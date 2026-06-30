@@ -1,12 +1,11 @@
 const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
 const overview = new Image();
-let state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1 };
+let state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [] };
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { $('status').textContent = m || ''; };
 
-// overview pixels <-> canvas pixels (the canvas is the overview scaled to fit)
 function ovToCanvas(px, py) { return [px * state.scale, py * state.scale]; }
 function canvasToOv(cx, cy) { return [cx / state.scale, cy / state.scale]; }
 
@@ -31,20 +30,44 @@ function draw() {
   }
 }
 
-$('gpx').onchange = async (e) => {
-  if (!e.target.files[0]) return;
-  const fd = new FormData(); fd.append('gpx', e.target.files[0]);
-  setStatus('Uploading…');
+function renderFileList() {
+  $('fileList').innerHTML = state.files.map((n) => `<li>${n}</li>`).join('');
+}
+
+async function uploadFiles(fileList) {
+  const arr = Array.from(fileList || []);
+  if (!arr.length) return;
+  const fd = new FormData();
+  for (const f of arr) fd.append('files', f);
+  if (state.session) fd.append('session_id', state.session);
+  setStatus(`Uploading ${arr.length} file(s)…`);
   const r = await fetch('/api/upload', { method: 'POST', body: fd });
   if (!r.ok) { setStatus('Upload failed: ' + (await r.text())); return; }
   const j = await r.json();
   state.session = j.session; state.ovSize = j.overview_size;
   state.scale = cv.width / j.overview_size[0];
   cv.height = Math.round(j.overview_size[1] * state.scale);
-  state.tracks = j.tracks; state.hotspots = j.hotspots; state.crop = null;
+  state.tracks = j.tracks; state.hotspots = j.hotspots;
+  state.files.push(...arr.map((f) => f.name)); renderFileList();
   overview.onload = draw; overview.src = j.overview;
-  $('proofBtn').disabled = false; $('acceptBtn').disabled = true;
-  setStatus(`${j.tracks.length} track(s) loaded — drag a crop box`);
+  $('proofBtn').disabled = false; $('clearBtn').disabled = false;
+  setStatus(`${j.tracks.length} track(s) across ${state.files.length} file(s) — drag a crop box`);
+}
+
+// drop zone + file picker
+const drop = $('drop');
+drop.onclick = () => $('files').click();
+$('files').onchange = (e) => { uploadFiles(e.target.files); e.target.value = ''; };
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); uploadFiles(e.dataTransfer.files); };
+
+$('clearBtn').onclick = () => {
+  state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [] };
+  renderFileList(); ctx.clearRect(0, 0, cv.width, cv.height);
+  $('proofImg').removeAttribute('src');
+  $('proofBtn').disabled = true; $('acceptBtn').disabled = true; $('clearBtn').disabled = true;
+  setStatus('Cleared — drop files to start a new map');
 };
 
 // drag a crop rectangle locked to the chosen print aspect ratio

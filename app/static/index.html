@@ -5,15 +5,21 @@
   <header><h1>TrailPrint</h1><span id="region"></span></header>
   <main>
     <div id="controls">
-      <input type="file" id="gpx" accept=".gpx">
-      <label>Print <select id="size">
-        <option value="18,24">18 x 24</option>
-        <option value="24,36">24 x 36</option>
-        <option value="12,16">12 x 16</option>
-        <option value="9,12">9 x 12</option>
-      </select></label>
-      <button id="proofBtn" disabled>Render proof</button>
-      <button id="acceptBtn" disabled>Accept &amp; render final</button>
+      <div id="drop">Drop <b>GPX / KML / KMZ</b> here<br><small>or click to browse — files accumulate</small>
+        <input type="file" id="files" accept=".gpx,.kml,.kmz" multiple hidden>
+      </div>
+      <ul id="fileList"></ul>
+      <div id="actions">
+        <label>Print <select id="size">
+          <option value="18,24">18 x 24</option>
+          <option value="24,36">24 x 36</option>
+          <option value="12,16">12 x 16</option>
+          <option value="9,12">9 x 12</option>
+        </select></label>
+        <button id="proofBtn" disabled>Render proof</button>
+        <button id="acceptBtn" disabled>Accept &amp; render final</button>
+        <button id="clearBtn" disabled>Clear</button>
+      </div>
       <span id="status"></span>
     </div>
     <canvas id="map" width="900" height="860"></canvas>

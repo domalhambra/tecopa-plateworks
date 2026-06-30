@@ -1,11 +1,12 @@
 # app/main.py
 import io, json, os
+from typing import List, Optional
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.geo import RegionGeo, crs_to_overview_px, crop_px_to_crs_window
-from app.ingest import load_gpx_tracks
+from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, ZoomTooTightError
 from app import session, render
@@ -22,12 +23,22 @@ FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
 app = FastAPI()
 
 @app.post("/api/upload")
-async def upload(gpx: UploadFile = File(...)):
-    tracks = load_gpx_tracks(await gpx.read(), GEO)
+async def upload(files: List[UploadFile] = File(...), session_id: Optional[str] = Form(None)):
+    new = []
+    for f in files:
+        new += load_tracks(await f.read(), GEO, filename=f.filename)   # GPX / KML / KMZ
+    if session_id and session.has(session_id):
+        tracks = session.get(session_id)["tracks"] + new               # accumulate
+        sid = session_id
+    else:
+        tracks, sid = new, None
     if not tracks:
-        raise HTTPException(400, "No usable tracks in file")
+        raise HTTPException(400, "No usable tracks in file(s)")
     spots = hotspots(tracks, region_bounds=CFG["bounds"])
-    sid = session.create({"tracks": tracks, "hotspots": spots})
+    if sid is None:
+        sid = session.create({"tracks": tracks, "hotspots": spots})
+    else:
+        session.update(sid, tracks=tracks, hotspots=spots)
     # project to overview pixels for the aim canvas
     tpx = [[crs_to_overview_px(GEO, x, y) for x, y in t.coords] for t in tracks]
     hpx = [{"px": crs_to_overview_px(GEO, s["x"], s["y"]), "weight": s["weight"]} for s in spots]

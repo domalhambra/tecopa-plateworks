@@ -7,6 +7,9 @@ def create(data: dict) -> str:
     _SESSIONS[sid] = data
     return sid
 
+def has(sid: str) -> bool:
+    return sid in _SESSIONS
+
 def get(sid: str) -> dict:
     return _SESSIONS[sid]
 

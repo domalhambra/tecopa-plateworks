@@ -18,9 +18,11 @@ def _client():
     return TestClient(app)
 
 
+def _file(name="a.gpx"):
+    return ("files", (name, open("tests/fixtures/sample.gpx", "rb").read(), "application/gpx+xml"))
+
 def _upload(c):
-    with open("tests/fixtures/sample.gpx", "rb") as f:
-        r = c.post("/api/upload", files={"gpx": ("sample.gpx", f.read(), "application/gpx+xml")})
+    r = c.post("/api/upload", files=[_file()])
     assert r.status_code == 200
     return r.json()
 
@@ -33,6 +35,20 @@ def _crop(j, km_wide, ar=0.75):
     x0 = ovw * 0.5 - cw / 2; y0 = ovh * 0.5 - ch / 2
     return {"x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch}
 
+
+def test_upload_multiple_files_accumulate():
+    c = _client()
+    r = c.post("/api/upload", files=[_file("a.gpx"), _file("b.gpx")])
+    assert r.status_code == 200
+    assert len(r.json()["tracks"]) == 10            # 5 + 5 combined
+
+def test_upload_appends_to_session():
+    c = _client()
+    j = _upload(c)                                   # 5 tracks
+    r = c.post("/api/upload", files=[_file("b.gpx")], data={"session_id": j["session"]})
+    assert r.status_code == 200
+    assert r.json()["session"] == j["session"]
+    assert len(r.json()["tracks"]) == 10
 
 def test_unknown_session_is_404_not_500():
     c = _client()
