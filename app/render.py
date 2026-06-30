@@ -12,15 +12,15 @@ from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 
-# ---- track cartography: the route is INKED into the paper, not painted over it ----
-TRACK_INK = (46, 34, 28)        # warm dark umber-ink, sits inside the earthy palette
-TRACK_CASING = (243, 237, 223)  # soft paper-cream halo for legibility on dark ridges
-CASING_STRENGTH = 0.22          # a whisper of halo for legibility -- ink stays dominant
-CASING_PAD_PT = 0.7             # halo reach beyond the ink, in points
+# ---- track cartography: a pronounced desert-gold route laid onto the paper ----
+TRACK_INK = (214, 158, 58)      # desert gold -- warm, saturated, reads against earthy terrain
+TRACK_CASING = (54, 40, 30)     # dark umber halo -> the gold line pops off any background
+CASING_STRENGTH = 0.34          # a soft dark outline that frames the gold
+CASING_PAD_PT = 0.8             # halo reach beyond the line, in points
 CASING_BLUR_PX = 1.4
 INK_FREQ_K = 1.15               # visitation -> opacity saturation (1 pass ~0.68, 2x -> cap)
 INK_EDGE_FEATHER_PX = 0.6       # soften the hard PIL edge
-INK_GRAIN = 0.16                # paper texture carried onto the ink
+INK_GRAIN = 0.16                # paper texture carried onto the line
 # ----------------------------------------------------------------------------------
 
 # ---- water cartography: lakes filled flat, rivers as order-weighted lines ----
@@ -78,19 +78,22 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
     casing_w = ink_w + 2 * max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
 
-    # 1) soft paper-cream casing under the ink -> legibility on dark ridges
+    # 1) soft dark umber casing under the line -> a thin outline that frames the gold
     casing = gaussian_filter(_coverage(spec, out_w, out_h, casing_w), CASING_BLUR_PX)
     casing_op = (CASING_STRENGTH * np.clip(casing, 0, 1))[..., None]
     casing_col = np.array(TRACK_CASING, np.float32) / 255.0
     img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
 
-    # 2) the ink: frequency -> saturating opacity, feathered, grain-textured, multiplied in
+    # 2) the line: frequency -> saturating opacity, feathered, grain-textured, painted toward gold
     visits = gaussian_filter(_coverage(spec, out_w, out_h, ink_w), INK_EDGE_FEATHER_PX)
     op = np.clip(1.0 - np.exp(-INK_FREQ_K * visits), 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
     ink = np.array(TRACK_INK, np.float32) / 255.0
-    img = img * ((1 - op) + op * ink[None, None, :])   # multiply toward ink: darkens, keeps texture
+    # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
+    # toward gold would only darken the terrain to a muddy brown); grain in `op`
+    # keeps the paper texture so it still sits on the sheet rather than floating.
+    img = img * (1 - op) + ink[None, None, :] * op
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
