@@ -1,0 +1,154 @@
+# app/render.py
+from __future__ import annotations
+import json, os
+import numpy as np
+import rasterio
+from rasterio.windows import from_bounds
+from rasterio.enums import Resampling
+from scipy.ndimage import gaussian_filter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from app.spec import CompositionSpec
+from app.relief import shaded_relief, grain
+
+MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
+
+# ---- track cartography: the route is INKED into the paper, not painted over it ----
+TRACK_INK = (46, 34, 28)        # warm dark umber-ink, sits inside the earthy palette
+TRACK_CASING = (243, 237, 223)  # soft paper-cream halo for legibility on dark ridges
+CASING_STRENGTH = 0.22          # a whisper of halo for legibility -- ink stays dominant
+CASING_PAD_PT = 0.7             # halo reach beyond the ink, in points
+CASING_BLUR_PX = 1.4
+INK_FREQ_K = 1.15               # visitation -> opacity saturation (1 pass ~0.68, 2x -> cap)
+INK_EDGE_FEATHER_PX = 0.6       # soften the hard PIL edge
+INK_GRAIN = 0.16                # paper texture carried onto the ink
+# ----------------------------------------------------------------------------------
+
+def _pt_to_px(pt, dpi):  # points -> pixels
+    return pt * dpi / 72.0
+
+def _read_window(region_dir, cfg, crop, out_w, out_h):
+    """Read the DEM for the crop (plus a margin) at the output resolution.
+    rasterio picks the right overview level for us (the image pyramid)."""
+    mx = (crop[2] - crop[0]) * MARGIN_FRAC
+    my = (crop[3] - crop[1]) * MARGIN_FRAC
+    big = (crop[0]-mx, crop[1]-my, crop[2]+mx, crop[3]+my)
+    pad_x = round(out_w * MARGIN_FRAC); pad_y = round(out_h * MARGIN_FRAC)
+    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
+        win = from_bounds(*big, transform=ds.transform)
+        elev = ds.read(1, window=win,
+                       out_shape=(out_h + 2*pad_y, out_w + 2*pad_x),
+                       resampling=Resampling.bilinear, boundless=True, fill_value=np.nan)
+    ground_per_px = (crop[2]-crop[0]) / out_w
+    return elev, pad_x, pad_y, ground_per_px
+
+def _crs_to_px(x, y, crop, out_w, out_h):
+    px = (x - crop[0]) / (crop[2]-crop[0]) * out_w
+    py = (crop[3] - y) / (crop[3]-crop[1]) * out_h
+    return px, py
+
+def _coverage(spec, out_w, out_h, width_px):
+    """Anti-aliased per-pixel visit count: how many track-passes cover each pixel.
+    Drawing each track on its own layer and summing makes overlap = frequency."""
+    cov = np.zeros((out_h, out_w), np.float32)
+    for coords in spec.tracks:
+        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in coords]
+        if len(pts) < 2:
+            continue
+        layer = Image.new("L", (out_w, out_h), 0)
+        ImageDraw.Draw(layer).line(pts, fill=255, width=max(1, width_px), joint="curve")
+        cov += np.asarray(layer, np.float32) / 255.0
+    return cov
+
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
+    """Composite tracks as inked, visitation-weighted, cased lines that pick up
+    the terrain texture and paper grain instead of floating on top."""
+    img = rgb_u8.astype(np.float32) / 255.0
+    ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
+    casing_w = ink_w + 2 * max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
+
+    # 1) soft paper-cream casing under the ink -> legibility on dark ridges
+    casing = gaussian_filter(_coverage(spec, out_w, out_h, casing_w), CASING_BLUR_PX)
+    casing_op = (CASING_STRENGTH * np.clip(casing, 0, 1))[..., None]
+    casing_col = np.array(TRACK_CASING, np.float32) / 255.0
+    img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+
+    # 2) the ink: frequency -> saturating opacity, feathered, grain-textured, multiplied in
+    visits = gaussian_filter(_coverage(spec, out_w, out_h, ink_w), INK_EDGE_FEATHER_PX)
+    op = np.clip(1.0 - np.exp(-INK_FREQ_K * visits), 0.0, spec.track_max_darken)
+    gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
+    op = (op * gf)[..., None]
+    ink = np.array(TRACK_INK, np.float32) / 255.0
+    img = img * ((1 - op) + op * ink[None, None, :])   # multiply toward ink: darkens, keeps texture
+
+    return (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
+def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
+    dia = max(5, round(spec.marker_diameter_in * dpi))
+    r = dia / 2.0
+    drop = max(1, round(dia * 0.07))
+
+    def in_frame(cx, cy):
+        return 0 <= cx <= out_w and 0 <= cy <= out_h
+
+    # soft drop shadow on its own layer -> markers sit on the paper, not over it
+    shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shadow)
+    for hs in spec.hotspots:
+        cx, cy = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
+        if in_frame(cx, cy):
+            sd.ellipse([cx-r, cy-r+drop, cx+r, cy+r+drop], fill=(22, 19, 16, 105))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(max(1.0, dia * 0.11)))
+    img = Image.alpha_composite(img.convert("RGBA"), shadow)
+
+    d = ImageDraw.Draw(img, "RGBA")
+    for hs in spec.hotspots:
+        cx, cy = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
+        if not in_frame(cx, cy):
+            continue
+        # contrast ring: light on dark terrain, dark on light
+        yy = int(np.clip(cy, 0, out_h-1)); xx = int(np.clip(cx, 0, out_w-1))
+        ring = (243, 237, 223, 235) if elev_lum[yy, xx] < 0.5 else (43, 42, 40, 230)
+        fill = (190, 158, 92, 255)   # muted rabbitbrush gold
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=fill, outline=ring,
+                  width=max(1, round(dia * 0.09)))
+    return img
+
+def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
+              watermark: bool = False) -> Image.Image:
+    spec.validate(dpi)
+    cfg = json.load(open(os.path.join(region_dir, "region.json")))
+    out_w, out_h = spec.pixel_size(dpi)
+
+    elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
+    rgb = shaded_relief(
+        elev, res_m=gpp,
+        elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
+        azimuth=cfg["light_azimuth"], altitude=cfg["light_altitude"],
+        z_factor=cfg["z_factor"], seed=spec.seed,
+        grain_cell_px=max(1.0, spec.grain_cell_in * dpi),
+        grain_strength=spec.grain_strength)
+    # trim the margin back to the exact crop
+    rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
+
+    lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
+    rgb = _ink_tracks(rgb, spec, out_w, out_h, dpi)
+    img = Image.fromarray(rgb, "RGB").convert("RGBA")
+    img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
+
+    if spec.title_text:
+        d = ImageDraw.Draw(img)
+        size = max(10, round(_pt_to_px(spec.title_pt, dpi)))
+        try:
+            font = ImageFont.truetype("Georgia.ttf", size)
+        except Exception:
+            font = ImageFont.load_default()
+        d.text((round(0.04*out_w), round(0.94*out_h)), spec.title_text,
+               fill=(43, 42, 40), font=font)
+
+    if watermark:
+        d = ImageDraw.Draw(img, "RGBA")
+        d.text((out_w//2 - 120, out_h//2), "PROOF", fill=(255, 255, 255, 90))
+    return img.convert("RGB")
+
+def save_print(img: Image.Image, path: str, dpi: int):
+    img.save(path, dpi=(dpi, dpi))   # embeds DPI so a print shop reads true size

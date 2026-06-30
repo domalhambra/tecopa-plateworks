@@ -22,7 +22,7 @@ class CompositionSpec:
     track_width_pt: float = 1.4
     track_color: tuple = (38, 36, 33)        # basalt-ish
     track_max_darken: float = 0.85           # overlap darkening ceiling
-    marker_diameter_in: float = 0.32
+    marker_diameter_in: float = 0.18
     grain_cell_in: float = 0.014
     grain_strength: float = 0.05
     title_pt: float = 22.0
