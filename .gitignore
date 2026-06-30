@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Region assets that region_prep.py regenerates (DEMs are large)
+regions/*/dem.tif
+regions/*/*.tif
+
+# Render outputs
+regions/*/final_*.png
+tune.png
+
+# OS
+.DS_Store
