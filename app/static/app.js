@@ -1,10 +1,40 @@
 const cv = document.getElementById('map');
 const ctx = cv.getContext('2d');
 const overview = new Image();
-let state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [] };
+let state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [], regionId: null, regions: [] };
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (m) => { $('status').textContent = m || ''; };
+
+function regionName(id) { const r = state.regions.find((x) => x.id === id); return r ? r.name : id; }
+
+function selectRegion(id) {
+  state.regionId = id;
+  $('region').textContent = id ? regionName(id) : '';
+  for (const el of document.querySelectorAll('.region-card'))
+    el.classList.toggle('sel', el.dataset.id === id);
+}
+
+async function loadRegions() {
+  let list = [];
+  try { list = await (await fetch('/api/regions')).json(); } catch (e) { /* leave empty */ }
+  state.regions = list;
+  if (list.length <= 1) {                         // one region: no picker, just name it
+    if (list.length === 1) selectRegion(list[0].id);
+    return;
+  }
+  const host = $('regionList');
+  host.innerHTML = '';
+  for (const r of list) {
+    const b = document.createElement('button');
+    b.className = 'region-card'; b.dataset.id = r.id;
+    b.innerHTML = `<img src="${r.overview}" alt=""><span>${r.name}</span>`;
+    b.onclick = () => selectRegion(r.id);
+    host.appendChild(b);
+  }
+  $('regionPicker').hidden = false;
+  setStatus('Pick a region, then drop your tracks (or just drop — we’ll auto-detect)');
+}
 
 function ovToCanvas(px, py) { return [px * state.scale, py * state.scale]; }
 function canvasToOv(cx, cy) { return [cx / state.scale, cy / state.scale]; }
@@ -40,10 +70,12 @@ async function uploadFiles(fileList) {
   const fd = new FormData();
   for (const f of arr) fd.append('files', f);
   if (state.session) fd.append('session_id', state.session);
+  else if (state.regionId) fd.append('region_id', state.regionId);   // else backend auto-detects
   setStatus(`Uploading ${arr.length} file(s)…`);
   const r = await fetch('/api/upload', { method: 'POST', body: fd });
   if (!r.ok) { setStatus('Upload failed: ' + (await r.text())); return; }
   const j = await r.json();
+  selectRegion(j.region);                                            // reflect the bound region
   state.session = j.session; state.ovSize = j.overview_size;
   state.scale = cv.width / j.overview_size[0];
   cv.height = Math.round(j.overview_size[1] * state.scale);
@@ -63,12 +95,16 @@ drop.ondragleave = () => drop.classList.remove('over');
 drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); uploadFiles(e.dataTransfer.files); };
 
 $('clearBtn').onclick = () => {
-  state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [] };
+  const regions = state.regions;                       // keep the loaded region list
+  state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [], regionId: null, regions };
+  selectRegion(regions.length === 1 ? regions[0].id : null);
   renderFileList(); ctx.clearRect(0, 0, cv.width, cv.height);
   $('proofImg').removeAttribute('src');
   $('proofBtn').disabled = true; $('acceptBtn').disabled = true; $('clearBtn').disabled = true;
-  setStatus('Cleared — drop files to start a new map');
+  setStatus('Cleared — pick a region and drop files to start a new map');
 };
+
+loadRegions();
 
 // drag a crop rectangle locked to the chosen print aspect ratio
 let dragStart = null;

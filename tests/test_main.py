@@ -36,6 +36,24 @@ def _crop(j, km_wide, ar=0.75):
     return {"x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch}
 
 
+def test_list_regions_includes_lassen():
+    c = _client()
+    r = c.get("/api/regions")
+    assert r.status_code == 200
+    ids = {x["id"] for x in r.json()}
+    assert "lassen_ca" in ids
+
+def test_upload_with_explicit_region_binds_session():
+    c = _client()
+    r = c.post("/api/upload", files=[_file()], data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    assert r.json()["region"] == "lassen_ca"
+
+def test_upload_unknown_region_is_404():
+    c = _client()
+    r = c.post("/api/upload", files=[_file()], data={"region_id": "atlantis"})
+    assert r.status_code == 404
+
 def test_upload_multiple_files_accumulate():
     c = _client()
     r = c.post("/api/upload", files=[_file("a.gpx"), _file("b.gpx")])
