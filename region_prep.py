@@ -25,8 +25,33 @@ import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.warp import calculate_default_transform, reproject
+from affine import Affine
 import py3dep
 from PIL import Image
+
+def _trim_nan_edges(dst, max_edge_nan=0.005):
+    """Return (r0, r1, c0, c1) bounding a NaN-clean rectangle. Greedily peel whichever
+    single edge (top/bottom/left/right) is currently the most NaN, and stop once the
+    worst remaining edge is under max_edge_nan. Peeling the worst edge each step removes
+    the reproject's NaN frame and triangular corners without over-trimming a clean side
+    (a naive per-edge pass over-trims, since a perpendicular NaN band makes every row or
+    column look bad). The small tolerance avoids peeling a whole row/col for one stray
+    pixel; sparse interior NaN is left for relief._fill_nan."""
+    finite = np.isfinite(dst)
+    r0, r1, c0, c1 = 0, dst.shape[0], 0, dst.shape[1]
+    while r1 - r0 > 1 and c1 - c0 > 1:
+        fr = [1.0 - finite[r0, c0:c1].mean(),       # top
+              1.0 - finite[r1-1, c0:c1].mean(),     # bottom
+              1.0 - finite[r0:r1, c0].mean(),       # left
+              1.0 - finite[r0:r1, c1-1].mean()]     # right
+        k = int(np.argmax(fr))
+        if fr[k] <= max_edge_nan:
+            break
+        if k == 0: r0 += 1
+        elif k == 1: r1 -= 1
+        elif k == 2: c0 += 1
+        else: c1 -= 1
+    return r0, r1, c0, c1
 
 def _exterior_rings(geom):
     if geom.geom_type == "Polygon":
@@ -113,8 +138,16 @@ def to_cog(dem_da, dst_crs, out_path, bbox_4326, resolution_m=10):
     dem_da = dem_da.rio.clip_box(float(np.min(xs)), float(np.min(ys)),
                                  float(np.max(xs)), float(np.max(ys)))
     dst = np.asarray(dem_da.values, dtype="float32")
-    dh, dw = dst.shape
     dst_transform = dem_da.rio.transform()
+    # The Albers->UTM reproject can still leave NaN at the corners when py3dep didn't
+    # over-return far enough past the bbox on a side (worse for wide/zone-straddling
+    # boxes). Trim whole edge rows/cols while they are mostly NaN so the COG is an
+    # honest, fully-valid rectangle (no dark wedges in the poster or aim view), and
+    # shift the transform origin to match.
+    r0, r1, c0, c1 = _trim_nan_edges(dst)
+    dst = dst[r0:r1, c0:c1]
+    dst_transform = dst_transform * Affine.translation(c0, r0)
+    dh, dw = dst.shape
 
     profile = dict(driver="GTiff", dtype="float32", count=1,
                    height=dh, width=dw, crs=dst_crs, transform=dst_transform,
