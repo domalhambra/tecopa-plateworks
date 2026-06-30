@@ -9,7 +9,17 @@ Usage:
         --bbox -120.90 40.33 -120.50 40.78 \
         --epsg 32610
 """
-import argparse, json, os
+import os
+import certifi
+# Point OpenSSL at certifi BEFORE importing anything that pulls aiohttp (py3dep,
+# pynhd). python.org Python on macOS ships no system CA bundle, so the USGS NHD
+# service fails SSL verification otherwise -- and aiohttp captures its SSL config
+# at import, so setting this after those imports is too late (concurrent requests
+# race onto the empty default store).
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("SSL_CERT_DIR", "")
+
+import argparse, json
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
@@ -59,7 +69,22 @@ def fetch_dem(bbox):
     # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard.
     return py3dep.get_dem(bbox, resolution=10)  # xarray DataArray, EPSG:4326
 
-def to_cog(dem_da, dst_crs, out_path, resolution_m=10):
+def fetch_hydro(bbox):
+    """Fetch NHD waterbodies + network flowlines for the bbox (EPSG:4326).
+    Returns (waterbodies_gdf_or_None, flowlines_gdf_or_None); tolerant of gaps."""
+    import pynhd
+    wb = fl = None
+    try:
+        wb = pynhd.WaterData("nhdwaterbody").bybox(bbox)
+    except Exception as ex:
+        print(f"  no waterbodies: {ex}")
+    try:
+        fl = pynhd.WaterData("nhdflowline_network").bybox(bbox)
+    except Exception as ex:
+        print(f"  no flowlines: {ex}")
+    return wb, fl
+
+def to_cog(dem_da, dst_crs, out_path, bbox_4326, resolution_m=10):
     # py3dep returns a rioxarray DataArray that already carries its own CRS
     # (3DEP serves CONUS Albers, EPSG:5070, with coords in metres). Trust that
     # CRS and reproject straight to the region CRS at a fixed metre grid, rather
@@ -68,6 +93,14 @@ def to_cog(dem_da, dst_crs, out_path, resolution_m=10):
         dem_da = dem_da.rio.write_crs("EPSG:4326")
     dem_da = dem_da.rio.reproject(dst_crs, resolution=resolution_m,
                                   resampling=Resampling.bilinear, nodata=np.nan)
+    # Clip to the UTM box of the requested geographic bbox. py3dep over-returns and
+    # the Albers->UTM reprojection leaves NaN corners; the bbox sits strictly inside
+    # the data, so this trims to a clean, fully-valid rectangle (honest bounds).
+    from pyproj import Transformer
+    fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
+    w, s, e, n = bbox_4326
+    xs, ys = zip(*(fwd.transform(lo, la) for lo, la in [(w, s), (w, n), (e, s), (e, n)]))
+    dem_da = dem_da.rio.clip_box(min(xs), min(ys), max(xs), max(ys))
     dst = np.asarray(dem_da.values, dtype="float32")
     dh, dw = dst.shape
     dst_transform = dem_da.rio.transform()
@@ -113,9 +146,18 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     dst_crs = f"EPSG:{args.epsg}"
 
+    # Fetch hydrography first, while aiohttp's SSL context is fresh (a prior large
+    # DEM fetch can leave it in a state where concurrent NHD requests fail SSL).
+    print("Fetching NHD hydrography...")
+    wb, fl = fetch_hydro(tuple(args.bbox))
+    hydro = bake_hydro(wb, fl, dst_crs)
+    with open(os.path.join(out_dir, "hydro.json"), "w") as f:
+        json.dump(hydro, f)
+    print(f"  lakes: {len(hydro['lakes'])}  rivers: {len(hydro['rivers'])}")
+
     print("Fetching 3DEP DEM...")
     dem = fetch_dem(tuple(args.bbox))
-    cog = to_cog(dem, dst_crs, os.path.join(out_dir, "dem.tif"))
+    cog = to_cog(dem, dst_crs, os.path.join(out_dir, "dem.tif"), tuple(args.bbox))
 
     print("Building aim-view overview...")
     size, bounds, crs = overview_png(cog, os.path.join(out_dir, "overview.png"))
@@ -129,6 +171,7 @@ def main():
         "id": args.id, "name": args.name, "crs": crs,
         "bounds": list(bounds), "overview_size": list(size),
         "dem_path": "dem.tif", "overview_path": "overview.png",
+        "hydro_path": "hydro.json",
         "native_resolution_m": 10,
         # absolute color scale + fixed light keep every crop consistent (invariant 4):
         "elevation_min": emin, "elevation_max": emax,
