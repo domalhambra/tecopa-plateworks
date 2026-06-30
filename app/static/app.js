@@ -179,12 +179,30 @@ $('proofBtn').onclick = async () => {
   setStatus('Proof ready — accept to render the full-resolution final');
 };
 
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
 $('acceptBtn').onclick = async () => {
   const fd = new FormData(); fd.append('session_id', state.session);
-  setStatus('Rendering final at 300 dpi…');
-  const r = await fetch('/api/final', { method: 'POST', body: fd });
-  if (!r.ok) { setStatus('Final failed: ' + (await r.text())); return; }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(await r.blob()); a.download = 'trailprint.png'; a.click();
-  setStatus('Final downloaded.');
+  $('acceptBtn').disabled = true;
+  setStatus('Queuing final render…');
+  const sub = await fetch('/api/final/submit', { method: 'POST', body: fd });
+  if (!sub.ok) { setStatus('Final failed: ' + (await sub.text())); $('acceptBtn').disabled = false; return; }
+  const jid = (await sub.json()).job;
+  // poll the job off the request thread; the 300 dpi paint can take a few seconds
+  for (;;) {
+    await sleep(600);
+    let s;
+    try { s = await (await fetch(`/api/jobs/${jid}`)).json(); } catch (e) { continue; }
+    if (s.state === 'queued') { setStatus('Queued…'); continue; }
+    if (s.state === 'running') { setStatus('Rendering final at 300 dpi…'); continue; }
+    if (s.state === 'error') { setStatus('Final failed: ' + (s.error || 'render error')); break; }
+    if (s.state === 'done') {
+      const blob = await (await fetch(s.result)).blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'trailprint.png'; a.click();
+      setStatus('Final downloaded.');
+      break;
+    }
+  }
+  $('acceptBtn').disabled = false;
 };
