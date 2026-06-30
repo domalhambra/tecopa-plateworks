@@ -17,6 +17,44 @@ from rasterio.warp import calculate_default_transform, reproject
 import py3dep
 from PIL import Image
 
+def _exterior_rings(geom):
+    if geom.geom_type == "Polygon":
+        return [list(geom.exterior.coords)]
+    if geom.geom_type == "MultiPolygon":
+        return [list(p.exterior.coords) for p in geom.geoms]
+    return []
+
+def _lines(geom):
+    if geom.geom_type == "LineString":
+        return [list(geom.coords)]
+    if geom.geom_type == "MultiLineString":
+        return [list(l.coords) for l in geom.geoms]
+    return []
+
+def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
+    """Reproject/simplify/filter NHD geometry into a serializable hydro dict in
+    dst_crs metres. waterbodies/flowlines are GeoDataFrames (EPSG:4326) or None."""
+    lakes, rivers = [], []
+    if waterbodies is not None and len(waterbodies):
+        for _, row in waterbodies.to_crs(dst_crs).iterrows():
+            g = row.geometry.simplify(simplify_m)
+            for ring in _exterior_rings(g):
+                lakes.append({"coords": [[float(x), float(y)] for x, y, *_ in ring],
+                              "name": str(row.get("gnis_name") or "")})
+    if flowlines is not None and len(flowlines):
+        fl = flowlines.to_crs(dst_crs)
+        col = "streamorde" if "streamorde" in fl.columns else (
+            "StreamOrde" if "StreamOrde" in fl.columns else None)
+        for _, row in fl.iterrows():
+            order = int(row[col]) if col and row[col] is not None else 0
+            if order < min_order:
+                continue
+            g = row.geometry.simplify(simplify_m)
+            for line in _lines(g):
+                rivers.append({"coords": [[float(x), float(y)] for x, y, *_ in line],
+                               "order": order, "name": str(row.get("gnis_name") or "")})
+    return {"crs": dst_crs, "lakes": lakes, "rivers": rivers}
+
 def fetch_dem(bbox):
     # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard.
     return py3dep.get_dem(bbox, resolution=10)  # xarray DataArray, EPSG:4326
