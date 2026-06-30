@@ -10,12 +10,21 @@ regions/*/*.tif
 
 # Render outputs / preview artifacts
 regions/*/final_*.png
+regions/*/poster_*.png
+regions/*/demo_photo.png
 tune.png
 poster.png
 comparison.png
 
 # requests-cache from the NHD/3DEP fetches
 cache/
+
+# user-uploaded marker photos (single-user local app)
+uploads/
+
+# server-foundation local stores (blob outputs + sqlite session db)
+blobs/
+*.db
 
 # OS
 .DS_Store

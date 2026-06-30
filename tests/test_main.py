@@ -36,6 +36,24 @@ def _crop(j, km_wide, ar=0.75):
     return {"x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch}
 
 
+def test_list_regions_includes_lassen():
+    c = _client()
+    r = c.get("/api/regions")
+    assert r.status_code == 200
+    ids = {x["id"] for x in r.json()}
+    assert "lassen_ca" in ids
+
+def test_upload_with_explicit_region_binds_session():
+    c = _client()
+    r = c.post("/api/upload", files=[_file()], data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    assert r.json()["region"] == "lassen_ca"
+
+def test_upload_unknown_region_is_404():
+    c = _client()
+    r = c.post("/api/upload", files=[_file()], data={"region_id": "atlantis"})
+    assert r.status_code == 404
+
 def test_upload_multiple_files_accumulate():
     c = _client()
     r = c.post("/api/upload", files=[_file("a.gpx"), _file("b.gpx")])
@@ -88,6 +106,66 @@ def test_too_tight_crop_rejected_at_proof_422():
     r = c.post("/api/proof", data=data)
     assert r.status_code == 422
 
+
+def test_set_markers_updates_and_invalidates_spec():
+    import json as _json
+    c = _client(); j = _upload(c)
+    # proof first so a spec is stamped, then edit markers -> final must 400 (re-proof)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/markers", data={"session_id": j["session"],
+               "markers": _json.dumps([{"i": 0, "label": "Base Camp", "icon": "camp"}])})
+    assert r.status_code == 200
+    assert c.post("/api/final", data={"session_id": j["session"]}).status_code == 400
+    # an invalid icon is dropped rather than rejected (label-only edits still apply)
+    assert c.post("/api/markers", data={"session_id": j["session"],
+           "markers": _json.dumps([{"i": 0, "icon": "bogus"}])}).status_code == 200
+
+def test_photo_endpoint_validates_and_attaches():
+    import io as _io
+    from PIL import Image
+    c = _client(); j = _upload(c)
+    buf = _io.BytesIO(); Image.new("RGB", (40, 40), (10, 20, 30)).save(buf, "PNG"); buf.seek(0)
+    r = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+               files={"file": ("p.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 200
+    # a non-image is rejected 422, not silently saved
+    bad = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+                 files={"file": ("x.png", b"not an image", "image/png")})
+    assert bad.status_code == 422
+
+def test_markers_unknown_session_404():
+    c = _client()
+    assert c.post("/api/markers", data={"session_id": "nope", "markers": "[]"}).status_code == 404
+
+def test_async_final_via_job_queue():
+    import time
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/final/submit", data={"session_id": j["session"]})
+    assert r.status_code == 200
+    jid = r.json()["job"]
+    state, res = None, None
+    for _ in range(600):                       # render runs on a worker thread
+        s = c.get(f"/api/jobs/{jid}").json()
+        state = s["state"]
+        if state in ("done", "error"):
+            res = s
+            break
+        time.sleep(0.05)
+    assert state == "done", res
+    out = c.get(res["result"])
+    assert out.status_code == 200 and out.headers["content-type"] == "image/png"
+    assert Image.open(io.BytesIO(out.content)).size == (2700, 3600)
+
+def test_async_final_before_proof_is_400():
+    c = _client(); j = _upload(c)
+    assert c.post("/api/final/submit", data={"session_id": j["session"]}).status_code == 400
+
+def test_job_status_unknown_404():
+    c = _client()
+    assert c.get("/api/jobs/nope").status_code == 404
 
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)

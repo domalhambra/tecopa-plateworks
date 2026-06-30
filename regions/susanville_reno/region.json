@@ -1,0 +1,24 @@
+{
+  "id": "susanville_reno",
+  "name": "Susanville\u2013Reno, CA/NV",
+  "crs": "EPSG:32610",
+  "bounds": [
+    697012.9100904971,
+    4386976.976535173,
+    760722.9100904971,
+    4485346.976535173
+  ],
+  "overview_size": [
+    906,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1214.1500244140625,
+  "elevation_max": 2328.57177734375,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}

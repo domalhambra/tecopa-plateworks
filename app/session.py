@@ -1,17 +1,21 @@
 # app/session.py
-import uuid
-_SESSIONS = {}   # single user, single machine (invariant: no DB in v1)
+"""The session API the app calls. Now a thin delegate over a pluggable store
+(store.py): in-memory by default (v1 behavior), or SQLite-backed persistence when
+TRAILPRINT_STORE=sqlite. Same four calls main.py already uses, so the switch is
+invisible to the rest of the app."""
+import os
+from app import store
+
+_STORE = store.make_store(os.environ.get("TRAILPRINT_STORE", "memory"))
 
 def create(data: dict) -> str:
-    sid = uuid.uuid4().hex
-    _SESSIONS[sid] = data
-    return sid
+    return _STORE.create(data)
 
 def has(sid: str) -> bool:
-    return sid in _SESSIONS
+    return _STORE.has(sid)
 
 def get(sid: str) -> dict:
-    return _SESSIONS[sid]
+    return _STORE.get(sid)        # KeyError on unknown sid -> caller maps to 404
 
 def update(sid: str, **kw):
-    _SESSIONS[sid].update(kw)
+    _STORE.update(sid, **kw)

@@ -10,6 +10,7 @@ Output: tests/fixtures/sample.gpx
 """
 from __future__ import annotations
 import math, os, random
+import numpy as np
 from datetime import datetime, timedelta, timezone
 
 # --- anchor points (lon, lat) ---
@@ -49,6 +50,30 @@ def interp(polyline, step_m):
             out.append((lon0 + (lon1 - lon0) * f, lat0 + (lat1 - lat0) * f))
     return out
 
+def meander(points, rng, amp_m, harmonics=5, lat_ref=40.5):
+    """Add a smooth, low-frequency lateral wander so a straight corridor reads as
+    an organic winding route. The offset is a sum of a few sine harmonics over
+    arc length (1/k amplitude decay -> mostly long, lazy curves with finer wiggle
+    on top), applied perpendicular to the local heading and tapered to zero at the
+    ends so the start/finish stay anchored. Deterministic for a given rng."""
+    mlon = m_per_deg_lon(lat_ref)
+    pts = np.asarray(points, float)
+    if len(pts) < 3:
+        return points
+    X = pts[:, 0] * mlon
+    Y = pts[:, 1] * M_PER_DEG_LAT
+    d = np.concatenate([[0.0], np.cumsum(np.hypot(np.diff(X), np.diff(Y)))])
+    s = d / d[-1] if d[-1] > 0 else d                 # arc-length param 0..1
+    off = np.zeros_like(s)
+    for k in range(1, harmonics + 1):
+        off += (amp_m / k) * np.sin(2 * math.pi * k * s + rng.uniform(0, 2 * math.pi))
+    off *= np.sin(math.pi * s) ** 0.5                 # taper ends to zero
+    tx, ty = np.gradient(X), np.gradient(Y)           # local tangent
+    tlen = np.hypot(tx, ty) + 1e-9
+    nx, ny = -ty / tlen, tx / tlen                    # unit normal (perpendicular)
+    Xo, Yo = X + nx * off, Y + ny * off
+    return list(zip(Xo / mlon, Yo / M_PER_DEG_LAT))
+
 def jitter(points, rng, sigma_m, lateral_m, lat_ref=40.5):
     """Per-point GPS noise plus a constant per-day lateral offset."""
     mlon = m_per_deg_lon(lat_ref)
@@ -61,14 +86,20 @@ def jitter(points, rng, sigma_m, lateral_m, lat_ref=40.5):
 
 def build():
     rng = random.Random(40)                # determinism
+    # One organic winding corridor that every trip retraces (a real road bends with
+    # the terrain). Fixed seed so the shared road is stable; meandering once -- not
+    # per day -- keeps the day-trips overlapping, which is what density/hotspots read.
+    corridor = meander(interp(CORRIDOR, step_m=24.0), random.Random(7), amp_m=360.0)
     trips = []
     start = datetime(2024, 6, 1, 7, 30, tzinfo=timezone.utc)
     for i, spot in enumerate(LAKE_SPOTS):
-        route = CORRIDOR + [spot]          # drive up the corridor, end at the day's spot
-        out = interp(route, step_m=24.0)
-        back = list(reversed(interp(route, step_m=27.0)))
-        # small per-day lateral offset: trips retrace the same road, lightly varied
-        path = jitter(out + back[1:], rng, sigma_m=4.0, lateral_m=(i - 2) * 15.0)
+        # each day branches off the corridor's end to its own lake spot, also winding
+        tail = meander(interp([CORRIDOR[-1], spot], step_m=24.0),
+                       random.Random(100 + i), amp_m=130.0)
+        route = corridor + tail[1:]        # drive up the shared road, peel off to the spot
+        out_back = route + list(reversed(route))[1:]   # out-and-back retrace
+        # small per-day lateral offset + GPS noise: same road, lightly varied each day
+        path = jitter(out_back, rng, sigma_m=5.0, lateral_m=(i - 2) * 12.0)
         day = start + timedelta(days=i * 9)
         stamps = [day + timedelta(seconds=4 * k) for k in range(len(path))]
         trips.append((f"Susanville to Eagle Lake {day.date().isoformat()}", path, stamps))
