@@ -26,7 +26,10 @@ app = FastAPI()
 async def upload(files: List[UploadFile] = File(...), session_id: Optional[str] = Form(None)):
     new = []
     for f in files:
-        new += load_tracks(await f.read(), GEO, filename=f.filename)   # GPX / KML / KMZ
+        try:
+            new += load_tracks(await f.read(), GEO, filename=f.filename)   # GPX / KML / KMZ
+        except Exception:
+            continue   # skip one unparseable file rather than 500 the whole batch
     if session_id and session.has(session_id):
         tracks = session.get(session_id)["tracks"] + new               # accumulate
         sid = session_id
@@ -38,7 +41,9 @@ async def upload(files: List[UploadFile] = File(...), session_id: Optional[str] 
     if sid is None:
         sid = session.create({"tracks": tracks, "hotspots": spots})
     else:
-        session.update(sid, tracks=tracks, hotspots=spots)
+        # invalidate any stamped spec: the track set changed, so /api/final must
+        # not render a stale proof (it re-enforces "approve a proof first").
+        session.update(sid, tracks=tracks, hotspots=spots, spec=None)
     # project to overview pixels for the aim canvas
     tpx = [[crs_to_overview_px(GEO, x, y) for x, y in t.coords] for t in tracks]
     hpx = [{"px": crs_to_overview_px(GEO, s["x"], s["y"]), "weight": s["weight"]} for s in spots]

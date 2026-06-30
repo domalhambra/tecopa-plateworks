@@ -50,6 +50,22 @@ def test_upload_appends_to_session():
     assert r.json()["session"] == j["session"]
     assert len(r.json()["tracks"]) == 10
 
+def test_reupload_after_proof_requires_reproof():
+    # accumulating tracks after a proof must invalidate the stamped spec, so the
+    # final can't silently render the old subset -> /api/final 400 until re-proofed.
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    c.post("/api/upload", files=[_file("b.gpx")], data={"session_id": j["session"]})
+    assert c.post("/api/final", data={"session_id": j["session"]}).status_code == 400
+
+def test_one_bad_file_does_not_fail_batch():
+    c = _client()
+    bad = ("files", ("broken.gpx", b"<gpx>not valid xml", "application/gpx+xml"))
+    r = c.post("/api/upload", files=[_file("good.gpx"), bad])
+    assert r.status_code == 200          # the good file survives; no opaque 500
+    assert len(r.json()["tracks"]) == 5
+
 def test_unknown_session_is_404_not_500():
     c = _client()
     r = c.post("/api/proof", data={"session_id": "nope", "x0": 0, "y0": 0, "x1": 9, "y1": 12,
