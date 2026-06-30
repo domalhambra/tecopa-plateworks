@@ -138,6 +138,35 @@ def test_markers_unknown_session_404():
     c = _client()
     assert c.post("/api/markers", data={"session_id": "nope", "markers": "[]"}).status_code == 404
 
+def test_async_final_via_job_queue():
+    import time
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/final/submit", data={"session_id": j["session"]})
+    assert r.status_code == 200
+    jid = r.json()["job"]
+    state, res = None, None
+    for _ in range(600):                       # render runs on a worker thread
+        s = c.get(f"/api/jobs/{jid}").json()
+        state = s["state"]
+        if state in ("done", "error"):
+            res = s
+            break
+        time.sleep(0.05)
+    assert state == "done", res
+    out = c.get(res["result"])
+    assert out.status_code == 200 and out.headers["content-type"] == "image/png"
+    assert Image.open(io.BytesIO(out.content)).size == (2700, 3600)
+
+def test_async_final_before_proof_is_400():
+    c = _client(); j = _upload(c)
+    assert c.post("/api/final/submit", data={"session_id": j["session"]}).status_code == 400
+
+def test_job_status_unknown_404():
+    c = _client()
+    assert c.get("/api/jobs/nope").status_code == 404
+
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}

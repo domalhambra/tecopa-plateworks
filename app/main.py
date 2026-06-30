@@ -8,7 +8,7 @@ from app.geo import crs_to_overview_px, crop_px_to_crs_window
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, ZoomTooTightError
-from app import session, render, regions
+from app import session, render, regions, blobs, jobs
 
 # The registry replaces the old single hardcoded region: every regions/<id> built
 # by region_prep.py is now selectable. Discovered once at import.
@@ -17,7 +17,22 @@ REGIONS = regions.discover()
 PROOF_DPI = 96    # cheap mid-fidelity preview
 FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
 
+# server foundation (v1.3): outputs go to a blob store, finals render off the
+# request thread via a job queue. Both are local impls behind interfaces that a
+# networked store / broker drops into later (see blobs.py, jobs.py).
+BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"))
+QUEUE = jobs.ThreadJobQueue()
+
 app = FastAPI()
+
+def _render_to_blob(spec, region_dir, key):
+    """The render worker: rasterize the stamped spec at print DPI and store the PNG.
+    Runs on a queue thread, so it touches only its arguments -- no request state."""
+    img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region_dir, watermark=False)
+    buf = io.BytesIO()
+    img.save(buf, "PNG", dpi=(FINAL_DPI, FINAL_DPI))   # embed DPI like save_print
+    BLOBS.put(key, buf.getvalue())
+    return key                                         # job result = the blob key
 
 def _region_or_404(rid):
     if rid not in REGIONS:
@@ -202,6 +217,46 @@ async def final(session_id: str = Form(...)):
     out = os.path.join(region.dir, f"final_{session_id}.png")
     render.save_print(img, out, dpi=FINAL_DPI)
     return FileResponse(out, media_type="image/png", filename="trailprint.png")
+
+@app.post("/api/final/submit")
+async def final_submit(session_id: str = Form(...)):
+    """Async final: enqueue the render at the compose->rasterize boundary and return
+    a job id, so the request thread doesn't block on a 300 dpi paint. Same gate as
+    the sync path (a proof must be stamped first)."""
+    try:
+        st = session.get(session_id)
+    except KeyError:
+        raise HTTPException(404, "Unknown or expired session")
+    spec = st.get("spec")
+    if spec is None:
+        raise HTTPException(400, "Approve a proof first")
+    region = _region_or_404(st["region_id"])
+    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.png")
+    return {"job": jid}
+
+@app.get("/api/jobs/{jid}")
+async def job_status(jid: str):
+    try:
+        s = QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown job")
+    out = {"state": s["state"], "error": s["error"]}
+    if s["state"] == "done":
+        out["result"] = f"/api/jobs/{jid}/result"
+    return out
+
+@app.get("/api/jobs/{jid}/result")
+async def job_result(jid: str):
+    try:
+        s = QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown job")
+    if s["state"] != "done":
+        raise HTTPException(409, f"job is {s['state']}")
+    key = s["result"]
+    if not BLOBS.exists(key):
+        raise HTTPException(404, "result expired")
+    return FileResponse(BLOBS.path(key), media_type="image/png", filename="trailprint.png")
 
 app.mount("/regions", StaticFiles(directory="regions"), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

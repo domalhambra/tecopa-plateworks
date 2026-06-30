@@ -22,5 +22,9 @@ cache/
 # user-uploaded marker photos (single-user local app)
 uploads/
 
+# server-foundation local stores (blob outputs + sqlite session db)
+blobs/
+*.db
+
 # OS
 .DS_Store
