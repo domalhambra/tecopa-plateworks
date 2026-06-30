@@ -67,7 +67,8 @@ def build():
         route = CORRIDOR + [spot]          # drive up the corridor, end at the day's spot
         out = interp(route, step_m=24.0)
         back = list(reversed(interp(route, step_m=27.0)))
-        path = jitter(out + back[1:], rng, sigma_m=4.0, lateral_m=(i - 2) * 60.0)
+        # small per-day lateral offset: trips retrace the same road, lightly varied
+        path = jitter(out + back[1:], rng, sigma_m=4.0, lateral_m=(i - 2) * 15.0)
         day = start + timedelta(days=i * 9)
         stamps = [day + timedelta(seconds=4 * k) for k in range(len(path))]
         trips.append((f"Susanville to Eagle Lake {day.date().isoformat()}", path, stamps))
