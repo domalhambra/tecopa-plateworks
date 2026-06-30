@@ -1,0 +1,23 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>TrailPrint</title>
+<link rel="stylesheet" href="style.css"></head>
+<body>
+  <header><h1>TrailPrint</h1><span id="region"></span></header>
+  <main>
+    <div id="controls">
+      <input type="file" id="gpx" accept=".gpx">
+      <label>Print <select id="size">
+        <option value="18,24">18 x 24</option>
+        <option value="24,36">24 x 36</option>
+        <option value="12,16">12 x 16</option>
+        <option value="9,12">9 x 12</option>
+      </select></label>
+      <button id="proofBtn" disabled>Render proof</button>
+      <button id="acceptBtn" disabled>Accept &amp; render final</button>
+      <span id="status"></span>
+    </div>
+    <canvas id="map" width="900" height="860"></canvas>
+    <div id="proofPane"><img id="proofImg" alt="proof appears here"></div>
+  </main>
+  <script src="app.js"></script>
+</body></html>
