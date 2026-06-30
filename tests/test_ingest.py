@@ -1,7 +1,8 @@
 # tests/test_ingest.py
-# Unit coverage for the GPX pipeline using synthetic in-memory GPX.
-# The end-to-end test against a real OnX/Avenza export lives separately (needs a
-# real fixture); these pin the load-bearing behaviors without one.
+# Unit coverage for the GPX pipeline using synthetic in-memory GPX, plus an
+# end-to-end pass over the committed dummy fixture (tests/fixtures/sample.gpx,
+# a stand-in for a real OnX/Avenza export until one is on hand).
+import os
 import numpy as np
 from app.geo import RegionGeo
 from app.ingest import load_gpx_tracks
@@ -49,3 +50,21 @@ def test_out_of_zone_point_dropped_not_inf():
     tracks = load_gpx_tracks(data, REGION)
     for t in tracks:
         assert np.isfinite(t.coords).all()
+
+# End-to-end over the committed Lassen County dummy fixture (UTM zone 10N).
+FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.gpx")
+LASSEN = RegionGeo(crs="EPSG:32610",
+                   bounds=(600000.0, 4470000.0, 640000.0, 4520000.0),  # unused by ingest
+                   overview_size=(1400, 1750))
+
+def test_loads_dummy_fixture():
+    with open(FIXTURE, "rb") as f:
+        tracks = load_gpx_tracks(f.read(), LASSEN)
+    assert len(tracks) == 5                          # five dated day-trips
+    days = {t.day for t in tracks}
+    assert len(days) == 5 and None not in days       # each on a distinct date
+    for t in tracks:
+        assert t.coords.shape[1] == 2
+        assert t.coords.shape[0] >= 2                 # simplified, not collapsed
+        assert np.isfinite(t.coords).all()
+        assert (t.coords[:, 0] > 100000.0).all()      # eastings in metres, not degrees
