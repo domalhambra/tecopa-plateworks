@@ -2,7 +2,7 @@
 # Unit coverage for the GPX pipeline using synthetic in-memory GPX, plus an
 # end-to-end pass over the committed dummy fixture (tests/fixtures/sample.gpx,
 # a stand-in for a real OnX/Avenza export until one is on hand).
-import os
+import io, os, zipfile
 import numpy as np
 from app.geo import RegionGeo
 from app.ingest import load_gpx_tracks
@@ -42,6 +42,50 @@ def test_day_none_without_timestamps():
 
 def test_single_point_segment_skipped():
     assert load_gpx_tracks(_gpx([(-111.5, 39.30)]), REGION) == []
+
+def _kml_linestring(points, name="t"):
+    coords = " ".join(f"{lon},{lat},0" for lon, lat in points)
+    return (f'<?xml version="1.0" encoding="UTF-8"?>'
+            f'<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark>'
+            f'<name>{name}</name><LineString><coordinates>{coords}</coordinates>'
+            f'</LineString></Placemark></Document></kml>').encode()
+
+def _kml_gx_track(points, day="2024-03-02"):
+    whens = "".join(f"<when>{day}T10:0{i}:00Z</when>" for i in range(len(points)))
+    coords = "".join(f"<gx:coord>{lon} {lat} 0</gx:coord>" for lon, lat in points)
+    return (f'<?xml version="1.0" encoding="UTF-8"?>'
+            f'<kml xmlns="http://www.opengis.net/kml/2.2" '
+            f'xmlns:gx="http://www.google.com/kml/ext/2.2"><Document><Placemark>'
+            f'<gx:Track>{whens}{coords}</gx:Track></Placemark></Document></kml>').encode()
+
+def test_kml_linestring_tracks():
+    from app.ingest import load_kml_tracks
+    data = _kml_linestring([(-111.5, 39.30), (-111.5, 39.33), (-111.5, 39.36)])
+    tracks = load_kml_tracks(data, REGION)
+    assert len(tracks) == 1
+    assert tracks[0].coords.shape[1] == 2
+    assert (tracks[0].coords[:, 0] > 100000).all()        # reprojected to metres
+
+def test_kml_gx_track_with_time():
+    from app.ingest import load_kml_tracks
+    tracks = load_kml_tracks(_kml_gx_track([(-111.5, 39.30), (-111.5, 39.34)]), REGION)
+    assert len(tracks) == 1
+    assert tracks[0].day == "2024-03-02"
+
+def test_kmz_unzips_and_parses():
+    from app.ingest import load_tracks
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("doc.kml", _kml_linestring([(-111.5, 39.30), (-111.5, 39.34)]))
+    tracks = load_tracks(buf.getvalue(), REGION, filename="a.kmz")
+    assert len(tracks) == 1
+
+def test_load_tracks_dispatches_by_content():
+    from app.ingest import load_tracks
+    gpx = _gpx([(-111.5, 39.30), (-111.5, 39.34)])
+    kml = _kml_linestring([(-111.5, 39.30), (-111.5, 39.34)])
+    assert len(load_tracks(gpx, REGION)) == 1
+    assert len(load_tracks(kml, REGION)) == 1
 
 def test_out_of_zone_point_dropped_not_inf():
     # A point far outside UTM 12N validity reprojects to (inf, inf). It must be
