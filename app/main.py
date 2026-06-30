@@ -16,6 +16,9 @@ CFG = json.load(open(os.path.join(REGION_DIR, "region.json")))
 GEO = RegionGeo(crs=CFG["crs"], bounds=tuple(CFG["bounds"]),
                 overview_size=tuple(CFG["overview_size"]))
 
+PROOF_DPI = 96    # cheap mid-fidelity preview
+FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
+
 app = FastAPI()
 
 @app.post("/api/upload")
@@ -31,8 +34,8 @@ async def upload(gpx: UploadFile = File(...)):
     return {"session": sid, "overview": f"/regions/{REGION_ID}/overview.png",
             "overview_size": CFG["overview_size"], "tracks": tpx, "hotspots": hpx}
 
-def _build_spec(sid, crop_px, print_w, print_h, dpi, title=""):
-    st = session.get(sid)
+def _build_spec(sid, crop_px, print_w, print_h, title=""):
+    st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404
     crop = crop_px_to_crs_window(GEO, *crop_px)
     spec = CompositionSpec(
         region_id=REGION_ID, crs=CFG["crs"], crop=crop,
@@ -40,7 +43,7 @@ def _build_spec(sid, crop_px, print_w, print_h, dpi, title=""):
         native_resolution_m=CFG["native_resolution_m"],
         tracks=[t.coords for t in st["tracks"]],
         hotspots=st["hotspots"], seed=7, title_text=title)
-    spec.validate(dpi)
+    spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
     session.update(sid, spec=spec)   # stamp it (invariant 1): final renders from this
     return spec
 
@@ -50,21 +53,29 @@ async def proof(session_id: str = Form(...),
                 x1: float = Form(...), y1: float = Form(...),
                 print_w: float = Form(18.0), print_h: float = Form(24.0)):
     try:
-        spec = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h, dpi=96)
+        spec = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h)
+    except KeyError:
+        raise HTTPException(404, "Unknown or expired session")
     except ZoomTooTightError as e:
         raise HTTPException(422, str(e))
-    img = render.rasterize(spec, dpi=96, region_dir=REGION_DIR, watermark=True)
+    img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=REGION_DIR, watermark=True)
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
 @app.post("/api/final")
 async def final(session_id: str = Form(...)):
-    spec = session.get(session_id).get("spec")
+    try:
+        spec = session.get(session_id).get("spec")
+    except KeyError:
+        raise HTTPException(404, "Unknown or expired session")
     if spec is None:
         raise HTTPException(400, "Approve a proof first")
-    img = render.rasterize(spec, dpi=300, region_dir=REGION_DIR, watermark=False)
+    try:
+        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=REGION_DIR, watermark=False)
+    except ZoomTooTightError as e:
+        raise HTTPException(422, str(e))
     out = os.path.join(REGION_DIR, f"final_{session_id}.png")
-    render.save_print(img, out, dpi=300)
+    render.save_print(img, out, dpi=FINAL_DPI)
     return FileResponse(out, media_type="image/png", filename="trailprint.png")
 
 app.mount("/regions", StaticFiles(directory="regions"), name="regions")
