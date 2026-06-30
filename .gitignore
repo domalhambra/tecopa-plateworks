@@ -10,6 +10,7 @@ regions/*/*.tif
 
 # Render outputs / preview artifacts
 regions/*/final_*.png
+regions/*/poster_*.png
 tune.png
 poster.png
 comparison.png
