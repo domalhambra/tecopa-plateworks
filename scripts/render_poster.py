@@ -34,6 +34,25 @@ def main():
     spots = hotspots(tracks, tuple(bx))
     print(f"hotspots: {len(spots)}")
 
+    # v1.1 demo: name + icon each hotspot, and pin a (synthetic) photo on the first,
+    # so the poster shows the rich-marker layer. Real labels/photos come from the UI.
+    labels = ["Base Camp", "The Notch", "Eagle Lake", "South Shore", "Marina"]
+    icons = ["camp", "peak", "water", "flag", "camera"]
+    for k, s in enumerate(spots):
+        s["label"] = labels[k % len(labels)]
+        s["icon"] = icons[k % len(icons)]
+    if spots:
+        from PIL import Image as _Img
+        demo = _Img.new("RGB", (240, 180))
+        px = demo.load()
+        for yy in range(180):                      # quick sky->ground gradient stand-in
+            for xx in range(240):
+                t = yy / 180
+                px[xx, yy] = (int(150 + 60*t), int(170 - 40*t), int(190 - 120*t))
+        photo_path = os.path.join(OUT_DIR, "demo_photo.png")
+        demo.save(photo_path)
+        spots[0]["photo"] = photo_path
+
     # finalized 18x24 crop: 54x72 km -> exactly 10 m/px at 18x24 in @ 300 dpi (zoom cap)
     crop = (cx - 27000, cy - 36000, cx + 27000, cy + 36000)
     spec = CompositionSpec(

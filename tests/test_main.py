@@ -107,6 +107,37 @@ def test_too_tight_crop_rejected_at_proof_422():
     assert r.status_code == 422
 
 
+def test_set_markers_updates_and_invalidates_spec():
+    import json as _json
+    c = _client(); j = _upload(c)
+    # proof first so a spec is stamped, then edit markers -> final must 400 (re-proof)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/markers", data={"session_id": j["session"],
+               "markers": _json.dumps([{"i": 0, "label": "Base Camp", "icon": "camp"}])})
+    assert r.status_code == 200
+    assert c.post("/api/final", data={"session_id": j["session"]}).status_code == 400
+    # an invalid icon is dropped rather than rejected (label-only edits still apply)
+    assert c.post("/api/markers", data={"session_id": j["session"],
+           "markers": _json.dumps([{"i": 0, "icon": "bogus"}])}).status_code == 200
+
+def test_photo_endpoint_validates_and_attaches():
+    import io as _io
+    from PIL import Image
+    c = _client(); j = _upload(c)
+    buf = _io.BytesIO(); Image.new("RGB", (40, 40), (10, 20, 30)).save(buf, "PNG"); buf.seek(0)
+    r = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+               files={"file": ("p.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 200
+    # a non-image is rejected 422, not silently saved
+    bad = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+                 files={"file": ("x.png", b"not an image", "image/png")})
+    assert bad.status_code == 422
+
+def test_markers_unknown_session_404():
+    c = _client()
+    assert c.post("/api/markers", data={"session_id": "nope", "markers": "[]"}).status_code == 404
+
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}

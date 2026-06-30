@@ -15,7 +15,7 @@ class CompositionSpec:
     print_h_in: float
     native_resolution_m: float
     tracks: list          # list of (N,2) arrays in CRS meters
-    hotspots: list        # list of {"x","y","weight"}
+    hotspots: list        # list of {"x","y","weight", and optional "label"/"icon"/"photo"}
     seed: int = 7
 
     # physical style values (invariant 2): everything visual sized in print units
@@ -27,6 +27,10 @@ class CompositionSpec:
     grain_strength: float = 0.05
     title_pt: float = 22.0
     title_text: str = ""
+    # rich markers (v1.1): labels, vector icons, and pinned photos -- all picture
+    # decisions, so they live on the spec; sizes physical so proof == final layout.
+    label_pt: float = 11.0                   # marker label text size
+    photo_box_in: float = 1.15               # long edge of a pinned photo thumbnail
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))

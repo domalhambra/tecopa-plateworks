@@ -27,3 +27,12 @@ select { padding: 6px; }
 .region-card img { width: 86px; height: 108px; object-fit: cover; border-radius: 4px; background: #ddd; }
 .region-card span { font-size: 12px; max-width: 100px; text-align: center; }
 .region-card.sel { border-color: #c7a955; background: #efe6cf; }
+
+#side { display: flex; flex-direction: column; gap: 16px; }
+.markers { background: #f6f1e6; border: 1px solid #e0d7c2; border-radius: 8px; padding: 10px 12px; }
+.marker-row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+.marker-row .dot { width: 12px; height: 12px; border-radius: 50%; background: #be9e5c; flex: none; }
+.marker-row .m-label { flex: 1; padding: 5px 7px; border: 1px solid #d6ccb5; border-radius: 4px; font: inherit; }
+.marker-row .m-icon { padding: 5px; }
+.marker-row .m-photo { cursor: pointer; padding: 4px 6px; border: 1px solid #d6ccb5; border-radius: 4px; filter: grayscale(1) opacity(.55); }
+.marker-row .m-photo.has { filter: none; border-color: #c7a955; background: #efe6cf; }

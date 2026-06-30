@@ -1,5 +1,5 @@
 # app/main.py
-import io, os
+import io, json, os
 from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
@@ -92,12 +92,69 @@ async def upload(files: List[UploadFile] = File(...),
         # invalidate any stamped spec: the track set changed, so /api/final must
         # not render a stale proof (it re-enforces "approve a proof first").
         session.update(sid, tracks=tracks, hotspots=spots, spec=None)
-    # project to overview pixels for the aim canvas
+    # project to overview pixels for the aim canvas; carry any marker metadata so
+    # the editor can show current label/icon/photo state after a reload.
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
-    hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]), "weight": s["weight"]} for s in spots]
+    hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]), "weight": s["weight"],
+            "label": s.get("label", ""), "icon": s.get("icon", ""),
+            "photo": bool(s.get("photo"))} for s in spots]
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx, "hotspots": hpx}
+
+VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
+UPLOADS_DIR = "uploads"
+
+def _require_session(session_id):
+    if not session.has(session_id):
+        raise HTTPException(404, "Unknown or expired session")
+    return session.get(session_id)
+
+@app.post("/api/markers")
+async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
+    """Set per-hotspot label/icon. `markers` is a JSON list of {i, label, icon};
+    editing markers invalidates any stamped spec so the final reflects the edits."""
+    st = _require_session(session_id)
+    try:
+        edits = json.loads(markers)
+    except Exception:
+        raise HTTPException(422, "markers must be JSON")
+    spots = st["hotspots"]
+    for e in edits:
+        i = e.get("i")
+        if not isinstance(i, int) or not (0 <= i < len(spots)):
+            continue
+        if "label" in e:
+            spots[i]["label"] = str(e["label"])[:60]
+        if "icon" in e:
+            icon = str(e["icon"])
+            spots[i]["icon"] = icon if icon in VALID_ICONS else ""
+    session.update(session_id, hotspots=spots, spec=None)   # re-proof to apply
+    return {"ok": True}
+
+@app.post("/api/photo")
+async def set_photo(session_id: str = Form(...), i: int = Form(...),
+                    file: UploadFile = File(...)):
+    """Attach a photo to hotspot i. Stored under uploads/<session>/ and referenced
+    by path on the spec; the file itself never rides the spec (same as the DEM)."""
+    st = _require_session(session_id)
+    spots = st["hotspots"]
+    if not (0 <= i < len(spots)):
+        raise HTTPException(422, "marker index out of range")
+    data = await file.read()
+    try:
+        from PIL import Image
+        Image.open(io.BytesIO(data)).verify()   # reject non-images before saving
+    except Exception:
+        raise HTTPException(422, "not a readable image")
+    dst_dir = os.path.join(UPLOADS_DIR, session_id)
+    os.makedirs(dst_dir, exist_ok=True)
+    path = os.path.join(dst_dir, f"{i}_{os.path.basename(file.filename or 'photo')}")
+    with open(path, "wb") as f:
+        f.write(data)
+    spots[i]["photo"] = path
+    session.update(session_id, hotspots=spots, spec=None)   # re-proof to apply
+    return {"ok": True}
 
 def _build_spec(sid, crop_px, print_w, print_h, title=""):
     st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404
