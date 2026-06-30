@@ -67,6 +67,24 @@ def test_water_fills_lake_area():
     px = b[wet.size[1] // 2, wet.size[0] // 2]            # centre of the lake
     assert all(abs(int(px[i]) - WATER_FILL[i]) < 40 for i in range(3))
 
+def test_hydro_tolerates_malformed_and_checks_crs():
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    crop = (cx-13500, cy-18000, cx+13500, cy+18000)
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[], hotspots=[], seed=7)
+    # missing 'coords' and 3-tuple (z) coords must not crash the render
+    bad = {"crs": cfg["crs"],
+           "lakes": [{"name": "no-coords"},
+                     {"coords": [[cx-2000, cy-2000, 9], [cx+2000, cy-2000, 9], [cx+2000, cy+2000, 9]]}],
+           "rivers": [{"order": 4, "name": "no-coords"}]}
+    assert rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro=bad).size == (864, 1152)
+    # a foreign-CRS hydro must fail loud rather than mis-register water silently
+    with pytest.raises(ValueError):
+        rasterize(spec, dpi=96, region_dir=REGION_DIR,
+                  hydro={"crs": "EPSG:32611", "lakes": [], "rivers": []})
+
 def test_rasterize_rejects_too_tight():
     cfg = _cfg(); bx = cfg["bounds"]
     cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2

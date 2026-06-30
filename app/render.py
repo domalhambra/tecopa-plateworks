@@ -137,13 +137,14 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
     d = ImageDraw.Draw(img, "RGBA")
     sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
     for lake in hydro.get("lakes", []):
-        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in lake["coords"]]
+        # tolerate missing key + 3-tuple (z) coords, matching what the baker emits
+        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y, *_ in (lake.get("coords") or [])]
         if len(pts) >= 3:
             d.polygon(pts, fill=WATER_FILL + (255,), outline=WATER_SHORELINE + (255,), width=sw)
     for r in hydro.get("rivers", []):
         wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
         wpx = max(1, round(_pt_to_px(wpt, dpi)))
-        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in r["coords"]]
+        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y, *_ in (r.get("coords") or [])]
         if len(pts) >= 2:
             d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
     return img
@@ -171,6 +172,9 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # water sits on the relief, under the tracks (relief -> water -> tracks -> markers)
     if hydro is None:
         hydro = _load_hydro(region_dir)
+    if hydro and hydro.get("crs") and hydro["crs"] != cfg["crs"]:
+        # invariant 4: water must be in the region CRS or it mis-registers silently
+        raise ValueError(f"hydro CRS {hydro['crs']} != region CRS {cfg['crs']}")
     himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
                        hydro, spec, out_w, out_h, dpi)
     rgb = np.asarray(himg.convert("RGB"))
