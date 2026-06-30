@@ -1,4 +1,5 @@
 # tests/test_hydro.py
+import numpy as np
 import geopandas as gpd
 from shapely.geometry import Polygon, LineString
 from region_prep import bake_hydro
@@ -24,3 +25,13 @@ def test_bake_reprojects_and_filters_by_order():
 
 def test_bake_handles_empty():
     assert bake_hydro(None, None, "EPSG:32610") == {"crs": "EPSG:32610", "lakes": [], "rivers": []}
+
+def test_bake_skips_nan_streamorde():
+    # NHD non-network records carry NaN streamorde; must be skipped, not crash int().
+    rivers = gpd.GeoDataFrame(
+        {"streamorde": [np.nan, 4.0], "gnis_name": ["unknown", "Susan River"]},
+        geometry=[LineString([(-120.70, 40.50), (-120.69, 40.51)]),
+                  LineString([(-120.66, 40.41), (-120.66, 40.45)])],
+        crs="EPSG:4326")
+    hydro = bake_hydro(None, rivers, "EPSG:32610", min_order=3)
+    assert len(hydro["rivers"]) == 1 and hydro["rivers"][0]["order"] == 4

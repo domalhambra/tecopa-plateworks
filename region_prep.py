@@ -21,6 +21,7 @@ os.environ.setdefault("SSL_CERT_DIR", "")
 
 import argparse, json
 import numpy as np
+import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.warp import calculate_default_transform, reproject
@@ -56,7 +57,10 @@ def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
         col = "streamorde" if "streamorde" in fl.columns else (
             "StreamOrde" if "StreamOrde" in fl.columns else None)
         for _, row in fl.iterrows():
-            order = int(row[col]) if col and row[col] is not None else 0
+            v = row[col] if col else None
+            # NHD non-network records carry NaN/NA streamorde; pd.isna catches both
+            # (neither is `is None`), else int(NaN) would crash the whole bake.
+            order = int(v) if v is not None and not pd.isna(v) else 0
             if order < min_order:
                 continue
             g = row.geometry.simplify(simplify_m)
@@ -99,8 +103,15 @@ def to_cog(dem_da, dst_crs, out_path, bbox_4326, resolution_m=10):
     from pyproj import Transformer
     fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
     w, s, e, n = bbox_4326
-    xs, ys = zip(*(fwd.transform(lo, la) for lo, la in [(w, s), (w, n), (e, s), (e, n)]))
-    dem_da = dem_da.rio.clip_box(min(xs), min(ys), max(xs), max(ys))
+    # Densify the bbox edges before projecting: meridians/parallels curve in UTM, so
+    # 4 corners can mis-bound a wide/high-latitude box. (NaN-freeness then relies on
+    # py3dep over-returning past the bbox, which it reliably does.)
+    t = np.linspace(0.0, 1.0, 25)
+    lons = np.concatenate([w + t*(e-w), w + t*(e-w), np.full(25, w), np.full(25, e)])
+    lats = np.concatenate([np.full(25, s), np.full(25, n), s + t*(n-s), s + t*(n-s)])
+    xs, ys = fwd.transform(lons, lats)
+    dem_da = dem_da.rio.clip_box(float(np.min(xs)), float(np.min(ys)),
+                                 float(np.max(xs)), float(np.max(ys)))
     dst = np.asarray(dem_da.values, dtype="float32")
     dh, dw = dst.shape
     dst_transform = dem_da.rio.transform()
@@ -149,8 +160,12 @@ def main():
     # Fetch hydrography first, while aiohttp's SSL context is fresh (a prior large
     # DEM fetch can leave it in a state where concurrent NHD requests fail SSL).
     print("Fetching NHD hydrography...")
-    wb, fl = fetch_hydro(tuple(args.bbox))
-    hydro = bake_hydro(wb, fl, dst_crs)
+    try:
+        wb, fl = fetch_hydro(tuple(args.bbox))   # import + fetch + ...
+        hydro = bake_hydro(wb, fl, dst_crs)       # ...processing all guarded
+    except Exception as ex:
+        print(f"  hydro failed, continuing without water: {ex}")
+        hydro = {"crs": dst_crs, "lakes": [], "rivers": []}
     with open(os.path.join(out_dir, "hydro.json"), "w") as f:
         json.dump(hydro, f)
     print(f"  lakes: {len(hydro['lakes'])}  rivers: {len(hydro['rivers'])}")
