@@ -13,20 +13,23 @@ HYPSO_STOPS = [
     (1.00, (236, 232, 220)),   # high near-white
 ]
 TEXTURE_STRENGTH = 0.35        # ridge crispness (high-pass blend)
-TEXTURE_RADIUS_PX = 6
 VALLEY_STRENGTH = 0.30         # soft darkening in deep valleys
-VALLEY_RADIUS_PX = 40
-# TODO (Phase 5 / render.py wiring): these blur radii are in PIXELS, so the same
-# spec yields a different relative texture/valley scale at proof (96 dpi) vs final
-# (300 dpi) -- a soft break of "one spec, painted at many sizes". When render.py
-# paints a spec at two DPIs, derive these from a physical length (ground metres /
-# res_m, or print inches * dpi) passed in at paint time, the way grain_cell_in does.
 HILLSHADE_GAMMA = 1.1          # contrast of the light
+# Blur radii are tied to a GROUND distance (metres), converted to pixels at paint
+# time via res_m -- so the same crop yields the same relief at any DPI ("one spec,
+# painted at many sizes"). render.py passes ground/res_m; the px fallbacks below
+# are only for direct/synthetic callers that have no real ground resolution.
+TEXTURE_RADIUS_M = 60.0         # ridge high-pass scale, ground metres
+VALLEY_RADIUS_M = 400.0         # valley darkening scale, ground metres
+TEXTURE_RADIUS_PX = 6          # fallback when no physical radius is supplied
+VALLEY_RADIUS_PX = 40
 # ---------------------------------------------------------------------
 
 def _fill_nan(elev):
     if not np.isnan(elev).any():
         return elev
+    if not np.isfinite(elev).any():
+        return np.zeros_like(elev)   # crop entirely off the DEM: flat fallback, no crash
     m = np.nanmean(elev)
     return np.where(np.isnan(elev), m, elev)
 
@@ -55,16 +58,16 @@ def hypsometric(elev, elev_min, elev_max):
         rgb[..., ch] = np.interp(norm, xs, ys)
     return rgb / 255.0
 
-def texture_pass(elev):
+def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
     # high-pass: sharpen ridges and drainages (a cheap stand-in for true texture shading)
-    blur = gaussian_filter(elev, TEXTURE_RADIUS_PX)
+    blur = gaussian_filter(elev, radius_px)
     hp = elev - blur
     s = np.std(hp) + 1e-9
     return np.clip(0.5 + (hp / (4 * s)), 0, 1)   # 0..1, centered
 
-def valley_pass(elev):
+def valley_pass(elev, radius_px=VALLEY_RADIUS_PX):
     # darken places that sit well below their surroundings
-    big = gaussian_filter(elev, VALLEY_RADIUS_PX)
+    big = gaussian_filter(elev, radius_px)
     depth = np.clip(big - elev, 0, None)
     s = np.percentile(depth, 99) + 1e-9
     return np.clip(depth / s, 0, 1)              # 0..1, 1 = deep valley
@@ -82,12 +85,13 @@ def grain(shape, cell_px, strength, seed):
 
 def shaded_relief(elev, res_m, elev_min, elev_max,
                   azimuth=315, altitude=45, z_factor=1.0, seed=7,
-                  grain_cell_px=2.0, grain_strength=0.05):
+                  grain_cell_px=2.0, grain_strength=0.05,
+                  texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX):
     elev = _fill_nan(elev.astype("float32"))
     base = hypsometric(elev, elev_min, elev_max)                  # color
     hs = hillshade(elev, res_m, azimuth, altitude, z_factor) ** HILLSHADE_GAMMA
-    tex = texture_pass(elev)
-    val = valley_pass(elev)
+    tex = texture_pass(elev, texture_radius_px)
+    val = valley_pass(elev, valley_radius_px)
 
     light = (0.45 + 0.55 * hs)                                    # never fully black
     light = light * (1.0 - VALLEY_STRENGTH * val)                # sink the valleys

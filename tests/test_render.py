@@ -2,6 +2,7 @@
 import json, os
 import numpy as np
 import pytest
+from PIL import Image
 from app.spec import CompositionSpec, ZoomTooTightError
 from app.render import rasterize
 
@@ -30,6 +31,22 @@ def test_proof_and_final_same_layout():
     final = rasterize(spec, dpi=300, region_dir=REGION_DIR, watermark=False)
     assert proof.size == (864, 1152)      # 9x12 @ 96
     assert final.size == (2700, 3600)     # 9x12 @ 300 -- same layout, more pixels
+
+def test_proof_relief_is_a_faithful_scale_of_final():
+    # Invariant 1: one spec, painted at many sizes. The proof (96 dpi) downscaled
+    # from the final (300 dpi) must be nearly identical -- relief texture/valley
+    # scale must NOT shift with DPI. (Relief only: no tracks/markers to isolate it.)
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    crop = (cx-13500, cy-18000, cx+13500, cy+18000)
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[], hotspots=[], seed=7)
+    proof = rasterize(spec, dpi=96, region_dir=REGION_DIR)
+    final = rasterize(spec, dpi=300, region_dir=REGION_DIR)
+    final_ds = final.resize(proof.size, Image.LANCZOS)
+    mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
+    assert mad < 2.5, f"proof is not a faithful scale of the final: mean abs diff {mad:.2f}/255"
 
 def test_rasterize_rejects_too_tight():
     cfg = _cfg(); bx = cfg["bounds"]

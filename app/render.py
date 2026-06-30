@@ -8,7 +8,7 @@ from rasterio.enums import Resampling
 from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec
-from app.relief import shaded_relief, grain
+from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 
@@ -29,10 +29,12 @@ def _pt_to_px(pt, dpi):  # points -> pixels
 def _read_window(region_dir, cfg, crop, out_w, out_h):
     """Read the DEM for the crop (plus a margin) at the output resolution.
     rasterio picks the right overview level for us (the image pyramid)."""
-    mx = (crop[2] - crop[0]) * MARGIN_FRAC
-    my = (crop[3] - crop[1]) * MARGIN_FRAC
-    big = (crop[0]-mx, crop[1]-my, crop[2]+mx, crop[3]+my)
+    # Pad by an INTEGER number of output pixels and derive the big bounds from that
+    # pad, so the trimmed central window maps to the crop exactly at every DPI
+    # (a continuous margin + round() leaves a sub-pixel terrain/track offset).
     pad_x = round(out_w * MARGIN_FRAC); pad_y = round(out_h * MARGIN_FRAC)
+    gx = (crop[2] - crop[0]) / out_w; gy = (crop[3] - crop[1]) / out_h
+    big = (crop[0]-pad_x*gx, crop[1]-pad_y*gy, crop[2]+pad_x*gx, crop[3]+pad_y*gy)
     with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
         win = from_bounds(*big, transform=ds.transform)
         elev = ds.read(1, window=win,
@@ -126,7 +128,10 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         azimuth=cfg["light_azimuth"], altitude=cfg["light_altitude"],
         z_factor=cfg["z_factor"], seed=spec.seed,
         grain_cell_px=max(1.0, spec.grain_cell_in * dpi),
-        grain_strength=spec.grain_strength)
+        grain_strength=spec.grain_strength,
+        # physical (ground-metre) blur radii -> identical relief at any DPI
+        texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
+        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp))
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 
