@@ -14,5 +14,8 @@ tune.png
 poster.png
 comparison.png
 
+# requests-cache from the NHD/3DEP fetches
+cache/
+
 # OS
 .DS_Store

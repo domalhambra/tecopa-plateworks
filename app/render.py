@@ -23,6 +23,16 @@ INK_EDGE_FEATHER_PX = 0.6       # soften the hard PIL edge
 INK_GRAIN = 0.16                # paper texture carried onto the ink
 # ----------------------------------------------------------------------------------
 
+# ---- water cartography: lakes filled flat, rivers as order-weighted lines ----
+WATER_FILL = (104, 128, 134)    # muted slate-blue, sits with the earthy palette
+WATER_SHORELINE = (74, 96, 102) # a touch darker for the lake edge
+SHORELINE_PT = 0.5              # shoreline width in POINTS (DPI-scaled, never raw px)
+RIVER_COLOR = (92, 118, 126)
+RIVER_BASE_PT = 0.7             # width of an order-3 river, in points
+RIVER_STEP_PT = 0.5             # extra width per stream order above 3
+RIVER_MAX_PT = 3.0
+# ------------------------------------------------------------------------------
+
 def _pt_to_px(pt, dpi):  # points -> pixels
     return pt * dpi / 72.0
 
@@ -115,8 +125,31 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
                   width=max(1, round(dia * 0.09)))
     return img
 
+def _load_hydro(region_dir):
+    p = os.path.join(region_dir, "hydro.json")
+    return json.load(open(p)) if os.path.exists(p) else None
+
+def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
+    """Composite baked water over the relief: lakes filled flat with a DPI-scaled
+    shoreline, rivers as order-weighted lines. All widths in physical units."""
+    if not hydro:
+        return img
+    d = ImageDraw.Draw(img, "RGBA")
+    sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
+    for lake in hydro.get("lakes", []):
+        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in lake["coords"]]
+        if len(pts) >= 3:
+            d.polygon(pts, fill=WATER_FILL + (255,), outline=WATER_SHORELINE + (255,), width=sw)
+    for r in hydro.get("rivers", []):
+        wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
+        wpx = max(1, round(_pt_to_px(wpt, dpi)))
+        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in r["coords"]]
+        if len(pts) >= 2:
+            d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
+    return img
+
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False) -> Image.Image:
+              watermark: bool = False, hydro=None) -> Image.Image:
     spec.validate(dpi)
     cfg = json.load(open(os.path.join(region_dir, "region.json")))
     out_w, out_h = spec.pixel_size(dpi)
@@ -134,6 +167,13 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp))
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
+
+    # water sits on the relief, under the tracks (relief -> water -> tracks -> markers)
+    if hydro is None:
+        hydro = _load_hydro(region_dir)
+    himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
+                       hydro, spec, out_w, out_h, dpi)
+    rgb = np.asarray(himg.convert("RGB"))
 
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
     rgb = _ink_tracks(rgb, spec, out_w, out_h, dpi)

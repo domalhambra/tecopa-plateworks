@@ -42,11 +42,30 @@ def test_proof_relief_is_a_faithful_scale_of_final():
     spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
                            print_w_in=9, print_h_in=12, native_resolution_m=10,
                            tracks=[], hotspots=[], seed=7)
-    proof = rasterize(spec, dpi=96, region_dir=REGION_DIR)
-    final = rasterize(spec, dpi=300, region_dir=REGION_DIR)
+    # empty hydro keeps this relief-only (water has its own DPI-scaled elements)
+    no_water = {"lakes": [], "rivers": []}
+    proof = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro=no_water)
+    final = rasterize(spec, dpi=300, region_dir=REGION_DIR, hydro=no_water)
     final_ds = final.resize(proof.size, Image.LANCZOS)
     mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
     assert mad < 2.5, f"proof is not a faithful scale of the final: mean abs diff {mad:.2f}/255"
+
+def test_water_fills_lake_area():
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    crop = (cx-13500, cy-18000, cx+13500, cy+18000)
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[], hotspots=[], seed=7)
+    lake = [[cx-6000, cy-6000], [cx+6000, cy-6000], [cx+6000, cy+6000], [cx-6000, cy+6000]]
+    dry = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro={"lakes": [], "rivers": []})
+    wet = rasterize(spec, dpi=96, region_dir=REGION_DIR,
+                    hydro={"lakes": [{"coords": lake, "name": "L"}], "rivers": []})
+    from app.render import WATER_FILL
+    a = np.asarray(dry); b = np.asarray(wet)
+    assert not np.array_equal(a, b)                       # water changed the image
+    px = b[wet.size[1] // 2, wet.size[0] // 2]            # centre of the lake
+    assert all(abs(int(px[i]) - WATER_FILL[i]) < 40 for i in range(3))
 
 def test_rasterize_rejects_too_tight():
     cfg = _cfg(); bx = cfg["bounds"]
