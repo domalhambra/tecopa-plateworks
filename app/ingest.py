@@ -2,6 +2,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import io
+import re
 import zipfile
 import numpy as np
 import gpxpy
@@ -64,11 +65,15 @@ def _kml_segments(root):
             coord_el = next((c for c in el if _localname(c) == "coordinates"), None)
             if coord_el is None or not coord_el.text:
                 continue
+            # normalize "lon, lat, alt" (exporter quirk) -> "lon,lat,alt"; skip bad tuples
             pts = []
-            for tok in coord_el.text.split():
+            for tok in re.sub(r"\s*,\s*", ",", coord_el.text).split():
                 p = tok.split(",")
                 if len(p) >= 2:
-                    pts.append((float(p[0]), float(p[1]), None))
+                    try:
+                        pts.append((float(p[0]), float(p[1]), None))
+                    except ValueError:
+                        continue
             if len(pts) >= 2:
                 segs.append(pts)
         elif ln == "Track":   # gx:Track: parallel <when> and <gx:coord> children
@@ -80,7 +85,10 @@ def _kml_segments(root):
                 elif cl == "coord" and c.text:
                     xy = c.text.split()
                     if len(xy) >= 2:
-                        coords.append((float(xy[0]), float(xy[1])))
+                        try:
+                            coords.append((float(xy[0]), float(xy[1])))
+                        except ValueError:
+                            continue
             if len(coords) >= 2:
                 times = whens + [None] * (len(coords) - len(whens))
                 segs.append([(lon, lat, times[i]) for i, (lon, lat) in enumerate(coords)])
@@ -112,12 +120,15 @@ def load_tracks(data: bytes, region: RegionGeo, filename: str | None = None,
     """Auto-detect GPX / KML / KMZ and return a list[Track]."""
     if data[:4] == b"PK\x03\x04":                      # zip -> KMZ
         return load_kml_tracks(_kmz_to_kml(data), region, simplify_tolerance_m)
-    head = data[:400].lower()
-    if b"<gpx" in head:
+    # scan the WHOLE document for the first root marker (a long comment/license block
+    # can push <kml past any fixed window), and pick whichever appears first
+    low = data.lower()
+    gpx_at = low.find(b"<gpx"); kml_at = low.find(b"<kml")
+    if gpx_at != -1 and (kml_at == -1 or gpx_at < kml_at):
         return load_gpx_tracks(data, region, simplify_tolerance_m)
-    if b"<kml" in head:
+    if kml_at != -1:
         return load_kml_tracks(data, region, simplify_tolerance_m)
-    fn = (filename or "").lower()                       # fall back to extension
+    fn = (filename or "").lower()                       # no marker -> extension
     if fn.endswith((".kml", ".kmz")):
         return load_kml_tracks(data, region, simplify_tolerance_m)
     return load_gpx_tracks(data, region, simplify_tolerance_m)

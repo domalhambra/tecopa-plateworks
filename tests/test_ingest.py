@@ -87,6 +87,23 @@ def test_load_tracks_dispatches_by_content():
     assert len(load_tracks(gpx, REGION)) == 1
     assert len(load_tracks(kml, REGION)) == 1
 
+def test_kml_with_long_preamble_routes_by_content():
+    from app.ingest import load_tracks
+    body = ('<kml xmlns="http://www.opengis.net/kml/2.2"><Document><Placemark><LineString>'
+            '<coordinates>-111.5,39.30,0 -111.5,39.34,0</coordinates></LineString></Placemark></Document></kml>')
+    kml = b'<?xml version="1.0" encoding="UTF-8"?><!-- ' + b'x' * 600 + b' -->' + body.encode()
+    assert b"<kml" not in kml[:400].lower()       # root tag is past any fixed window
+    assert len(load_tracks(kml, REGION)) == 1     # whole-doc scan still routes to KML
+
+def test_kml_malformed_coords_skipped_not_crash():
+    from app.ingest import load_kml_tracks
+    # spaces after commas (a real exporter quirk) must parse, not crash the file
+    kml = ('<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+           '<Placemark><LineString><coordinates>-111.5, 39.30, 0 -111.5, 39.34, 0</coordinates>'
+           '</LineString></Placemark></Document></kml>').encode()
+    tracks = load_kml_tracks(kml, REGION)
+    assert len(tracks) == 1 and tracks[0].coords.shape[0] >= 2
+
 def test_out_of_zone_point_dropped_not_inf():
     # A point far outside UTM 12N validity reprojects to (inf, inf). It must be
     # dropped rather than emitted, or it crashes density downstream.
