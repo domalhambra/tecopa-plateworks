@@ -1,0 +1,23 @@
+{
+  "id": "lassen_ca",
+  "name": "Lassen County, California",
+  "crs": "EPSG:32610",
+  "bounds": [
+    664563.0465110968,
+    4458255.309011253,
+    724833.0465110968,
+    4525535.309011253
+  ],
+  "overview_size": [
+    1254,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "native_resolution_m": 10,
+  "elevation_min": 1230.6602783203125,
+  "elevation_max": 2221.49169921875,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}
