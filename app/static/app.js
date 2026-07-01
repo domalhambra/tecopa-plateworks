@@ -209,8 +209,30 @@ function startOver() {
   setStatus('Cleared — drop files to start a new map');
 }
 
+// --- theme (Night/Day) ---
+// The pre-paint <head> script applies the saved scheme before first paint; here we
+// reflect it in the toggle and persist changes. Restyles the UI only, never the poster.
+function currentScheme() {
+  return document.documentElement.getAttribute('data-color-scheme') === 'light' ? 'light' : 'dark';
+}
+function applyTheme(scheme) {
+  document.documentElement.setAttribute('data-color-scheme', scheme);
+  const btn = $('themeToggle');
+  btn.textContent = scheme === 'light' ? 'Night' : 'Day';
+  btn.setAttribute('aria-label', scheme === 'light' ? 'Switch to night theme' : 'Switch to day theme');
+}
+function initTheme() {
+  const btn = $('themeToggle'); btn.hidden = false;
+  applyTheme(currentScheme());
+  btn.onclick = () => {
+    const next = currentScheme() === 'light' ? 'dark' : 'light';
+    applyTheme(next); savePref('theme', next);
+  };
+}
+
 // --- wiring ---
 function wire() {
+  initTheme();
   canvas.init($('map'), {
     onCropChange: () => { if (state.hasSpec) state.proofStale = true; markers.refreshOutOfFrame(); },
     onMarkerMoved: () => { state.proofStale = true; markers.refreshOutOfFrame(); setStatus('Marker moved — re-render the proof to see it'); },
