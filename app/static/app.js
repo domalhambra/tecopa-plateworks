@@ -1,208 +1,250 @@
-const cv = document.getElementById('map');
-const ctx = cv.getContext('2d');
-const overview = new Image();
-let state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [], regionId: null, regions: [] };
+// app.js — bootstrap + step state machine. Owns transitions and the stepper; wires
+// the panes to canvas.js / markers.js / api.js. Single nav paradigm: one named
+// primary button drives each step forward; the stepper only clicks BACK to a
+// completed step.
+import { state, loadPrefs, savePref, activeRegion } from './state.js';
+import * as api from './api.js';
+import * as canvas from './canvas.js';
+import * as markers from './markers.js';
 
 const $ = (id) => document.getElementById(id);
-const setStatus = (m) => { $('status').textContent = m || ''; };
+const STEP_LABELS = { region: 'Region', tracks: 'Tracks', frame: 'Frame', proof: 'Proof' };
+const WORKSPACE_HEADING = { tracks: 'Add your tracks', frame: 'Frame the poster' };
 
-function regionName(id) { const r = state.regions.find((x) => x.id === id); return r ? r.name : id; }
+function setStatus(msg, which = 'status') { const el = $(which); if (el) el.textContent = msg || ''; }
+function stepIndex() { return state.steps.indexOf(state.step); }
 
-function selectRegion(id) {
-  state.regionId = id;
-  $('region').textContent = id ? regionName(id) : '';
-  for (const el of document.querySelectorAll('.region-card'))
-    el.classList.toggle('sel', el.dataset.id === id);
+// --- stepper ---
+function buildStepper() {
+  const nav = $('stepper'); nav.innerHTML = '';
+  const ci = stepIndex();
+  state.steps.forEach((s, idx) => {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'step' + (s === state.step ? ' active' : '') +
+                    (idx < ci ? ' done' : '') + (idx > ci ? ' upcoming' : '');
+    if (s === state.step) row.setAttribute('aria-current', 'step');
+    row.disabled = idx >= ci;                          // only completed steps go back
+    row.innerHTML =
+      `<span class="circle">${idx < ci ? '✓' : idx + 1}</span>` +
+      `<span class="steptext"><span class="eyebrow">Step ${idx + 1}</span>` +
+      `<span class="label">${STEP_LABELS[s]}</span></span>`;
+    row.onclick = () => { if (idx < ci) go(s); };      // click-back only
+    nav.appendChild(row);
+  });
 }
 
-async function loadRegions() {
-  let list = [];
-  try { list = await (await fetch('/api/regions')).json(); } catch (e) { /* leave empty */ }
-  state.regions = list;
-  if (list.length <= 1) {                         // one region: no picker, just name it
-    if (list.length === 1) selectRegion(list[0].id);
-    return;
+// --- transitions ---
+function go(step) {
+  state.step = step;
+  const inWork = step === 'tracks' || step === 'frame';
+  $('pane-region').hidden = step !== 'region';
+  $('workspace').hidden = !inWork;
+  $('pane-proof').hidden = step !== 'proof';
+
+  if (inWork) {
+    $('h-workspace').textContent = WORKSPACE_HEADING[step];
+    $('filesBlock').hidden = step !== 'tracks';
+    $('frameControls').hidden = step !== 'frame';
+    $('toFrame').hidden = step !== 'tracks';
+    $('renderProof').hidden = step !== 'frame';
+    $('markersBox').hidden = !(state.hotspots.length);
+    canvas.setMode(step);
+    if (step === 'tracks') {
+      setStatus(state.tracks.length
+        ? `${state.tracks.length} track(s) — name places or continue` : '');
+    } else {
+      markers.refreshOutOfFrame();
+      showHint('Drag to draw a frame · Reset to recenter');
+      setStatus('', 'status');
+    }
   }
-  const host = $('regionList');
-  host.innerHTML = '';
-  for (const r of list) {
+  buildStepper();
+  focusHeading(step);
+}
+
+function focusHeading(step) {
+  const id = { region: 'h-region', tracks: 'h-workspace', frame: 'h-workspace', proof: 'h-proof' }[step];
+  const el = $(id); if (el) el.focus();
+}
+
+function showHint(text) { const h = $('hint'); if (!h) return; h.textContent = text; h.hidden = !text; }
+
+// --- region step ---
+function selectRegion(id) {
+  state.region = id;
+  const meta = state.regions.find((r) => r.id === id);
+  state.regionName = meta ? meta.name : '';
+  $('regionName').textContent = state.regionName;
+  for (const el of document.querySelectorAll('.region-card')) el.classList.toggle('sel', el.dataset.id === id);
+  $('toTracks').disabled = !id;
+}
+
+function buildRegionGallery() {
+  const host = $('regionGallery'); host.innerHTML = '';
+  for (const r of state.regions) {
     const b = document.createElement('button');
-    b.className = 'region-card'; b.dataset.id = r.id;
+    b.type = 'button'; b.className = 'region-card'; b.dataset.id = r.id;
     b.innerHTML = `<img src="${r.overview}" alt=""><span>${r.name}</span>`;
     b.onclick = () => selectRegion(r.id);
     host.appendChild(b);
   }
-  $('regionPicker').hidden = false;
-  setStatus('Pick a region, then drop your tracks (or just drop — we’ll auto-detect)');
 }
 
-function ovToCanvas(px, py) { return [px * state.scale, py * state.scale]; }
-function canvasToOv(cx, cy) { return [cx / state.scale, cy / state.scale]; }
-
-function draw() {
-  ctx.clearRect(0, 0, cv.width, cv.height);
-  if (overview.complete && state.ovSize) ctx.drawImage(overview, 0, 0, cv.width, cv.height);
-  ctx.strokeStyle = 'rgba(43,42,40,.75)'; ctx.lineWidth = 1.2;
-  for (const t of state.tracks) {
-    ctx.beginPath();
-    t.forEach(([px, py], i) => { const [x, y] = ovToCanvas(px, py); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
-    ctx.stroke();
-  }
-  for (const h of state.hotspots) {
-    const [x, y] = ovToCanvas(h.px[0], h.px[1]);
-    ctx.fillStyle = '#c7a955';
-    ctx.beginPath(); ctx.arc(x, y, 6, 0, 2 * Math.PI); ctx.fill();
-  }
-  if (state.crop) {
-    const [a, b, c, d] = state.crop;
-    ctx.strokeStyle = '#c7a955'; ctx.lineWidth = 2;
-    ctx.strokeRect(a, b, c - a, d - b);
+async function loadRegions() {
+  let list = [];
+  try { list = await api.getRegions(); } catch { /* leave empty; drop-to-detect still works */ }
+  state.regions = list;
+  const prefs = loadPrefs();
+  if (list.length <= 1) {                              // auto-skip the Region step
+    state.steps = ['tracks', 'frame', 'proof'];
+    if (list.length === 1) selectRegion(list[0].id);
+    go('tracks');
+  } else {
+    state.steps = ['region', 'tracks', 'frame', 'proof'];
+    buildRegionGallery();
+    if (prefs.region && list.some((r) => r.id === prefs.region)) selectRegion(prefs.region);
+    $('startOver').hidden = false;
+    go('region');
   }
 }
 
-function renderFileList() {
-  $('fileList').innerHTML = state.files.map((n) => `<li>${n}</li>`).join('');
-}
-
-const ICONS = ['dot', 'peak', 'camp', 'water', 'flag', 'camera', 'star'];
-
-function renderMarkers() {
-  const host = $('markerList');
-  if (!state.hotspots.length) { $('markers').hidden = true; return; }
-  $('markers').hidden = false;
-  host.innerHTML = '';
-  state.hotspots.forEach((h, i) => {
-    const row = document.createElement('div');
-    row.className = 'marker-row';
-    const opts = ICONS.map((ic) => `<option value="${ic}"${(h.icon || 'dot') === ic ? ' selected' : ''}>${ic}</option>`).join('');
-    row.innerHTML =
-      `<span class="dot"></span>` +
-      `<input class="m-label" placeholder="Marker ${i + 1}" value="${h.label || ''}">` +
-      `<select class="m-icon">${opts}</select>` +
-      `<label class="m-photo${h.photo ? ' has' : ''}">📷<input type="file" accept="image/*" hidden></label>`;
-    row.querySelector('.m-label').onchange = (e) => { h.label = e.target.value; pushMarkers(); };
-    row.querySelector('.m-icon').onchange = (e) => { h.icon = e.target.value; pushMarkers(); };
-    row.querySelector('.m-photo input').onchange = (e) => { if (e.target.files[0]) uploadPhoto(i, e.target.files[0], row); };
-    host.appendChild(row);
-  });
-}
-
-async function pushMarkers() {
-  if (!state.session) return;
-  const markers = state.hotspots.map((h, i) => ({ i, label: h.label || '', icon: h.icon || 'dot' }));
-  const fd = new FormData();
-  fd.append('session_id', state.session); fd.append('markers', JSON.stringify(markers));
-  await fetch('/api/markers', { method: 'POST', body: fd });
-  setStatus('Markers updated — re-render the proof to see them');
-}
-
-async function uploadPhoto(i, file, row) {
-  const fd = new FormData();
-  fd.append('session_id', state.session); fd.append('i', i); fd.append('file', file);
-  const r = await fetch('/api/photo', { method: 'POST', body: fd });
-  if (!r.ok) { setStatus('Photo rejected: ' + (await r.text())); return; }
-  state.hotspots[i].photo = true;
-  row.querySelector('.m-photo').classList.add('has');
-  setStatus('Photo attached — re-render the proof to see it');
-}
-
-async function uploadFiles(fileList) {
+// --- upload / tracks step ---
+async function doUpload(fileList) {
   const arr = Array.from(fileList || []);
   if (!arr.length) return;
-  const fd = new FormData();
-  for (const f of arr) fd.append('files', f);
-  if (state.session) fd.append('session_id', state.session);
-  else if (state.regionId) fd.append('region_id', state.regionId);   // else backend auto-detects
   setStatus(`Uploading ${arr.length} file(s)…`);
-  const r = await fetch('/api/upload', { method: 'POST', body: fd });
-  if (!r.ok) { setStatus('Upload failed: ' + (await r.text())); return; }
-  const j = await r.json();
-  selectRegion(j.region);                                            // reflect the bound region
-  state.session = j.session; state.ovSize = j.overview_size;
-  state.scale = cv.width / j.overview_size[0];
-  cv.height = Math.round(j.overview_size[1] * state.scale);
-  state.tracks = j.tracks; state.hotspots = j.hotspots;
-  state.files.push(...arr.map((f) => f.name)); renderFileList(); renderMarkers();
-  overview.onload = draw; overview.src = j.overview;
-  $('proofBtn').disabled = false; $('clearBtn').disabled = false;
-  setStatus(`${j.tracks.length} track(s) across ${state.files.length} file(s) — drag a crop box`);
+  try {
+    const j = await api.upload(arr, { sessionId: state.session, regionId: state.region });
+    state.session = j.session;
+    if (j.region !== state.region) selectRegion(j.region);   // reflect an auto-detected region
+    state.regionName = j.name; $('regionName').textContent = j.name || '';
+    state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
+    state.starterCrop = j.starter_crop; state.crop = null;    // set on Frame entry
+    state.hasSpec = false; state.proofStale = true;           // new tracks invalidate any spec
+    savePref('region', j.region);
+    arr.forEach((f) => state.files.push(f.name)); renderFiles();
+    canvas.setOverview(j.overview, j.overview_size);
+    $('dropzone').hidden = true; $('map').hidden = false; $('addFiles').hidden = false;
+    markers.render($('markerList'), (msg) => setStatus(msg));
+    $('markersBox').hidden = !state.hotspots.length;
+    canvas.setMode('tracks');
+    $('toFrame').disabled = state.tracks.length === 0;
+    showHint('Your tracks are on the map — gold dots mark places you returned to most');
+    setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s) — name places or continue`);
+  } catch (e) { setStatus('Upload failed: ' + e.message); }
 }
 
-// drop zone + file picker
-const drop = $('drop');
-drop.onclick = () => $('files').click();
-$('files').onchange = (e) => { uploadFiles(e.target.files); e.target.value = ''; };
-drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
-drop.ondragleave = () => drop.classList.remove('over');
-drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); uploadFiles(e.dataTransfer.files); };
+function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${n}</li>`).join(''); }
 
-$('clearBtn').onclick = () => {
-  const regions = state.regions;                       // keep the loaded region list
-  state = { session: null, ovSize: null, tracks: [], hotspots: [], crop: null, scale: 1, files: [], regionId: null, regions };
-  selectRegion(regions.length === 1 ? regions[0].id : null);
-  renderFileList(); renderMarkers(); ctx.clearRect(0, 0, cv.width, cv.height);
-  $('proofImg').removeAttribute('src');
-  $('proofBtn').disabled = true; $('acceptBtn').disabled = true; $('clearBtn').disabled = true;
-  setStatus('Cleared — pick a region and drop files to start a new map');
-};
+// --- proof step ---
+async function renderProof() {
+  const ov = cropForProof();
+  if (!ov) { setStatus('Draw a frame first', 'status'); return; }
+  setStatus('Rendering proof…', 'status');
+  try {
+    const blob = await api.proof(state.session, ov, state.printW, state.printH);
+    $('posterImg').src = URL.createObjectURL(blob);
+    state.hasSpec = true; state.proofStale = false;
+    go('proof');
+    setStatus('Proof ready — accept to render the full-resolution final', 'proofStatus');
+  } catch (e) {
+    if (e.status === 422) {
+      setStatus(`This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`, 'status');
+    } else { setStatus('Proof failed: ' + e.message, 'status'); }
+  }
+}
 
-loadRegions();
-
-// drag a crop rectangle locked to the chosen print aspect ratio
-let dragStart = null;
-cv.onmousedown = (e) => { dragStart = [e.offsetX, e.offsetY]; };
-cv.onmousemove = (e) => {
-  if (!dragStart) return;
-  const [sw, sh] = $('size').value.split(',').map(Number);
-  const ar = sw / sh;
-  const w = e.offsetX - dragStart[0];
-  const h = w / ar;
-  state.crop = [dragStart[0], dragStart[1], dragStart[0] + w, dragStart[1] + h];
-  draw();
-};
-cv.onmouseup = () => { dragStart = null; };
-
-$('proofBtn').onclick = async () => {
-  if (!state.crop) { setStatus('Drag a crop box first'); return; }
-  const [sw, sh] = $('size').value.split(',').map(Number);
-  const [a, b] = canvasToOv(state.crop[0], state.crop[1]);
-  const [c, d] = canvasToOv(state.crop[2], state.crop[3]);
-  const fd = new FormData();
-  fd.append('session_id', state.session);
-  fd.append('x0', a); fd.append('y0', b); fd.append('x1', c); fd.append('y1', d);
-  fd.append('print_w', sw); fd.append('print_h', sh);
-  setStatus('Rendering proof…');
-  const r = await fetch('/api/proof', { method: 'POST', body: fd });
-  if (!r.ok) { setStatus('Proof rejected: ' + (await r.text())); $('acceptBtn').disabled = true; return; }
-  $('proofImg').src = URL.createObjectURL(await r.blob());
-  $('acceptBtn').disabled = false;
-  setStatus('Proof ready — accept to render the full-resolution final');
-};
+function cropForProof() {
+  const c = state.crop; if (!c || !state.scale) return null;
+  const s = state.scale;
+  return [Math.min(c[0], c[2]) / s, Math.min(c[1], c[3]) / s,
+          Math.max(c[0], c[2]) / s, Math.max(c[1], c[3]) / s];
+}
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
-$('acceptBtn').onclick = async () => {
-  const fd = new FormData(); fd.append('session_id', state.session);
-  $('acceptBtn').disabled = true;
-  setStatus('Queuing final render…');
-  const sub = await fetch('/api/final/submit', { method: 'POST', body: fd });
-  if (!sub.ok) { setStatus('Final failed: ' + (await sub.text())); $('acceptBtn').disabled = false; return; }
-  const jid = (await sub.json()).job;
-  // poll the job off the request thread; the 300 dpi paint can take a few seconds
-  for (;;) {
-    await sleep(600);
-    let s;
-    try { s = await (await fetch(`/api/jobs/${jid}`)).json(); } catch (e) { continue; }
-    if (s.state === 'queued') { setStatus('Queued…'); continue; }
-    if (s.state === 'running') { setStatus('Rendering final at 300 dpi…'); continue; }
-    if (s.state === 'error') { setStatus('Final failed: ' + (s.error || 'render error')); break; }
-    if (s.state === 'done') {
-      const blob = await (await fetch(s.result)).blob();
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob); a.download = 'trailprint.png'; a.click();
-      setStatus('Final downloaded.');
-      break;
-    }
+async function acceptFinal() {
+  if (!state.hasSpec || state.proofStale) {
+    setStatus('Something changed since the last proof — re-render the proof first.', 'proofStatus');
+    return;
   }
-  $('acceptBtn').disabled = false;
-};
+  $('accept').disabled = true;
+  setStatus('Queuing final render…', 'proofStatus');
+  try {
+    const { job } = await api.submitFinal(state.session);
+    for (;;) {
+      await sleep(600);
+      let s;
+      try { s = await api.jobStatus(job); } catch { continue; }
+      if (s.state === 'queued') { setStatus('Queued…', 'proofStatus'); continue; }
+      if (s.state === 'running') { setStatus('Rendering final at 300 dpi…', 'proofStatus'); continue; }
+      if (s.state === 'error') { setStatus('Final failed: ' + (s.error || 'render error'), 'proofStatus'); break; }
+      if (s.state === 'done') {
+        const blob = await api.fetchBlob(s.result);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob); a.download = 'trailprint.png'; a.click();
+        setStatus('Final downloaded.', 'proofStatus');
+        break;
+      }
+    }
+  } catch (e) { setStatus('Final failed: ' + e.message, 'proofStatus'); }
+  $('accept').disabled = false;
+}
+
+// --- start over ---
+function startOver() {
+  const hasWork = state.session || state.files.length;
+  if (hasWork && !confirm('Start over? This clears the loaded tracks and framing (uploaded photos are kept until the session ends).')) return;
+  const regions = state.regions, steps = state.steps;
+  Object.assign(state, {
+    session: null, ovSize: null, scale: 1, tracks: [], hotspots: [],
+    crop: null, starterCrop: null, hasSpec: false, proofStale: false, files: [],
+  });
+  state.regions = regions; state.steps = steps;
+  renderFiles(); $('markerList').innerHTML = ''; $('markersBox').hidden = true;
+  $('dropzone').hidden = false; $('map').hidden = true; $('addFiles').hidden = true;
+  $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
+  go(state.steps[0]);
+  setStatus('Cleared — drop files to start a new map');
+}
+
+// --- wiring ---
+function wire() {
+  canvas.init($('map'), {
+    onCropChange: () => { if (state.hasSpec) state.proofStale = true; markers.refreshOutOfFrame(); },
+    onMarkerMoved: () => { state.proofStale = true; markers.refreshOutOfFrame(); setStatus('Marker moved — re-render the proof to see it'); },
+    onDragTip: () => showHint('Tip: drag a gold dot to reposition that place'),
+  });
+
+  const dz = $('dropzone'), fi = $('fileInput');
+  dz.onclick = () => fi.click();
+  $('addFiles').onclick = () => fi.click();
+  fi.onchange = (e) => { doUpload(e.target.files); e.target.value = ''; };
+  const mapPane = $('mapPane');
+  mapPane.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
+  mapPane.addEventListener('dragleave', () => dz.classList.remove('over'));
+  mapPane.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); doUpload(e.dataTransfer.files); });
+
+  $('toTracks').onclick = () => go('tracks');
+  $('toFrame').onclick = () => go('frame');
+  $('renderProof').onclick = renderProof;
+  $('resetFrame').onclick = () => { canvas.resetFrame(); markers.refreshOutOfFrame(); };
+  $('reframe').onclick = () => go('frame');
+  $('accept').onclick = acceptFinal;
+  $('startOver').onclick = startOver;
+
+  const prefs = loadPrefs();
+  if (prefs.printSize) {
+    const [w, h] = prefs.printSize.split(',').map(Number);
+    if (w && h) { state.printW = w; state.printH = h; $('size').value = prefs.printSize; }
+  }
+  $('size').onchange = (e) => {
+    const [w, h] = e.target.value.split(',').map(Number);
+    state.printW = w; state.printH = h; savePref('printSize', e.target.value);
+    canvas.refitForSize(); markers.refreshOutOfFrame();
+  };
+}
+
+wire();
+loadRegions();

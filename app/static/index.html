@@ -1,39 +1,104 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>TrailPrint</title>
-<link rel="stylesheet" href="style.css"></head>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TrailPrint Studio</title>
+  <!-- apply the saved theme before first paint to avoid a flash -->
+  <script>
+    try {
+      var p = JSON.parse(localStorage.getItem('trailprint') || '{}');
+      if (p.theme) document.documentElement.setAttribute('data-color-scheme', p.theme);
+    } catch (e) { /* private mode */ }
+  </script>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="style.css">
+</head>
 <body>
-  <header><h1>TrailPrint</h1><span id="region"></span></header>
+  <header>
+    <div class="brand">
+      <h1>TrailPrint <span>Studio</span></h1>
+      <span id="regionName" class="region-name"></span>
+    </div>
+    <button id="themeToggle" class="ghost" type="button" aria-label="Toggle day and night theme" hidden>Day</button>
+  </header>
+
   <main>
-    <div id="controls">
-      <div id="regionPicker" class="regions" hidden>
-        <div class="regions-label">Region</div>
-        <div id="regionList" class="region-list"></div>
+    <nav id="stepper" aria-label="Progress"></nav>
+
+    <section id="stage">
+      <!-- STEP: Region -->
+      <div class="pane" id="pane-region" hidden>
+        <h2 id="h-region" tabindex="-1">Choose a region</h2>
+        <p class="lede">Turn your tracks into a shaded-relief poster.</p>
+        <div id="regionGallery" class="region-gallery"></div>
+        <div class="actions">
+          <button id="startOver" class="ghost danger" type="button" hidden>Start over</button>
+          <button id="toTracks" class="primary" type="button" disabled>Continue to Tracks</button>
+        </div>
       </div>
-      <div id="drop">Drop <b>GPX / KML / KMZ</b> here<br><small>or click to browse — files accumulate</small>
-        <input type="file" id="files" accept=".gpx,.kml,.kmz" multiple hidden>
+
+      <!-- STEPS: Tracks &amp; Frame (share one map) -->
+      <div class="pane" id="workspace" hidden>
+        <h2 id="h-workspace" tabindex="-1">Add your tracks</h2>
+
+        <div id="frameControls" class="frame-controls" hidden>
+          <label>Print size
+            <select id="size">
+              <option value="18,24">18 × 24 in</option>
+              <option value="24,36">24 × 36 in</option>
+              <option value="12,16">12 × 16 in</option>
+              <option value="9,12">9 × 12 in</option>
+            </select>
+          </label>
+          <button id="resetFrame" class="ghost" type="button">Reset frame</button>
+        </div>
+
+        <div class="map-wrap">
+          <div id="mapPane" class="map-pane">
+            <canvas id="map" hidden></canvas>
+            <button id="dropzone" class="dropzone" type="button">
+              <b>Drop GPX / KML / KMZ</b>
+              <span>or click to browse — files accumulate</span>
+            </button>
+            <div id="hint" class="hint" hidden></div>
+          </div>
+
+          <aside class="side">
+            <div id="filesBlock">
+              <button id="addFiles" class="ghost small" type="button" hidden>+ Add more files</button>
+              <ul id="fileList" class="file-list"></ul>
+            </div>
+            <div id="markersBox" class="markers" hidden>
+              <div class="side-label">Places — name, icon, photo <span class="optional">(optional)</span></div>
+              <div id="markerList"></div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="actions">
+          <span id="status" class="status"></span>
+          <button id="toFrame" class="primary" type="button" disabled>Continue to Frame</button>
+          <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
+        </div>
       </div>
-      <ul id="fileList"></ul>
-      <div id="actions">
-        <label>Print <select id="size">
-          <option value="18,24">18 x 24</option>
-          <option value="24,36">24 x 36</option>
-          <option value="12,16">12 x 16</option>
-          <option value="9,12">9 x 12</option>
-        </select></label>
-        <button id="proofBtn" disabled>Render proof</button>
-        <button id="acceptBtn" disabled>Accept &amp; render final</button>
-        <button id="clearBtn" disabled>Clear</button>
+
+      <!-- STEP: Proof -->
+      <div class="pane" id="pane-proof" hidden>
+        <h2 id="h-proof" tabindex="-1">Your poster proof</h2>
+        <div class="proof-wrap">
+          <div class="poster-card"><img id="posterImg" alt="Poster proof"></div>
+        </div>
+        <div class="actions">
+          <span id="proofStatus" class="status"></span>
+          <button id="reframe" class="ghost" type="button">Reframe</button>
+          <button id="accept" class="primary" type="button">Accept &amp; render final</button>
+        </div>
       </div>
-      <span id="status"></span>
-    </div>
-    <canvas id="map" width="900" height="860"></canvas>
-    <div id="side">
-      <div id="markers" class="markers" hidden>
-        <div class="regions-label">Markers — name, icon, photo</div>
-        <div id="markerList"></div>
-      </div>
-      <div id="proofPane"><img id="proofImg" alt="proof appears here"></div>
-    </div>
+    </section>
   </main>
-  <script src="app.js"></script>
-</body></html>
+
+  <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

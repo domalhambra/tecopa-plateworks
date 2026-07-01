@@ -14,9 +14,11 @@ def test_discover_finds_lassen():
 def test_region_meta_shape():
     r = discover(REGIONS_ROOT)["lassen_ca"]
     m = r.meta()
-    assert set(m) >= {"id", "name", "bounds", "overview_size", "overview", "lonlat_bbox"}
+    assert set(m) >= {"id", "name", "bounds", "overview_size", "overview",
+                      "lonlat_bbox", "native_resolution_m"}
     assert m["overview"] == "/regions/lassen_ca/overview.png"
     assert len(m["bounds"]) == 4 and len(m["lonlat_bbox"]) == 4
+    assert m["native_resolution_m"] == 10
 
 def test_lonlat_bbox_roundtrips_to_input_bbox():
     # Lassen was built from --bbox -121.06 40.16 -120.34 40.85. Recovering lon/lat

@@ -47,6 +47,7 @@ class Region:
         return {"id": self.id, "name": self.name,
                 "bounds": list(self.cfg["bounds"]),
                 "overview_size": list(self.cfg["overview_size"]),
+                "native_resolution_m": self.cfg["native_resolution_m"],
                 "overview": f"/regions/{self.id}/overview.png",
                 "lonlat_bbox": list(self.lonlat_bbox)}
 

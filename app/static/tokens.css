@@ -1,0 +1,51 @@
+/* Badwater design tokens (subset), mirrored from the exported design system
+   colors.css (badwater-hd-design-system tokens dir). Dark (Night) is the default
+   :root; Day is [data-color-scheme="light"]. The theme toggle flips the attribute;
+   it restyles the whole UI and never touches the rendered poster. */
+:root {
+  --color-contrast: #EBE6D9;
+  --color-foreground: #D5D8E0;
+  --color-muted: #8E9099;
+  --color-background: #161618;
+  --color-background-100: #1A1A1C;
+  --color-background-200: #27272A;
+  --color-background-300: #333336;
+  --surface-elevated: var(--color-background-100);
+  --surface-recessed: var(--color-background);
+  --color-border: rgba(235, 230, 217, 0.10);
+  --color-border-strong: rgba(235, 230, 217, 0.18);
+  --color-accent: #B56B4A;
+  --color-accent-hover: #C77F5C;
+  --color-accent-foreground: #FFFFFF;
+  --color-accent-gold: #D4B464;
+  --color-accent-gold-foreground: #161618;
+  --color-success: #6FA89D;
+  --color-warning: #D49658;
+  --color-error: #B56B4A;
+  --card-shadow: 0 2px 8px rgba(0, 0, 0, .30), 0 1px 2px rgba(0, 0, 0, .18);
+  --tp-accent: var(--color-accent-gold);
+}
+
+:root[data-color-scheme="light"] {
+  --color-contrast: #2B2A28;
+  --color-foreground: #2B2A28;
+  --color-muted: #5E5E5E;
+  --color-background: #F0EFEC;
+  --color-background-100: #FFFFFF;
+  --color-background-200: #E6E4DF;
+  --color-background-300: #DAD8D2;
+  --surface-elevated: var(--color-background-200);
+  --surface-recessed: var(--color-background);
+  --color-border: rgba(43, 42, 40, 0.10);
+  --color-border-strong: rgba(43, 42, 40, 0.18);
+  --color-accent: #A85638;
+  --color-accent-hover: #8F4830;
+  --color-accent-foreground: #FFFFFF;
+  --color-accent-gold: #8A6310;
+  --color-accent-gold-foreground: #FBF7EF;
+  --color-success: #3F6B60;
+  --color-warning: #A8622A;
+  --color-error: #B56B4A;
+  --card-shadow: 0 2px 8px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
+  --tp-accent: var(--color-accent-gold);
+}
