@@ -108,6 +108,8 @@ docs/superpowers/   specs/ and plans/ — the design + implementation plan for t
 
 ## Open threads / what's next (priority order)
 
+> **Superseded — see [`2026-07-01-prioritized-next-steps.md`](2026-07-01-prioritized-next-steps.md)** for the current, prioritized action plan (P0 v1-hardening first), which is grounded in the red-team roadmap at [`../assessments/2026-07-01-trailprint-redteam-and-roadmap.md`](../assessments/2026-07-01-trailprint-redteam-and-roadmap.md). The list below is retained for historical context.
+
 0. **TrailPrint Studio wizard shipped** (`docs/superpowers/specs|plans/2026-06-30-trailprint-studio-wizard*`). `app/static/*` is now a 4-step guided wizard (Region → Tracks & Places → Frame → Proof) split into ES modules (`state/api/canvas/markers/app.js` + `tokens.css`), with a new `POST /api/markers/move` (drag-to-reposition, persisted) and a tested floor-safe `starter_crop` helper surfaced on `/api/upload`. Night/Day theme toggle, single-nav stepper, a11y wins. Verified by driving the app (Playwright/Chromium). **Note:** the by-eye visual verification used a *throwaway synthetic* `regions/lassen_ca/dem.tif` (gitignored, coarse noise) because the real ~190 MB DEM isn't in the clone — rebuild it with `region_prep.py` before judging real posters.
 1. **Real GPX fixture.** Replace the synthetic `sample.gpx` with a real OnX/Avenza export and re-verify the by-eye look + marker auto-placement on real tracks.
 2. **Async render path is now wired into the UI** — the wizard's Accept & render final calls `/api/final/submit` → polls `/api/jobs/{id}` → downloads `/result` (the sync `/api/final` remains for tests). Done.
