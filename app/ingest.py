@@ -76,27 +76,48 @@ def _kml_segments(root):
                         continue
             if len(pts) >= 2:
                 segs.append(pts)
-        elif ln == "Track":   # gx:Track: parallel <when> and <gx:coord> children
+        elif ln == "Track":   # gx:Track: N <when>s then N position-matched <gx:coord>s
             whens, coords = [], []
+            j = 0                       # index over ALL <gx:coord>s (valid or not)
             for c in el:
                 cl = _localname(c)
                 if cl == "when":
                     whens.append(c.text)
-                elif cl == "coord" and c.text:
+                elif cl == "coord":
+                    # pair this coord with its own <when> and drop them as a unit: a
+                    # malformed coord must advance the index too, or every later point
+                    # inherits the previous point's time -> wrong day -> wrong hotspots
+                    # (red-team V1-7). The n-th when matches the n-th coord (KML spec).
+                    when = whens[j] if j < len(whens) else None
+                    j += 1
+                    if not c.text:
+                        continue
                     xy = c.text.split()
                     if len(xy) >= 2:
                         try:
-                            coords.append((float(xy[0]), float(xy[1])))
+                            coords.append((float(xy[0]), float(xy[1]), when))
                         except ValueError:
                             continue
             if len(coords) >= 2:
-                times = whens + [None] * (len(coords) - len(whens))
-                segs.append([(lon, lat, times[i]) for i, (lon, lat) in enumerate(coords)])
+                segs.append(coords)     # each point already carries its aligned (lon,lat,when)
     return segs
+
+def _parse_kml_bytes(data: bytes):
+    """Parse KML/XML with entity expansion + external/DTD loading disabled. On modern
+    lxml the real threat is a billion-laughs entity-expansion DoS (not XXE file-read),
+    so resolve_entities=False neutralizes it; huge_tree=False bounds the tree; and a
+    DOCTYPE is rejected outright so no custom entities can be defined (red-team V1-6).
+    A fresh parser per call keeps this thread-safe under concurrent requests."""
+    parser = etree.XMLParser(resolve_entities=False, no_network=True,
+                             huge_tree=False, load_dtd=False, dtd_validation=False)
+    root = etree.fromstring(data, parser=parser)
+    if root.getroottree().docinfo.doctype:
+        raise ValueError("XML DOCTYPE is not allowed")
+    return root
 
 def load_kml_tracks(data: bytes, region: RegionGeo,
                     simplify_tolerance_m: float = 15.0) -> list[Track]:
-    root = etree.fromstring(data)
+    root = _parse_kml_bytes(data)
     out: list[Track] = []
     idx = 0
     for pts in _kml_segments(root):
@@ -106,13 +127,26 @@ def load_kml_tracks(data: bytes, region: RegionGeo,
             idx += 1
     return out
 
+# KMZ is a zip; a malicious archive can be a zip-bomb or an entry flood. Bound both
+# before reading anything out (red-team V1-6).
+KMZ_MAX_ENTRIES = 512
+KMZ_MAX_TOTAL_BYTES = 200 * 1024 * 1024     # declared decompressed size, whole archive
+KMZ_MAX_MEMBER_BYTES = 64 * 1024 * 1024     # the single .kml we actually read
+
 def _kmz_to_kml(data: bytes) -> bytes:
     with zipfile.ZipFile(io.BytesIO(data)) as z:
+        infos = z.infolist()
+        if len(infos) > KMZ_MAX_ENTRIES:
+            raise ValueError("KMZ has too many entries")
+        if sum(i.file_size for i in infos) > KMZ_MAX_TOTAL_BYTES:
+            raise ValueError("KMZ decompressed size exceeds cap")
         names = z.namelist()
         target = "doc.kml" if "doc.kml" in names else next(
             (n for n in names if n.lower().endswith(".kml")), None)
         if target is None:
             raise ValueError("no .kml inside KMZ")
+        if z.getinfo(target).file_size > KMZ_MAX_MEMBER_BYTES:
+            raise ValueError("KMZ .kml member too large")
         return z.read(target)
 
 def load_tracks(data: bytes, region: RegionGeo, filename: str | None = None,

@@ -1,7 +1,10 @@
 # tests/test_region_prep.py
-# NaN-edge trimming in region_prep (DEM-free).
+# NaN-edge trimming in region_prep (DEM-free logic, but region_prep imports the
+# pandas/py3dep build stack at module load, so importorskip the whole module to
+# skip cleanly in the core CI env instead of erroring collection (red-team V1-4).
 import numpy as np
-from region_prep import _trim_nan_edges
+import pytest
+_trim_nan_edges = pytest.importorskip("region_prep")._trim_nan_edges
 
 def test_trims_nan_frame_keeps_interior():
     a = np.full((20, 30), 100.0, dtype="float32")

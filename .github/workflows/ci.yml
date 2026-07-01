@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: ".python-version"
+          cache: "pip"
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-lock.txt
+
+      # rasterio/pyproj/Pillow ship manylinux wheels (bundled GDAL/PROJ), so no apt
+      # GDAL is needed. tests/conftest.py hydrates a synthetic DEM, so the
+      # endpoint/render/registration suites run here instead of skipping. The
+      # region-prep (py3dep/pynhd/pandas/geopandas) tests importorskip and are skipped.
+      - name: Run tests
+        run: pytest -q

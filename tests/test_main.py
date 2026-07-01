@@ -3,13 +3,12 @@
 # robustness/zoom-cap behaviors: clean 404/422/400 instead of opaque 500s, and
 # the zoom cap judged at the FINAL print DPI rather than the proof DPI.
 import io, json, os
-import pytest
 from PIL import Image
 
 REGION_DIR = "regions/lassen_ca"
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(REGION_DIR, "dem.tif")),
-    reason="region assets not built; run region_prep.py")
+
+# tests/conftest.py hydrates a synthetic DEM on a fresh clone / in CI, so these
+# endpoint tests always run (red-team V1-4) instead of skipping without region assets.
 
 
 def _client():
@@ -35,6 +34,15 @@ def _crop(j, km_wide, ar=0.75):
     x0 = ovw * 0.5 - cw / 2; y0 = ovh * 0.5 - ch / 2
     return {"x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch}
 
+
+def test_readyz_ok_with_hydrated_regions():
+    # both bundled regions have a DEM (synthetic in CI) whose bounds match region.json
+    c = _client()
+    r = c.get("/readyz")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ready"] is True
+    assert any(e["id"] == "lassen_ca" and e["ready"] for e in body["regions"])
 
 def test_list_regions_includes_lassen():
     c = _client()
@@ -107,6 +115,20 @@ def test_too_tight_crop_rejected_at_proof_422():
     assert r.status_code == 422
 
 
+def test_offdem_crop_proof_is_422():
+    # red-team V1-1: a cap-clearing crop shoved off the region's DEM must 422
+    # (humanized "extends past the elevation data"), not 500 or an invented poster.
+    c = _client(); j = _upload(c)
+    ovw, ovh = j["overview_size"]
+    base = _crop(j, km_wide=27.0)                 # a valid centered 27 km crop
+    shift = ovw * 0.9                             # slide it east, fully off the DEM
+    data = {"session_id": j["session"],
+            "x0": base["x0"] + shift, "y0": base["y0"],
+            "x1": base["x1"] + shift, "y1": base["y1"],
+            "print_w": 9, "print_h": 12}
+    r = c.post("/api/proof", data=data)
+    assert r.status_code == 422
+
 def test_set_markers_updates_and_invalidates_spec():
     import json as _json
     c = _client(); j = _upload(c)
@@ -133,6 +155,18 @@ def test_photo_endpoint_validates_and_attaches():
     bad = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
                  files={"file": ("x.png", b"not an image", "image/png")})
     assert bad.status_code == 422
+
+def test_photo_oversized_dimensions_rejected(monkeypatch):
+    # red-team V1-6: a decompression-bomb photo (small file, huge declared dimensions)
+    # must 422 on the pixel-count guard, not decode into an OOM.
+    import io as _io
+    from PIL import Image
+    monkeypatch.setattr("app.main.PHOTO_MAX_PIXELS", 100)   # a 40x40 upload now exceeds it
+    c = _client(); j = _upload(c)
+    buf = _io.BytesIO(); Image.new("RGB", (40, 40), (1, 2, 3)).save(buf, "PNG"); buf.seek(0)
+    r = c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+               files={"file": ("big.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 422
 
 def test_markers_unknown_session_404():
     c = _client()

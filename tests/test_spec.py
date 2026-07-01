@@ -1,7 +1,8 @@
 # tests/test_spec.py
 import numpy as np
 import pytest
-from app.spec import CompositionSpec, ZoomTooTightError
+from app.spec import (CompositionSpec, ZoomTooTightError, OutputTooLargeError,
+                      SpecError, MAX_OUTPUT_PIXELS)
 
 def base_kwargs(**over):
     kw = dict(
@@ -30,6 +31,20 @@ def test_pixel_dims_track_dpi():
     s = CompositionSpec(**base_kwargs())
     assert s.pixel_size(96) == (1728, 2304)
     assert s.pixel_size(300) == (5400, 7200)
+
+def test_output_pixel_ceiling_rejected():
+    # red-team V1-6: a huge print size would allocate a gigapixel canvas -> OOM.
+    # 40x40 in @ 300 dpi = 144 MP, over the 120 MP ceiling; refuse before any render.
+    s = CompositionSpec(**base_kwargs(print_w_in=40, print_h_in=40))
+    assert s.pixel_size(300)[0] * s.pixel_size(300)[1] > MAX_OUTPUT_PIXELS
+    with pytest.raises(OutputTooLargeError):
+        s.validate(dpi=300)
+    assert issubclass(OutputTooLargeError, SpecError)   # API maps SpecError -> 422
+
+def test_nonpositive_print_size_rejected_not_divzero():
+    # print size 0 would divide-by-zero the zoom cap; must raise a clean SpecError (422)
+    with pytest.raises(SpecError):
+        CompositionSpec(**base_kwargs(print_w_in=0.0)).validate(dpi=300)
 
 def test_zoom_cap_allows_exactly_native():
     # Boundary guard (invariant 6): a crop that lands EXACTLY at native resolution

@@ -1,19 +1,23 @@
 # app/main.py
 import io, json, os
 from typing import List, Optional
+from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks
 from app.density import hotspots
-from app.spec import CompositionSpec, ZoomTooTightError
+from app.spec import CompositionSpec, SpecError
 from app import session, render, regions, blobs, jobs
 
 # The registry replaces the old single hardcoded region: every regions/<id> built
-# by region_prep.py is now selectable. Discovered once at import.
-REGIONS = regions.discover()
+# by region_prep.py is now selectable. Discovered once at import. The root is
+# env-overridable (TRAILPRINT_REGIONS) so a deploy or the test harness can point
+# the app at a different region tree without editing code.
+REGIONS_ROOT = os.environ.get("TRAILPRINT_REGIONS", "regions")
+REGIONS = regions.discover(REGIONS_ROOT)
 
 PROOF_DPI = 96    # cheap mid-fidelity preview
 FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
@@ -101,6 +105,17 @@ def _resolve_region(blobs, session_id, region_id):
         raise HTTPException(422, "Tracks don't fall within any available region")
     return best, best_tracks
 
+@app.get("/readyz")
+async def readyz():
+    """Readiness probe: every discovered region must have a present DEM whose bounds
+    and CRS match its region.json. 503 (with a per-region report) if any region can't
+    render -- so a deploy/health check catches a missing or bounds-drifted DEM up front
+    instead of a client hitting a 500 or a fabricated-terrain poster (V1-1/V1-2)."""
+    report = [r.readiness() for r in REGIONS.values()]
+    ok = bool(report) and all(e["ready"] for e in report)
+    return JSONResponse({"ready": ok, "regions": report},
+                        status_code=200 if ok else 503)
+
 @app.get("/api/regions")
 async def list_regions():
     """The region-picker gallery: every built region, lightweight metadata only."""
@@ -148,6 +163,15 @@ async def upload(files: List[UploadFile] = File(...),
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 UPLOADS_DIR = "uploads"
 
+# Photo upload guards (red-team V1-6): a small file can declare enormous dimensions
+# (decompression bomb) or just be huge. Cap the raw bytes and the decoded pixel count.
+PHOTO_MAX_BYTES = 20 * 1024 * 1024
+PHOTO_MAX_PIXELS = 64_000_000
+# Process-wide PIL backstop: sits above the render output ceiling (spec.MAX_OUTPUT_PIXELS
+# = 120 MP), so it never trips a legitimate render (built via Image.new/fromarray, not
+# decoded from a file) but still bombs out an absurdly large decoded upload.
+Image.MAX_IMAGE_PIXELS = 200_000_000
+
 def _require_session(session_id):
     if not session.has(session_id):
         raise HTTPException(404, "Unknown or expired session")
@@ -185,9 +209,16 @@ async def set_photo(session_id: str = Form(...), i: int = Form(...),
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
     data = await file.read()
+    if len(data) > PHOTO_MAX_BYTES:
+        raise HTTPException(422, "photo exceeds the size limit")
     try:
-        from PIL import Image
-        Image.open(io.BytesIO(data)).verify()   # reject non-images before saving
+        im = Image.open(io.BytesIO(data))
+        w, h = im.size                           # header read; no full decode yet
+        if w * h > PHOTO_MAX_PIXELS:
+            raise HTTPException(422, "photo dimensions are too large")
+        im.verify()                              # reject corrupt/non-image bytes
+    except HTTPException:
+        raise                                    # keep the specific 422 above
     except Exception:
         raise HTTPException(422, "not a readable image")
     dst_dir = os.path.join(UPLOADS_DIR, session_id)
@@ -243,9 +274,12 @@ async def proof(session_id: str = Form(...),
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h)
     except KeyError:
         raise HTTPException(404, "Unknown or expired session")
-    except ZoomTooTightError as e:
+    except SpecError as e:
         raise HTTPException(422, str(e))
-    img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir, watermark=True)
+    try:
+        img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir, watermark=True)
+    except SpecError as e:
+        raise HTTPException(422, str(e))
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
@@ -261,7 +295,7 @@ async def final(session_id: str = Form(...)):
     region = _region_or_404(st["region_id"])
     try:
         img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir, watermark=False)
-    except ZoomTooTightError as e:
+    except SpecError as e:
         raise HTTPException(422, str(e))
     out = os.path.join(region.dir, f"final_{session_id}.png")
     render.save_print(img, out, dpi=FINAL_DPI)
@@ -307,5 +341,5 @@ async def job_result(jid: str):
         raise HTTPException(404, "result expired")
     return FileResponse(BLOBS.path(key), media_type="image/png", filename="trailprint.png")
 
-app.mount("/regions", StaticFiles(directory="regions"), name="regions")
+app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

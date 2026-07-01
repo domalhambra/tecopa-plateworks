@@ -51,6 +51,34 @@ class Region:
                 "overview": f"/regions/{self.id}/overview.png",
                 "lonlat_bbox": list(self.lonlat_bbox)}
 
+    def readiness(self) -> dict:
+        """Can this region actually render? The DEM must be present and its own bounds
+        + CRS must match region.json -- the DEM's transform is the single source of
+        truth, so a region.json whose bounds overhang the real DEM (red-team V1-1/V1-2:
+        the fabricated-terrain root cause, and susanville shipping with no DEM at all)
+        is caught here instead of surfacing as a 500 or a silently-wrong poster."""
+        import rasterio
+        dem = os.path.join(self.dir, self.cfg.get("dem_path", "dem.tif"))
+        out = {"id": self.id, "dem_present": os.path.exists(dem)}
+        if not out["dem_present"]:
+            out["ready"] = False
+            return out
+        try:
+            with rasterio.open(dem) as ds:
+                b = ds.bounds
+                cb = self.cfg["bounds"]
+                # tolerance ~1.5 DEM pixels, so honest float rounding never trips it
+                tol = max(abs(ds.transform.a), abs(ds.transform.e)) * 1.5
+                drift = max(abs(b.left - cb[0]), abs(b.bottom - cb[1]),
+                            abs(b.right - cb[2]), abs(b.top - cb[3]))
+                crs_ok = ds.crs is not None and ds.crs.to_string() == self.cfg["crs"]
+                out.update(bounds_drift_m=round(float(drift), 2),
+                           bounds_match=bool(drift <= tol), crs_match=bool(crs_ok),
+                           ready=bool(drift <= tol and crs_ok))
+        except Exception as ex:
+            out.update(ready=False, error=f"{type(ex).__name__}: {ex}")
+        return out
+
 def discover(root: str = REGIONS_ROOT) -> dict:
     """Map region_id -> Region for every regions/<id>/region.json present."""
     out: dict[str, Region] = {}

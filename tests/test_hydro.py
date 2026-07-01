@@ -1,8 +1,13 @@
 # tests/test_hydro.py
 import numpy as np
-import geopandas as gpd
+import pytest
 from shapely.geometry import Polygon, LineString
-from region_prep import bake_hydro
+
+# region_prep + its geopandas/pandas/py3dep stack are region-build-only deps, not
+# installed in the core CI env; skip this module cleanly instead of erroring
+# collection (red-team V1-4).
+gpd = pytest.importorskip("geopandas")
+bake_hydro = pytest.importorskip("region_prep").bake_hydro
 
 def test_bake_reprojects_and_filters_by_order():
     # one lake polygon + two flowlines (order 2 dropped, order 4 kept), EPSG:4326

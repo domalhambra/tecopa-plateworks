@@ -3,15 +3,14 @@ import json, os
 import numpy as np
 import pytest
 from PIL import Image
-from app.spec import CompositionSpec, ZoomTooTightError
+from app.spec import CompositionSpec, ZoomTooTightError, OffDemError
 from app.render import rasterize
 
 REGION_DIR = "regions/lassen_ca"
 
-# Integration tests need the built DEM (gitignored); skip on a fresh clone.
-pytestmark = pytest.mark.skipif(
-    not os.path.exists(os.path.join(REGION_DIR, "dem.tif")),
-    reason="region assets not built; run region_prep.py")
+# The DEM is gitignored, but tests/conftest.py hydrates a synthetic one on a fresh
+# clone / in CI, so these integration tests always run (red-team V1-4). A machine
+# with a real 3DEP DEM runs them against real terrain instead.
 
 def _cfg():
     return json.load(open(os.path.join(REGION_DIR, "region.json")))
@@ -84,6 +83,20 @@ def test_hydro_tolerates_malformed_and_checks_crs():
     with pytest.raises(ValueError):
         rasterize(spec, dpi=96, region_dir=REGION_DIR,
                   hydro={"crs": "EPSG:32611", "lakes": [], "rivers": []})
+
+def test_rasterize_rejects_off_dem_crop():
+    # red-team V1-1: a cap-clearing crop shoved past the region's real DEM must raise
+    # OffDemError, not silently paint crop-mean terrain under the tracks. 27x36 km
+    # (passes the 10 m/px cap at 9x12) but pushed ~80% past the east edge.
+    cfg = _cfg(); bx = cfg["bounds"]
+    east = bx[2]; cy = (bx[1] + bx[3]) / 2
+    crop = (east - 5000, cy - 18000, east + 22000, cy + 18000)
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[np.array([[east - 4000, cy], [east + 20000, cy]])],
+                           hotspots=[], seed=7)
+    with pytest.raises(OffDemError):
+        rasterize(spec, dpi=96, region_dir=REGION_DIR)
 
 def test_rasterize_rejects_too_tight():
     cfg = _cfg(); bx = cfg["bounds"]

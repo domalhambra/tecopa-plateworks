@@ -72,6 +72,48 @@ def test_kml_gx_track_with_time():
     assert len(tracks) == 1
     assert tracks[0].day == "2024-03-02"
 
+def test_gx_track_drops_bad_coord_as_unit_keeps_time_alignment():
+    # red-team V1-7: a malformed leading <gx:coord> must drop together with its own
+    # <when>, so the surviving first point keeps ITS date. The old code collected the
+    # two lists independently, shifting every later time up by one -> wrong day.
+    from app.ingest import load_kml_tracks
+    whens = ("<when>2024-03-01T10:00:00Z</when>"
+             "<when>2024-03-02T10:00:00Z</when>"
+             "<when>2024-03-02T10:01:00Z</when>")
+    coords = ("<gx:coord>garbage</gx:coord>"           # dropped
+              "<gx:coord>-111.5 39.32 0</gx:coord>"
+              "<gx:coord>-111.5 39.34 0</gx:coord>")
+    kml = (f'<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2" '
+           f'xmlns:gx="http://www.google.com/kml/ext/2.2"><Document><Placemark>'
+           f'<gx:Track>{whens}{coords}</gx:Track></Placemark></Document></kml>').encode()
+    tracks = load_kml_tracks(kml, REGION)
+    assert len(tracks) == 1
+    assert tracks[0].day == "2024-03-02"    # second when (first coord dropped), not 03-01
+
+def test_kml_doctype_is_rejected():
+    # red-team V1-6: a DOCTYPE could define entities (billion-laughs DoS / XXE); the
+    # hardened parser rejects it outright rather than expanding anything.
+    import pytest
+    from app.ingest import load_kml_tracks
+    evil = (b'<?xml version="1.0"?>'
+            b'<!DOCTYPE kml [<!ENTITY a "aaaaaaaaaa">]>'
+            b'<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+            b'<Placemark><LineString><coordinates>&a;</coordinates>'
+            b'</LineString></Placemark></Document></kml>')
+    with pytest.raises(ValueError):
+        load_kml_tracks(evil, REGION)
+
+def test_kmz_too_many_entries_rejected():
+    # red-team V1-6: an entry-flood KMZ must be refused before reading anything out.
+    import pytest
+    from app.ingest import load_tracks, KMZ_MAX_ENTRIES
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for k in range(KMZ_MAX_ENTRIES + 10):
+            z.writestr(f"f{k}.txt", b"x")
+    with pytest.raises(ValueError):
+        load_tracks(buf.getvalue(), REGION, filename="a.kmz")
+
 def test_kmz_unzips_and_parses():
     from app.ingest import load_tracks
     buf = io.BytesIO()

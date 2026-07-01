@@ -7,10 +7,15 @@ from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
 from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from app.spec import CompositionSpec
+from app.spec import CompositionSpec, OffDemError
 from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
+# Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
+# of the crop itself (margin excluded) has no DEM coverage, the crop overhangs real
+# data and painting it would invent smooth terrain under real tracks -- refuse loudly
+# instead. A sliver of interior nodata below this is repaired by relief._fill_nan.
+MAX_OFFDEM_NAN_FRAC = 0.01
 
 # ---- track cartography: a pronounced desert-gold route laid onto the paper ----
 TRACK_INK = (214, 158, 58)      # desert gold -- warm, saturated, reads against earthy terrain
@@ -259,6 +264,16 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     out_w, out_h = spec.pixel_size(dpi)
 
     elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
+    # Off-DEM guard: measure nodata WITHIN the crop (exclude the read margin, which
+    # may legitimately overhang at a region edge) and refuse a plausible-but-wrong
+    # poster before any painting invents terrain under the tracks (red-team V1-1).
+    core = elev[pad_y:pad_y + out_h, pad_x:pad_x + out_w]
+    nan_frac = float(np.isnan(core).mean()) if core.size else 1.0
+    if nan_frac > MAX_OFFDEM_NAN_FRAC:
+        raise OffDemError(
+            f"The selected frame extends past the available elevation data "
+            f"({nan_frac * 100:.0f}% of it has no DEM coverage). "
+            f"Pan or shrink the crop to keep it inside the region.")
     rgb = shaded_relief(
         elev, res_m=gpp,
         elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],

@@ -1,3 +1,7 @@
+# Core runtime for the TrailPrint app + render engine.
+# Exact pinned versions live in requirements-lock.txt (what CI installs); the ranges
+# below are the human-readable minimums. Test stack: requirements-dev.txt. Offline
+# region build (3DEP/NHD): requirements-regionprep.txt.
 rasterio>=1.3
 pyproj>=3.6
 numpy>=1.26
@@ -9,9 +13,3 @@ Pillow>=10.2
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
-# region prep only:
-py3dep>=0.16
-pynhd>=0.19
-# dev:
-pytest>=8.0
-httpx>=0.27          # FastAPI TestClient

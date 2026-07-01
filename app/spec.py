@@ -3,8 +3,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import numpy as np
 
-class ZoomTooTightError(ValueError):
+# All three are "this picture can't be made here" conditions, not bugs: the API maps
+# any SpecError to a humanized 422 (like the zoom cap), so a single except catches them.
+class SpecError(ValueError):
     pass
+
+class ZoomTooTightError(SpecError):
+    pass
+
+class OutputTooLargeError(SpecError):
+    """The requested print size would paint an OOM-sized image. Caught before any
+    allocation in validate() so one oversized request can't kill a client session."""
+    pass
+
+class OffDemError(SpecError):
+    """The crop extends past the region's real elevation data. Raised at render time
+    (render.py) rather than validate() because it needs the DEM window, not just the
+    spec. Invariant 5: never paint invented terrain -- refuse loudly instead."""
+    pass
+
+# Absolute output ceiling (guards OOM): 18x24 @ 300 dpi is ~39 MP, 24x36 is ~78 MP,
+# so this leaves headroom for any real poster while blocking a gigapixel request.
+MAX_OUTPUT_PIXELS = 120_000_000
 
 @dataclass
 class CompositionSpec:
@@ -40,6 +60,17 @@ class CompositionSpec:
         return (self.crop[2] - self.crop[0]) / w_px
 
     def validate(self, dpi: int = 300):
+        w_px, h_px = self.pixel_size(dpi)
+        # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
+        if w_px < 1 or h_px < 1:
+            raise SpecError(
+                f"print size {self.print_w_in}x{self.print_h_in} in is not renderable")
+        # absolute output-pixel ceiling: refuse an OOM-sized render before any allocation
+        if w_px * h_px > MAX_OUTPUT_PIXELS:
+            raise OutputTooLargeError(
+                f"{w_px}x{h_px}px ({w_px * h_px / 1e6:.0f} MP) exceeds the "
+                f"{MAX_OUTPUT_PIXELS // 1_000_000} MP output ceiling; "
+                f"choose a smaller print size")
         # zoom cap (invariant 6): never request finer ground detail than the data holds
         if self.ground_per_pixel(dpi) < self.native_resolution_m:
             raise ZoomTooTightError(
