@@ -123,11 +123,12 @@ Persists a hand-repositioned marker so the render reads the moved coordinates (t
 - `px: float`, `py: float` — new position in overview pixels
 
 **Behavior:**
-- Resolve the session (`_require_session`), validate `0 <= i < len(hotspots)`.
-- Convert overview px → CRS via `overview_px_to_crs` (the existing geo helper).
-- **Clamp** the CRS point to the region bounds; if the point is outside region bounds, reject with `422` (consistent with the density/zoom-cap error style).
+- Resolve the session (`st = _require_session(session_id)`); reject an invalid index (`0 <= i < len(hotspots)`, else `422` — matching `set_photo`'s "marker index out of range").
+- **Resolve the region first**, `region = _region_or_404(st["region_id"])` (as `_build_spec` already does). `overview_px_to_crs` takes a `RegionGeo` (`region.geo`), not the session dict — this step is required before the conversion and the clamp.
+- Convert overview px → CRS via `overview_px_to_crs(region.geo, px, py)`.
+- **Clamp** the CRS point to `region.cfg["bounds"]` (out-of-bounds is clamped, never rejected — a forgiving UX that matches "snap the dot"). `422` is reserved for the invalid-index case only.
 - Write `hotspots[i]["x"]`, `hotspots[i]["y"]`; `session.update(session_id, hotspots=..., spec=None)` — invalidating the stamped spec exactly as label/icon/photo edits already do, so the next proof reflects the move.
-- Return `{"ok": True}` plus the clamped `{"px","py"}` so the client can snap the dot to the clamped position.
+- Return `{"ok": True}` plus the clamped position projected back to overview px (`{"px","py"}`) so the client can snap the dot to the clamped position.
 
 **Out-of-crop cue (frontend):** `render._draw_markers` already skips markers outside the crop. So a marker dragged outside the eventual crop would silently vanish from the poster. The Frame/Proof view must show a cue (e.g., a muted "outside frame" state on that side-list row) when a marker's position falls outside the current crop.
 
@@ -170,7 +171,7 @@ Cross-region auto-recovery; full keyboard/ARIA canvas; async poll timeout; expre
 ## 9. Testing
 
 **New backend tests (pytest):**
-- `POST /api/markers/move`: happy path writes new x/y and sets `spec=None`; a point inside bounds is accepted; a point outside region bounds is clamped or `422` per the contract; invalid `i` → error.
+- `POST /api/markers/move`: happy path writes new x/y and sets `spec=None`; a point inside bounds is accepted unchanged; a point outside region bounds is clamped to the bounds (and the returned `px`/`py` reflect the clamp); an invalid index `i` → `422`.
 - Starter-crop helper: given a region + tracks, the computed starter crop matches the print aspect and sits at or above the zoom-cap floor (never produces an on-entry `ZoomTooTightError`).
 
 **Existing suite:** stays green (`pytest -q`).
