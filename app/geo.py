@@ -37,3 +37,50 @@ def crop_px_to_crs_window(region: RegionGeo, x0, y0, x1, y1):
     ax, ay = overview_px_to_crs(region, min(x0, x1), max(y0, y1))  # lower-left
     bx, by = overview_px_to_crs(region, max(x0, x1), min(y0, y1))  # upper-right
     return (ax, ay, bx, by)
+
+
+def starter_crop(region: RegionGeo, tracks_px, print_w_in, print_h_in,
+                 native_resolution_m, dpi=300, track_fraction=1 / 3):
+    """A generous default crop (in overview px) for the Frame step: centered on the
+    track centroid, aspect-locked to the print size, clamped to region bounds, and at
+    or above the zoom-cap floor at `dpi` so the first proof never trips
+    ZoomTooTightError. Deliberately NOT the tight track bounding box -- a tight cluster
+    blown up to print aspect would trip the cap and frame cramped terrain.
+
+    tracks_px: list of polylines in overview pixels (as /api/upload returns).
+    Returns (x0, y0, x1, y1) in overview pixels, ordered.
+    """
+    min_x, min_y, max_x, max_y = region.bounds
+    reg_w, reg_h = max_x - min_x, max_y - min_y
+    aspect = print_w_in / print_h_in                       # width / height
+
+    # track centroid + span, converted to CRS metres (the cap lives in metres)
+    pts = [p for t in tracks_px for p in t]
+    if pts:
+        xs = [overview_px_to_crs(region, px, py)[0] for px, py in pts]
+        ys = [overview_px_to_crs(region, px, py)[1] for px, py in pts]
+        cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+        span_w = (max(xs) - min(xs)) / track_fraction      # tracks ~ middle third
+        span_h = (max(ys) - min(ys)) / track_fraction
+    else:
+        cx, cy = (min_x + max_x) / 2, (min_y + max_y) / 2
+        span_w = span_h = 0.0
+
+    floor_w = native_resolution_m * round(print_w_in * dpi)   # cap floor, metres
+    # target width: the largest of (track-driven, aspect-fit of track height, floor),
+    # then clamp to what the region box can actually hold at this aspect
+    w = max(span_w, span_h * aspect, floor_w)
+    w = min(w, reg_w, reg_h * aspect)
+    h = w / aspect
+    if h > reg_h:                                          # aspect vs region: refit on h
+        h = reg_h
+        w = h * aspect
+
+    # center on the tracks, then slide the box fully inside the region bounds
+    x0 = min(max(cx - w / 2, min_x), max_x - w)
+    y0 = min(max(cy - h / 2, min_y), max_y - h)
+    win = (x0, y0, x0 + w, y0 + h)                         # CRS (min_x,min_y,max_x,max_y)
+    # map the CRS window back to overview px (image y flips)
+    px0, py0 = crs_to_overview_px(region, win[0], win[3])   # top-left
+    px1, py1 = crs_to_overview_px(region, win[2], win[1])   # bottom-right
+    return (min(px0, px1), min(py0, py1), max(px0, px1), max(py0, py1))

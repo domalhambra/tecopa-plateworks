@@ -5,7 +5,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
-                     overview_px_to_crs)
+                     overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, ZoomTooTightError
@@ -114,9 +114,14 @@ async def upload(files: List[UploadFile] = File(...),
     hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]), "weight": s["weight"],
             "label": s.get("label", ""), "icon": s.get("icon", ""),
             "photo": bool(s.get("photo"))} for s in spots]
+    # a floor-safe default crop for the Frame step (default print size 18x24); the
+    # client re-fits it in place when the operator changes the print size.
+    start = starter_crop(region.geo, tpx, 18, 24,
+                         native_resolution_m=region.cfg["native_resolution_m"])
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
-            "overview_size": region.cfg["overview_size"], "tracks": tpx, "hotspots": hpx}
+            "overview_size": region.cfg["overview_size"], "tracks": tpx,
+            "hotspots": hpx, "starter_crop": list(start)}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 UPLOADS_DIR = "uploads"

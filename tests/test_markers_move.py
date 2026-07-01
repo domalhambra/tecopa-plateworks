@@ -18,6 +18,13 @@ def _upload(c):
     return r.json()
 
 
+def test_upload_returns_valid_starter_crop():
+    c = _client(); j = _upload(c)
+    w, h = j["overview_size"]
+    x0, y0, x1, y1 = j["starter_crop"]
+    assert 0 <= x0 < x1 <= w and 0 <= y0 < y1 <= h      # ordered box inside overview
+
+
 def test_move_returns_ok_and_snapped_px():
     c = _client(); j = _upload(c)
     w, h = j["overview_size"]
