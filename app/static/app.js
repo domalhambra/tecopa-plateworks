@@ -8,6 +8,7 @@ import * as canvas from './canvas.js';
 import * as markers from './markers.js';
 
 const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const STEP_LABELS = { region: 'Region', tracks: 'Tracks', frame: 'Frame', proof: 'Proof' };
 const WORKSPACE_HEADING = { tracks: 'Add your tracks', frame: 'Frame the poster' };
 
@@ -127,15 +128,17 @@ async function doUpload(fileList) {
     canvas.setOverview(j.overview, j.overview_size);
     $('dropzone').hidden = true; $('map').hidden = false; $('addFiles').hidden = false;
     markers.render($('markerList'), (msg) => setStatus(msg));
-    $('markersBox').hidden = !state.hotspots.length;
-    canvas.setMode('tracks');
     $('toFrame').disabled = state.tracks.length === 0;
+    // re-enter Tracks through the normal transition so step/canvas-mode/panes stay in
+    // sync even when files were dropped while on the Frame step (adding tracks is a
+    // Tracks-step action; it invalidated the crop, so returning to Tracks is correct).
+    go('tracks');
     showHint('Your tracks are on the map — gold dots mark places you returned to most');
     setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s) — name places or continue`);
   } catch (e) { setStatus('Upload failed: ' + e.message); }
 }
 
-function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${n}</li>`).join(''); }
+function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${escapeHtml(n)}</li>`).join(''); }
 
 // --- proof step ---
 async function renderProof() {

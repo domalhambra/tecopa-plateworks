@@ -49,12 +49,16 @@ export function setMode(m) {
   draw();
 }
 
-// Reset the frame to the server-computed starter crop (clears only the crop).
+// Reset the frame to the server-computed starter crop (clears only the crop). The
+// server sizes the starter for 18x24; if the active print size was restored to
+// something else, re-fit so the crop matches that aspect and clears ITS zoom floor
+// on entry (else a returning operator's first proof would trip the cap).
 export function resetFrame() {
   if (!state.starterCrop) return;
   const s = state.scale;
   const [x0, y0, x1, y1] = state.starterCrop;         // overview px -> canvas px
   state.crop = [x0 * s, y0 * s, x1 * s, y1 * s];
+  if (state.printW !== 18 || state.printH !== 24) { refitForSize(); return; }
   draw();
   hooks.onCropChange && hooks.onCropChange();
 }
@@ -132,9 +136,11 @@ function onMove(e) {
   }
   if (drag.type === 'marker') {
     if (Math.hypot(cx - drag.sx0, cy - drag.sy0) > DRAG_THRESH) drag.moved = true;
-    const [ovx, ovy] = toOverview(clamp(cx, 0, cv.width), clamp(cy, 0, cv.height));
-    state.hotspots[drag.i].px = [ovx, ovy];
-    draw();
+    if (drag.moved) {                                 // only reposition past the threshold,
+      const [ovx, ovy] = toOverview(clamp(cx, 0, cv.width), clamp(cy, 0, cv.height));
+      state.hotspots[drag.i].px = [ovx, ovy];         // so a sub-threshold press never nudges
+      draw();                                          // the dot without persisting (onUp gate)
+    }
   } else if (drag.type === 'crop') {
     const ar = state.printW / state.printH;
     const x0 = Math.min(drag.startX, cx), x1 = Math.max(drag.startX, cx);

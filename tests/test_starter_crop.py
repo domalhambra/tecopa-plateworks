@@ -42,6 +42,17 @@ def test_starter_crop_clamps_into_region():
     assert 0 <= x0 < x1 <= 1128 and 0 <= y0 < y1 <= 1400
 
 
+def test_starter_crop_small_region_best_effort_no_crash():
+    # A region narrower than the 18x24 floor (54 km at nr=10) physically cannot satisfy
+    # the cap; starter_crop must still return a valid, ordered, in-region box (best
+    # effort) rather than raise -- the too-tight state is surfaced downstream.
+    small = RegionGeo(crs="EPSG:32610", bounds=(0.0, 0.0, 30000.0, 40000.0),
+                      overview_size=(600, 800))
+    x0, y0, x1, y1 = starter_crop(small, [[[300, 400]]], 18, 24,
+                                  native_resolution_m=10, dpi=300)
+    assert 0 <= x0 < x1 <= 600 and 0 <= y0 < y1 <= 800     # valid, in-region box
+
+
 def test_starter_crop_no_tracks_centers_region():
     x0, y0, x1, y1 = starter_crop(LASSEN, [], 18, 24, native_resolution_m=10, dpi=300)
     assert 0 <= x0 < x1 <= 1128 and 0 <= y0 < y1 <= 1400

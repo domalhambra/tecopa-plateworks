@@ -42,12 +42,18 @@ def crop_px_to_crs_window(region: RegionGeo, x0, y0, x1, y1):
 def starter_crop(region: RegionGeo, tracks_px, print_w_in, print_h_in,
                  native_resolution_m, dpi=300, track_fraction=1 / 3):
     """A generous default crop (in overview px) for the Frame step: centered on the
-    track centroid, aspect-locked to the print size, clamped to region bounds, and at
-    or above the zoom-cap floor at `dpi` so the first proof never trips
-    ZoomTooTightError. Deliberately NOT the tight track bounding box -- a tight cluster
-    blown up to print aspect would trip the cap and frame cramped terrain.
+    track centroid, aspect-locked to the print size, clamped to region bounds, and --
+    WHEN the region is large enough to hold a floor-sized aspect box -- at or above the
+    zoom-cap floor at `dpi`, so the first proof clears the cap. Deliberately NOT the
+    tight track bounding box: a tight cluster blown up to print aspect would trip the
+    cap and frame cramped terrain.
 
-    tracks_px: list of polylines in overview pixels (as /api/upload returns).
+    A region too small to hold a floor-sized box at this aspect (region width <
+    native_resolution_m * round(print_w_in * dpi), or too short for the aspect height)
+    physically cannot satisfy the cap at this print size; this returns the largest
+    in-region crop (best effort) and the too-tight state is surfaced downstream (the
+    Frame red-tint and the proof's humanized 422). The two bundled regions both hold
+    the 18x24 floor. tracks_px: polylines in overview px (as /api/upload returns).
     Returns (x0, y0, x1, y1) in overview pixels, ordered.
     """
     min_x, min_y, max_x, max_y = region.bounds
