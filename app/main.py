@@ -4,7 +4,8 @@ from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from app.geo import crs_to_overview_px, crop_px_to_crs_window
+from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
+                     overview_px_to_crs)
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, ZoomTooTightError
@@ -170,6 +171,27 @@ async def set_photo(session_id: str = Form(...), i: int = Form(...),
     spots[i]["photo"] = path
     session.update(session_id, hotspots=spots, spec=None)   # re-proof to apply
     return {"ok": True}
+
+@app.post("/api/markers/move")
+async def move_marker(session_id: str = Form(...), i: int = Form(...),
+                      px: float = Form(...), py: float = Form(...)):
+    """Persist a hand-dragged hotspot. Convert overview px -> CRS, clamp to region
+    bounds (never reject: 'snap the dot'), write x/y, invalidate the stamped spec so
+    the next proof reflects the move. Returns the clamped position back in overview px
+    so the client can snap the dot to where it actually landed."""
+    st = _require_session(session_id)
+    spots = st["hotspots"]
+    if not (0 <= i < len(spots)):
+        raise HTTPException(422, "marker index out of range")
+    region = _region_or_404(st["region_id"])                 # geo lives on the region
+    x, y = overview_px_to_crs(region.geo, px, py)
+    min_x, min_y, max_x, max_y = region.cfg["bounds"]
+    x = min(max(x, min_x), max_x)                             # clamp, don't reject
+    y = min(max(y, min_y), max_y)
+    spots[i]["x"], spots[i]["y"] = x, y
+    session.update(session_id, hotspots=spots, spec=None)     # re-proof to apply
+    cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
+    return {"ok": True, "px": cpx, "py": cpy}
 
 def _build_spec(sid, crop_px, print_w, print_h, title=""):
     st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404
