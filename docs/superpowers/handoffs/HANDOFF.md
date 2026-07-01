@@ -108,11 +108,11 @@ docs/superpowers/   specs/ and plans/ — the design + implementation plan for t
 
 ## Open threads / what's next (priority order)
 
-1. **Build a second region** to exercise multi-region for real (the registry/picker/auto-detect are in, but only `lassen_ca` exists). Just run `region_prep.py` with a new `--id/--bbox/--epsg` (network, ~4 min). The picker and auto-detect light up automatically.
-2. **Real GPX fixture.** Replace the synthetic `sample.gpx` with a real OnX/Avenza export and re-verify the by-eye look + marker auto-placement on real tracks.
-3. **Wire the async render path into the UI.** Backend is done (`/api/final/submit` → `/api/jobs/{id}` → `/result`); the Accept button still calls the sync `/api/final`. Swap it to submit+poll with a progress indicator when desired.
-4. **Title/legend treatment is bare** (`render.rasterize` draws a small bottom-left title). A finished poster likely wants a real title block / margin / legend — partly aesthetic, decide with Dom.
-5. **Promote the v1.3 foundations to a real server when scaling** (each is a local impl behind an interface, so no teardown): swap `SqliteStore`→Postgres, `ThreadJobQueue`→Redis/Celery + worker pool, `LocalBlobs`→S3/GCS. Then v1.4 accounts + payment + print fulfillment (final render already gated behind explicit accept).
+0. **TrailPrint Studio wizard shipped** (`docs/superpowers/specs|plans/2026-06-30-trailprint-studio-wizard*`). `app/static/*` is now a 4-step guided wizard (Region → Tracks & Places → Frame → Proof) split into ES modules (`state/api/canvas/markers/app.js` + `tokens.css`), with a new `POST /api/markers/move` (drag-to-reposition, persisted) and a tested floor-safe `starter_crop` helper surfaced on `/api/upload`. Night/Day theme toggle, single-nav stepper, a11y wins. Verified by driving the app (Playwright/Chromium). **Note:** the by-eye visual verification used a *throwaway synthetic* `regions/lassen_ca/dem.tif` (gitignored, coarse noise) because the real ~190 MB DEM isn't in the clone — rebuild it with `region_prep.py` before judging real posters.
+1. **Real GPX fixture.** Replace the synthetic `sample.gpx` with a real OnX/Avenza export and re-verify the by-eye look + marker auto-placement on real tracks.
+2. **Async render path is now wired into the UI** — the wizard's Accept & render final calls `/api/final/submit` → polls `/api/jobs/{id}` → downloads `/result` (the sync `/api/final` remains for tests). Done.
+3. **Title/legend treatment is bare** (`render.rasterize` draws a small bottom-left title). A finished poster likely wants a real title block / margin / legend — partly aesthetic, decide with Dom.
+4. **Promote the v1.3 foundations to a real server when scaling** (each is a local impl behind an interface, so no teardown): swap `SqliteStore`→Postgres, `ThreadJobQueue`→Redis/Celery + worker pool, `LocalBlobs`→S3/GCS. Then v1.4 accounts + payment + print fulfillment (final render already gated behind explicit accept).
 
 **Style levers** (approved by eye this session, but still the tuning surface): relief palette/light/texture/valley at the top of `app/relief.py` (`HYPSO_STOPS`, `TEXTURE_*`, `VALLEY_*`, `HILLSHADE_GAMMA`); track/marker/water constants at the top of `app/render.py` (`TRACK_INK`, `TRACK_CASING`, `MARKER_FILL`, `ICON_INK`, `WATER_FILL`, `RIVER_*`).
 
