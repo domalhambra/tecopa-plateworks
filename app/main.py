@@ -89,6 +89,9 @@ def _resolve_region(blobs, session_id, region_id):
             alt, alt_tracks = _best_region(blobs)
             if alt is not None:
                 return alt, alt_tracks
+            # tracks land in NO built region -> clean 422 (same as auto-detect),
+            # rather than rendering a garbage poster for out-of-bounds tracks.
+            raise HTTPException(422, "Tracks don't fall within any available region")
         return region, tracks
     if len(REGIONS) == 1:
         region = next(iter(REGIONS.values()))

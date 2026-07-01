@@ -45,6 +45,17 @@ def test_upload_honors_correct_region_without_recovery():
     assert j["recovered"] is False
 
 
+def test_upload_explicit_region_tracks_nowhere_422():
+    # tracks that parse (valid UTM 10N) but fall inside NO built region -> clean 422,
+    # not a garbage poster (consistent with the auto-detect path).
+    c = _client()
+    nowhere = _gpx([(-122.0, 42.0), (-122.0, 42.02)])   # north of both regions
+    r = c.post("/api/upload",
+               files=[("files", ("t.gpx", nowhere, "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 422
+
+
 def test_upload_autodetect_is_not_flagged_as_recovery():
     # no region_id at all -> plain auto-detect, which is not a "recovery"
     c = _client()

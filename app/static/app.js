@@ -164,6 +164,8 @@ function updateFrameFeasibility() {
 
 // --- proof step ---
 async function renderProof() {
+  // honor the infeasible-size guard from every entry point (button, Enter, express)
+  if (canvas.sizeInfeasibleForRegion()) { updateFrameFeasibility(); return false; }
   const ov = cropForProof();
   if (!ov) { setStatus('Draw a frame first', 'status'); return false; }
   setStatus('Rendering proof…', 'status');

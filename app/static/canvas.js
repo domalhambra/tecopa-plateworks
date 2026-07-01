@@ -99,14 +99,18 @@ export function cropBelowFloor() {
   return groundW < r.native_resolution_m * Math.round(state.printW * 300);
 }
 
-// Can NO in-region crop satisfy the zoom floor at the selected size? (region width <
-// the floor width). Then even the whole region is too small for this print size, so
-// the honest fix is a SMALLER size -- not "draw wider".
+// Can NO in-region crop satisfy the zoom floor at the selected size? The largest
+// aspect-locked box the region can hold is min(width, height*aspect) metres wide
+// (mirrors starter_crop's region clamp on both axes); if the floor exceeds that,
+// even the whole region is too small for this print size and the honest fix is a
+// SMALLER size -- not "draw wider".
 export function sizeInfeasibleForRegion() {
   const r = activeRegion();
   if (!r) return false;
-  const regionW = r.bounds[2] - r.bounds[0];
-  return r.native_resolution_m * Math.round(state.printW * 300) > regionW;
+  const regW = r.bounds[2] - r.bounds[0];
+  const regH = r.bounds[3] - r.bounds[1];
+  const maxCropW = Math.min(regW, regH * (state.printW / state.printH));
+  return r.native_resolution_m * Math.round(state.printW * 300) > maxCropW;
 }
 
 function cropAnnouncement() {
@@ -127,20 +131,18 @@ function onKey(e) {
   e.preventDefault();
   const ar = state.printW / state.printH;
   const STEP = 12;
-  let [ax, ay, bx, by] = [Math.min(state.crop[0], state.crop[2]), Math.min(state.crop[1], state.crop[3]),
-                          Math.max(state.crop[0], state.crop[2]), Math.max(state.crop[1], state.crop[3])];
-  let w = bx - ax, h = by - ay;
+  let ax = Math.min(state.crop[0], state.crop[2]), ay = Math.min(state.crop[1], state.crop[3]);
+  let w = Math.abs(state.crop[2] - state.crop[0]), h = Math.abs(state.crop[3] - state.crop[1]);
   if (e.shiftKey) {                                    // resize, aspect-locked
     const grow = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? STEP : -STEP;
-    w = Math.max(20, w + grow); h = w / ar;
-  } else {                                             // move
+    w = Math.min(Math.max(20, w + grow), cv.width); h = w / ar;
+    if (h > cv.height) { h = cv.height; w = h * ar; }
+  } else {                                             // move: translate only, keep w/h
     if (e.key === 'ArrowLeft') ax -= STEP;
     else if (e.key === 'ArrowRight') ax += STEP;
     else if (e.key === 'ArrowUp') ay -= STEP;
     else if (e.key === 'ArrowDown') ay += STEP;
   }
-  w = Math.min(w, cv.width); h = w / ar;
-  if (h > cv.height) { h = cv.height; w = h * ar; }
   ax = clamp(ax, 0, cv.width - w); ay = clamp(ay, 0, cv.height - h);
   state.crop = [ax, ay, ax + w, ay + h];
   draw();
