@@ -4,7 +4,8 @@ from typing import List, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from app.geo import crs_to_overview_px, crop_px_to_crs_window
+from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
+                     overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, ZoomTooTightError
@@ -59,25 +60,43 @@ def _count_in_bounds(tracks, region):
                   (c[:, 1] >= b[1]) & (c[:, 1] <= b[3])).sum())
     return n
 
-def _resolve_region(blobs, session_id, region_id):
-    """Decide which region an upload belongs to and return (region, parsed_tracks).
-    Order: an existing session is already bound; else an explicit region_id; else
-    the sole region; else auto-detect the region holding the most track points."""
-    if session_id and session.has(session_id):
-        region = _region_or_404(session.get(session_id)["region_id"])
-        return region, _load_all(blobs, region)
-    if region_id:
-        region = _region_or_404(region_id)
-        return region, _load_all(blobs, region)
-    if len(REGIONS) == 1:
-        region = next(iter(REGIONS.values()))
-        return region, _load_all(blobs, region)
+def _best_region(blobs):
+    """The region holding the most track points (None if the tracks land nowhere)."""
     best, best_tracks, best_n = None, [], 0
     for r in REGIONS.values():
         tracks = _load_all(blobs, r)
         n = _count_in_bounds(tracks, r)
         if n > best_n:
             best, best_tracks, best_n = r, tracks, n
+    return best, best_tracks
+
+
+def _resolve_region(blobs, session_id, region_id):
+    """Decide which region an upload belongs to and return (region, parsed_tracks).
+    Order: an existing session is already bound; else an explicit region_id (with
+    cross-region auto-recovery if the tracks don't fall in it); else the sole region;
+    else auto-detect the region holding the most track points."""
+    if session_id and session.has(session_id):
+        region = _region_or_404(session.get(session_id)["region_id"])
+        return region, _load_all(blobs, region)
+    if region_id:
+        region = _region_or_404(region_id)
+        tracks = _load_all(blobs, region)
+        # Auto-recovery: the operator pre-picked a region, but if the tracks land
+        # nowhere inside it and another built region actually holds them, switch --
+        # a forgiving "you dropped the wrong region's tracks" fix (v1.2).
+        if _count_in_bounds(tracks, region) == 0:
+            alt, alt_tracks = _best_region(blobs)
+            if alt is not None:
+                return alt, alt_tracks
+            # tracks land in NO built region -> clean 422 (same as auto-detect),
+            # rather than rendering a garbage poster for out-of-bounds tracks.
+            raise HTTPException(422, "Tracks don't fall within any available region")
+        return region, tracks
+    if len(REGIONS) == 1:
+        region = next(iter(REGIONS.values()))
+        return region, _load_all(blobs, region)
+    best, best_tracks = _best_region(blobs)
     if best is None:
         raise HTTPException(422, "Tracks don't fall within any available region")
     return best, best_tracks
@@ -93,6 +112,10 @@ async def upload(files: List[UploadFile] = File(...),
                  region_id: Optional[str] = Form(None)):
     blobs = [(await f.read(), f.filename) for f in files]
     region, new = _resolve_region(blobs, session_id, region_id)
+    # recovery = the operator's explicit region was overridden because the tracks
+    # actually belong to a different built region (not a plain auto-detect).
+    recovered = bool(region_id and region.id != region_id
+                     and not (session_id and session.has(session_id)))
     if session_id and session.has(session_id):
         tracks = session.get(session_id)["tracks"] + new               # accumulate
         sid = session_id
@@ -113,9 +136,14 @@ async def upload(files: List[UploadFile] = File(...),
     hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]), "weight": s["weight"],
             "label": s.get("label", ""), "icon": s.get("icon", ""),
             "photo": bool(s.get("photo"))} for s in spots]
+    # a floor-safe default crop for the Frame step (default print size 18x24); the
+    # client re-fits it in place when the operator changes the print size.
+    start = starter_crop(region.geo, tpx, 18, 24,
+                         native_resolution_m=region.cfg["native_resolution_m"])
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
-            "overview_size": region.cfg["overview_size"], "tracks": tpx, "hotspots": hpx}
+            "overview_size": region.cfg["overview_size"], "tracks": tpx,
+            "hotspots": hpx, "starter_crop": list(start), "recovered": recovered}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 UPLOADS_DIR = "uploads"
@@ -170,6 +198,27 @@ async def set_photo(session_id: str = Form(...), i: int = Form(...),
     spots[i]["photo"] = path
     session.update(session_id, hotspots=spots, spec=None)   # re-proof to apply
     return {"ok": True}
+
+@app.post("/api/markers/move")
+async def move_marker(session_id: str = Form(...), i: int = Form(...),
+                      px: float = Form(...), py: float = Form(...)):
+    """Persist a hand-dragged hotspot. Convert overview px -> CRS, clamp to region
+    bounds (never reject: 'snap the dot'), write x/y, invalidate the stamped spec so
+    the next proof reflects the move. Returns the clamped position back in overview px
+    so the client can snap the dot to where it actually landed."""
+    st = _require_session(session_id)
+    spots = st["hotspots"]
+    if not (0 <= i < len(spots)):
+        raise HTTPException(422, "marker index out of range")
+    region = _region_or_404(st["region_id"])                 # geo lives on the region
+    x, y = overview_px_to_crs(region.geo, px, py)
+    min_x, min_y, max_x, max_y = region.cfg["bounds"]
+    x = min(max(x, min_x), max_x)                             # clamp, don't reject
+    y = min(max(y, min_y), max_y)
+    spots[i]["x"], spots[i]["y"] = x, y
+    session.update(session_id, hotspots=spots, spec=None)     # re-proof to apply
+    cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
+    return {"ok": True, "px": cpx, "py": cpy}
 
 def _build_spec(sid, crop_px, print_w, print_h, title=""):
     st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404

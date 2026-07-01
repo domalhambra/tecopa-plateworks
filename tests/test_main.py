@@ -138,6 +138,17 @@ def test_markers_unknown_session_404():
     c = _client()
     assert c.post("/api/markers", data={"session_id": "nope", "markers": "[]"}).status_code == 404
 
+def test_move_marker_invalidates_spec():
+    # a hand-dragged marker must invalidate the stamped spec so the final re-proofs
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200          # stamp a spec
+    w, h = j["overview_size"]
+    r = c.post("/api/markers/move", data={"session_id": j["session"], "i": 0,
+               "px": w * 0.5, "py": h * 0.5})
+    assert r.status_code == 200
+    assert c.post("/api/final", data={"session_id": j["session"]}).status_code == 400
+
 def test_async_final_via_job_queue():
     import time
     c = _client(); j = _upload(c)
