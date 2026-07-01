@@ -60,25 +60,40 @@ def _count_in_bounds(tracks, region):
                   (c[:, 1] >= b[1]) & (c[:, 1] <= b[3])).sum())
     return n
 
-def _resolve_region(blobs, session_id, region_id):
-    """Decide which region an upload belongs to and return (region, parsed_tracks).
-    Order: an existing session is already bound; else an explicit region_id; else
-    the sole region; else auto-detect the region holding the most track points."""
-    if session_id and session.has(session_id):
-        region = _region_or_404(session.get(session_id)["region_id"])
-        return region, _load_all(blobs, region)
-    if region_id:
-        region = _region_or_404(region_id)
-        return region, _load_all(blobs, region)
-    if len(REGIONS) == 1:
-        region = next(iter(REGIONS.values()))
-        return region, _load_all(blobs, region)
+def _best_region(blobs):
+    """The region holding the most track points (None if the tracks land nowhere)."""
     best, best_tracks, best_n = None, [], 0
     for r in REGIONS.values():
         tracks = _load_all(blobs, r)
         n = _count_in_bounds(tracks, r)
         if n > best_n:
             best, best_tracks, best_n = r, tracks, n
+    return best, best_tracks
+
+
+def _resolve_region(blobs, session_id, region_id):
+    """Decide which region an upload belongs to and return (region, parsed_tracks).
+    Order: an existing session is already bound; else an explicit region_id (with
+    cross-region auto-recovery if the tracks don't fall in it); else the sole region;
+    else auto-detect the region holding the most track points."""
+    if session_id and session.has(session_id):
+        region = _region_or_404(session.get(session_id)["region_id"])
+        return region, _load_all(blobs, region)
+    if region_id:
+        region = _region_or_404(region_id)
+        tracks = _load_all(blobs, region)
+        # Auto-recovery: the operator pre-picked a region, but if the tracks land
+        # nowhere inside it and another built region actually holds them, switch --
+        # a forgiving "you dropped the wrong region's tracks" fix (v1.2).
+        if _count_in_bounds(tracks, region) == 0:
+            alt, alt_tracks = _best_region(blobs)
+            if alt is not None:
+                return alt, alt_tracks
+        return region, tracks
+    if len(REGIONS) == 1:
+        region = next(iter(REGIONS.values()))
+        return region, _load_all(blobs, region)
+    best, best_tracks = _best_region(blobs)
     if best is None:
         raise HTTPException(422, "Tracks don't fall within any available region")
     return best, best_tracks
@@ -94,6 +109,10 @@ async def upload(files: List[UploadFile] = File(...),
                  region_id: Optional[str] = Form(None)):
     blobs = [(await f.read(), f.filename) for f in files]
     region, new = _resolve_region(blobs, session_id, region_id)
+    # recovery = the operator's explicit region was overridden because the tracks
+    # actually belong to a different built region (not a plain auto-detect).
+    recovered = bool(region_id and region.id != region_id
+                     and not (session_id and session.has(session_id)))
     if session_id and session.has(session_id):
         tracks = session.get(session_id)["tracks"] + new               # accumulate
         sid = session_id
@@ -121,7 +140,7 @@ async def upload(files: List[UploadFile] = File(...),
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
-            "hotspots": hpx, "starter_crop": list(start)}
+            "hotspots": hpx, "starter_crop": list(start), "recovered": recovered}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 UPLOADS_DIR = "uploads"
