@@ -36,13 +36,16 @@ def _crop(j, km_wide, ar=0.75):
 
 
 def test_readyz_ok_with_hydrated_regions():
-    # both bundled regions have a DEM (synthetic in CI) whose bounds match region.json
+    # the hydrated (synthetic-DEM) region must report ready with matching bounds. Assert
+    # the region entry rather than the aggregate 200, so a machine that also has a real
+    # DEM with the documented bounds-drift (-> 503) doesn't fail this test.
     c = _client()
     r = c.get("/readyz")
-    assert r.status_code == 200
     body = r.json()
-    assert body["ready"] is True
-    assert any(e["id"] == "lassen_ca" and e["ready"] for e in body["regions"])
+    entry = next(e for e in body["regions"] if e["id"] == "lassen_ca")
+    assert entry["dem_present"] and entry["ready"] and entry["bounds_match"]
+    # status code tracks the aggregate: 200 iff every region is ready, else 503
+    assert r.status_code == (200 if all(e["ready"] for e in body["regions"]) else 503)
 
 def test_list_regions_includes_lassen():
     c = _client()
@@ -128,6 +131,15 @@ def test_offdem_crop_proof_is_422():
             "print_w": 9, "print_h": 12}
     r = c.post("/api/proof", data=data)
     assert r.status_code == 422
+    # pin the OFF-DEM path specifically (a zoom-cap 422 would not mention elevation data)
+    assert "elevation data" in r.json().get("detail", "")
+
+def test_proof_nonfinite_print_size_is_422_not_500():
+    # red-team: print_w=nan would make round(nan) raise inside validate() -> uncaught 500;
+    # the finiteness guard must turn it into a clean 422.
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": "nan", "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 422
 
 def test_set_markers_updates_and_invalidates_spec():
     import json as _json

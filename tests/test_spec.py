@@ -46,6 +46,16 @@ def test_nonpositive_print_size_rejected_not_divzero():
     with pytest.raises(SpecError):
         CompositionSpec(**base_kwargs(print_w_in=0.0)).validate(dpi=300)
 
+def test_nonfinite_print_size_is_clean_spec_error():
+    # red-team: nan/inf print size would make round() raise ValueError/OverflowError --
+    # NOT a SpecError -- and escape the endpoint's `except SpecError` as a 500. validate()
+    # must convert it to a clean SpecError (-> 422) before pixel_size().
+    for bad in (float("nan"), float("inf")):
+        with pytest.raises(SpecError):
+            CompositionSpec(**base_kwargs(print_w_in=bad)).validate(dpi=300)
+    with pytest.raises(SpecError):
+        CompositionSpec(**base_kwargs(crop=(float("nan"), 0.0, 1.0, 1.0))).validate(dpi=300)
+
 def test_zoom_cap_allows_exactly_native():
     # Boundary guard (invariant 6): a crop that lands EXACTLY at native resolution
     # is not finer than the data, so it must be allowed. Pins the strict `<`

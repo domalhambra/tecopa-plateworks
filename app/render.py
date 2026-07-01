@@ -12,10 +12,15 @@ from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 # Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
-# of the crop itself (margin excluded) has no DEM coverage, the crop overhangs real
-# data and painting it would invent smooth terrain under real tracks -- refuse loudly
-# instead. A sliver of interior nodata below this is repaired by relief._fill_nan.
+# of the crop itself has no DEM coverage, the crop overhangs real data and painting it
+# would invent smooth terrain under real tracks -- refuse loudly instead. A sliver of
+# interior nodata below this is repaired by relief._fill_nan.
 MAX_OFFDEM_NAN_FRAC = 0.01
+# The coverage is measured on a FIXED probe grid (not the output-resolution window), so
+# the verdict is identical at proof (96 dpi) and final (300 dpi) -- one spec, one
+# coverage verdict (invariant 1). Measuring on the DPI-scaled render window let a crop
+# marginally overhanging the DEM pass the proof yet be rejected at the final.
+OFFDEM_PROBE_PX = 384
 
 # ---- track cartography: a pronounced desert-gold route laid onto the paper ----
 TRACK_INK = (214, 158, 58)      # desert gold -- warm, saturated, reads against earthy terrain
@@ -57,6 +62,23 @@ def _read_window(region_dir, cfg, crop, out_w, out_h):
                        resampling=Resampling.bilinear, boundless=True, fill_value=np.nan)
     ground_per_px = (crop[2]-crop[0]) / out_w
     return elev, pad_x, pad_y, ground_per_px
+
+def _offdem_fraction(region_dir, cfg, crop):
+    """Fraction of the crop (margin excluded) with no DEM coverage, sampled on a fixed
+    probe grid so the value does not depend on the render DPI. Nearest resampling: we
+    only care whether each probe cell hits data, not its interpolated value."""
+    cw, ch = crop[2] - crop[0], crop[3] - crop[1]
+    if cw <= 0 or ch <= 0:
+        return 1.0
+    if cw >= ch:
+        pw, ph = OFFDEM_PROBE_PX, max(1, round(OFFDEM_PROBE_PX * ch / cw))
+    else:
+        ph, pw = OFFDEM_PROBE_PX, max(1, round(OFFDEM_PROBE_PX * cw / ch))
+    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
+        win = from_bounds(*crop, transform=ds.transform)
+        probe = ds.read(1, window=win, out_shape=(ph, pw),
+                        resampling=Resampling.nearest, boundless=True, fill_value=np.nan)
+    return float(np.isnan(probe).mean())
 
 def _crs_to_px(x, y, crop, out_w, out_h):
     px = (x - crop[0]) / (crop[2]-crop[0]) * out_w
@@ -263,17 +285,17 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     cfg = json.load(open(os.path.join(region_dir, "region.json")))
     out_w, out_h = spec.pixel_size(dpi)
 
-    elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
-    # Off-DEM guard: measure nodata WITHIN the crop (exclude the read margin, which
-    # may legitimately overhang at a region edge) and refuse a plausible-but-wrong
-    # poster before any painting invents terrain under the tracks (red-team V1-1).
-    core = elev[pad_y:pad_y + out_h, pad_x:pad_x + out_w]
-    nan_frac = float(np.isnan(core).mean()) if core.size else 1.0
+    # Off-DEM guard: refuse a plausible-but-wrong poster before any painting invents
+    # terrain under the tracks (red-team V1-1). DPI-independent probe, so proof and
+    # final agree on the same spec (invariant 1).
+    nan_frac = _offdem_fraction(region_dir, cfg, spec.crop)
     if nan_frac > MAX_OFFDEM_NAN_FRAC:
         raise OffDemError(
             f"The selected frame extends past the available elevation data "
             f"({nan_frac * 100:.0f}% of it has no DEM coverage). "
             f"Pan or shrink the crop to keep it inside the region.")
+
+    elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
     rgb = shaded_relief(
         elev, res_m=gpp,
         elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],

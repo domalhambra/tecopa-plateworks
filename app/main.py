@@ -262,7 +262,8 @@ def _build_spec(sid, crop_px, print_w, print_h, title=""):
         tracks=[t.coords for t in st["tracks"]],
         hotspots=st["hotspots"], seed=7, title_text=title)
     spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
-    session.update(sid, spec=spec)   # stamp it (invariant 1): final renders from this
+    # NB: not stamped here -- the caller stamps only after a clean proof render, so a
+    # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
     return spec, region
 
 @app.post("/api/proof")
@@ -280,6 +281,9 @@ async def proof(session_id: str = Form(...),
         img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir, watermark=True)
     except SpecError as e:
         raise HTTPException(422, str(e))
+    # stamp only now (invariant 1): a clean proof means the final renders from this same
+    # spec. The off-DEM verdict is DPI-independent, so a stamped spec always renders.
+    session.update(session_id, spec=spec)
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 

@@ -34,6 +34,10 @@ def test_coordinate_chain_lands_on_dem():
     LON, LAT = -120.6530, 40.4163           # downtown-ish Susanville, in-region
     region, cfg = load_region()
     x, y = lonlat_to_crs(region, LON, LAT)
+    # the projected point must land INSIDE the region's CRS bounds -- an axis swap or
+    # wrong CRS would push it far outside, which is the registration error we guard.
+    min_x, min_y, max_x, max_y = cfg["bounds"]
+    assert min_x <= x <= max_x and min_y <= y <= max_y, f"projected ({x:.0f},{y:.0f}) outside bounds"
     with rasterio.open(DEM_PATH) as ds:
         val = float(list(ds.sample([(x, y)]))[0][0])
     import math

@@ -105,13 +105,17 @@ def test_kml_doctype_is_rejected():
 
 def test_kmz_too_many_entries_rejected():
     # red-team V1-6: an entry-flood KMZ must be refused before reading anything out.
+    # Include a VALID doc.kml so the pre-existing "no .kml" path can't mask the cap, and
+    # pin the specific message so reverting the cap fails this test (it would otherwise
+    # parse the doc.kml happily and return tracks).
     import pytest
     from app.ingest import load_tracks, KMZ_MAX_ENTRIES
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("doc.kml", _kml_linestring([(-111.5, 39.30), (-111.5, 39.34)]))
         for k in range(KMZ_MAX_ENTRIES + 10):
             z.writestr(f"f{k}.txt", b"x")
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="too many entries"):
         load_tracks(buf.getvalue(), REGION, filename="a.kmz")
 
 def test_kmz_unzips_and_parses():

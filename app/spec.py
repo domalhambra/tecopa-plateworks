@@ -1,6 +1,7 @@
 # app/spec.py
 from __future__ import annotations
 from dataclasses import dataclass, field
+import math
 import numpy as np
 
 # All three are "this picture can't be made here" conditions, not bugs: the API maps
@@ -60,6 +61,14 @@ class CompositionSpec:
         return (self.crop[2] - self.crop[0]) / w_px
 
     def validate(self, dpi: int = 300):
+        # finiteness first: a NaN/inf print size or crop (a client can POST print_w=nan)
+        # would make round() raise ValueError/OverflowError -- which are NOT SpecError, so
+        # they'd escape the endpoint's `except SpecError` as an uncaught 500. Convert to a
+        # clean 422 up front.
+        if not (math.isfinite(self.print_w_in) and math.isfinite(self.print_h_in)):
+            raise SpecError(f"print size {self.print_w_in}x{self.print_h_in} in is not finite")
+        if not all(math.isfinite(v) for v in self.crop):
+            raise SpecError("crop bounds are not finite")
         w_px, h_px = self.pixel_size(dpi)
         # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
         if w_px < 1 or h_px < 1:
