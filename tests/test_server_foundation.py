@@ -38,6 +38,26 @@ def test_memory_store_basic():
     s.update(sid, hotspots=[])
     assert s.get(sid)["hotspots"] == []
 
+def test_memory_store_get_is_deep_isolated():
+    # red-team V1-3: mutating a get()'d session (nested hotspots) must NOT leak into
+    # stored state -- the shallow copy.copy shared the list and diverged from SQLite.
+    s = store.MemoryStore()
+    sid = s.create({"region_id": "r", "hotspots": [{"label": "A"}], "tracks": [], "spec": None})
+    got = s.get(sid)
+    got["hotspots"][0]["label"] = "MUTATED"
+    assert s.get(sid)["hotspots"][0]["label"] == "A"
+
+def test_memory_store_create_and_update_dont_alias_caller():
+    s = store.MemoryStore()
+    src = {"region_id": "r", "hotspots": [{"label": "A"}], "tracks": [], "spec": None}
+    sid = s.create(src)
+    src["hotspots"][0]["label"] = "MUTATED"          # mutate the original after create
+    assert s.get(sid)["hotspots"][0]["label"] == "A"
+    hs = [{"label": "B"}]
+    s.update(sid, hotspots=hs)
+    hs[0]["label"] = "MUTATED"                        # mutate after write-back
+    assert s.get(sid)["hotspots"][0]["label"] == "B"
+
 def test_sqlite_store_persists_across_instances(tmp_path):
     path = str(tmp_path / "t.db")
     sid = store.SqliteStore(path).create(_session())

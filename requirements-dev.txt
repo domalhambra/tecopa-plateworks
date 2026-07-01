@@ -1,0 +1,5 @@
+# Test stack (adds to the core runtime). For a reproducible install, prefer the
+# pinned requirements-lock.txt (what CI uses); this file is the unpinned convenience.
+-r requirements.txt
+pytest>=8.0
+httpx>=0.27          # FastAPI TestClient

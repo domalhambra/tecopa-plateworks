@@ -13,9 +13,14 @@ resolution. The proof and the final are the same spec painted at two pixel sizes
 
 ```
 python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-lock.txt        # pinned core + test stack (what CI installs)
 python -c "import rasterio, pyproj, numpy, scipy, shapely, gpxpy, PIL; print('ok')"
 ```
+
+- `requirements.txt` — core runtime (unpinned minimums); `requirements-dev.txt` adds the
+  test deps; `requirements-lock.txt` is the exact pinned set (determinism / CI).
+- `requirements-regionprep.txt` — the heavy offline build stack for `region_prep.py`
+  (py3dep/pynhd/pandas/geopandas). Only needed to build a new region.
 
 On Apple Silicon, rasterio / pyproj / Pillow ship native wheels — no Homebrew GDAL
 required.
@@ -45,3 +50,9 @@ required.
 ```
 pytest -q
 ```
+
+The real 3DEP DEMs are gitignored, so `tests/conftest.py` hydrates a tiny synthetic DEM
+per region on first run — the endpoint / render / registration suites run on a fresh
+clone and in CI (GitHub Actions, `.github/workflows/ci.yml`) rather than skipping. A
+machine with real DEMs runs them against real terrain instead. `/readyz` reports whether
+every region has a present DEM whose bounds match its `region.json`.

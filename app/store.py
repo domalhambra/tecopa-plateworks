@@ -15,6 +15,11 @@ import copy, json, os, sqlite3, threading, uuid
 from app import serialize
 
 class MemoryStore:
+    """Value semantics, matching SqliteStore (which round-trips through JSON): a caller
+    that mutates a get()'d session and writes it back via update() must NOT alias stored
+    state. A shallow copy.copy shared the nested `hotspots`/`spec`, so an in-place edit
+    leaked into storage outside the lock and diverged from the SQLite path (red-team
+    V1-3). deepcopy on the way in and out makes the two stores behave identically."""
     def __init__(self):
         self._d: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -22,18 +27,19 @@ class MemoryStore:
     def create(self, data: dict) -> str:
         sid = uuid.uuid4().hex
         with self._lock:
-            self._d[sid] = copy.copy(data)
+            self._d[sid] = copy.deepcopy(data)
         return sid
 
     def has(self, sid: str) -> bool:
         return sid in self._d
 
     def get(self, sid: str) -> dict:
-        return copy.copy(self._d[sid])           # KeyError -> caller maps to 404
+        with self._lock:
+            return copy.deepcopy(self._d[sid])   # KeyError -> caller maps to 404
 
     def update(self, sid: str, **kw):
         with self._lock:
-            self._d[sid].update(kw)
+            self._d[sid].update(copy.deepcopy(kw))
 
 class SqliteStore:
     """Persists each session as one JSON row. Serialization (tracks/spec) is shared

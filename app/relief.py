@@ -1,7 +1,7 @@
 # app/relief.py
 from __future__ import annotations
 import numpy as np
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import gaussian_filter, distance_transform_edt
 
 # ---- tuning surface: edit these by eye against the reference maps ----
 HYPSO_STOPS = [
@@ -26,12 +26,18 @@ VALLEY_RADIUS_PX = 40
 # ---------------------------------------------------------------------
 
 def _fill_nan(elev):
-    if not np.isnan(elev).any():
+    """Repair stray nodata pixels from the NEAREST finite neighbour -- NOT the crop
+    mean, which invents a smooth plateau at the average elevation under any real
+    tracks crossing it (red-team V1-1). render.py's off-DEM guard already refuses a
+    crop with more than a sliver of nodata, so this only ever patches a few interior
+    holes; nearest-neighbour keeps them locally honest instead of globally averaged."""
+    mask = np.isnan(elev)
+    if not mask.any():
         return elev
-    if not np.isfinite(elev).any():
+    if mask.all():
         return np.zeros_like(elev)   # crop entirely off the DEM: flat fallback, no crash
-    m = np.nanmean(elev)
-    return np.where(np.isnan(elev), m, elev)
+    idx = distance_transform_edt(mask, return_distances=False, return_indices=True)
+    return elev[tuple(idx)]
 
 def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
     # `aspect` below (arctan2(-dx, dy)) is the compass bearing of the downhill

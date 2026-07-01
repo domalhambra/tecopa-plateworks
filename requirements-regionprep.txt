@@ -1,0 +1,7 @@
+# Offline, one-time region build stack for region_prep.py (fetches 3DEP elevation +
+# NHD hydrography, builds the COG + overview + region.json). Heavy — pulls pandas,
+# geopandas, and a GDAL stack. NOT needed to run the app or the core test suite: those
+# tests importorskip it. Install only when building a new region.
+-r requirements.txt
+py3dep>=0.16
+pynhd>=0.19

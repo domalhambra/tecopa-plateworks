@@ -1,6 +1,6 @@
 # tests/test_relief.py
 import numpy as np
-from app.relief import shaded_relief, hillshade
+from app.relief import shaded_relief, hillshade, _fill_nan
 
 def synthetic_terrain(h=256, w=320):
     yy, xx = np.mgrid[0:h, 0:w]
@@ -27,6 +27,21 @@ def _planar(facing, h=16, w=16):
         return (w - col)   # high west, low east -> faces east
     if facing == "W":
         return col         # faces west
+
+def test_fill_nan_uses_nearest_neighbour_not_crop_mean():
+    # red-team V1-1: a stray hole must be repaired from its nearest finite neighbour,
+    # not filled with the crop mean (which would invent a plateau at the average).
+    a = np.full((5, 5), 90.0, dtype="float32")
+    a[0, :] = 10.0            # only the top row is low; the hole sits among 90s
+    a[2, 2] = np.nan
+    out = _fill_nan(a.copy())
+    assert np.isfinite(out).all()
+    assert out[2, 2] == 90.0  # nearest neighbour (90), not the ~73 crop mean
+
+def test_fill_nan_all_nodata_is_flat_not_crash():
+    a = np.full((4, 4), np.nan, dtype="float32")
+    out = _fill_nan(a.copy())
+    assert np.isfinite(out).all() and np.all(out == 0.0)
 
 def test_hillshade_comes_from_requested_azimuth():
     # Registration/correctness guard for the light: a slope must be brightest when
