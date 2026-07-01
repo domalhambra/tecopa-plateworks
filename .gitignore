@@ -19,8 +19,9 @@ comparison.png
 # requests-cache from the NHD/3DEP fetches
 cache/
 
-# user-uploaded marker photos (single-user local app)
-uploads/
+# user-uploaded marker photos (single-user local app) — root only, so it
+# doesn't swallow doc folders that happen to contain an "uploads/" subdir
+/uploads/
 
 # server-foundation local stores (blob outputs + sqlite session db)
 blobs/

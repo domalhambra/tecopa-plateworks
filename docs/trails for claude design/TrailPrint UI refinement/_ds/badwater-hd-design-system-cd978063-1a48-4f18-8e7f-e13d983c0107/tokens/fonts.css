@@ -1,0 +1,7 @@
+/* =============================================================================
+   fonts.css — Badwater HD webfonts
+   Fraunces (display / headings) + Lora (body) are loaded from Google Fonts.
+   These are the exact families the live site links; no local binaries needed.
+   ============================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500..800&family=Lora:ital,wght@0,400..600;1,400..600&display=swap');

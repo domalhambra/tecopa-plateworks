@@ -1,0 +1,39 @@
+/* =============================================================================
+   spacing.css — Badwater HD spacing, radius, container & elevation scale
+   A compact rem-based scale. Radii are gentle (6/12px); the brand reads as
+   calm and bookish, never bubbly.
+   ============================================================================= */
+
+:root {
+  /* Spacing scale */
+  --spacing-1: 0.125rem;   /* 2px  */
+  --spacing-2: 0.25rem;    /* 4px  */
+  --spacing-3: 0.375rem;   /* 6px  */
+  --spacing-4: 0.5rem;     /* 8px  */
+  --spacing-5: 0.625rem;   /* 10px */
+  --spacing-6: 0.75rem;    /* 12px */
+  --spacing-7: 1rem;       /* 16px */
+  --spacing-8: 1.25rem;    /* 20px */
+  --spacing-9: 1.875rem;   /* 30px */
+  --spacing-10: 2.5rem;    /* 40px */
+
+  /* Border radius */
+  --radius-1: 6px;
+  --radius-2: 12px;
+  --radius-pill: 8px;      /* compact pill chrome — chips inside cards */
+  --radius-round: 999px;   /* identity badges, chip pills */
+
+  /* Container widths */
+  --container-narrow: 440px;
+  --container-default: 800px;
+  --container-wide: 1100px;
+
+  /* Header */
+  --header-min-height: 3.75rem; /* 60px */
+
+  /* Card chrome (resolves against color tokens) */
+  --card-bg: var(--surface-elevated);
+  --card-border: 1px solid var(--color-border-strong);
+  --card-radius: var(--radius-2);
+  --card-padding: var(--spacing-7);
+}

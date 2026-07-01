@@ -1,0 +1,169 @@
+/* =============================================================================
+   colors.css — Badwater HD color system
+   A warm earth / desert palette. DARK is the default (applied bare to :root);
+   LIGHT is a cream-paper scope under [data-color-scheme="light"] and the
+   system media query. Terracotta is the through-accent; antique gold is the
+   secondary. The nine Human Design center hues read on either background.
+   ============================================================================= */
+
+/* HD center colors + quarter accents live in centers.css (a domain-token file
+   imported alongside this one). */
+
+/* ---------------------------------------------------------------------------
+   DARK — default (no selector; applied to :root)
+   --------------------------------------------------------------------------- */
+:root {
+  /* Text */
+  --color-contrast: #EBE6D9;     /* headings, highest-contrast text */
+  --color-foreground: #D5D8E0;   /* body text */
+  --color-secondary: #BBB1A2;    /* decoration only: captions, dividers, icons */
+  --color-mute: #969BAB;         /* decoration only: timestamps, disabled */
+  --color-muted: #8E9099;        /* AA-safe muted body text */
+
+  /* Surfaces */
+  --color-background: #161618;
+  --color-background-100: #1A1A1C;
+  --color-background-200: #27272A;
+  --color-background-300: #333336;
+  --color-background-400: #4E4E54;
+  --surface-elevated: var(--color-background-100);  /* cards, pills */
+  --surface-recessed: var(--color-background);
+
+  /* Borders */
+  --color-border: rgba(235, 230, 217, 0.10);
+  --color-border-strong: rgba(235, 230, 217, 0.18);
+
+  /* Accent — terracotta */
+  --color-accent: #B56B4A;
+  --color-accent-hover: #C77F5C;
+  --color-accent-foreground: #FFFFFF;
+  --color-accent-strong: #A2552F;  /* solid fills behind white text (AA 5.4:1) */
+  --color-accent-text: #CB8767;    /* AA terracotta for small text on dark */
+
+  /* Secondary accent — antique gold */
+  --color-accent-gold: #D4B464;
+  --color-accent-gold-foreground: #161618;
+
+  /* Semantic */
+  --color-success: #6FA89D;
+  --color-warning: #D49658;
+  --color-error: #B56B4A;
+
+  /* Type-specific aura colors (TypeBadge aura visualization) */
+  --type-manifestor: #E47A60;             /* warm rust — closed, initiating */
+  --type-generator: #6FA89D;              /* sacral teal — open, generating */
+  --type-manifesting-generator: #B59548;  /* hybrid amber */
+  --type-projector: #86A1B5;              /* cool blue — focused, penetrating */
+  --type-reflector: #B8B6AE;              /* lunar muted — reflective */
+
+  /* ---------------------------------------------------------------------------
+     Per-pillar accents — the site's six top-level sections each get ONE
+     intentional hue from the unified desert / HD-center palette. Used wherever
+     a pillar surfaces: axis pills, homepage pathway cards, the pillar-hub
+     top-rule + eyebrow + movement numbers, and footer group accents. The set
+     is a balanced spread around the warm desert wheel plus one neutral, chosen
+     so the six read as distinct AND so each color resonates with its pillar.
+       Design     — terracotta : the brand-core identity pillar (Type/Strategy)
+       BodyGraph  — antique gold: the nine-center energy map
+       Wheel      — dusk mauve : the celestial zodiac / cross wheel
+       Not-Self   — canyon rust: the friction / conditioning / the wound
+       Effort     — chaparral  : the body, training, recovery
+       Reference  — slate      : the quiet utility drawer
+     --------------------------------------------------------------------------- */
+  --pillar-accent-design: var(--color-accent-text);      /* terracotta */
+  --pillar-accent-bodygraph: var(--color-accent-gold);   /* antique gold */
+  --pillar-accent-wheel: var(--center-solar-plexus);     /* desert-dusk mauve */
+  --pillar-accent-notself: var(--center-sacral);         /* canyon rust */
+  --pillar-accent-effort: var(--color-success);          /* chaparral green */
+  --pillar-accent-reference: var(--color-mute);          /* slate neutral */
+
+  /* Card shadow — dark (stronger) */
+  --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.30), 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+/* ---------------------------------------------------------------------------
+   LIGHT — cream paper. Explicit opt-in.
+   ⚠ Keep in sync with the @media (prefers-color-scheme: light) block.
+   --------------------------------------------------------------------------- */
+:root[data-color-scheme="light"] {
+  --color-contrast: #2B2A28;
+  --color-foreground: #2B2A28;
+  --color-secondary: #9AA392;
+  --color-mute: #B8B6AE;
+  --color-muted: #5E5E5E;
+
+  --color-background: #F0EFEC;
+  --color-background-100: #FFFFFF;
+  --color-background-200: #E6E4DF;
+  --color-background-300: #DAD8D2;
+  --color-background-400: #C4C1B8;
+  --surface-elevated: var(--color-background-200);   /* layered warm gray */
+  --surface-recessed: var(--color-background);
+
+  --color-border: rgba(43, 42, 40, 0.10);
+  --color-border-strong: rgba(43, 42, 40, 0.18);
+
+  --color-accent: #A85638;        /* deeper terracotta for cream */
+  --color-accent-hover: #8F4830;
+  --color-accent-foreground: #FFFFFF;
+  --color-accent-strong: #A2552F;
+  --color-accent-text: #8A4E32;
+
+  --color-accent-gold: #8A6310;   /* deep antique gold — AA on cream */
+  --color-accent-gold-foreground: #FBF7EF;
+
+  --color-success: #3F6B60;
+  --color-warning: #A8622A;
+  --color-error: #B56B4A;
+
+  --type-manifestor: #B43E2E;
+  --type-generator: #4E7A6F;
+  --type-manifesting-generator: #8E6E2D;
+  --type-projector: #3F6F84;
+  --type-reflector: #5A5448;
+
+  --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* OS-driven light mode when scheme is "system" */
+@media (prefers-color-scheme: light) {
+  :root[data-color-scheme="system"] {
+    --color-contrast: #2B2A28;
+    --color-foreground: #2B2A28;
+    --color-secondary: #9AA392;
+    --color-mute: #B8B6AE;
+    --color-muted: #5E5E5E;
+
+    --color-background: #F0EFEC;
+    --color-background-100: #FFFFFF;
+    --color-background-200: #E6E4DF;
+    --color-background-300: #DAD8D2;
+    --color-background-400: #C4C1B8;
+    --surface-elevated: var(--color-background-200);
+    --surface-recessed: var(--color-background);
+
+    --color-border: rgba(43, 42, 40, 0.10);
+    --color-border-strong: rgba(43, 42, 40, 0.18);
+
+    --color-accent: #A85638;
+    --color-accent-hover: #8F4830;
+    --color-accent-foreground: #FFFFFF;
+    --color-accent-strong: #A2552F;
+    --color-accent-text: #8A4E32;
+
+    --color-accent-gold: #8A6310;
+    --color-accent-gold-foreground: #FBF7EF;
+
+    --color-success: #3F6B60;
+    --color-warning: #A8622A;
+    --color-error: #B56B4A;
+
+    --type-manifestor: #B43E2E;
+    --type-generator: #4E7A6F;
+    --type-manifesting-generator: #8E6E2D;
+    --type-projector: #3F6F84;
+    --type-reflector: #5A5448;
+
+    --card-shadow: 0 2px 8px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
+}

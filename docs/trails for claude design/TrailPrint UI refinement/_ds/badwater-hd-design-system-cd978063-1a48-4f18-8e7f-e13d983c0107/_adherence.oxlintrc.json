@@ -1,0 +1,367 @@
+{
+  "plugins": [
+    "react",
+    "import"
+  ],
+  "rules": {
+    "react/forbid-elements": [
+      "warn",
+      {
+        "forbid": []
+      }
+    ],
+    "no-restricted-imports": [
+      "warn",
+      {
+        "patterns": [
+          {
+            "group": [
+              "components/core/**",
+              "components/feedback/**",
+              "components/hd/**",
+              "screens.jsx",
+              "ui_kits/badwater-hd/**"
+            ],
+            "message": "Import design-system components from 'index.js', not component internals."
+          }
+        ]
+      }
+    ],
+    "no-restricted-syntax": [
+      "warn",
+      {
+        "selector": "Literal[value=/#[0-9a-fA-F]{3,8}\\b/]",
+        "message": "Raw hex color — use a design-system color token via var()."
+      },
+      {
+        "selector": "Literal[value=/\\b\\d+px\\b/]",
+        "message": "Raw px value — use a design-system spacing token via var()."
+      },
+      {
+        "selector": "Literal[value=/font-family\\s*:\\s*(?!['\\\"]?(?:Fraunces|Lora))/i]",
+        "message": "Font not provided by the design system. Available: Fraunces, Lora."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute > JSXIdentifier[name!=/^(?:tone|children|key|ref|className|style|children)$/]",
+        "message": "<Badge> doesn't accept that prop. Declared props: tone, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Badge'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:outline|solid|gold|neutral|success)$/]",
+        "message": "<Badge> tone must be one of 'outline' | 'solid' | 'gold' | 'neutral' | 'success'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|size|as|href|disabled|fullWidth|children|key|ref|className|style|children)$/]",
+        "message": "<Button> doesn't accept that prop. Declared props: variant, size, as, href, disabled, fullWidth, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:primary|secondary|gold|ghost)$/]",
+        "message": "<Button> variant must be one of 'primary' | 'secondary' | 'gold' | 'ghost'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='size'] > Literal[value!=/^(?:small|medium|large)$/]",
+        "message": "<Button> size must be one of 'small' | 'medium' | 'large'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Button'] > JSXAttribute[name.name='as'] > Literal[value!=/^(?:button|a)$/]",
+        "message": "<Button> as must be one of 'button' | 'a'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Callout'] > JSXAttribute > JSXIdentifier[name!=/^(?:variant|label|children|key|ref|className|style|children)$/]",
+        "message": "<Callout> doesn't accept that prop. Declared props: variant, label, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Callout'] > JSXAttribute[name.name='variant'] > Literal[value!=/^(?:context|note|bespoke)$/]",
+        "message": "<Callout> variant must be one of 'context' | 'note' | 'bespoke'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CardChip'] > JSXAttribute > JSXIdentifier[name!=/^(?:label|href|key|ref|className|style|children)$/]",
+        "message": "<CardChip> doesn't accept that prop. Declared props: label, href."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CenterBadge'] > JSXAttribute > JSXIdentifier[name!=/^(?:center|state|label|key|ref|className|style|children)$/]",
+        "message": "<CenterBadge> doesn't accept that prop. Declared props: center, state, label."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CenterBadge'] > JSXAttribute[name.name='center'] > Literal[value!=/^(?:head|ajna|throat|g-center|heart-ego|sacral|solar-plexus|spleen|root)$/]",
+        "message": "<CenterBadge> center must be one of 'head' | 'ajna' | 'throat' | 'g-center' | 'heart-ego' | 'sacral' | 'solar-plexus' | 'spleen' | 'root'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='CenterBadge'] > JSXAttribute[name.name='state'] > Literal[value!=/^(?:defined|open)$/]",
+        "message": "<CenterBadge> state must be one of 'defined' | 'open'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute > JSXIdentifier[name!=/^(?:as|href|active|children|key|ref|className|style|children)$/]",
+        "message": "<Chip> doesn't accept that prop. Declared props: as, href, active, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Chip'] > JSXAttribute[name.name='as'] > Literal[value!=/^(?:a|span)$/]",
+        "message": "<Chip> as must be one of 'a' | 'span'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='DeepDive'] > JSXAttribute > JSXIdentifier[name!=/^(?:summary|defaultOpen|children|key|ref|className|style|children)$/]",
+        "message": "<DeepDive> doesn't accept that prop. Declared props: summary, defaultOpen, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Eyebrow'] > JSXAttribute > JSXIdentifier[name!=/^(?:tone|as|children|key|ref|className|style|children)$/]",
+        "message": "<Eyebrow> doesn't accept that prop. Declared props: tone, as, children."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Eyebrow'] > JSXAttribute[name.name='tone'] > Literal[value!=/^(?:accent|muted|gold)$/]",
+        "message": "<Eyebrow> tone must be one of 'accent' | 'muted' | 'gold'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='Eyebrow'] > JSXAttribute[name.name='as'] > Literal[value!=/^(?:div|span|p)$/]",
+        "message": "<Eyebrow> as must be one of 'div' | 'span' | 'p'."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='TypeBadge'] > JSXAttribute > JSXIdentifier[name!=/^(?:type|showStrategy|key|ref|className|style|children)$/]",
+        "message": "<TypeBadge> doesn't accept that prop. Declared props: type, showStrategy."
+      },
+      {
+        "selector": "JSXOpeningElement[name.name='TypeBadge'] > JSXAttribute[name.name='type'] > Literal[value!=/^(?:manifestor|generator|manifesting-generator|projector|reflector)$/]",
+        "message": "<TypeBadge> type must be one of 'manifestor' | 'generator' | 'manifesting-generator' | 'projector' | 'reflector'."
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "**/index.js"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
+  "x-omelette": {
+    "components": {
+      "Badge": {
+        "replaces": []
+      },
+      "Button": {
+        "replaces": []
+      },
+      "Callout": {
+        "replaces": []
+      },
+      "CardChip": {
+        "replaces": []
+      },
+      "CenterBadge": {
+        "replaces": []
+      },
+      "Chip": {
+        "replaces": []
+      },
+      "DeepDive": {
+        "replaces": []
+      },
+      "Eyebrow": {
+        "replaces": []
+      },
+      "TypeBadge": {
+        "replaces": []
+      }
+    },
+    "tokens": [
+      "--card-bg",
+      "--card-border",
+      "--card-padding",
+      "--card-radius",
+      "--card-shadow",
+      "--center-ajna",
+      "--center-g-center",
+      "--center-head",
+      "--center-heart-ego",
+      "--center-root",
+      "--center-sacral",
+      "--center-solar-plexus",
+      "--center-spleen",
+      "--center-throat",
+      "--color-accent",
+      "--color-accent-foreground",
+      "--color-accent-gold",
+      "--color-accent-gold-foreground",
+      "--color-accent-hover",
+      "--color-accent-strong",
+      "--color-accent-text",
+      "--color-background",
+      "--color-background-100",
+      "--color-background-200",
+      "--color-background-300",
+      "--color-background-400",
+      "--color-border",
+      "--color-border-strong",
+      "--color-contrast",
+      "--color-error",
+      "--color-foreground",
+      "--color-mute",
+      "--color-muted",
+      "--color-secondary",
+      "--color-success",
+      "--color-warning",
+      "--container-default",
+      "--container-narrow",
+      "--container-wide",
+      "--font-chip",
+      "--font-display",
+      "--font-family-body",
+      "--font-family-headings",
+      "--font-family-mono",
+      "--font-h1",
+      "--font-h2",
+      "--font-h3",
+      "--font-h4",
+      "--font-h5",
+      "--font-h6",
+      "--font-small",
+      "--font-weight-bold",
+      "--font-weight-light",
+      "--font-weight-medium",
+      "--font-weight-regular",
+      "--font-weight-semibold",
+      "--font-x-small",
+      "--header-min-height",
+      "--leading-body",
+      "--leading-prose",
+      "--leading-tight",
+      "--pillar-accent-bodygraph",
+      "--pillar-accent-design",
+      "--pillar-accent-effort",
+      "--pillar-accent-notself",
+      "--pillar-accent-reference",
+      "--pillar-accent-wheel",
+      "--quarter-accent-civilization",
+      "--quarter-accent-duality",
+      "--quarter-accent-initiation",
+      "--quarter-accent-mutation",
+      "--radius-1",
+      "--radius-2",
+      "--radius-pill",
+      "--radius-round",
+      "--spacing-1",
+      "--spacing-10",
+      "--spacing-2",
+      "--spacing-3",
+      "--spacing-4",
+      "--spacing-5",
+      "--spacing-6",
+      "--spacing-7",
+      "--spacing-8",
+      "--spacing-9",
+      "--surface-elevated",
+      "--surface-recessed",
+      "--text-body",
+      "--text-display",
+      "--text-mono",
+      "--tracking-eyebrow",
+      "--type-generator",
+      "--type-manifesting-generator",
+      "--type-manifestor",
+      "--type-projector",
+      "--type-reflector"
+    ],
+    "tokenKinds": {
+      "--color-contrast": "color",
+      "--color-foreground": "color",
+      "--color-secondary": "color",
+      "--color-mute": "color",
+      "--color-muted": "color",
+      "--color-background": "color",
+      "--color-background-100": "color",
+      "--color-background-200": "color",
+      "--color-background-300": "color",
+      "--color-background-400": "color",
+      "--surface-elevated": "color",
+      "--surface-recessed": "color",
+      "--color-border": "color",
+      "--color-border-strong": "color",
+      "--color-accent": "color",
+      "--color-accent-hover": "color",
+      "--color-accent-foreground": "color",
+      "--color-accent-strong": "color",
+      "--color-accent-text": "font",
+      "--color-accent-gold": "color",
+      "--color-accent-gold-foreground": "color",
+      "--color-success": "color",
+      "--color-warning": "color",
+      "--color-error": "color",
+      "--type-manifestor": "font",
+      "--type-generator": "font",
+      "--type-manifesting-generator": "font",
+      "--type-projector": "font",
+      "--type-reflector": "font",
+      "--pillar-accent-design": "color",
+      "--pillar-accent-bodygraph": "color",
+      "--pillar-accent-wheel": "color",
+      "--pillar-accent-notself": "color",
+      "--pillar-accent-effort": "color",
+      "--pillar-accent-reference": "color",
+      "--card-shadow": "shadow",
+      "--center-head": "color",
+      "--center-ajna": "color",
+      "--center-throat": "color",
+      "--center-g-center": "color",
+      "--center-heart-ego": "color",
+      "--center-sacral": "color",
+      "--center-solar-plexus": "color",
+      "--center-spleen": "color",
+      "--center-root": "color",
+      "--quarter-accent-initiation": "color",
+      "--quarter-accent-civilization": "color",
+      "--quarter-accent-duality": "color",
+      "--quarter-accent-mutation": "color",
+      "--font-family-body": "font",
+      "--font-family-headings": "font",
+      "--font-family-mono": "font",
+      "--font-chip": "font",
+      "--font-x-small": "font",
+      "--font-small": "font",
+      "--font-h6": "font",
+      "--font-h5": "font",
+      "--font-h4": "font",
+      "--font-h3": "font",
+      "--font-h2": "font",
+      "--font-h1": "font",
+      "--font-display": "font",
+      "--font-weight-light": "font",
+      "--font-weight-regular": "font",
+      "--font-weight-medium": "font",
+      "--font-weight-semibold": "font",
+      "--font-weight-bold": "font",
+      "--text-body": "font",
+      "--text-display": "font",
+      "--text-mono": "font",
+      "--leading-body": "font",
+      "--leading-prose": "font",
+      "--leading-tight": "font",
+      "--tracking-eyebrow": "font",
+      "--spacing-1": "spacing",
+      "--spacing-2": "spacing",
+      "--spacing-3": "spacing",
+      "--spacing-4": "spacing",
+      "--spacing-5": "spacing",
+      "--spacing-6": "spacing",
+      "--spacing-7": "spacing",
+      "--spacing-8": "spacing",
+      "--spacing-9": "spacing",
+      "--spacing-10": "spacing",
+      "--radius-1": "radius",
+      "--radius-2": "radius",
+      "--radius-pill": "radius",
+      "--radius-round": "radius",
+      "--container-narrow": "spacing",
+      "--container-default": "spacing",
+      "--container-wide": "spacing",
+      "--header-min-height": "spacing",
+      "--card-bg": "color",
+      "--card-border": "color",
+      "--card-radius": "radius",
+      "--card-padding": "spacing"
+    },
+    "fontFamilies": [
+      "Fraunces",
+      "Lora"
+    ]
+  }
+}
