@@ -24,6 +24,7 @@
   </header>
 
   <main>
+    <div id="a11yStatus" class="sr-only" aria-live="polite" role="status"></div>
     <nav id="stepper" aria-label="Progress"></nav>
 
     <section id="stage">
@@ -56,7 +57,9 @@
 
         <div class="map-wrap">
           <div id="mapPane" class="map-pane">
-            <canvas id="map" hidden></canvas>
+            <canvas id="map" tabindex="0"
+                    aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
+                    hidden></canvas>
             <button id="dropzone" class="dropzone" type="button">
               <b>Drop GPX / KML / KMZ</b>
               <span>or click to browse — files accumulate</span>
@@ -79,6 +82,7 @@
         <div class="actions">
           <span id="status" class="status"></span>
           <button id="toFrame" class="primary" type="button" disabled>Continue to Frame</button>
+          <button id="expressBtn" class="ghost" type="button" hidden>Proof + render final</button>
           <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
         </div>
       </div>

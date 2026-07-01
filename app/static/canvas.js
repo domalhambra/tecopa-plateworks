@@ -24,6 +24,7 @@ export function init(canvasEl, h = {}) {
   cv = canvasEl; ctx = cv.getContext('2d'); hooks = h;
   cv.addEventListener('pointerdown', onDown);
   cv.addEventListener('pointermove', onMove);
+  cv.addEventListener('keydown', onKey);              // keyboard crop control (a11y)
   window.addEventListener('pointerup', onUp);
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && drag && drag.type === 'crop') {
@@ -96,6 +97,55 @@ export function cropBelowFloor() {
   if (!c || !r || !mpp) return false;
   const groundW = (c[2] - c[0]) * mpp;
   return groundW < r.native_resolution_m * Math.round(state.printW * 300);
+}
+
+// Can NO in-region crop satisfy the zoom floor at the selected size? (region width <
+// the floor width). Then even the whole region is too small for this print size, so
+// the honest fix is a SMALLER size -- not "draw wider".
+export function sizeInfeasibleForRegion() {
+  const r = activeRegion();
+  if (!r) return false;
+  const regionW = r.bounds[2] - r.bounds[0];
+  return r.native_resolution_m * Math.round(state.printW * 300) > regionW;
+}
+
+function cropAnnouncement() {
+  const c = cropOverviewPx(); const mpp = metresPerPx();
+  if (!c || !mpp) return 'Frame updated';
+  const wkm = ((c[2] - c[0]) * mpp / 1000).toFixed(1);
+  const hkm = ((c[3] - c[1]) * mpp / 1000).toFixed(1);
+  return `Frame ${wkm} by ${hkm} kilometres` + (cropBelowFloor() ? ' — too tight to print sharp' : '');
+}
+
+// Keyboard crop control on the Frame step (a11y): arrows move the frame, Shift+arrows
+// resize it (aspect-locked), Enter renders the proof. Mirrors the pointer geometry.
+function onKey(e) {
+  if (mode !== 'frame' || !state.crop) return;
+  if (e.key === 'Enter') { e.preventDefault(); hooks.onRenderProof && hooks.onRenderProof(); return; }
+  const arrows = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'];
+  if (!arrows.includes(e.key)) return;
+  e.preventDefault();
+  const ar = state.printW / state.printH;
+  const STEP = 12;
+  let [ax, ay, bx, by] = [Math.min(state.crop[0], state.crop[2]), Math.min(state.crop[1], state.crop[3]),
+                          Math.max(state.crop[0], state.crop[2]), Math.max(state.crop[1], state.crop[3])];
+  let w = bx - ax, h = by - ay;
+  if (e.shiftKey) {                                    // resize, aspect-locked
+    const grow = (e.key === 'ArrowRight' || e.key === 'ArrowUp') ? STEP : -STEP;
+    w = Math.max(20, w + grow); h = w / ar;
+  } else {                                             // move
+    if (e.key === 'ArrowLeft') ax -= STEP;
+    else if (e.key === 'ArrowRight') ax += STEP;
+    else if (e.key === 'ArrowUp') ay -= STEP;
+    else if (e.key === 'ArrowDown') ay += STEP;
+  }
+  w = Math.min(w, cv.width); h = w / ar;
+  if (h > cv.height) { h = cv.height; w = h * ar; }
+  ax = clamp(ax, 0, cv.width - w); ay = clamp(ay, 0, cv.height - h);
+  state.crop = [ax, ay, ax + w, ay + h];
+  draw();
+  hooks.onCropChange && hooks.onCropChange();
+  hooks.announce && hooks.announce(cropAnnouncement());
 }
 
 // --- pointer handlers ---

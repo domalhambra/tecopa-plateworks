@@ -49,6 +49,7 @@ function go(step) {
     $('frameControls').hidden = step !== 'frame';
     $('toFrame').hidden = step !== 'tracks';
     $('renderProof').hidden = step !== 'frame';
+    $('expressBtn').hidden = step !== 'frame';
     $('markersBox').hidden = !(state.hotspots.length);
     canvas.setMode(step);
     if (step === 'tracks') {
@@ -56,8 +57,9 @@ function go(step) {
         ? `${state.tracks.length} track(s) — name places or continue` : '');
     } else {
       markers.refreshOutOfFrame();
-      showHint('Drag to draw a frame · Reset to recenter');
+      showHint('Drag to draw a frame · arrow keys nudge it · Reset to recenter');
       setStatus('', 'status');
+      updateFrameFeasibility();
     }
   }
   buildStepper();
@@ -133,17 +135,37 @@ async function doUpload(fileList) {
     // sync even when files were dropped while on the Frame step (adding tracks is a
     // Tracks-step action; it invalidated the crop, so returning to Tracks is correct).
     go('tracks');
-    showHint('Your tracks are on the map — gold dots mark places you returned to most');
-    setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s) — name places or continue`);
+    if (j.recovered) {                                 // dropped tracks belonged elsewhere
+      showHint(`These tracks are in ${j.name} — switched to that region`);
+      setStatus(`Switched to ${j.name} — the dropped tracks belong to that region.`);
+      announce(`Switched region to ${j.name}`);
+    } else {
+      showHint('Your tracks are on the map — gold dots mark places you returned to most');
+      setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s) — name places or continue`);
+    }
   } catch (e) { setStatus('Upload failed: ' + e.message); }
 }
 
 function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${escapeHtml(n)}</li>`).join(''); }
 
+// --- a11y live-region announcements ---
+function announce(msg) { const el = $('a11yStatus'); if (el) el.textContent = msg || ''; }
+
+// disable proof when the region physically can't hold the selected print size, with
+// an honest "pick a smaller size" message (vs. the "draw wider" case for a tight box).
+function updateFrameFeasibility() {
+  const infeasible = canvas.sizeInfeasibleForRegion();
+  $('renderProof').disabled = infeasible;
+  $('expressBtn').disabled = infeasible;
+  setStatus(infeasible
+    ? `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.` : '',
+    'status');
+}
+
 // --- proof step ---
 async function renderProof() {
   const ov = cropForProof();
-  if (!ov) { setStatus('Draw a frame first', 'status'); return; }
+  if (!ov) { setStatus('Draw a frame first', 'status'); return false; }
   setStatus('Rendering proof…', 'status');
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH);
@@ -151,11 +173,23 @@ async function renderProof() {
     state.hasSpec = true; state.proofStale = false;
     go('proof');
     setStatus('Proof ready — accept to render the full-resolution final', 'proofStatus');
+    return true;
   } catch (e) {
     if (e.status === 422) {
-      setStatus(`This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`, 'status');
+      const msg = canvas.sizeInfeasibleForRegion()
+        ? `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.`
+        : `This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`;
+      setStatus(msg, 'status');
     } else { setStatus('Proof failed: ' + e.message, 'status'); }
+    return false;
   }
+}
+
+// Express: render a proof and, if it succeeds, chain straight into the final render.
+// An extra shortcut -- the explicit Accept gate on the Proof step still stands.
+async function expressFinal() {
+  const okProof = await renderProof();
+  if (okProof) await acceptFinal();
 }
 
 function cropForProof() {
@@ -238,8 +272,10 @@ function wire() {
   initTheme();
   canvas.init($('map'), {
     onCropChange: () => { if (state.hasSpec) state.proofStale = true; markers.refreshOutOfFrame(); },
-    onMarkerMoved: () => { state.proofStale = true; markers.refreshOutOfFrame(); setStatus('Marker moved — re-render the proof to see it'); },
+    onMarkerMoved: () => { state.proofStale = true; markers.refreshOutOfFrame(); setStatus('Marker moved — re-render the proof to see it'); announce('Marker moved'); },
     onDragTip: () => showHint('Tip: drag a gold dot to reposition that place'),
+    onRenderProof: () => renderProof(),                // Enter on the focused canvas
+    announce,                                          // keyboard crop -> live region
   });
 
   const dz = $('dropzone'), fi = $('fileInput');
@@ -254,7 +290,8 @@ function wire() {
   $('toTracks').onclick = () => go('tracks');
   $('toFrame').onclick = () => go('frame');
   $('renderProof').onclick = renderProof;
-  $('resetFrame').onclick = () => { canvas.resetFrame(); markers.refreshOutOfFrame(); };
+  $('expressBtn').onclick = expressFinal;
+  $('resetFrame').onclick = () => { canvas.resetFrame(); markers.refreshOutOfFrame(); updateFrameFeasibility(); };
   $('reframe').onclick = () => go('frame');
   $('accept').onclick = acceptFinal;
   $('startOver').onclick = startOver;
@@ -267,7 +304,7 @@ function wire() {
   $('size').onchange = (e) => {
     const [w, h] = e.target.value.split(',').map(Number);
     state.printW = w; state.printH = h; savePref('printSize', e.target.value);
-    canvas.refitForSize(); markers.refreshOutOfFrame();
+    canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
   };
 }
 

@@ -3,6 +3,9 @@
    colors (the poster/overview) are fixed in canvas.js and never themed. */
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }   /* beat element display rules (flex/block) */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+           overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+#map:focus-visible { outline: 2px solid var(--tp-accent); outline-offset: 2px; }
 body {
   margin: 0; font: 15px/1.5 Georgia, 'Times New Roman', serif;
   color: var(--color-foreground); background: var(--color-background);
