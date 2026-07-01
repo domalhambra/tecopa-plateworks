@@ -1,5 +1,6 @@
 # app/main.py
-import io, json, os
+import io, json, os, shutil, time
+import logging
 from typing import List, Optional
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -10,7 +11,10 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, SpecError
-from app import session, render, regions, blobs, jobs
+from app import session, render, regions, blobs, jobs, logconfig
+
+logconfig.setup_logging()
+log = logging.getLogger("trailprint.api")
 
 # The registry replaces the old single hardcoded region: every regions/<id> built
 # by region_prep.py is now selectable. Discovered once at import. The root is
@@ -22,11 +26,16 @@ REGIONS = regions.discover(REGIONS_ROOT)
 PROOF_DPI = 96    # cheap mid-fidelity preview
 FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
 
+# Lifecycle TTL (red-team V1-8): a back-to-back concierge day otherwise leaks disk +
+# memory (finals, blobs, job records, uploaded photos were never evicted). Default 24h;
+# set 0 to disable eviction (e.g. an archival run).
+TTL_SECONDS = float(os.environ.get("TRAILPRINT_TTL_SECONDS", 86400))
+
 # server foundation (v1.3): outputs go to a blob store, finals render off the
 # request thread via a job queue. Both are local impls behind interfaces that a
 # networked store / broker drops into later (see blobs.py, jobs.py).
-BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"))
-QUEUE = jobs.ThreadJobQueue()
+BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"), ttl_seconds=TTL_SECONDS)
+QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS)
 
 app = FastAPI()
 
@@ -125,6 +134,7 @@ async def list_regions():
 async def upload(files: List[UploadFile] = File(...),
                  session_id: Optional[str] = Form(None),
                  region_id: Optional[str] = Form(None)):
+    _sweep_uploads()                        # opportunistic eviction of stale photo dirs
     blobs = [(await f.read(), f.filename) for f in files]
     region, new = _resolve_region(blobs, session_id, region_id)
     # recovery = the operator's explicit region was overridden because the tracks
@@ -155,6 +165,8 @@ async def upload(files: List[UploadFile] = File(...),
     # client re-fits it in place when the operator changes the print size.
     start = starter_crop(region.geo, tpx, 18, 24,
                          native_resolution_m=region.cfg["native_resolution_m"])
+    log.info("event=upload session=%s region=%s tracks=%d hotspots=%d recovered=%s",
+             sid, region.id, len(tracks), len(spots), recovered)
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
@@ -162,6 +174,24 @@ async def upload(files: List[UploadFile] = File(...),
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 UPLOADS_DIR = "uploads"
+
+def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
+    """Evict per-session photo dirs whose last write is older than the TTL (V1-8).
+    Keyed on dir mtime, which each photo write bumps, so an active session survives."""
+    if not ttl_seconds or not os.path.isdir(root):
+        return
+    cutoff = time.time() - ttl_seconds
+    removed = 0
+    for name in os.listdir(root):
+        d = os.path.join(root, name)
+        try:
+            if os.path.isdir(d) and os.path.getmtime(d) < cutoff:
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        except OSError:
+            pass
+    if removed:
+        log.info("event=uploads.sweep removed=%d ttl_s=%s", removed, ttl_seconds)
 
 # Photo upload guards (red-team V1-6): a small file can declare enormous dimensions
 # (decompression bomb) or just be huge. Cap the raw bytes and the decoded pixel count.
@@ -277,13 +307,17 @@ async def proof(session_id: str = Form(...),
         raise HTTPException(404, "Unknown or expired session")
     except SpecError as e:
         raise HTTPException(422, str(e))
+    t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir, watermark=True)
     except SpecError as e:
+        log.info("event=proof.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
     # stamp only now (invariant 1): a clean proof means the final renders from this same
     # spec. The off-DEM verdict is DPI-independent, so a stamped spec always renders.
     session.update(session_id, spec=spec)
+    log.info("event=proof session=%s region=%s dpi=%d ms=%d",
+             session_id, region.id, PROOF_DPI, int((time.time() - t0) * 1000))
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
@@ -297,13 +331,21 @@ async def final(session_id: str = Form(...)):
     if spec is None:
         raise HTTPException(400, "Approve a proof first")
     region = _region_or_404(st["region_id"])
+    t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir, watermark=False)
     except SpecError as e:
+        log.info("event=final.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
-    out = os.path.join(region.dir, f"final_{session_id}.png")
-    render.save_print(img, out, dpi=FINAL_DPI)
-    return FileResponse(out, media_type="image/png", filename="trailprint.png")
+    # Route the final through the blob seam (V1-8): stop littering region.dir with
+    # final_*.png. Same key + embedded DPI as the async path, so both serve identically.
+    key = f"{session_id}/final.png"
+    buf = io.BytesIO()
+    img.save(buf, "PNG", dpi=(FINAL_DPI, FINAL_DPI))
+    BLOBS.put(key, buf.getvalue())
+    log.info("event=final session=%s region=%s dpi=%d ms=%d",
+             session_id, region.id, FINAL_DPI, int((time.time() - t0) * 1000))
+    return FileResponse(BLOBS.path(key), media_type="image/png", filename="trailprint.png")
 
 @app.post("/api/final/submit")
 async def final_submit(session_id: str = Form(...)):

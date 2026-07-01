@@ -82,6 +82,26 @@ def test_blobs_put_path_exists_and_guards_escape(tmp_path):
     with pytest.raises(ValueError):
         b.path("../escape.png")
 
+def test_blobs_delete_is_idempotent(tmp_path):
+    b = blobs.LocalBlobs(str(tmp_path / "blobs"))
+    b.put("s/final.png", b"X")
+    b.delete("s/final.png")
+    assert not b.exists("s/final.png")
+    b.delete("s/final.png")          # deleting a missing key is a no-op, not an error
+
+def test_blobs_ttl_sweep_evicts_old_and_prunes_dirs(tmp_path):
+    # red-team V1-8: finals must not accumulate forever. A blob older than the TTL is
+    # swept and its now-empty session dir pruned; a fresh blob survives.
+    b = blobs.LocalBlobs(str(tmp_path / "blobs"), ttl_seconds=3600)
+    old_p = b.put("old/final.png", b"X")
+    b.put("fresh/final.png", b"Y")
+    stale = time.time() - 100_000
+    import os
+    os.utime(old_p, (stale, stale))
+    assert b.sweep() == 1
+    assert not b.exists("old/final.png") and b.exists("fresh/final.png")
+    assert not os.path.isdir(os.path.dirname(old_p))    # empty session dir pruned
+
 def test_job_queue_runs_and_reports_done():
     q = jobs.ThreadJobQueue()
     jid = q.submit(lambda a, b: a + b, 2, 3)
@@ -103,3 +123,20 @@ def test_job_queue_captures_error():
         time.sleep(0.01)
     s = q.status(jid)
     assert s["state"] == "error" and "nope" in s["error"]
+
+def test_job_queue_evicts_finished_after_ttl():
+    # red-team V1-8: finished job records must not grow unbounded. A done record older
+    # than the TTL is evicted the next time a job is submitted.
+    import pytest
+    q = jobs.ThreadJobQueue(ttl_seconds=3600)
+    jid = q.submit(lambda: 1)
+    for _ in range(200):
+        if q.status(jid)["state"] == "done":
+            break
+        time.sleep(0.01)
+    assert q.status(jid)["state"] == "done"
+    with q._lock:                                   # backdate so it is past the TTL
+        q._jobs[jid]["finished"] = time.time() - 100_000
+    q.submit(lambda: 2)                             # submit triggers the eviction sweep
+    with pytest.raises(KeyError):
+        q.status(jid)
