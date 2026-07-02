@@ -48,7 +48,11 @@ def _encode_final(img, fmt: str) -> bytes:
     pil_fmt, _ = FINAL_FORMATS[fmt]
     buf = io.BytesIO()
     if fmt == "pdf":
-        img.save(buf, pil_fmt, resolution=FINAL_DPI)   # 300 dpi -> true 18x24 in page
+        # resolution -> true page size (300 dpi). Pillow embeds RGB PDF pages as JPEG;
+        # the libjpeg defaults (quality 75, 4:2:0 chroma subsampling) fringe exactly
+        # our crisp features -- a saturated gold line on desaturated paper -- so pass
+        # print-grade encoder params through (they reach the embedded JPEG encoder).
+        img.save(buf, pil_fmt, resolution=FINAL_DPI, quality=95, subsampling=0)
     else:
         img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # embed DPI like save_print
     return buf.getvalue()
@@ -308,6 +312,7 @@ def _build_spec(sid, crop_px, print_w, print_h, title=""):
         print_w_in=print_w, print_h_in=print_h,
         native_resolution_m=region.cfg["native_resolution_m"],
         tracks=[t.coords for t in st["tracks"]],
+        track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
         hotspots=st["hotspots"], seed=7, title_text=title)
     spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a

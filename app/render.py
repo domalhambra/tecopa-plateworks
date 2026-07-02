@@ -99,17 +99,43 @@ def _crs_to_px(x, y, crop, out_w, out_h):
     py = (crop[3] - y) / (crop[3]-crop[1]) * out_h
     return px, py
 
-def _coverage(spec, out_w, out_h, width_px):
-    """Anti-aliased per-pixel visit count: how many track-passes cover each pixel.
-    Drawing each track on its own layer and summing makes overlap = frequency."""
+def _journey_groups(spec):
+    """Group spec.tracks indices into journeys. Segments sharing a (non-None) day are
+    ONE journey -- a device splits a single outing into several trksegs at auto-pause,
+    and those must not read as separate visits. A day-less segment stays its own
+    journey. Specs without track_days (older sessions, direct callers) degrade to
+    one-journey-per-track, the pre-grouping behavior."""
+    days = list(spec.track_days or [])
+    days += [None] * (len(spec.tracks) - len(days))          # tolerate short lists
+    groups, by_day = [], {}
+    for i, day in enumerate(days[:len(spec.tracks)]):
+        if day is None:
+            groups.append([i])
+        elif day in by_day:
+            by_day[day].append(i)
+        else:
+            by_day[day] = [i]
+            groups.append(by_day[day])
+    return groups
+
+def _coverage(spec, out_w, out_h, width_px, groups=None):
+    """Anti-aliased per-pixel visit count: how many distinct JOURNEYS cover each
+    pixel. All segments of one journey draw onto one layer (self-overlap counts
+    once); summing layers makes overlap across journeys = frequency."""
+    if groups is None:
+        groups = [[i] for i in range(len(spec.tracks))]
     cov = np.zeros((out_h, out_w), np.float32)
-    for coords in spec.tracks:
-        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in coords]
-        if len(pts) < 2:
-            continue
+    for g in groups:
         layer = Image.new("L", (out_w, out_h), 0)
-        ImageDraw.Draw(layer).line(pts, fill=255, width=max(1, width_px), joint="curve")
-        cov += np.asarray(layer, np.float32) / 255.0
+        d = ImageDraw.Draw(layer)
+        drew = False
+        for i in g:
+            pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in spec.tracks[i]]
+            if len(pts) >= 2:
+                d.line(pts, fill=255, width=max(1, width_px), joint="curve")
+                drew = True
+        if drew:
+            cov += np.asarray(layer, np.float32) / 255.0
     return cov
 
 def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
@@ -122,25 +148,38 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
     pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
     feather = max(0.3, _pt_to_px(INK_EDGE_FEATHER_PT, dpi))
+    groups = _journey_groups(spec)
+    # a single journey can never be "worn" -- skip both worn rasterizations (a
+    # flagship final saves ~4 s and ~300 MB; output is identical since one journey's
+    # coverage never exceeds 1, so the worn terms are exactly zero).
+    worn_possible = len(groups) >= 2
 
-    # per-pass coverage at both widths (each track on its own layer -> overlap = passes)
-    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w), feather)
-    visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w), feather)
+    # per-journey coverage at both widths (overlap across journeys = frequency)
+    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups), feather)
 
     # 1) paper halo under the line, following the worn width where paths repeat.
-    #    clip(cov)-1 at the halo width = presence of a 2nd+ pass -> the worn halo gate.
-    cas_base = _coverage(spec, out_w, out_h, ink_w + 2 * pad)
-    cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad)
-    cas = np.maximum(np.clip(cas_base, 0, 1), np.clip(cas_worn - 1, 0, 1))
+    #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
+    cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
+    if worn_possible:
+        cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
+        cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
+        del cas_worn
     cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
     casing_op = (CASING_STRENGTH * np.clip(cas, 0, 1))[..., None]
+    del cas
     casing_col = np.array(TRACK_CASING, np.float32) / 255.0
     img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+    del casing_op
 
-    # 2) the line: base width at near-solid ink; repeat days widen it (saturating)
-    op_base = 1.0 - np.exp(-INK_FREQ_K * visits_base)
-    op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
-    op = np.clip(np.maximum(op_base, op_worn), 0.0, spec.track_max_darken)
+    # 2) the line: base width at near-solid ink; repeat journeys widen it (saturating)
+    op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
+    del visits_base
+    if worn_possible:
+        visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w, groups), feather)
+        op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
+        op = np.maximum(op, op_worn)
+        del visits_worn, op_worn
+    op = np.clip(op, 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
     ink = np.array(TRACK_INK, np.float32) / 255.0
@@ -152,16 +191,18 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 def _draw_termini(img, spec, out_w, out_h, dpi):
-    """A small dark pin with a paper ring at each track's first and last point --
-    the journey's start and end anchor the story (V1-10). Sized off the track width
-    (physical units) so proof and final agree."""
+    """A small dark pin with a paper ring at each JOURNEY's first and last point --
+    the start and end anchor the story (V1-10). Pause-split segments of one day form
+    one journey (see _journey_groups), so mid-route stop/resume points get no pin.
+    Sized off the track width (physical units) so proof and final agree."""
     d = ImageDraw.Draw(img, "RGBA")
     r = max(2.0, _pt_to_px(spec.track_width_pt, dpi) * 0.9)
     ring_w = max(1, round(r * 0.45))
-    for coords in spec.tracks:
-        if len(coords) < 2:
+    for g in _journey_groups(spec):
+        segs = [spec.tracks[i] for i in g if len(spec.tracks[i]) >= 2]
+        if not segs:
             continue
-        for x, y in (coords[0], coords[-1]):
+        for x, y in (segs[0][0], segs[-1][-1]):     # journey start, journey end
             px, py = _crs_to_px(x, y, spec.crop, out_w, out_h)
             if 0 <= px <= out_w and 0 <= py <= out_h:
                 d.ellipse([px - r, py - r, px + r, py + r],
@@ -184,7 +225,13 @@ def _font(size):
             return ImageFont.truetype(name, size)
         except Exception:
             continue
-    return ImageFont.load_default()
+    # load_default() with no size ignores the request (~10 px bitmap font), which
+    # would shrink labels -- and the sheet-scaled PROOF watermark -- to invisible
+    # on a host without the TTFs above. Pillow >= 10.1 scales the default font.
+    try:
+        return ImageFont.load_default(size)
+    except TypeError:
+        return ImageFont.load_default()
 
 def _draw_glyph(d, name, cx, cy, r, color):
     """Draw a small cartographic icon centred at (cx,cy), scaled to radius r. Vector

@@ -38,6 +38,11 @@ class CompositionSpec:
     tracks: list          # list of (N,2) arrays in CRS meters
     hotspots: list        # list of {"x","y","weight", and optional "label"/"icon"/"photo"}
     seed: int = 7
+    # Journey identity, parallel to `tracks` (None -> each track is its own journey).
+    # Devices split one outing into several segments at auto-pause/stop-resume; the
+    # renderer groups segments sharing a day into ONE journey so the worn-width pass
+    # counts distinct outings (not segments) and terminus pins mark real start/end.
+    track_days: list | None = None
 
     # physical style values (invariant 2): everything visual sized in print units.
     # Defaults follow the V1-10 "pronounced" pass (approved by Dom): the route,

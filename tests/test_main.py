@@ -249,17 +249,6 @@ def test_sweep_uploads_evicts_stale_session_dirs(tmp_path):
     assert not os.path.exists(os.path.join(root, "old_sess"))
     assert os.path.exists(os.path.join(root, "fresh_sess"))
 
-def test_final_pdf_format():
-    # V1-10: the deliverable may be a PDF someone saves for themselves (or hands a
-    # print shop). format=pdf must return a real PDF at the same rendered spec.
-    c = _client(); j = _upload(c)
-    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
-    assert c.post("/api/proof", data=data).status_code == 200
-    r = c.post("/api/final", data={"session_id": j["session"], "format": "pdf"})
-    assert r.status_code == 200
-    assert r.headers["content-type"] == "application/pdf"
-    assert r.content[:5] == b"%PDF-"
-
 def test_final_unknown_format_is_422():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
@@ -270,14 +259,17 @@ def test_final_unknown_format_is_422():
                                              "format": "tiff"}).status_code == 422
 
 def test_async_final_pdf_via_job_queue():
-    import time
+    # V1-10: the deliverable may be a PDF someone saves for themselves (or hands a
+    # print shop). One render covers the whole pdf pipeline: _render_to_blob fmt,
+    # the blob-key extension -> media type inference, and the embedded page size.
+    import re, time
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
     assert c.post("/api/proof", data=data).status_code == 200
     jid = c.post("/api/final/submit", data={"session_id": j["session"],
                                             "format": "pdf"}).json()["job"]
     res = None
-    for _ in range(600):
+    for _ in range(1200):                     # generous budget for a CI runner
         s = c.get(f"/api/jobs/{jid}").json()
         if s["state"] in ("done", "error"):
             res = s
@@ -288,6 +280,10 @@ def test_async_final_pdf_via_job_queue():
     assert out.status_code == 200
     assert out.headers["content-type"] == "application/pdf"
     assert out.content[:5] == b"%PDF-"
+    # the PDF's reason to exist: a true 9x12 in page (648x864 pt) via resolution=300
+    box = re.search(rb"/MediaBox \[ ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) \]", out.content)
+    assert box, "no MediaBox in PDF"
+    assert [round(float(v)) for v in box.groups()] == [0, 0, 648, 864]
 
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)

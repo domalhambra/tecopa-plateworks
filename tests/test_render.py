@@ -56,21 +56,50 @@ def test_proof_relief_is_a_faithful_scale_of_final():
 def test_proof_track_treatment_is_a_faithful_scale_of_final():
     # V1-10 regression guard for physical-unit track styling: casing blur and edge
     # feather used to be raw PIXELS, so the proof's halo was ~3x softer than the
-    # final's. With pt units, a track-bearing proof must downscale-match the final.
-    # Two coincident tracks exercise the worn-width path across DPIs too.
+    # final's. Whole-image MAD is dominated by terrain and cannot see this, so the
+    # comparison is masked to the TRACK CORRIDOR (where the regression lives).
+    # Two coincident distinct-day tracks exercise the worn-width path across DPIs.
+    from app import render as render_mod
     cfg = _cfg(); bx = cfg["bounds"]
     cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
     crop = (cx-13500, cy-18000, cx+13500, cy+18000)
     line = np.array([[crop[0]+3000, crop[1]+3000], [crop[2]-3000, crop[3]-3000]])
     spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
                            print_w_in=9, print_h_in=12, native_resolution_m=10,
-                           tracks=[line, line.copy()], hotspots=[], seed=7)
+                           tracks=[line, line.copy()],
+                           track_days=["2024-06-01", "2024-06-02"],
+                           hotspots=[], seed=7)
     no_water = {"lakes": [], "rivers": []}
     proof = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro=no_water)
     final = rasterize(spec, dpi=300, region_dir=REGION_DIR, hydro=no_water)
     final_ds = final.resize(proof.size, Image.LANCZOS)
-    mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
-    assert mad < 3.5, f"track treatment shifts with DPI: mean abs diff {mad:.2f}/255"
+    w, h = proof.size
+    corridor = render_mod._coverage(spec, w, h, width_px=12) > 0    # line + halo + slack
+    diff = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32))
+    mad = diff[corridor].mean()
+    # calibrated on the real DEM: the physical-unit treatment measures 14.75 here;
+    # the old px-valued blur/feather (same pixel sigma at both DPIs) measures 17.34.
+    assert mad < 16.0, f"track treatment shifts with DPI: corridor MAD {mad:.2f}/255"
+    assert diff.mean() < 3.5, f"whole-image drift: {diff.mean():.2f}/255"
+
+def test_rasterize_composites_terminus_pins():
+    # the pins must actually be wired into rasterize (the unit tests call
+    # _draw_termini directly and would stay green if the call were dropped).
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    crop = (cx-13500, cy-18000, cx+13500, cy+18000)
+    line = np.array([[crop[0]+3000, crop[1]+3000], [crop[2]-3000, crop[3]-3000]])
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[line], hotspots=[], seed=7)
+    img = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro={"lakes": [], "rivers": []})
+    out = np.asarray(img).astype(int)
+    from app.render import TERMINUS_INK
+    # start point (crop[0]+3000, crop[1]+3000) -> px (96, 1056) at 9x12 @ 96 dpi
+    patch = out[1056-8:1056+8, 96-8:96+8]
+    d = np.linalg.norm(patch - np.array(TERMINUS_INK), axis=2)
+    assert (d < 40).sum() > 8, "terminus pin not composited by rasterize()"
+    assert (patch.sum(axis=2) > 640).sum() > 3, "terminus ring not composited"
 
 def test_water_fills_lake_area():
     cfg = _cfg(); bx = cfg["bounds"]
