@@ -22,16 +22,18 @@ def track_from_json(d: dict) -> Track:
 def spec_to_json(s: CompositionSpec) -> dict:
     d = {f.name: getattr(s, f.name) for f in fields(s)}
     d["crop"] = list(s.crop)
-    d["track_color"] = list(s.track_color)
     d["tracks"] = [np.asarray(a, float).tolist() for a in s.tracks]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:
     d = dict(d)
     d["crop"] = tuple(d["crop"])
-    d["track_color"] = tuple(d["track_color"])
     d["tracks"] = [np.asarray(a, float) for a in d["tracks"]]
-    return CompositionSpec(**d)
+    # tolerate schema drift in persisted rows, both directions: a row written by an
+    # older build lacks new fields (dataclass defaults fill them), and a row written
+    # before a field was REMOVED (e.g. track_color) must not TypeError the load.
+    known = {f.name for f in fields(CompositionSpec)}
+    return CompositionSpec(**{k: v for k, v in d.items() if k in known})
 
 def dump_session(data: dict) -> dict:
     """A live session dict -> JSON-able dict (tracks/spec flattened)."""

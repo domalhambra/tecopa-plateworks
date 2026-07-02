@@ -4,6 +4,13 @@ _Last updated: 2026-07-01 · after the guided-wizard merge (PR #2) and the red-t
 
 **Read this to know what to work on next, in priority order.** It is the action plan; the *reasoning* behind every item lives in the red-team deliverable.
 
+> **v1.1 red-team (2026-07-02):** after v1.1 went code-complete, a second full red-team
+> ran over `main` — see [`../assessments/2026-07-02-v1.1-redteam.md`](../assessments/2026-07-02-v1.1-redteam.md).
+> 53 confirmed findings; everything fixable was fixed in the follow-up PR (suite now
+> ~145 tests). What remains there needs Dom: the zoom-cap floor vs "the journey fills
+> the sheet" (the biggest open product lever), Honey Lake taste call, display font,
+> marker-weight styling, and the margin-frame v1.2 fork.
+
 ## Reference documents (read in this order)
 1. **The roadmap / rationale (primary reference):** [`docs/superpowers/assessments/2026-07-01-trailprint-redteam-and-roadmap.md`](../assessments/2026-07-01-trailprint-redteam-and-roadmap.md) — the full red-team (8 verified lenses, 54 findings), the truly-ready-v1 and hosted-v2 end-state definitions, the phased P0–P3 roadmap, and the open questions. **Every item below cites its section/finding there.**
 2. **Architecture & invariants + how-to-run:** `docs/superpowers/handoffs/HANDOFF.md` (still the best architecture/gotchas reference — but its "what's next" list is superseded by *this* doc, and note the stale-fact corrections below).

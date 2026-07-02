@@ -50,6 +50,9 @@ function go(step) {
     $('toFrame').hidden = step !== 'tracks';
     $('renderProof').hidden = step !== 'frame';
     $('expressBtn').hidden = step !== 'frame';
+    // stepping back from a still-valid proof must not force a ~5 s re-render:
+    // offer the way forward when nothing changed since the last proof.
+    $('backToProof').hidden = !(step === 'frame' && state.hasSpec && !state.proofStale);
     $('markersBox').hidden = !(state.hotspots.length);
     canvas.setMode(step);
     if (step === 'tracks') {
@@ -129,6 +132,7 @@ async function doUpload(fileList) {
     arr.forEach((f) => state.files.push(f.name)); renderFiles();
     canvas.setOverview(j.overview, j.overview_size);
     $('dropzone').hidden = true; $('map').hidden = false; $('addFiles').hidden = false;
+    $('startOver').hidden = false;               // reset is reachable from any step now
     markers.render($('markerList'), (msg) => setStatus(msg));
     $('toFrame').disabled = state.tracks.length === 0;
     // re-enter Tracks through the normal transition so step/canvas-mode/panes stay in
@@ -170,17 +174,24 @@ async function renderProof() {
   if (!ov) { setStatus('Draw a frame first', 'status'); return false; }
   setStatus('Rendering proof…', 'status');
   try {
-    const blob = await api.proof(state.session, ov, state.printW, state.printH);
+    const blob = await api.proof(state.session, ov, state.printW, state.printH, state.title);
     $('posterImg').src = URL.createObjectURL(blob);
     state.hasSpec = true; state.proofStale = false;
+    state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
     go('proof');
     setStatus('Proof ready — accept to render the full-resolution final', 'proofStatus');
     return true;
   } catch (e) {
     if (e.status === 422) {
-      const msg = canvas.sizeInfeasibleForRegion()
-        ? `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.`
-        : `This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`;
+      // Prefer the server's humanized sentence (off-DEM, aspect, in-bounds…);
+      // translate only the terse zoom-cap numbers into operator language. The old
+      // catch-all "draw wider" advice was the OPPOSITE fix for an off-DEM crop.
+      let msg = e.message && !/^HTTP /.test(e.message) ? e.message : '';
+      if (canvas.sizeInfeasibleForRegion()) {
+        msg = `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.`;
+      } else if (!msg || /m\/px/.test(msg)) {
+        msg = `This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`;
+      }
       setStatus(msg, 'status');
     } else { setStatus('Proof failed: ' + e.message, 'status'); }
     return false;
@@ -203,6 +214,12 @@ function cropForProof() {
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+async function downloadFinal(url, fmt) {
+  const blob = await api.fetchBlob(url);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `trailprint.${fmt}`; a.click();
+}
+
 async function acceptFinal() {
   if (!state.hasSpec || state.proofStale) {
     setStatus('Something changed since the last proof — re-render the proof first.', 'proofStatus');
@@ -210,20 +227,31 @@ async function acceptFinal() {
   }
   $('accept').disabled = true;
   setStatus('Queuing final render…', 'proofStatus');
+  const fmt = state.finalFormat;
   try {
-    const { job } = await api.submitFinal(state.session);
+    const { job } = await api.submitFinal(state.session, fmt);
+    let misses = 0;
     for (;;) {
       await sleep(600);
       let s;
-      try { s = await api.jobStatus(job); } catch { continue; }
+      try {
+        s = await api.jobStatus(job);
+        misses = 0;
+      } catch (e) {
+        // a vanished job (404: server restarted, record evicted) can never finish --
+        // the old `continue` polled it forever with the button locked.
+        if (e.status === 404) { setStatus('Final lost (server restarted?) — accept again to re-render.', 'proofStatus'); break; }
+        if (++misses >= 20) { setStatus('Lost contact with the server — accept again to retry.', 'proofStatus'); break; }
+        continue;
+      }
       if (s.state === 'queued') { setStatus('Queued…', 'proofStatus'); continue; }
       if (s.state === 'running') { setStatus('Rendering final at 300 dpi…', 'proofStatus'); continue; }
       if (s.state === 'error') { setStatus('Final failed: ' + (s.error || 'render error'), 'proofStatus'); break; }
       if (s.state === 'done') {
-        const blob = await api.fetchBlob(s.result);
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob); a.download = 'trailprint.png'; a.click();
-        setStatus('Final downloaded.', 'proofStatus');
+        await downloadFinal(s.result, fmt);
+        state.lastFinal = { url: s.result, fmt };        // re-download without re-rendering
+        $('downloadAgain').hidden = false;
+        setStatus(`Final ${fmt.toUpperCase()} downloaded.`, 'proofStatus');
         break;
       }
     }
@@ -239,11 +267,13 @@ function startOver() {
   Object.assign(state, {
     session: null, ovSize: null, scale: 1, tracks: [], hotspots: [],
     crop: null, starterCrop: null, hasSpec: false, proofStale: false, files: [],
+    title: '', lastFinal: null,
   });
   state.regions = regions; state.steps = steps;
   renderFiles(); $('markerList').innerHTML = ''; $('markersBox').hidden = true;
   $('dropzone').hidden = false; $('map').hidden = true; $('addFiles').hidden = true;
   $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
+  $('titleInput').value = ''; $('downloadAgain').hidden = true;
   go(state.steps[0]);
   setStatus('Cleared — drop files to start a new map');
 }
@@ -295,8 +325,24 @@ function wire() {
   $('expressBtn').onclick = expressFinal;
   $('resetFrame').onclick = () => { canvas.resetFrame(); markers.refreshOutOfFrame(); updateFrameFeasibility(); };
   $('reframe').onclick = () => go('frame');
+  $('backToProof').onclick = () => go('proof');
   $('accept').onclick = acceptFinal;
   $('startOver').onclick = startOver;
+  $('downloadAgain').onclick = () => {
+    if (state.lastFinal) downloadFinal(state.lastFinal.url, state.lastFinal.fmt)
+      .catch(() => setStatus('That final has expired — accept again to re-render.', 'proofStatus'));
+  };
+  $('titleInput').oninput = (e) => {
+    state.title = e.target.value;
+    if (state.hasSpec) state.proofStale = true;      // the title prints; re-proof it
+  };
+  $('finalFormat').onchange = (e) => {
+    state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
+  };
+  const fmtPref = loadPrefs().finalFormat;
+  if (fmtPref === 'pdf' || fmtPref === 'png') {
+    state.finalFormat = fmtPref; $('finalFormat').value = fmtPref;
+  }
 
   const prefs = loadPrefs();
   if (prefs.printSize) {

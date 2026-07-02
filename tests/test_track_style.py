@@ -77,9 +77,10 @@ def test_terminus_pins_drawn_at_track_ends():
     img = Image.new("RGBA", (w, h), (128, 128, 128, 255))
     img = render._draw_termini(img, _spec([LINE]), w, h, dpi=300)
     out = np.asarray(img.convert("RGB")).astype(int)
-    # endpoints (100,500) and (900,500) in the (0,0,1000,1000) crop -> px (40,200),(360,200)
+    # endpoints (100,500) and (900,500) in the (0,0,1000,1000) crop -> px (40,200),(360,200);
+    # pin radius is now marker-scaled (~15 px at 300 dpi), so probe a wider patch.
     for cx in (40, 360):
-        patch = out[190:210, cx - 10:cx + 10]
+        patch = out[178:222, cx - 22:cx + 22]
         assert (patch.sum(axis=2) < 200).sum() > 10, f"no pin fill near x={cx}"
         assert (patch.sum(axis=2) > 640).sum() > 5, f"no paper ring near x={cx}"
 
@@ -96,7 +97,7 @@ def test_termini_are_per_journey_not_per_segment():
     img = render._draw_termini(img, _spec(segs, track_days=["2024-06-01"] * 3), w, h, dpi=300)
     out = np.asarray(img.convert("RGB")).astype(int)
     for cx, expect in ((40, True), (360, True), (160, False), (280, False)):
-        patch = out[190:210, cx - 10:cx + 10]
+        patch = out[178:222, cx - 22:cx + 22]
         dark = (patch.sum(axis=2) < 200).sum()
         if expect:
             assert dark > 10, f"missing journey terminus near x={cx}"

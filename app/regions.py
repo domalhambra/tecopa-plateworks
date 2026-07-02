@@ -38,10 +38,6 @@ class Region:
     def name(self) -> str:
         return self.cfg.get("name", self.id)
 
-    def contains_lonlat(self, lon: float, lat: float) -> bool:
-        w, s, e, n = self.lonlat_bbox
-        return w <= lon <= e and s <= lat <= n
-
     def meta(self) -> dict:
         """Lightweight metadata for the region-picker UI (no DEM, no geometry)."""
         return {"id": self.id, "name": self.name,
@@ -89,12 +85,6 @@ def discover(root: str = REGIONS_ROOT) -> dict:
             out[rid] = Region(rid, root)
     return out
 
-def detect_region(regions: dict, lonlat_points) -> Region | None:
-    """Pick the region containing the most of the given (lon, lat) points. Ties go
-    to the first by id (discover() returns sorted); None if nothing lands anywhere."""
-    best, best_n = None, 0
-    for r in regions.values():
-        n = sum(1 for lon, lat in lonlat_points if r.contains_lonlat(lon, lat))
-        if n > best_n:
-            best, best_n = r, n
-    return best
+# NOTE: an earlier lon/lat-based detect_region()/contains_lonlat() pair was removed
+# as dead code (red-team): upload routing lives in main._best_region, which counts
+# points in CRS space against true bounds rather than an approximate lon/lat bbox.

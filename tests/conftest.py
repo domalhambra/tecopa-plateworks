@@ -16,6 +16,15 @@ stays gitignored — it is a test artifact, never committed.
 from __future__ import annotations
 import json
 import os
+import tempfile
+
+# Isolate the app's writable stores BEFORE any test module imports app.main: the
+# endpoint tests used to write finals into the repo's live blobs/ and uploads/
+# (417 MB accumulated) and every put() swept the operator's real store (red-team).
+os.environ.setdefault("TRAILPRINT_BLOBS",
+                      tempfile.mkdtemp(prefix="trailprint-test-blobs-"))
+os.environ.setdefault("TRAILPRINT_UPLOADS",
+                      tempfile.mkdtemp(prefix="trailprint-test-uploads-"))
 
 import numpy as np
 import rasterio

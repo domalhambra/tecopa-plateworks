@@ -1,8 +1,7 @@
 # app/spec.py
 from __future__ import annotations
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import math
-import numpy as np
 
 # All three are "this picture can't be made here" conditions, not bugs: the API maps
 # any SpecError to a humanized 422 (like the zoom cap), so a single except catches them.
@@ -49,7 +48,6 @@ class CompositionSpec:
     # markers, and photos are sized to read at poster viewing distance (2-3 m),
     # not arm's length -- legibility-first, like a mapping app.
     track_width_pt: float = 2.6
-    track_color: tuple = (38, 36, 33)        # basalt-ish
     track_max_darken: float = 0.9            # ink ceiling (grain still shows through)
     marker_diameter_in: float = 0.24
     grain_cell_in: float = 0.014
@@ -88,9 +86,22 @@ class CompositionSpec:
                 f"{w_px}x{h_px}px ({w_px * h_px / 1e6:.0f} MP) exceeds the "
                 f"{MAX_OUTPUT_PIXELS // 1_000_000} MP output ceiling; "
                 f"choose a smaller print size")
-        # zoom cap (invariant 6): never request finer ground detail than the data holds
-        if self.ground_per_pixel(dpi) < self.native_resolution_m:
+        # crop must be a real box, and its aspect must match the print aspect -- the
+        # renderer maps crop -> full sheet, so a mismatch would stretch the terrain
+        # anisotropically with no error anywhere downstream (red-team).
+        cw, ch = self.crop[2] - self.crop[0], self.crop[3] - self.crop[1]
+        if cw <= 0 or ch <= 0:
+            raise SpecError("crop is empty or inverted")
+        crop_ar, print_ar = cw / ch, self.print_w_in / self.print_h_in
+        if abs(crop_ar - print_ar) / print_ar > 0.02:
+            raise SpecError(
+                f"crop aspect {crop_ar:.3f} doesn't match print aspect {print_ar:.3f}; "
+                f"the picture would be stretched -- re-frame the crop")
+        # zoom cap (invariant 6): never request finer ground detail than the data
+        # holds, judged on BOTH axes (x-only let a tall thin crop bypass it).
+        gpp = min(cw / w_px, ch / h_px)
+        if gpp < self.native_resolution_m:
             raise ZoomTooTightError(
-                f"{self.ground_per_pixel(dpi):.1f} m/px requested, "
+                f"{gpp:.1f} m/px requested, "
                 f"data floor is {self.native_resolution_m} m/px")
         return self

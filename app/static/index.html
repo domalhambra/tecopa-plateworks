@@ -20,7 +20,10 @@
       <h1>TrailPrint <span>Studio</span></h1>
       <span id="regionName" class="region-name"></span>
     </div>
-    <button id="themeToggle" class="ghost" type="button" aria-label="Toggle day and night theme" hidden>Day</button>
+    <div class="header-actions">
+      <button id="startOver" class="ghost danger" type="button" hidden>Start over</button>
+      <button id="themeToggle" class="ghost" type="button" aria-label="Toggle day and night theme" hidden>Day</button>
+    </div>
   </header>
 
   <main>
@@ -34,7 +37,6 @@
         <p class="lede">Turn your tracks into a shaded-relief poster.</p>
         <div id="regionGallery" class="region-gallery"></div>
         <div class="actions">
-          <button id="startOver" class="ghost danger" type="button" hidden>Start over</button>
           <button id="toTracks" class="primary" type="button" disabled>Continue to Tracks</button>
         </div>
       </div>
@@ -51,6 +53,10 @@
               <option value="12,16">12 × 16 in</option>
               <option value="9,12">9 × 12 in</option>
             </select>
+          </label>
+          <label>Poster title
+            <input id="titleInput" type="text" maxlength="60"
+                   placeholder="Region name — type “-” for none">
           </label>
           <button id="resetFrame" class="ghost" type="button">Reset frame</button>
         </div>
@@ -81,6 +87,7 @@
 
         <div class="actions">
           <span id="status" class="status"></span>
+          <button id="backToProof" class="ghost" type="button" hidden>Back to proof</button>
           <button id="toFrame" class="primary" type="button" disabled>Continue to Frame</button>
           <button id="expressBtn" class="ghost" type="button" hidden>Proof + render final</button>
           <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
@@ -95,6 +102,13 @@
         </div>
         <div class="actions">
           <span id="proofStatus" class="status"></span>
+          <label class="format-label">Format
+            <select id="finalFormat">
+              <option value="png">PNG</option>
+              <option value="pdf">PDF (print shop)</option>
+            </select>
+          </label>
+          <button id="downloadAgain" class="ghost" type="button" hidden>Download again</button>
           <button id="reframe" class="ghost" type="button">Reframe</button>
           <button id="accept" class="primary" type="button">Accept &amp; render final</button>
         </div>

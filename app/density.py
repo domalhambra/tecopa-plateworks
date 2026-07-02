@@ -8,8 +8,11 @@ def _rasterize_visits(tracks, bounds, cell_m):
     ny = max(1, int((max_y - min_y) / cell_m))
     # For each cell, collect the set of distinct track keys passing through it.
     sets = [[set() for _ in range(nx)] for _ in range(ny)]
-    for t in tracks:
-        key = t.day or t.track_id   # prefer distinct days, fall back to track id
+    for i, t in enumerate(tracks):
+        # prefer distinct days; day-less tracks each count as their own visit. The
+        # list index (not track_id) disambiguates: ids restart at "<name>-0" per
+        # FILE, so two day-less files' tracks used to collide and undercount.
+        key = t.day or f"__anon-{i}"
         c = t.coords
         # densify so a straight segment still marks every cell it crosses
         seg_len = np.hypot(np.diff(c[:, 0]), np.diff(c[:, 1]))

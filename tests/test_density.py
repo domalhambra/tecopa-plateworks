@@ -33,3 +33,13 @@ def test_short_segment_marks_destination_cell():
     assert gx_start != gx_end
     assert grid[gy, gx_start] >= 1
     assert grid[gy, gx_end] >= 1                       # the dropped one before the fix
+
+def test_dayless_tracks_from_different_files_count_separately():
+    # red-team: track_ids restart at "<name>-0" per FILE, so two day-less files'
+    # tracks used to collide on the visit key and undercount to weight 1.
+    base = (430000.0, 4350000.0)
+    a = Track("track-0", line(base, (base[0] + 500, base[1] + 500)), day=None)
+    b = Track("track-0", line(base, (base[0] + 500, base[1] + 500)), day=None)  # same id!
+    hs = hotspots([a, b], region_bounds=(400000, 4318000, 470000, 4385000),
+                  cell_m=1000, max_spots=1)
+    assert hs and hs[0]["weight"] == 2

@@ -13,8 +13,19 @@ async function postForm(url, fields) {
   return fetch(url, { method: 'POST', body: fd });
 }
 
+// Surface the server's humanized `detail` sentence, not the raw JSON envelope --
+// the operator used to see `{"detail":"Tracks don't fall..."}` verbatim.
+async function errText(res) {
+  const txt = await res.text();
+  try {
+    const j = JSON.parse(txt);
+    if (j && j.detail) return String(j.detail).slice(0, 300);
+  } catch { /* not JSON */ }
+  return txt.slice(0, 300);
+}
+
 async function asJson(res) {
-  if (!res.ok) throw new ApiError(res.status, (await res.text()).slice(0, 300));
+  if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.json();
 }
 
@@ -50,19 +61,21 @@ export async function moveMarker(sessionId, i, px, py) {
   return asJson(res);   // { ok, px, py } — clamped snap-back position
 }
 
-// Render a proof; resolves to a PNG Blob, throws ApiError(422, "<zoom msg>") when
-// the crop trips the cap so the caller can show the humanized message.
-export async function proof(sessionId, cropOv, printW, printH) {
+// Render a proof; resolves to a PNG Blob, throws ApiError(422, "<detail>") when the
+// crop trips the zoom cap / off-DEM / aspect guard so the caller can show it.
+// `title` rides along ('' -> region-name default on the server; '-' -> no block).
+export async function proof(sessionId, cropOv, printW, printH, title = '') {
   const [x0, y0, x1, y1] = cropOv;
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
+    title: title || undefined,
   });
-  if (!res.ok) throw new ApiError(res.status, (await res.text()).slice(0, 300));
+  if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();
 }
 
-export async function submitFinal(sessionId) {
-  const res = await postForm('/api/final/submit', { session_id: sessionId });
+export async function submitFinal(sessionId, format = 'png') {
+  const res = await postForm('/api/final/submit', { session_id: sessionId, format });
   return asJson(res);   // { job }
 }
 

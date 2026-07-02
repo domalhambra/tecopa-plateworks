@@ -10,14 +10,6 @@ __pycache__/
 regions/*/dem.tif
 regions/*/*.tif
 
-# Render outputs / preview artifacts
-regions/*/final_*.png
-regions/*/poster_*.png
-regions/*/demo_photo.png
-tune.png
-poster.png
-comparison.png
-
 # requests-cache from the NHD/3DEP fetches
 cache/
 
