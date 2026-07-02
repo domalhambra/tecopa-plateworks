@@ -47,7 +47,30 @@ def test_proof_relief_is_a_faithful_scale_of_final():
     final = rasterize(spec, dpi=300, region_dir=REGION_DIR, hydro=no_water)
     final_ds = final.resize(proof.size, Image.LANCZOS)
     mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
-    assert mad < 2.5, f"proof is not a faithful scale of the final: mean abs diff {mad:.2f}/255"
+    # 3.0: relief is base*light, so the V1-10 paper-lift (brighter base) scales the
+    # same relative resampling noise to a larger absolute MAD (~2.4 -> ~2.5 measured
+    # on the real DEM). The guard is against DPI-dependent texture/valley scale, which
+    # would push this far past 3.
+    assert mad < 3.0, f"proof is not a faithful scale of the final: mean abs diff {mad:.2f}/255"
+
+def test_proof_track_treatment_is_a_faithful_scale_of_final():
+    # V1-10 regression guard for physical-unit track styling: casing blur and edge
+    # feather used to be raw PIXELS, so the proof's halo was ~3x softer than the
+    # final's. With pt units, a track-bearing proof must downscale-match the final.
+    # Two coincident tracks exercise the worn-width path across DPIs too.
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    crop = (cx-13500, cy-18000, cx+13500, cy+18000)
+    line = np.array([[crop[0]+3000, crop[1]+3000], [crop[2]-3000, crop[3]-3000]])
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[line, line.copy()], hotspots=[], seed=7)
+    no_water = {"lakes": [], "rivers": []}
+    proof = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro=no_water)
+    final = rasterize(spec, dpi=300, region_dir=REGION_DIR, hydro=no_water)
+    final_ds = final.resize(proof.size, Image.LANCZOS)
+    mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
+    assert mad < 3.5, f"track treatment shifts with DPI: mean abs diff {mad:.2f}/255"
 
 def test_water_fills_lake_area():
     cfg = _cfg(); bx = cfg["bounds"]

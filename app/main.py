@@ -39,13 +39,31 @@ QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS)
 
 app = FastAPI()
 
-def _render_to_blob(spec, region_dir, key):
-    """The render worker: rasterize the stamped spec at print DPI and store the PNG.
-    Runs on a queue thread, so it touches only its arguments -- no request state."""
-    img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region_dir, watermark=False)
+# The deliverable isn't only a print: a PDF suits "an image someone saves for
+# themselves" and is what a print shop asks for anyway (V1-10). Both encode the
+# same rasterized spec; PDF embeds the page size via `resolution`.
+FINAL_FORMATS = {"png": ("PNG", "image/png"), "pdf": ("PDF", "application/pdf")}
+
+def _encode_final(img, fmt: str) -> bytes:
+    pil_fmt, _ = FINAL_FORMATS[fmt]
     buf = io.BytesIO()
-    img.save(buf, "PNG", dpi=(FINAL_DPI, FINAL_DPI))   # embed DPI like save_print
-    BLOBS.put(key, buf.getvalue())
+    if fmt == "pdf":
+        img.save(buf, pil_fmt, resolution=FINAL_DPI)   # 300 dpi -> true 18x24 in page
+    else:
+        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # embed DPI like save_print
+    return buf.getvalue()
+
+def _require_format(fmt: str) -> str:
+    fmt = (fmt or "png").lower()
+    if fmt not in FINAL_FORMATS:
+        raise HTTPException(422, f"format must be one of {sorted(FINAL_FORMATS)}")
+    return fmt
+
+def _render_to_blob(spec, region_dir, key, fmt="png"):
+    """The render worker: rasterize the stamped spec at print DPI and store the
+    encoded output. Runs on a queue thread, so it touches only its arguments."""
+    img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region_dir, watermark=False)
+    BLOBS.put(key, _encode_final(img, fmt))
     return key                                         # job result = the blob key
 
 def _region_or_404(rid):
@@ -322,7 +340,8 @@ async def proof(session_id: str = Form(...),
     return StreamingResponse(buf, media_type="image/png")
 
 @app.post("/api/final")
-async def final(session_id: str = Form(...)):
+async def final(session_id: str = Form(...), format: str = Form("png")):
+    fmt = _require_format(format)
     try:
         st = session.get(session_id)
     except KeyError:
@@ -338,20 +357,20 @@ async def final(session_id: str = Form(...)):
         log.info("event=final.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
     # Route the final through the blob seam (V1-8): stop littering region.dir with
-    # final_*.png. Same key + embedded DPI as the async path, so both serve identically.
-    key = f"{session_id}/final.png"
-    buf = io.BytesIO()
-    img.save(buf, "PNG", dpi=(FINAL_DPI, FINAL_DPI))
-    BLOBS.put(key, buf.getvalue())
-    log.info("event=final session=%s region=%s dpi=%d ms=%d",
-             session_id, region.id, FINAL_DPI, int((time.time() - t0) * 1000))
-    return FileResponse(BLOBS.path(key), media_type="image/png", filename="trailprint.png")
+    # final_*.png. Same key + encoding as the async path, so both serve identically.
+    key = f"{session_id}/final.{fmt}"
+    BLOBS.put(key, _encode_final(img, fmt))
+    log.info("event=final session=%s region=%s dpi=%d fmt=%s ms=%d",
+             session_id, region.id, FINAL_DPI, fmt, int((time.time() - t0) * 1000))
+    return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
+                        filename=f"trailprint.{fmt}")
 
 @app.post("/api/final/submit")
-async def final_submit(session_id: str = Form(...)):
+async def final_submit(session_id: str = Form(...), format: str = Form("png")):
     """Async final: enqueue the render at the compose->rasterize boundary and return
     a job id, so the request thread doesn't block on a 300 dpi paint. Same gate as
     the sync path (a proof must be stamped first)."""
+    fmt = _require_format(format)
     try:
         st = session.get(session_id)
     except KeyError:
@@ -360,7 +379,7 @@ async def final_submit(session_id: str = Form(...)):
     if spec is None:
         raise HTTPException(400, "Approve a proof first")
     region = _region_or_404(st["region_id"])
-    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.png")
+    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt)
     return {"job": jid}
 
 @app.get("/api/jobs/{jid}")
@@ -385,7 +404,9 @@ async def job_result(jid: str):
     key = s["result"]
     if not BLOBS.exists(key):
         raise HTTPException(404, "result expired")
-    return FileResponse(BLOBS.path(key), media_type="image/png", filename="trailprint.png")
+    fmt = "pdf" if key.endswith(".pdf") else "png"     # blob key carries the format
+    return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
+                        filename=f"trailprint.{fmt}")
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

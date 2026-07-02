@@ -22,15 +22,29 @@ MAX_OFFDEM_NAN_FRAC = 0.01
 # marginally overhanging the DEM pass the proof yet be rejected at the final.
 OFFDEM_PROBE_PX = 384
 
-# ---- track cartography: a pronounced desert-gold route laid onto the paper ----
+# ---- track cartography (V1-10 hybrid, approved by Dom): a pronounced desert-gold
+# route on a light paper halo. The halo is the mapping-app legibility move: it always
+# contrasts one way (light against terrain) while the gold contrasts the other, so
+# the route separates from ANY ground -- dark ridge or pale basin -- and reads from
+# across a room. All reach/softness values are in POINTS (invariant 2): the old
+# pixel-valued blur made the proof's halo softer than the final's.
 TRACK_INK = (214, 158, 58)      # desert gold -- warm, saturated, reads against earthy terrain
-TRACK_CASING = (54, 40, 30)     # dark umber halo -> the gold line pops off any background
-CASING_STRENGTH = 0.34          # a soft dark outline that frames the gold
-CASING_PAD_PT = 0.8             # halo reach beyond the line, in points
-CASING_BLUR_PX = 1.4
-INK_FREQ_K = 1.15               # visitation -> opacity saturation (1 pass ~0.68, 2x -> cap)
-INK_EDGE_FEATHER_PX = 0.6       # soften the hard PIL edge
+TRACK_CASING = (246, 240, 226)  # paper halo under the gold line
+CASING_STRENGTH = 0.7           # halo opacity
+CASING_PAD_PT = 1.0             # halo reach beyond the line, in points
+CASING_BLUR_PT = 1.0            # halo softness, in points (was 1.4 px -- DPI-dependent)
+INK_FREQ_K = 2.5                # first pass inks near-solid; the cap does the limiting
+INK_EDGE_FEATHER_PT = 0.45      # soften the hard PIL edge, in points (was 0.6 px)
 INK_GRAIN = 0.16                # paper texture carried onto the line
+# "Lived in": a segment traveled on several distinct days physically WIDENS toward
+# WORN_WIDTH_FACTOR x the base width (a desire path), instead of only darkening.
+# Coverage counts one pass per track layer, so a same-day out-and-back stays base width.
+WORN_WIDTH_FACTOR = 1.6
+WORN_FREQ_K = 0.9               # how fast repeat days saturate the worn band
+# Journey terminus marks: a small dark pin with a paper ring at each track's start/end
+# -- a route with a beginning and an end reads as a story, not decoration.
+TERMINUS_INK = (54, 40, 30)     # the old dark umber, kept for the pins
+TERMINUS_RING = (246, 240, 226)
 # ----------------------------------------------------------------------------------
 
 # ---- water cartography: lakes filled flat, rivers as order-weighted lines ----
@@ -99,21 +113,34 @@ def _coverage(spec, out_w, out_h, width_px):
     return cov
 
 def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
-    """Composite tracks as inked, visitation-weighted, cased lines that pick up
-    the terrain texture and paper grain instead of floating on top."""
+    """Composite tracks as inked, cased lines that pick up the terrain texture and
+    paper grain instead of floating on top. Visitation is expressed as WIDTH: any
+    pass draws the base line near-solid; segments covered by 2+ distinct passes
+    swell toward the worn width, like a desire path (V1-10)."""
     img = rgb_u8.astype(np.float32) / 255.0
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
-    casing_w = ink_w + 2 * max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
+    worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
+    pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
+    feather = max(0.3, _pt_to_px(INK_EDGE_FEATHER_PT, dpi))
 
-    # 1) soft dark umber casing under the line -> a thin outline that frames the gold
-    casing = gaussian_filter(_coverage(spec, out_w, out_h, casing_w), CASING_BLUR_PX)
-    casing_op = (CASING_STRENGTH * np.clip(casing, 0, 1))[..., None]
+    # per-pass coverage at both widths (each track on its own layer -> overlap = passes)
+    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w), feather)
+    visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w), feather)
+
+    # 1) paper halo under the line, following the worn width where paths repeat.
+    #    clip(cov)-1 at the halo width = presence of a 2nd+ pass -> the worn halo gate.
+    cas_base = _coverage(spec, out_w, out_h, ink_w + 2 * pad)
+    cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad)
+    cas = np.maximum(np.clip(cas_base, 0, 1), np.clip(cas_worn - 1, 0, 1))
+    cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
+    casing_op = (CASING_STRENGTH * np.clip(cas, 0, 1))[..., None]
     casing_col = np.array(TRACK_CASING, np.float32) / 255.0
     img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
 
-    # 2) the line: frequency -> saturating opacity, feathered, grain-textured, painted toward gold
-    visits = gaussian_filter(_coverage(spec, out_w, out_h, ink_w), INK_EDGE_FEATHER_PX)
-    op = np.clip(1.0 - np.exp(-INK_FREQ_K * visits), 0.0, spec.track_max_darken)
+    # 2) the line: base width at near-solid ink; repeat days widen it (saturating)
+    op_base = 1.0 - np.exp(-INK_FREQ_K * visits_base)
+    op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
+    op = np.clip(np.maximum(op_base, op_worn), 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
     ink = np.array(TRACK_INK, np.float32) / 255.0
@@ -123,6 +150,24 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     img = img * (1 - op) + ink[None, None, :] * op
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
+def _draw_termini(img, spec, out_w, out_h, dpi):
+    """A small dark pin with a paper ring at each track's first and last point --
+    the journey's start and end anchor the story (V1-10). Sized off the track width
+    (physical units) so proof and final agree."""
+    d = ImageDraw.Draw(img, "RGBA")
+    r = max(2.0, _pt_to_px(spec.track_width_pt, dpi) * 0.9)
+    ring_w = max(1, round(r * 0.45))
+    for coords in spec.tracks:
+        if len(coords) < 2:
+            continue
+        for x, y in (coords[0], coords[-1]):
+            px, py = _crs_to_px(x, y, spec.crop, out_w, out_h)
+            if 0 <= px <= out_w and 0 <= py <= out_h:
+                d.ellipse([px - r, py - r, px + r, py + r],
+                          fill=TERMINUS_INK + (255,),
+                          outline=TERMINUS_RING + (235,), width=ring_w)
+    return img
 
 # ---- rich markers (v1.1): labels, vector icons, pinned photos ----
 MARKER_FILL = (190, 158, 92)        # muted rabbitbrush gold disc
@@ -322,6 +367,7 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
     rgb = _ink_tracks(rgb, spec, out_w, out_h, dpi)
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
+    img = _draw_termini(img, spec, out_w, out_h, dpi)  # journey start/end pins, under markers
     img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
     img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
 
@@ -336,8 +382,13 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
                fill=(43, 42, 40), font=font)
 
     if watermark:
+        # scale to the sheet (the old fixed 120 px offset + default font was invisible
+        # at poster sizes) and center properly; translucent so the proof stays readable.
         d = ImageDraw.Draw(img, "RGBA")
-        d.text((out_w//2 - 120, out_h//2), "PROOF", fill=(255, 255, 255, 90))
+        wm_font = _font(max(24, round(out_w * 0.09)))
+        l, t, rt, b = d.textbbox((0, 0), "PROOF", font=wm_font)
+        d.text(((out_w - (rt - l)) / 2 - l, (out_h - (b - t)) / 2 - t), "PROOF",
+               fill=(255, 255, 255, 80), font=wm_font)
     return img.convert("RGB")
 
 def save_print(img: Image.Image, path: str, dpi: int):
