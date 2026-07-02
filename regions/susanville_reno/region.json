@@ -3,10 +3,10 @@
   "name": "Susanville\u2013Reno, CA/NV",
   "crs": "EPSG:32610",
   "bounds": [
-    697012.9100904971,
-    4386976.976535173,
-    760722.9100904971,
-    4485346.976535173
+    696599.9420921917,
+    4386193.435190513,
+    761189.9420921917,
+    4485963.435190513
   ],
   "overview_size": [
     906,
@@ -17,7 +17,7 @@
   "hydro_path": "hydro.json",
   "native_resolution_m": 10,
   "elevation_min": 1214.1500244140625,
-  "elevation_max": 2328.57177734375,
+  "elevation_max": 2334.2978515625,
   "light_azimuth": 315,
   "light_altitude": 45,
   "z_factor": 1.0

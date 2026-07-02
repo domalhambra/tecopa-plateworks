@@ -1,5 +1,7 @@
 # Python
 .venv/
+# isolated region-prep stack (requirements-regionprep.txt)
+.venv-prep/
 __pycache__/
 *.py[cod]
 .pytest_cache/
