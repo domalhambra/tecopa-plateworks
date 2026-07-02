@@ -401,37 +401,223 @@ def _draw_keyline(img, out_w, out_h, dpi):
                 outline=TERMINUS_INK + (200,), width=w)
     return img
 
-def _draw_title_block(img, spec, out_w, out_h, dpi):
-    """The finished title block: a paper plate anchored bottom-left carrying the
-    title (caps, serif) over a small stats caption (scale, days, mileage). Replaces
-    the old bare bottom-left caption."""
+# Cartouche conventions after the reference sheets (USGS quads, NatGeo/Swisstopo):
+# tracked caps, hairline rule, a true graphic scale bar, square-cornered keyline box.
+TITLE_TRACKING_EM = 0.14        # title letterspacing, fraction of font size
+STATS_TRACKING_EM = 0.08
+SCALE_BAR_TARGET_IN = 1.9       # aim length of the bar on the sheet
+SCALE_BAR_H_IN = 0.05
+NICE_MILES = (0.5, 1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30, 40, 50, 75, 100, 150, 200)
+
+def _tracked_width(d, text, font, tracking):
+    if not text:
+        return 0
+    return round(sum(d.textlength(ch, font=font) for ch in text)
+                 + tracking * (len(text) - 1))
+
+def _tracked_text(d, xy, text, font, fill, tracking):
+    """PIL has no letterspacing; draw per glyph with an added tracking gap --
+    the wide-tracked caps every classic map cartouche sets its title in."""
+    x, y = xy
+    for ch in text:
+        d.text((x, y), ch, fill=fill, font=font)
+        x += d.textlength(ch, font=font) + tracking
+
+def _scale_bar_miles(spec, dpi):
+    """(miles, px) for the graphic scale bar: the 'nice' mileage whose true length
+    on the sheet is closest to the target. Derived from the spec alone (invariant 3)."""
+    gpp = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * dpi)   # ground m / px
+    target_px = SCALE_BAR_TARGET_IN * dpi
+    best = min(NICE_MILES, key=lambda mi: abs(mi * 1609.344 / gpp - target_px))
+    return best, best * 1609.344 / gpp
+
+def _title_block_metrics(spec, d, dpi):
+    """Measured geometry of the cartouche (None when there's no title). Shared by
+    _draw_title_block and the compass placement above it, so they can't drift."""
     if not spec.title_text.strip():
-        return img
-    d = ImageDraw.Draw(img, "RGBA")
+        return None
     title = spec.title_text.strip().upper()
     stats = _stats_line(spec, dpi)
-    title_font = _font(max(12, round(_pt_to_px(spec.title_pt, dpi))))
-    stats_font = _font(max(8, round(_pt_to_px(spec.label_pt * 0.85, dpi))))
-    tl, tt, tr, tb = d.textbbox((0, 0), title, font=title_font)
+    t_size = max(12, round(_pt_to_px(spec.title_pt, dpi)))
+    s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, dpi)))
+    title_font = _font(t_size)
+    stats_font = _font(s_size)
+    bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, dpi))))
+    # track off the requested size, not font.size (the bitmap fallback has none)
+    t_track = round(t_size * TITLE_TRACKING_EM)
+    s_track = round(s_size * STATS_TRACKING_EM)
+    _, tt, _, tb = d.textbbox((0, 0), title, font=title_font)
     th = tb - tt
+    tw = _tracked_width(d, title, title_font, t_track)
     if stats:
-        sl, st_, sr, sb = d.textbbox((0, 0), stats, font=stats_font)
-        sh, sw = sb - st_, sr - sl
-        gap = round(0.45 * sh)
+        _, st_, _, sb = d.textbbox((0, 0), stats, font=stats_font)
+        sh = sb - st_
+        sw = _tracked_width(d, stats, stats_font, s_track)
     else:
-        sl = st_ = sh = sw = gap = 0
-    pad = max(4, round(0.12 * dpi))
-    bw = max(tr - tl, sw) + 2 * pad
-    bh = th + (gap + sh if stats else 0) + 2 * pad
+        st_ = sh = sw = 0
+    miles, bar_px = _scale_bar_miles(spec, dpi)
+    bar_h = max(3, round(SCALE_BAR_H_IN * dpi))
+    _, lt, _, lb = d.textbbox((0, 0), f"{miles:g} MI", font=bar_font)
+    lbl_h = lb - lt
+    gap = max(3, round(0.35 * (sh or th)))
+    rule_h = gap * 2                          # rule row: hairline + air on both sides
+    pad = max(6, round(0.16 * dpi))
+    content_w = max(tw, sw, round(bar_px))
+    bh = pad + th + rule_h + (sh + gap if stats else 0) + bar_h + 2 + lbl_h + pad
+    return {"title": title, "stats": stats, "title_font": title_font,
+            "stats_font": stats_font, "bar_font": bar_font,
+            "t_track": t_track, "s_track": s_track,
+            "tt": tt, "th": th, "tw": tw, "st": st_, "sh": sh, "sw": sw,
+            "miles": miles, "bar_px": round(bar_px), "bar_h": bar_h, "lbl_h": lbl_h,
+            "gap": gap, "rule_h": rule_h, "pad": pad,
+            "bw": content_w + 2 * pad, "bh": bh}
+
+def _draw_title_block(img, spec, out_w, out_h, dpi):
+    """The cartouche, after the reference sheets: centered tracked-caps title over a
+    hairline rule, the stats caption, and a true graphic scale bar (USGS-style
+    alternating segments) -- inside a square-cornered plate with a fine keyline."""
+    d = ImageDraw.Draw(img, "RGBA")
+    m = _title_block_metrics(spec, d, dpi)
+    if m is None:
+        return img
     inset = round(TITLE_INSET_IN * dpi)
-    x = inset
-    y = out_h - inset - bh
-    d.rounded_rectangle([x, y, x + bw, y + bh], radius=max(2, pad // 2),
-                        fill=LABEL_PLATE + (235,))
-    d.text((x + pad - tl, y + pad - tt), title, fill=LABEL_INK + (255,), font=title_font)
-    if stats:
-        d.text((x + pad - sl, y + pad + th + gap - st_), stats,
-               fill=LABEL_INK + (200,), font=stats_font)
+    x, y = inset, out_h - inset - m["bh"]
+    bw, pad = m["bw"], m["pad"]
+    cx = x + bw / 2
+    d.rectangle([x, y, x + bw, y + m["bh"]], fill=LABEL_PLATE + (235,))
+    kl = max(1, round(_pt_to_px(0.5, dpi)))
+    d.rectangle([x + kl + 1, y + kl + 1, x + bw - kl - 1, y + m["bh"] - kl - 1],
+                outline=TERMINUS_INK + (170,), width=kl)
+    cy = y + pad
+    _tracked_text(d, (cx - m["tw"] / 2, cy - m["tt"]), m["title"],
+                  m["title_font"], LABEL_INK + (255,), m["t_track"])
+    cy += m["th"]
+    rw = max(m["tw"], m["sw"]) * 0.8          # the hairline rule, centred
+    ry = cy + m["rule_h"] / 2
+    d.line([(cx - rw / 2, ry), (cx + rw / 2, ry)],
+           fill=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.4, dpi))))
+    cy += m["rule_h"]
+    if m["stats"]:
+        _tracked_text(d, (cx - m["sw"] / 2, cy - m["st"]), m["stats"],
+                      m["stats_font"], LABEL_INK + (205,), m["s_track"])
+        cy += m["sh"] + m["gap"]
+    # graphic scale bar: four alternating segments, keyline-edged, end labels
+    bx = cx - m["bar_px"] / 2
+    seg = m["bar_px"] / 4
+    for i in range(4):
+        fill = TERMINUS_INK + (230,) if i % 2 == 0 else LABEL_PLATE + (255,)
+        d.rectangle([bx + i * seg, cy, bx + (i + 1) * seg, cy + m["bar_h"]], fill=fill)
+    d.rectangle([bx, cy, bx + m["bar_px"], cy + m["bar_h"]],
+                outline=TERMINUS_INK + (220,), width=max(1, round(_pt_to_px(0.35, dpi))))
+    ly = cy + m["bar_h"] + 2
+    d.text((bx, ly), "0", fill=LABEL_INK + (190,), font=m["bar_font"])
+    lbl = f"{m['miles']:g} MI"
+    lw = d.textlength(lbl, font=m["bar_font"])
+    d.text((bx + m["bar_px"] - lw, ly), lbl, fill=LABEL_INK + (190,), font=m["bar_font"])
+    return img
+
+# ---- optional furniture (v1.2, Dom): elevation contours + compass rose ----
+CONTOUR_INK = (54, 40, 30)      # the umber ink family
+CONTOUR_MINOR_OPACITY = 0.32    # visible-by-choice: the operator turned these on
+CONTOUR_INDEX_OPACITY = 0.55    # every 5th level reads a touch firmer
+CONTOUR_MINOR_PT = 0.45         # physical widths -> proof == final (invariant 2)
+CONTOUR_INDEX_PT = 0.8
+COMPASS_DIAMETER_IN = 0.85      # rose size on the sheet
+# -----------------------------------------------------------------------------
+
+def _contour_interval(range_m):
+    """The smallest conventional interval giving at most ~18 lines across the
+    crop's local relief (~26 max) -- dense enough to read, sparse enough not to shade."""
+    for iv in (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000):
+        if range_m / iv <= 26:
+            return iv
+    return 2000
+
+def _contour_alpha(elev, interval, width_px):
+    """Anti-aliased constant-screen-width contour coverage (0..1) plus each pixel's
+    nearest level index. Distance-to-level in PIXELS = |frac| / |gradient|, so the
+    line width holds across slopes and DPIs; flat ground (gradient ~ 0) draws no
+    line rather than flooding a whole plateau that sits exactly on a level."""
+    t = elev / float(interval)
+    f = np.abs(t - np.round(t))
+    gy, gx = np.gradient(t)
+    g = np.hypot(gx, gy)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        d_px = np.where(g > 1e-6, f / g, np.inf)
+    a = np.clip(1.0 - d_px / max(width_px, 0.5), 0.0, 1.0)
+    return a, np.round(t).astype(np.int64)
+
+def _draw_contours(rgb_u8, elev_core, dpi):
+    """Composite elevation contours over the relief (under water/tracks): minor
+    lines at the auto interval, index lines every 5th level slightly firmer."""
+    from app.relief import _fill_nan
+    elev = _fill_nan(np.array(elev_core, dtype="float32", copy=True))
+    rng = float(elev.max() - elev.min())
+    if rng < 1.0:                              # a dead-flat crop has no contours
+        return rgb_u8
+    iv = _contour_interval(rng)
+    a_minor, levels = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_MINOR_PT, dpi))
+    a_index, _ = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_INDEX_PT, dpi))
+    is_index = (levels % 5 == 0)
+    alpha = np.where(is_index, a_index * CONTOUR_INDEX_OPACITY,
+                     a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32)
+    ink = np.array(CONTOUR_INK, np.float32) / 255.0
+    img = rgb_u8.astype(np.float32) / 255.0
+    img = img * (1 - alpha) + ink[None, None, :] * alpha
+    return (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
+def _draw_compass(img, spec, out_w, out_h, dpi):
+    """An eight-point split-shaded compass rose above the cartouche, bottom-left,
+    after the classic engraved roses: short intercardinal points under the long
+    cardinals, a double ring, north point long, each point half umber / half paper,
+    a small N above. Vector-only + physical sizes, so the same spec renders
+    identically at any DPI and on any machine."""
+    if not spec.compass:
+        return img
+    import math as _m
+    d = ImageDraw.Draw(img, "RGBA")
+    R = COMPASS_DIAMETER_IN * dpi / 2.0
+    inset = round(TITLE_INSET_IN * dpi)
+    m = _title_block_metrics(spec, d, dpi)
+    base_y = out_h - inset - ((m["bh"] + round(0.16 * dpi)) if m else 0)
+    cx, cy = inset + R, base_y - R
+    # a soft paper ground, keyline-edged so it reads as a set medallion, not a blob
+    d.ellipse([cx - R * 1.16, cy - R * 1.16, cx + R * 1.16, cy + R * 1.16],
+              fill=LABEL_PLATE + (160,),
+              outline=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.35, dpi))))
+    # double ring: the outer line and an inner hairline
+    d.ellipse([cx - R, cy - R, cx + R, cy + R],
+              outline=TERMINUS_INK + (210,), width=max(1, round(_pt_to_px(0.6, dpi))))
+    r2 = R * 0.78
+    d.ellipse([cx - r2, cy - r2, cx + r2, cy + r2],
+              outline=TERMINUS_INK + (130,), width=max(1, round(_pt_to_px(0.35, dpi))))
+
+    def point(angle_deg, length, half_w, dark_a=235, light_a=245):
+        a = _m.radians(angle_deg - 90)                     # 0 deg = north, y down
+        tip = (cx + length * _m.cos(a), cy + length * _m.sin(a))
+        left = (cx + half_w * _m.cos(a - _m.pi / 2), cy + half_w * _m.sin(a - _m.pi / 2))
+        right = (cx + half_w * _m.cos(a + _m.pi / 2), cy + half_w * _m.sin(a + _m.pi / 2))
+        d.polygon([tip, left, (cx, cy)], fill=TERMINUS_INK + (dark_a,))
+        d.polygon([tip, right, (cx, cy)], fill=TERMINUS_RING + (light_a,))
+
+    for ang in (45, 135, 225, 315):                        # intercardinals, underneath
+        point(ang, R * 0.40, R * 0.09, dark_a=200, light_a=235)
+    for ang, ln in ((90, R * 0.62), (180, R * 0.62), (270, R * 0.62), (0, R * 0.95)):
+        point(ang, ln, R * 0.16)                           # cardinals; north last, long
+    hub = R * 0.075
+    d.ellipse([cx - hub, cy - hub, cx + hub, cy + hub], fill=TERMINUS_INK + (255,))
+    hub2 = R * 0.032
+    d.ellipse([cx - hub2, cy - hub2, cx + hub2, cy + hub2], fill=TERMINUS_RING + (255,))
+    f = _font(max(10, round(_pt_to_px(11.5, dpi))))
+    nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
+    nw, nh = nr - nl, nb - nt
+    nx, ny = cx - nw / 2, cy - R - nh - round(0.05 * dpi)
+    pad = max(2, round(nh * 0.22))
+    # a mini paper plate behind the N (house label style) -- the bare letter sat on
+    # terrain above the rose's ground disc and vanished over dark ridges
+    d.rounded_rectangle([nx - pad, ny - pad, nx + nw + pad, ny + nh + pad],
+                        radius=pad, fill=LABEL_PLATE + (220,))
+    d.text((nx - nl, ny - nt), "N", fill=TERMINUS_INK + (240,), font=f)
     return img
 
 def _load_hydro(region_dir):
@@ -493,6 +679,11 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 
+    # optional elevation contours: over the relief, under water/tracks, computed on
+    # the SAME trimmed elevation window the relief was painted from (registration).
+    if spec.contours:
+        rgb = _draw_contours(rgb, elev[pad_y:pad_y+out_h, pad_x:pad_x+out_w], dpi)
+
     # water sits on the relief, under the tracks (relief -> water -> tracks -> markers)
     if hydro is None:
         hydro = _load_hydro(region_dir)
@@ -511,6 +702,7 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
 
     img = _draw_keyline(img, out_w, out_h, dpi)
+    img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
     img = _draw_title_block(img, spec, out_w, out_h, dpi)
 
     if watermark:

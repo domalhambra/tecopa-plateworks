@@ -210,6 +210,20 @@ def test_markers_non_dict_entries_skipped_not_500():
     assert c.post("/api/markers", data={"session_id": j["session"],
                   "markers": _json.dumps({"i": 0})}).status_code == 422
 
+def test_contours_and_compass_flags_stamped_through_endpoint():
+    # the furniture toggles are picture decisions: they must ride the stamped spec
+    # so the final renders exactly what the proof showed (invariant 1).
+    from app import session as sess_mod
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data={**data, "contours": "true",
+                                      "compass": "false"}).status_code == 200
+    spec = sess_mod.get(j["session"])["spec"]
+    assert spec.contours is True and spec.compass is False
+    assert c.post("/api/proof", data=data).status_code == 200          # defaults
+    spec = sess_mod.get(j["session"])["spec"]
+    assert spec.contours is False and spec.compass is True
+
 def test_track_days_stamped_through_endpoint():
     # journey grouping is a rendering-semantics contract: the spec stamped by the
     # endpoint must carry the per-track days ingest parsed (a mutation dropping

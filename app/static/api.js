@@ -63,12 +63,15 @@ export async function moveMarker(sessionId, i, px, py) {
 
 // Render a proof; resolves to a PNG Blob, throws ApiError(422, "<detail>") when the
 // crop trips the zoom cap / off-DEM / aspect guard so the caller can show it.
-// `title` rides along ('' -> region-name default on the server; '-' -> no block).
-export async function proof(sessionId, cropOv, printW, printH, title = '') {
+// `title` rides along ('' -> region-name default on the server; '-' -> no block);
+// `contours`/`compass` are the optional furniture toggles.
+export async function proof(sessionId, cropOv, printW, printH,
+                            { title = '', contours = false, compass = true } = {}) {
   const [x0, y0, x1, y1] = cropOv;
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
     title: title || undefined,
+    contours: contours ? 'true' : 'false', compass: compass ? 'true' : 'false',
   });
   if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();

@@ -174,7 +174,9 @@ async function renderProof() {
   if (!ov) { setStatus('Draw a frame first', 'status'); return false; }
   setStatus('Rendering proof…', 'status');
   try {
-    const blob = await api.proof(state.session, ov, state.printW, state.printH, state.title);
+    const blob = await api.proof(state.session, ov, state.printW, state.printH,
+                                 { title: state.title, contours: state.contours,
+                                   compass: state.compass });
     $('posterImg').src = URL.createObjectURL(blob);
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
@@ -335,6 +337,14 @@ function wire() {
   $('titleInput').oninput = (e) => {
     state.title = e.target.value;
     if (state.hasSpec) state.proofStale = true;      // the title prints; re-proof it
+  };
+  $('contoursChk').onchange = (e) => {
+    state.contours = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('compassChk').onchange = (e) => {
+    state.compass = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
   };
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);

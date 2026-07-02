@@ -397,7 +397,7 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
     return {"ok": True, "px": cpx, "py": cpy}
 
-def _build_spec(sid, crop_px, print_w, print_h, title=""):
+def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True):
     st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
@@ -413,7 +413,8 @@ def _build_spec(sid, crop_px, print_w, print_h, title=""):
         native_resolution_m=region.cfg["native_resolution_m"],
         tracks=[t.coords for t in st["tracks"]],
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
-        hotspots=st["hotspots"], seed=7, title_text=title)
+        hotspots=st["hotspots"], seed=7, title_text=title,
+        contours=contours, compass=compass)
     spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
@@ -424,9 +425,11 @@ async def proof(session_id: str = Form(...),
                 x0: float = Form(...), y0: float = Form(...),
                 x1: float = Form(...), y1: float = Form(...),
                 print_w: float = Form(18.0), print_h: float = Form(24.0),
-                title: str = Form("")):
+                title: str = Form(""),
+                contours: bool = Form(False), compass: bool = Form(True)):
     try:
-        spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h, title)
+        spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
+                                   title, contours, compass)
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()
