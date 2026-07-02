@@ -1,0 +1,42 @@
+{
+  "id": "lassen_ca",
+  "built": "2026-07-02",
+  "fetch_bbox_4326": [
+    -121.06,
+    40.16,
+    -120.34,
+    40.85
+  ],
+  "crs": "EPSG:32610",
+  "rebuild": "python region_prep.py --id lassen_ca --name <name> --bbox -121.06 40.16 -120.34 40.85 --epsg 32610",
+  "assets": {
+    "dem.tif": {
+      "sha256": "0ec1b940c9f3bd02cdfa070179ea12a6b2c7bf5be899d011508ee83d785efc58",
+      "bytes": 183391503
+    },
+    "hydro.json": {
+      "sha256": "13b267121da4525728f69c941b82dae8a63230b68b2d7b8773694f388c79e53b",
+      "bytes": 196784
+    },
+    "region.json": {
+      "sha256": "1525c0c849f7c2f03331aae3e03843e2e8fad742fc3c6968388f4e2fcb779138",
+      "bytes": 501
+    },
+    "overview.png": {
+      "sha256": "fd3c3f1a27a16ad4043aff3fd4f3770f18b124ccfbe717ed88ac6c1d9ebbe436",
+      "bytes": 636491
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "py3dep.get_dem",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}

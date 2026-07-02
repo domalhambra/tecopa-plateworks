@@ -44,6 +44,15 @@ app = FastAPI()
 # same rasterized spec; PDF embeds the page size via `resolution`.
 FINAL_FORMATS = {"png": ("PNG", "image/png"), "pdf": ("PDF", "application/pdf")}
 
+# sRGB ICC profile for the final PNG so a print lab / color-managed viewer reads our
+# colors as intended instead of guessing (V1-10 print-correctness). Pillow bundles
+# littlecms; fall back to no profile rather than fail the render if it's absent.
+try:
+    from PIL import ImageCms
+    SRGB_PROFILE = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+except Exception:                                          # pragma: no cover
+    SRGB_PROFILE = None
+
 def _encode_final(img, fmt: str) -> bytes:
     pil_fmt, _ = FINAL_FORMATS[fmt]
     buf = io.BytesIO()
@@ -52,7 +61,10 @@ def _encode_final(img, fmt: str) -> bytes:
         # the libjpeg defaults (quality 75, 4:2:0 chroma subsampling) fringe exactly
         # our crisp features -- a saturated gold line on desaturated paper -- so pass
         # print-grade encoder params through (they reach the embedded JPEG encoder).
+        # (Pillow cannot embed a PDF output intent; the PNG carries the sRGB profile.)
         img.save(buf, pil_fmt, resolution=FINAL_DPI, quality=95, subsampling=0)
+    elif SRGB_PROFILE:
+        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI), icc_profile=SRGB_PROFILE)
     else:
         img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # embed DPI like save_print
     return buf.getvalue()
@@ -307,6 +319,12 @@ def _build_spec(sid, crop_px, print_w, print_h, title=""):
     st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
+    # A finished poster carries a title block; default to the region's name so the
+    # deliverable never ships bare (the old bare-caption title was unreachable: the
+    # API had no title field). Pass title="-" to render a clean, block-free map.
+    title = (title or "").strip() or region.name
+    if title == "-":
+        title = ""
     spec = CompositionSpec(
         region_id=region.id, crs=region.cfg["crs"], crop=crop,
         print_w_in=print_w, print_h_in=print_h,
@@ -323,9 +341,10 @@ def _build_spec(sid, crop_px, print_w, print_h, title=""):
 async def proof(session_id: str = Form(...),
                 x0: float = Form(...), y0: float = Form(...),
                 x1: float = Form(...), y1: float = Form(...),
-                print_w: float = Form(18.0), print_h: float = Form(24.0)):
+                print_w: float = Form(18.0), print_h: float = Form(24.0),
+                title: str = Form("")):
     try:
-        spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h)
+        spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h, title)
     except KeyError:
         raise HTTPException(404, "Unknown or expired session")
     except SpecError as e:

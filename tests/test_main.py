@@ -285,6 +285,30 @@ def test_async_final_pdf_via_job_queue():
     assert box, "no MediaBox in PDF"
     assert [round(float(v)) for v in box.groups()] == [0, 0, 648, 864]
 
+def test_final_png_embeds_srgb_and_dpi():
+    # V1-10 print-correctness: the PNG final must carry an sRGB ICC profile and the
+    # 300-dpi physical size so a lab/viewer reads color and dimensions as intended.
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/final", data={"session_id": j["session"]})
+    assert r.status_code == 200
+    im = Image.open(io.BytesIO(r.content))
+    assert im.info.get("icc_profile"), "no sRGB profile embedded"
+    assert round(im.info["dpi"][0]) == 300
+
+def test_title_defaults_to_region_name_and_dash_suppresses():
+    # the finished poster never ships bare: no title -> region name; "-" -> clean map
+    from app import session as sess_mod
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].title_text == "Lassen County, California"
+    assert c.post("/api/proof", data={**data, "title": "-"}).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].title_text == ""
+    assert c.post("/api/proof", data={**data, "title": "Eagle Lake Loop"}).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].title_text == "Eagle Lake Loop"
+
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
