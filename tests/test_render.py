@@ -91,7 +91,8 @@ def test_rasterize_composites_terminus_pins():
     line = np.array([[crop[0]+3000, crop[1]+3000], [crop[2]-3000, crop[3]-3000]])
     spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
                            print_w_in=9, print_h_in=12, native_resolution_m=10,
-                           tracks=[line], hotspots=[], seed=7)
+                           tracks=[line], hotspots=[], seed=7,
+                           compass=False)   # the rose's ground disc would cover the probe
     img = rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro={"lakes": [], "rivers": []})
     out = np.asarray(img).astype(int)
     from app.render import TERMINUS_INK

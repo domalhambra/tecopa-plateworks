@@ -19,6 +19,8 @@ export const state = {
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)
   title: '',              // poster title ('' -> region name; '-' -> no title block)
+  contours: false,        // elevation contour lines
+  compass: true,          // compass rose above the title block
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };

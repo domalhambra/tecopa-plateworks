@@ -58,6 +58,10 @@ class CompositionSpec:
     # decisions, so they live on the spec; sizes physical so proof == final layout.
     label_pt: float = 13.0                   # marker label text size
     photo_box_in: float = 1.5                # long edge of a pinned photo thumbnail
+    # map furniture (v1.2): elevation contours (auto interval from the crop's local
+    # relief) and the compass rose above the title block. Picture decisions -> spec.
+    contours: bool = False
+    compass: bool = True
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
