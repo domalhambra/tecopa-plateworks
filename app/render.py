@@ -347,6 +347,74 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
         d.rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], outline=PHOTO_EDGE + (255,), width=max(1, mat//2))
     return img
 
+# ---- finished-sheet furniture (V1-10 print-correctness): keyline + title block ----
+KEYLINE_INSET_IN = 0.25         # thin frame inset from the sheet edge
+KEYLINE_PT = 0.6
+TITLE_INSET_IN = 0.35           # title block inset from the sheet corner
+# ------------------------------------------------------------------------------------
+
+def _stats_line(spec, dpi):
+    """A deterministic cartographic caption from the spec alone: approximate scale
+    ratio, distinct days, total mileage. No wall clock, no locale (invariant 3)."""
+    import math
+    parts = []
+    ratio = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * 0.0254)
+    if ratio > 0:
+        mag = 10 ** max(0, int(math.floor(math.log10(ratio))) - 1)
+        parts.append(f"~1:{round(ratio / mag) * mag:,.0f}")
+    days = {d for d in (spec.track_days or []) if d}
+    if days:
+        parts.append(f"{len(days)} DAY" + ("S" if len(days) != 1 else ""))
+    dist_m = sum(float(np.hypot(np.diff(np.asarray(t)[:, 0]),
+                                np.diff(np.asarray(t)[:, 1])).sum())
+                 for t in spec.tracks if len(t) >= 2)
+    if dist_m > 0:
+        parts.append(f"{dist_m / 1609.344:.0f} MI")
+    return " · ".join(parts)
+
+def _draw_keyline(img, out_w, out_h, dpi):
+    """A thin dark frame just inside the sheet edge -- the 'deliberate' finish that
+    reads as a plate mark. Physical inset/width, so proof and final agree."""
+    d = ImageDraw.Draw(img, "RGBA")
+    inset = round(KEYLINE_INSET_IN * dpi)
+    w = max(1, round(_pt_to_px(KEYLINE_PT, dpi)))
+    d.rectangle([inset, inset, out_w - 1 - inset, out_h - 1 - inset],
+                outline=TERMINUS_INK + (200,), width=w)
+    return img
+
+def _draw_title_block(img, spec, out_w, out_h, dpi):
+    """The finished title block: a paper plate anchored bottom-left carrying the
+    title (caps, serif) over a small stats caption (scale, days, mileage). Replaces
+    the old bare bottom-left caption."""
+    if not spec.title_text.strip():
+        return img
+    d = ImageDraw.Draw(img, "RGBA")
+    title = spec.title_text.strip().upper()
+    stats = _stats_line(spec, dpi)
+    title_font = _font(max(12, round(_pt_to_px(spec.title_pt, dpi))))
+    stats_font = _font(max(8, round(_pt_to_px(spec.label_pt * 0.85, dpi))))
+    tl, tt, tr, tb = d.textbbox((0, 0), title, font=title_font)
+    th = tb - tt
+    if stats:
+        sl, st_, sr, sb = d.textbbox((0, 0), stats, font=stats_font)
+        sh, sw = sb - st_, sr - sl
+        gap = round(0.45 * sh)
+    else:
+        sl = st_ = sh = sw = gap = 0
+    pad = max(4, round(0.12 * dpi))
+    bw = max(tr - tl, sw) + 2 * pad
+    bh = th + (gap + sh if stats else 0) + 2 * pad
+    inset = round(TITLE_INSET_IN * dpi)
+    x = inset
+    y = out_h - inset - bh
+    d.rounded_rectangle([x, y, x + bw, y + bh], radius=max(2, pad // 2),
+                        fill=LABEL_PLATE + (235,))
+    d.text((x + pad - tl, y + pad - tt), title, fill=LABEL_INK + (255,), font=title_font)
+    if stats:
+        d.text((x + pad - sl, y + pad + th + gap - st_), stats,
+               fill=LABEL_INK + (200,), font=stats_font)
+    return img
+
 def _load_hydro(region_dir):
     p = os.path.join(region_dir, "hydro.json")
     return json.load(open(p)) if os.path.exists(p) else None
@@ -418,15 +486,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
     img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
 
-    if spec.title_text:
-        d = ImageDraw.Draw(img)
-        size = max(10, round(_pt_to_px(spec.title_pt, dpi)))
-        try:
-            font = ImageFont.truetype("Georgia.ttf", size)
-        except Exception:
-            font = ImageFont.load_default()
-        d.text((round(0.04*out_w), round(0.94*out_h)), spec.title_text,
-               fill=(43, 42, 40), font=font)
+    img = _draw_keyline(img, out_w, out_h, dpi)
+    img = _draw_title_block(img, spec, out_w, out_h, dpi)
 
     if watermark:
         # scale to the sheet (the old fixed 120 px offset + default font was invisible

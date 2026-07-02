@@ -1,0 +1,42 @@
+{
+  "id": "susanville_reno",
+  "built": "2026-07-02",
+  "fetch_bbox_4326": [
+    -120.7051,
+    39.5929,
+    -119.9243,
+    40.4955
+  ],
+  "crs": "EPSG:32610",
+  "rebuild": "python region_prep.py --id susanville_reno --name <name> --bbox -120.7051 39.5929 -119.9243 40.4955 --epsg 32610",
+  "assets": {
+    "dem.tif": {
+      "sha256": "46d9d174eaa59699a20c55723a38b336f4c3c0b2eb134563fe79bd901357879c",
+      "bytes": 256622855
+    },
+    "hydro.json": {
+      "sha256": "1c48665ecc47bd6991009b5335e1eabe0737bd58ce73b89419071987f4aaf363",
+      "bytes": 307099
+    },
+    "region.json": {
+      "sha256": "105ac75be5b42c2e48caebe784328f0f79e20b393a1f359d94775c6b6d230c1d",
+      "bytes": 508
+    },
+    "overview.png": {
+      "sha256": "7b6ebd29a3cfb4f9cb98171873cfbf5ac7892f31578c0cecb35466ea6374ba51",
+      "bytes": 582802
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "py3dep.get_dem",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}

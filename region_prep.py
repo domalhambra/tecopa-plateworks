@@ -176,6 +176,47 @@ def overview_png(cog_path, out_png, long_edge=1400):
     Image.fromarray(img, "L").convert("RGB").save(out_png)
     return (ow, oh), (bounds.left, bounds.bottom, bounds.right, bounds.top), crs
 
+def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None):
+    """Record what this region was built FROM (V1-12 continuity): source datasets,
+    licenses, the exact fetch bbox, and sha256 of the produced assets. The DEM itself
+    is gitignored; the committed manifest lets a rebuild be verified against what was
+    validated (a hash mismatch = upstream 3DEP/NHD drift, not a local mistake) and
+    tells an archival job exactly which artifacts to preserve."""
+    import datetime
+    import hashlib
+
+    def _sha256(path):
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+
+    manifest = {
+        "id": region_id,
+        "built": built or datetime.date.today().isoformat(),
+        "fetch_bbox_4326": list(bbox_4326),
+        "crs": dst_crs,
+        "rebuild": (f"python region_prep.py --id {region_id} --name <name> "
+                    f"--bbox {' '.join(str(v) for v in bbox_4326)} "
+                    f"--epsg {dst_crs.split(':')[1]}"),
+        "assets": {},
+        "sources": [
+            {"dataset": "USGS 3DEP 10 m DEM", "via": "py3dep.get_dem",
+             "license": "Public domain (USGS)"},
+            {"dataset": "USGS NHD waterbodies + network flowlines",
+             "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+             "license": "Public domain (USGS)"},
+        ],
+    }
+    for name in ("dem.tif", "hydro.json", "region.json", "overview.png"):
+        p = os.path.join(out_dir, name)
+        if os.path.exists(p):
+            manifest["assets"][name] = {"sha256": _sha256(p), "bytes": os.path.getsize(p)}
+    with open(os.path.join(out_dir, "sources.json"), "w") as f:
+        json.dump(manifest, f, indent=2)
+    return manifest
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", required=True)
@@ -227,6 +268,7 @@ def main():
     }
     with open(os.path.join(out_dir, "region.json"), "w") as f:
         json.dump(region, f, indent=2)
+    write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs)
     print(f"Region ready: {out_dir}")
 
 if __name__ == "__main__":
