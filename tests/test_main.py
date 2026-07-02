@@ -224,6 +224,31 @@ def test_job_status_unknown_404():
     c = _client()
     assert c.get("/api/jobs/nope").status_code == 404
 
+def test_final_goes_to_blob_not_region_dir():
+    # red-team V1-8: the sync final must route through the blob seam, not litter
+    # region.dir with final_*.png.
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    r = c.post("/api/final", data={"session_id": j["session"]})
+    assert r.status_code == 200
+    assert not os.path.exists(os.path.join(REGION_DIR, f"final_{j['session']}.png"))
+    from app.main import BLOBS
+    assert BLOBS.exists(f"{j['session']}/final.png")
+
+def test_sweep_uploads_evicts_stale_session_dirs(tmp_path):
+    # red-team V1-8: a stale session's photo dir is evicted; an active one survives.
+    import time
+    from app.main import _sweep_uploads
+    root = str(tmp_path / "uploads")
+    os.makedirs(os.path.join(root, "old_sess"))
+    os.makedirs(os.path.join(root, "fresh_sess"))
+    stale = time.time() - 100_000
+    os.utime(os.path.join(root, "old_sess"), (stale, stale))
+    _sweep_uploads(ttl_seconds=3600, root=root)
+    assert not os.path.exists(os.path.join(root, "old_sess"))
+    assert os.path.exists(os.path.join(root, "fresh_sess"))
+
 def test_proof_then_final_happy_path():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
