@@ -1,8 +1,7 @@
 # tests/test_regions.py
 # The region registry only reads region.json (committed), so these run on a fresh
 # clone without the DEM.
-import os
-from app.regions import discover, detect_region, Region, _lonlat_bbox
+from app.regions import discover
 
 REGIONS_ROOT = "regions"
 
@@ -30,13 +29,5 @@ def test_lonlat_bbox_roundtrips_to_input_bbox():
     assert abs(s - 40.16) < 0.1 and abs(n - 40.85) < 0.1
     assert w < e and s < n
 
-def test_contains_and_detect():
-    regions = discover(REGIONS_ROOT)
-    r = regions["lassen_ca"]
-    cx = (r.lonlat_bbox[0] + r.lonlat_bbox[2]) / 2
-    cy = (r.lonlat_bbox[1] + r.lonlat_bbox[3]) / 2
-    assert r.contains_lonlat(cx, cy)
-    assert not r.contains_lonlat(-110.0, 45.0)            # Yellowstone-ish, far away
-    # detect routes a track inside the box to lassen, and nothing to None
-    assert detect_region(regions, [(cx, cy), (cx, cy)]).id == "lassen_ca"
-    assert detect_region(regions, [(-110.0, 45.0)]) is None
+# (detect_region/contains_lonlat were removed as production-dead code -- upload
+# routing is main._best_region, covered by tests/test_region_recovery.py.)

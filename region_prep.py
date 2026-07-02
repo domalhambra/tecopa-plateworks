@@ -21,13 +21,13 @@ os.environ.setdefault("SSL_CERT_DIR", "")
 
 import argparse, json
 import numpy as np
-import pandas as pd
 import rasterio
 from rasterio.enums import Resampling
-from rasterio.warp import calculate_default_transform, reproject
 from affine import Affine
-import py3dep
 from PIL import Image
+# pandas / py3dep / pynhd are imported lazily inside the functions that fetch or
+# bake: importing THIS module then only needs the core stack, so the pure-logic
+# tests (_trim_nan_edges, bake_hydro) run in CI without the ~200 MB fetch stack.
 
 def _trim_nan_edges(dst, max_edge_nan=0.005):
     """Return (r0, r1, c0, c1) bounding a NaN-clean rectangle. Greedily peel whichever
@@ -67,12 +67,30 @@ def _lines(geom):
         return [list(l.coords) for l in geom.geoms]
     return []
 
+# NHD waterbody ftypes that are honestly "blue water" on a poster. Playa (361) is a
+# dry alkali flat most of the year (Honey Lake rendered as a ~234 km2 solid slab --
+# red-team's top beauty finding), and SwampMarsh (466) / Ice (378) mislead the same
+# way. LakePond (390) + Reservoir (436) stay.
+WATER_FTYPES = {390, 436}
+
+def _is_water_ftype(row):
+    v = row.get("ftype", row.get("FTYPE"))
+    if v is None:
+        return True                       # no ftype column -> keep (old behavior)
+    try:
+        return int(v) in WATER_FTYPES
+    except (TypeError, ValueError):
+        return str(v).strip().lower() in {"lakepond", "reservoir"}
+
 def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
     """Reproject/simplify/filter NHD geometry into a serializable hydro dict in
     dst_crs metres. waterbodies/flowlines are GeoDataFrames (EPSG:4326) or None."""
+    import pandas as pd
     lakes, rivers = [], []
     if waterbodies is not None and len(waterbodies):
         for _, row in waterbodies.to_crs(dst_crs).iterrows():
+            if not _is_water_ftype(row):
+                continue
             g = row.geometry.simplify(simplify_m)
             for ring in _exterior_rings(g):
                 lakes.append({"coords": [[float(x), float(y)] for x, y, *_ in ring],
@@ -96,6 +114,7 @@ def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
 
 def fetch_dem(bbox):
     # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard.
+    import py3dep
     return py3dep.get_dem(bbox, resolution=10)  # xarray DataArray, EPSG:4326
 
 def fetch_hydro(bbox):

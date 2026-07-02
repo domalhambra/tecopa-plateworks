@@ -196,7 +196,10 @@ def _draw_termini(img, spec, out_w, out_h, dpi):
     one journey (see _journey_groups), so mid-route stop/resume points get no pin.
     Sized off the track width (physical units) so proof and final agree."""
     d = ImageDraw.Draw(img, "RGBA")
-    r = max(2.0, _pt_to_px(spec.track_width_pt, dpi) * 0.9)
+    # pin size rides the marker scale (physical), not the line width: at the old
+    # track-width-derived ~1.7 mm the "story anchors" were invisible at poster
+    # viewing distance (red-team). 0.42 x a 0.24 in marker ~ a 2.6 mm pin.
+    r = max(2.0, spec.marker_diameter_in * dpi * 0.21)
     ring_w = max(1, round(r * 0.45))
     for g in _journey_groups(spec):
         segs = [spec.tracks[i] for i in g if len(spec.tracks[i]) >= 2]
@@ -220,7 +223,11 @@ PHOTO_EDGE = (54, 40, 30)           # thin dark keyline + connector stem
 # -------------------------------------------------------------------
 
 def _font(size):
-    for name in ("Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"):
+    # TRAILPRINT_FONT lets the operator drop in a licensed display face (a real
+    # poster face beats the DejaVu screen workhorse); then the serif chain.
+    names = ([os.environ["TRAILPRINT_FONT"]] if os.environ.get("TRAILPRINT_FONT") else [])
+    names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
+    for name in names:
         try:
             return ImageFont.truetype(name, size)
         except Exception:
@@ -365,9 +372,21 @@ def _stats_line(spec, dpi):
     days = {d for d in (spec.track_days or []) if d}
     if days:
         parts.append(f"{len(days)} DAY" + ("S" if len(days) != 1 else ""))
-    dist_m = sum(float(np.hypot(np.diff(np.asarray(t)[:, 0]),
-                                np.diff(np.asarray(t)[:, 1])).sum())
-                 for t in spec.tracks if len(t) >= 2)
+    # dedupe segments identical in BOTH day and geometry (the same file uploaded
+    # twice) so the printed mileage doesn't double-count -- while the same route
+    # honestly re-traveled on different days still sums (red-team).
+    tdays = list(spec.track_days or [])
+    tdays += [None] * (len(spec.tracks) - len(tdays))
+    seen, dist_m = set(), 0.0
+    for t, day in zip(spec.tracks, tdays):
+        a = np.asarray(t)
+        if len(a) < 2:
+            continue
+        key = (day, a.tobytes())
+        if key in seen:
+            continue
+        seen.add(key)
+        dist_m += float(np.hypot(np.diff(a[:, 0]), np.diff(a[:, 1])).sum())
     if dist_m > 0:
         parts.append(f"{dist_m / 1609.344:.0f} MI")
     return " · ".join(parts)
@@ -430,7 +449,10 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
         # tolerate missing key + 3-tuple (z) coords, matching what the baker emits
         pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y, *_ in (lake.get("coords") or [])]
         if len(pts) >= 3:
-            d.polygon(pts, fill=WATER_FILL + (255,), outline=WATER_SHORELINE + (255,), width=sw)
+            # 235 alpha, not opaque: a whisper of the lakebed relief ghosts through, so
+            # lakes sit IN the toothy sheet instead of reading as flat vinyl stickers
+            # (red-team beauty finding). The shoreline stays crisp at full ink.
+            d.polygon(pts, fill=WATER_FILL + (235,), outline=WATER_SHORELINE + (255,), width=sw)
     for r in hydro.get("rivers", []):
         wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
         wpx = max(1, round(_pt_to_px(wpt, dpi)))
@@ -440,9 +462,11 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
     return img
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False, hydro=None) -> Image.Image:
+              watermark: bool = False, hydro=None, cfg=None) -> Image.Image:
     spec.validate(dpi)
-    cfg = json.load(open(os.path.join(region_dir, "region.json")))
+    if cfg is None:                        # callers holding regions.Region pass .cfg
+        with open(os.path.join(region_dir, "region.json")) as f:
+            cfg = json.load(f)
     out_w, out_h = spec.pixel_size(dpi)
 
     # Off-DEM guard: refuse a plausible-but-wrong poster before any painting invents
@@ -495,9 +519,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         d = ImageDraw.Draw(img, "RGBA")
         wm_font = _font(max(24, round(out_w * 0.09)))
         l, t, rt, b = d.textbbox((0, 0), "PROOF", font=wm_font)
-        d.text(((out_w - (rt - l)) / 2 - l, (out_h - (b - t)) / 2 - t), "PROOF",
+        # upper third, not dead center: starter_crop centers the journey mid-sheet,
+        # and the mark was parking exactly on the corridor being judged (red-team).
+        d.text(((out_w - (rt - l)) / 2 - l, out_h * 0.24 - t), "PROOF",
                fill=(255, 255, 255, 80), font=wm_font)
     return img.convert("RGB")
-
-def save_print(img: Image.Image, path: str, dpi: int):
-    img.save(path, dpi=(dpi, dpi))   # embeds DPI so a print shop reads true size

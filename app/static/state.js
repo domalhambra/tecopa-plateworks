@@ -18,6 +18,9 @@ export const state = {
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)
+  title: '',              // poster title ('' -> region name; '-' -> no title block)
+  finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
+  lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };
 
 const LS_KEY = 'trailprint';   // { region, printSize, theme }

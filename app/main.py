@@ -35,7 +35,11 @@ TTL_SECONDS = float(os.environ.get("TRAILPRINT_TTL_SECONDS", 86400))
 # request thread via a job queue. Both are local impls behind interfaces that a
 # networked store / broker drops into later (see blobs.py, jobs.py).
 BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"), ttl_seconds=TTL_SECONDS)
-QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS)
+# one render at a time by default: a 300-dpi final peaks at ~5 GB RSS, so unbounded
+# concurrency could OOM the operator's machine on double-click (red-team).
+QUEUE = jobs.ThreadJobQueue(
+    ttl_seconds=TTL_SECONDS,
+    max_concurrency=int(os.environ.get("TRAILPRINT_RENDER_CONCURRENCY", 1)))
 
 app = FastAPI()
 
@@ -66,7 +70,7 @@ def _encode_final(img, fmt: str) -> bytes:
     elif SRGB_PROFILE:
         img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI), icc_profile=SRGB_PROFILE)
     else:
-        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # embed DPI like save_print
+        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # a print shop reads true size
     return buf.getvalue()
 
 def _require_format(fmt: str) -> str:
@@ -87,11 +91,11 @@ def _region_or_404(rid):
         raise HTTPException(404, f"Unknown region {rid!r}")
     return REGIONS[rid]
 
-def _load_all(blobs, region):
-    """Parse every uploaded blob into tracks for one region; skip unparseable ones
+def _load_all(payloads, region):
+    """Parse every uploaded file into tracks for one region; skip unparseable ones
     rather than 500 the batch (matches the per-file tolerance the UI relies on)."""
     out = []
-    for data, fn in blobs:
+    for data, fn in payloads:
         try:
             out += load_tracks(data, region.geo, filename=fn)   # GPX / KML / KMZ
         except Exception:
@@ -107,33 +111,39 @@ def _count_in_bounds(tracks, region):
                   (c[:, 1] >= b[1]) & (c[:, 1] <= b[3])).sum())
     return n
 
-def _best_region(blobs):
+def _best_region(payloads):
     """The region holding the most track points (None if the tracks land nowhere)."""
     best, best_tracks, best_n = None, [], 0
     for r in REGIONS.values():
-        tracks = _load_all(blobs, r)
+        tracks = _load_all(payloads, r)
         n = _count_in_bounds(tracks, r)
         if n > best_n:
             best, best_tracks, best_n = r, tracks, n
     return best, best_tracks
 
 
-def _resolve_region(blobs, session_id, region_id):
+def _resolve_region(payloads, session_id, region_id):
     """Decide which region an upload belongs to and return (region, parsed_tracks).
     Order: an existing session is already bound; else an explicit region_id (with
     cross-region auto-recovery if the tracks don't fall in it); else the sole region;
-    else auto-detect the region holding the most track points."""
+    else auto-detect the region holding the most track points. EVERY branch enforces
+    the in-bounds check -- the session and single-region paths used to skip it, so
+    out-of-region tracks accumulated silently instead of a clean 422."""
     if session_id and session.has(session_id):
         region = _region_or_404(session.get(session_id)["region_id"])
-        return region, _load_all(blobs, region)
+        tracks = _load_all(payloads, region)
+        if tracks and _count_in_bounds(tracks, region) == 0:
+            raise HTTPException(
+                422, f"Tracks don't fall within this session's region ({region.name})")
+        return region, tracks
     if region_id:
         region = _region_or_404(region_id)
-        tracks = _load_all(blobs, region)
+        tracks = _load_all(payloads, region)
         # Auto-recovery: the operator pre-picked a region, but if the tracks land
         # nowhere inside it and another built region actually holds them, switch --
         # a forgiving "you dropped the wrong region's tracks" fix (v1.2).
         if _count_in_bounds(tracks, region) == 0:
-            alt, alt_tracks = _best_region(blobs)
+            alt, alt_tracks = _best_region(payloads)
             if alt is not None:
                 return alt, alt_tracks
             # tracks land in NO built region -> clean 422 (same as auto-detect),
@@ -142,8 +152,11 @@ def _resolve_region(blobs, session_id, region_id):
         return region, tracks
     if len(REGIONS) == 1:
         region = next(iter(REGIONS.values()))
-        return region, _load_all(blobs, region)
-    best, best_tracks = _best_region(blobs)
+        tracks = _load_all(payloads, region)
+        if tracks and _count_in_bounds(tracks, region) == 0:
+            raise HTTPException(422, "Tracks don't fall within any available region")
+        return region, tracks
+    best, best_tracks = _best_region(payloads)
     if best is None:
         raise HTTPException(422, "Tracks don't fall within any available region")
     return best, best_tracks
@@ -164,25 +177,70 @@ async def list_regions():
     """The region-picker gallery: every built region, lightweight metadata only."""
     return [r.meta() for r in REGIONS.values()]
 
+# Track-upload caps (red-team): photos and KMZ contents were capped in the V1-6 pass
+# but raw GPX/KML uploads were not -- one huge file ballooned RSS before any parsing.
+TRACK_FILE_MAX_BYTES = 64 * 1024 * 1024
+TRACK_BATCH_MAX_BYTES = 256 * 1024 * 1024
+
+# nearest-hotspot radius when carrying annotations across a recompute; matches
+# density.hotspots' min_spacing_m, so "nearest" is unambiguous within one spacing.
+ANNOTATION_CARRY_M = 6000.0
+
+def _carry_annotations(old_spots, new_spots):
+    """Recomputing hotspots must never destroy operator work: transfer each annotated
+    old hotspot's label/icon/photo onto the nearest recomputed hotspot (within one
+    hotspot spacing); if none is near or the near one is already annotated, keep the
+    old annotated spot itself. Before this, adding one more day's GPX to a session
+    silently wiped every label, icon, and pinned photo (red-team, high)."""
+    keys = ("label", "icon", "photo")
+    out = [dict(s) for s in new_spots]
+    for old in old_spots:
+        if not any(old.get(k) for k in keys):
+            continue
+        best, best_d = None, None
+        for s in out:
+            d = ((s["x"] - old["x"]) ** 2 + (s["y"] - old["y"]) ** 2) ** 0.5
+            if best is None or d < best_d:
+                best, best_d = s, d
+        if (best is not None and best_d <= ANNOTATION_CARRY_M
+                and not any(best.get(k) for k in keys)):
+            for k in keys:
+                if old.get(k):
+                    best[k] = old[k]
+        else:
+            out.append(dict(old))          # keep the annotated spot verbatim
+    return out
+
 @app.post("/api/upload")
 async def upload(files: List[UploadFile] = File(...),
                  session_id: Optional[str] = Form(None),
                  region_id: Optional[str] = Form(None)):
     _sweep_uploads()                        # opportunistic eviction of stale photo dirs
-    blobs = [(await f.read(), f.filename) for f in files]
-    region, new = _resolve_region(blobs, session_id, region_id)
+    payloads = []
+    total = 0
+    for f in files:
+        data = await f.read()
+        total += len(data)
+        if len(data) > TRACK_FILE_MAX_BYTES or total > TRACK_BATCH_MAX_BYTES:
+            raise HTTPException(422, "Track upload exceeds the size limit")
+        payloads.append((data, f.filename))
+    region, new = _resolve_region(payloads, session_id, region_id)
     # recovery = the operator's explicit region was overridden because the tracks
     # actually belong to a different built region (not a plain auto-detect).
     recovered = bool(region_id and region.id != region_id
                      and not (session_id and session.has(session_id)))
+    old_spots = []
     if session_id and session.has(session_id):
-        tracks = session.get(session_id)["tracks"] + new               # accumulate
+        st = session.get(session_id)
+        tracks = st["tracks"] + new                                    # accumulate
+        old_spots = st["hotspots"]
         sid = session_id
     else:
         tracks, sid = new, None
     if not tracks:
         raise HTTPException(400, "No usable tracks in file(s)")
-    spots = hotspots(tracks, region_bounds=region.cfg["bounds"])
+    spots = _carry_annotations(old_spots,
+                               hotspots(tracks, region_bounds=region.cfg["bounds"]))
     if sid is None:
         sid = session.create({"tracks": tracks, "hotspots": spots, "region_id": region.id})
     else:
@@ -207,11 +265,14 @@ async def upload(files: List[UploadFile] = File(...),
             "hotspots": hpx, "starter_crop": list(start), "recovered": recovered}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
-UPLOADS_DIR = "uploads"
+# env-overridable so the test harness never writes into the operator's live dir
+UPLOADS_DIR = os.environ.get("TRAILPRINT_UPLOADS", "uploads")
 
 def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
     """Evict per-session photo dirs whose last write is older than the TTL (V1-8).
-    Keyed on dir mtime, which each photo write bumps, so an active session survives."""
+    Never touch a dir whose session still exists -- a stamped proof may reference the
+    photos, and deleting them under a live session silently dropped photos from a
+    final rendered the next day (red-team). Dir name == session id."""
     if not ttl_seconds or not os.path.isdir(root):
         return
     cutoff = time.time() - ttl_seconds
@@ -219,7 +280,7 @@ def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
     for name in os.listdir(root):
         d = os.path.join(root, name)
         try:
-            if os.path.isdir(d) and os.path.getmtime(d) < cutoff:
+            if os.path.isdir(d) and os.path.getmtime(d) < cutoff and not session.has(name):
                 shutil.rmtree(d, ignore_errors=True)
                 removed += 1
         except OSError:
@@ -237,9 +298,21 @@ PHOTO_MAX_PIXELS = 64_000_000
 Image.MAX_IMAGE_PIXELS = 200_000_000
 
 def _require_session(session_id):
-    if not session.has(session_id):
+    """Session or 404, in one store round-trip (was has()+get(), and half the
+    endpoints re-implemented it inline with try/except -- one idiom now)."""
+    try:
+        return session.get(session_id)
+    except KeyError:
         raise HTTPException(404, "Unknown or expired session")
-    return session.get(session_id)
+
+def _require_stamped(session_id):
+    """The shared gate for both final endpoints: session -> 404, no stamped spec ->
+    400 (approve a proof first), and the region it renders against."""
+    st = _require_session(session_id)
+    spec = st.get("spec")
+    if spec is None:
+        raise HTTPException(400, "Approve a proof first")
+    return spec, _region_or_404(st["region_id"])
 
 @app.post("/api/markers")
 async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
@@ -250,8 +323,12 @@ async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
         edits = json.loads(markers)
     except Exception:
         raise HTTPException(422, "markers must be JSON")
+    if not isinstance(edits, list):
+        raise HTTPException(422, "markers must be a JSON list")
     spots = st["hotspots"]
     for e in edits:
+        if not isinstance(e, dict):       # a bare string/number entry must not 500
+            continue
         i = e.get("i")
         if not isinstance(i, int) or not (0 <= i < len(spots)):
             continue
@@ -305,6 +382,11 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     spots = st["hotspots"]
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
+    import math
+    if not (math.isfinite(px) and math.isfinite(py)):
+        # pydantic parses "nan"/"inf" floats; min/max would propagate NaN into the
+        # stored x/y and poison the session permanently (red-team) -- reject instead.
+        raise HTTPException(422, "marker position must be finite")
     region = _region_or_404(st["region_id"])                 # geo lives on the region
     x, y = overview_px_to_crs(region.geo, px, py)
     min_x, min_y, max_x, max_y = region.cfg["bounds"]
@@ -316,7 +398,7 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     return {"ok": True, "px": cpx, "py": cpy}
 
 def _build_spec(sid, crop_px, print_w, print_h, title=""):
-    st = session.get(sid)   # KeyError on unknown sid -> caller maps to 404
+    st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
     # A finished poster carries a title block; default to the region's name so the
@@ -345,13 +427,12 @@ async def proof(session_id: str = Form(...),
                 title: str = Form("")):
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h, title)
-    except KeyError:
-        raise HTTPException(404, "Unknown or expired session")
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()
     try:
-        img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir, watermark=True)
+        img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir,
+                               watermark=True, cfg=region.cfg)
     except SpecError as e:
         log.info("event=proof.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
@@ -366,17 +447,11 @@ async def proof(session_id: str = Form(...),
 @app.post("/api/final")
 async def final(session_id: str = Form(...), format: str = Form("png")):
     fmt = _require_format(format)
-    try:
-        st = session.get(session_id)
-    except KeyError:
-        raise HTTPException(404, "Unknown or expired session")
-    spec = st.get("spec")
-    if spec is None:
-        raise HTTPException(400, "Approve a proof first")
-    region = _region_or_404(st["region_id"])
+    spec, region = _require_stamped(session_id)
     t0 = time.time()
     try:
-        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir, watermark=False)
+        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir,
+                               watermark=False, cfg=region.cfg)
     except SpecError as e:
         log.info("event=final.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
@@ -395,14 +470,7 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png")):
     a job id, so the request thread doesn't block on a 300 dpi paint. Same gate as
     the sync path (a proof must be stamped first)."""
     fmt = _require_format(format)
-    try:
-        st = session.get(session_id)
-    except KeyError:
-        raise HTTPException(404, "Unknown or expired session")
-    spec = st.get("spec")
-    if spec is None:
-        raise HTTPException(400, "Approve a proof first")
-    region = _region_or_404(st["region_id"])
+    spec, region = _require_stamped(session_id)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt)
     return {"job": jid}
 

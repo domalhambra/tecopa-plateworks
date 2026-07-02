@@ -20,10 +20,15 @@ import uuid
 log = logging.getLogger("trailprint.jobs")
 
 class ThreadJobQueue:
-    def __init__(self, ttl_seconds: float | None = None):
+    def __init__(self, ttl_seconds: float | None = None, max_concurrency: int = 1):
         self._jobs: dict[str, dict] = {}
         self._lock = threading.Lock()
         self.ttl_seconds = ttl_seconds
+        # Bound concurrent work: every submit used to spawn an unbounded worker
+        # thread, so back-to-back finals ran several ~GB 300-dpi renders at once and
+        # could OOM the operator's machine (red-team). Excess jobs stay "queued"
+        # until a slot frees -- same states, no API change.
+        self._slots = threading.Semaphore(max(1, max_concurrency))
 
     def _evict_expired_locked(self):
         if not self.ttl_seconds:
@@ -45,22 +50,25 @@ class ThreadJobQueue:
         log.info("event=job.submit jid=%s", jid)
 
         def run():
-            t0 = time.time()
-            with self._lock:
-                self._jobs[jid]["state"] = "running"
-            try:
-                result = fn(*args, **kwargs)
+            with self._slots:              # stay "queued" until a render slot frees
+                t0 = time.time()
                 with self._lock:
-                    self._jobs[jid].update(state="done", result=result, finished=time.time())
-                log.info("event=job.done jid=%s ms=%d", jid, int((time.time() - t0) * 1000))
-            except Exception as ex:               # surface failures as job state, not a crash
-                with self._lock:
-                    self._jobs[jid].update(state="error",
-                                           error=f"{type(ex).__name__}: {ex}",
-                                           finished=time.time())
-                # log with traceback to the logger (not vanishing stdout) so a failed
-                # client render is diagnosable (red-team V1-11).
-                log.exception("event=job.error jid=%s", jid)
+                    self._jobs[jid]["state"] = "running"
+                try:
+                    result = fn(*args, **kwargs)
+                    with self._lock:
+                        self._jobs[jid].update(state="done", result=result,
+                                               finished=time.time())
+                    log.info("event=job.done jid=%s ms=%d", jid,
+                             int((time.time() - t0) * 1000))
+                except Exception as ex:       # surface failures as job state, not a crash
+                    with self._lock:
+                        self._jobs[jid].update(state="error",
+                                               error=f"{type(ex).__name__}: {ex}",
+                                               finished=time.time())
+                    # log with traceback to the logger (not vanishing stdout) so a
+                    # failed client render is diagnosable (red-team V1-11).
+                    log.exception("event=job.error jid=%s", jid)
 
         threading.Thread(target=run, daemon=True).start()
         return jid

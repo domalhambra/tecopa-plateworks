@@ -123,7 +123,10 @@ def test_offdem_crop_proof_is_422():
     # (humanized "extends past the elevation data"), not 500 or an invented poster.
     c = _client(); j = _upload(c)
     ovw, ovh = j["overview_size"]
-    base = _crop(j, km_wide=27.0)                 # a valid centered 27 km crop
+    # 30 km clears the zoom cap with margin on BOTH axes (27 km sits exactly at the
+    # 10 m/px boundary and overview-px rounding can tip the y-axis under it, which
+    # would 422 at the cap and never reach the off-DEM guard this test pins).
+    base = _crop(j, km_wide=30.0)
     shift = ovw * 0.9                             # slide it east, fully off the DEM
     data = {"session_id": j["session"],
             "x0": base["x0"] + shift, "y0": base["y0"],
@@ -140,6 +143,117 @@ def test_proof_nonfinite_print_size_is_422_not_500():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": "nan", "print_h": 12}
     assert c.post("/api/proof", data=data).status_code == 422
+
+def test_accumulate_preserves_marker_annotations():
+    # red-team (high): adding one more day's GPX to a session used to recompute
+    # hotspots from scratch, silently destroying every label/icon/photo.
+    import io as _io
+    import json as _json
+    from PIL import Image as _Image
+    c = _client(); j = _upload(c)
+    assert c.post("/api/markers", data={"session_id": j["session"],
+                  "markers": _json.dumps([{"i": 0, "label": "Base Camp",
+                                           "icon": "camp"}])}).status_code == 200
+    buf = _io.BytesIO(); _Image.new("RGB", (32, 32), (7, 8, 9)).save(buf, "PNG")
+    assert c.post("/api/photo", data={"session_id": j["session"], "i": 0},
+                  files={"file": ("p.png", buf.getvalue(), "image/png")}).status_code == 200
+    r = c.post("/api/upload", files=[_file("b.gpx")], data={"session_id": j["session"]})
+    assert r.status_code == 200
+    from app import session as sess_mod
+    spots = sess_mod.get(j["session"])["hotspots"]
+    keep = [s for s in spots if s.get("label") == "Base Camp"]
+    assert keep, "annotation lost on accumulate"
+    assert keep[0].get("icon") == "camp" and keep[0].get("photo")
+
+def test_accumulate_out_of_region_tracks_422():
+    # a session bound to lassen must reject a file whose tracks land elsewhere,
+    # not silently accumulate garbage (red-team: the session branch skipped the
+    # in-bounds check).
+    c = _client(); j = _upload(c)
+    utah = (b'<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            b'xmlns="http://www.topografix.com/GPX/1/1"><trk><trkseg>'
+            b'<trkpt lat="39.30" lon="-111.50"></trkpt>'
+            b'<trkpt lat="39.34" lon="-111.50"></trkpt>'
+            b'</trkseg></trk></gpx>')
+    r = c.post("/api/upload", files=[("files", ("utah.gpx", utah, "application/gpx+xml"))],
+               data={"session_id": j["session"]})
+    assert r.status_code == 422
+    from app import session as sess_mod
+    assert len(sess_mod.get(j["session"])["tracks"]) == 5     # session unchanged
+
+def test_upload_oversize_rejected(monkeypatch):
+    monkeypatch.setattr("app.main.TRACK_FILE_MAX_BYTES", 64)
+    c = _client()
+    r = c.post("/api/upload", files=[_file()])
+    assert r.status_code == 422
+
+def test_move_marker_nan_rejected_not_poisoned():
+    # pydantic parses px="nan"; the clamp used to propagate NaN into stored x/y and
+    # THEN 500 -- a permanently poisoned session (red-team).
+    import math
+    c = _client(); j = _upload(c)
+    r = c.post("/api/markers/move", data={"session_id": j["session"], "i": 0,
+                                          "px": "nan", "py": "10"})
+    assert r.status_code == 422
+    from app import session as sess_mod
+    s0 = sess_mod.get(j["session"])["hotspots"][0]
+    assert math.isfinite(s0["x"]) and math.isfinite(s0["y"])
+
+def test_markers_non_dict_entries_skipped_not_500():
+    import json as _json
+    c = _client(); j = _upload(c)
+    r = c.post("/api/markers", data={"session_id": j["session"],
+               "markers": _json.dumps(["bogus", 7, {"i": 0, "label": "OK"}])})
+    assert r.status_code == 200
+    from app import session as sess_mod
+    assert sess_mod.get(j["session"])["hotspots"][0]["label"] == "OK"
+    assert c.post("/api/markers", data={"session_id": j["session"],
+                  "markers": _json.dumps({"i": 0})}).status_code == 422
+
+def test_track_days_stamped_through_endpoint():
+    # journey grouping is a rendering-semantics contract: the spec stamped by the
+    # endpoint must carry the per-track days ingest parsed (a mutation dropping
+    # track_days used to survive the whole endpoint suite -- red-team).
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    from app import session as sess_mod
+    spec = sess_mod.get(j["session"])["spec"]
+    assert spec.track_days is not None and len(spec.track_days) == 5
+    assert len({d for d in spec.track_days if d}) == 5        # five distinct days
+
+def test_readyz_503_when_a_region_cannot_render(tmp_path, monkeypatch):
+    # the 503 path was never exercised: a /readyz that always said 200 would blind
+    # the health check (red-team). Break one region and expect 503 + its report.
+    import json as _json
+    from app import main as main_mod, regions as regions_mod
+    d = tmp_path / "broken"; d.mkdir()
+    (d / "region.json").write_text(_json.dumps({
+        "id": "broken", "name": "Broken", "crs": "EPSG:32610",
+        "bounds": [0.0, 0.0, 1000.0, 1000.0], "overview_size": [10, 10],
+        "dem_path": "dem.tif", "native_resolution_m": 10,
+        "elevation_min": 0.0, "elevation_max": 1.0}))
+    broken = regions_mod.Region("broken", root=str(tmp_path))
+    patched = dict(main_mod.REGIONS); patched["broken"] = broken
+    monkeypatch.setattr(main_mod, "REGIONS", patched)
+    r = _client().get("/readyz")
+    assert r.status_code == 503
+    body = r.json()
+    assert body["ready"] is False
+    assert any(e["id"] == "broken" and not e["ready"] for e in body["regions"])
+
+def test_job_result_409_while_running_and_404_when_expired():
+    import time
+    c = _client()
+    from app.main import QUEUE
+    slow = QUEUE.submit(time.sleep, 1.0)
+    assert c.get(f"/api/jobs/{slow}/result").status_code == 409   # not done yet
+    gone = QUEUE.submit(lambda: "nonexistent/blob.png")           # done, blob missing
+    for _ in range(200):
+        if QUEUE.status(gone)["state"] == "done":
+            break
+        time.sleep(0.02)
+    assert c.get(f"/api/jobs/{gone}/result").status_code == 404   # result expired
 
 def test_set_markers_updates_and_invalidates_spec():
     import json as _json
@@ -204,7 +318,7 @@ def test_async_final_via_job_queue():
     assert r.status_code == 200
     jid = r.json()["job"]
     state, res = None, None
-    for _ in range(600):                       # render runs on a worker thread
+    for _ in range(1200):                      # generous budget for a CI runner
         s = c.get(f"/api/jobs/{jid}").json()
         state = s["state"]
         if state in ("done", "error"):
@@ -224,9 +338,11 @@ def test_job_status_unknown_404():
     c = _client()
     assert c.get("/api/jobs/nope").status_code == 404
 
-def test_final_goes_to_blob_not_region_dir():
-    # red-team V1-8: the sync final must route through the blob seam, not litter
-    # region.dir with final_*.png.
+def test_final_blob_seam_srgb_and_dpi():
+    # one 300-dpi render covers three contracts (the suite used to re-render an
+    # identical final five times -- red-team): (a) the sync final routes through
+    # the blob seam, not final_*.png in region.dir (V1-8); (b) the PNG embeds an
+    # sRGB ICC profile; (c) it embeds the 300-dpi physical size.
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
     assert c.post("/api/proof", data=data).status_code == 200
@@ -235,6 +351,9 @@ def test_final_goes_to_blob_not_region_dir():
     assert not os.path.exists(os.path.join(REGION_DIR, f"final_{j['session']}.png"))
     from app.main import BLOBS
     assert BLOBS.exists(f"{j['session']}/final.png")
+    im = Image.open(io.BytesIO(r.content))
+    assert im.info.get("icc_profile"), "no sRGB profile embedded"
+    assert round(im.info["dpi"][0]) == 300
 
 def test_sweep_uploads_evicts_stale_session_dirs(tmp_path):
     # red-team V1-8: a stale session's photo dir is evicted; an active one survives.
@@ -284,18 +403,6 @@ def test_async_final_pdf_via_job_queue():
     box = re.search(rb"/MediaBox \[ ([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) \]", out.content)
     assert box, "no MediaBox in PDF"
     assert [round(float(v)) for v in box.groups()] == [0, 0, 648, 864]
-
-def test_final_png_embeds_srgb_and_dpi():
-    # V1-10 print-correctness: the PNG final must carry an sRGB ICC profile and the
-    # 300-dpi physical size so a lab/viewer reads color and dimensions as intended.
-    c = _client(); j = _upload(c)
-    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
-    assert c.post("/api/proof", data=data).status_code == 200
-    r = c.post("/api/final", data={"session_id": j["session"]})
-    assert r.status_code == 200
-    im = Image.open(io.BytesIO(r.content))
-    assert im.info.get("icc_profile"), "no sRGB profile embedded"
-    assert round(im.info["dpi"][0]) == 300
 
 def test_title_defaults_to_region_name_and_dash_suppresses():
     # the finished poster never ships bare: no title -> region name; "-" -> clean map

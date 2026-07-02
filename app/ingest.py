@@ -51,6 +51,15 @@ def load_gpx_tracks(data: bytes, region: RegionGeo,
             if t is not None:
                 out.append(t)
                 idx += 1
+    # <rte>/<rtept> route-only files are a common exporter output (Garmin route
+    # exports, planning apps); they used to parse to zero tracks and fail the whole
+    # upload with a generic 400 (red-team). A planned route has no timestamps.
+    for rte in gpx.routes:
+        pts = [(p.longitude, p.latitude, p.time) for p in rte.points]
+        t = _make_track(pts, region, rte.name or "route", idx, simplify_tolerance_m)
+        if t is not None:
+            out.append(t)
+            idx += 1
     return out
 
 def _localname(el):

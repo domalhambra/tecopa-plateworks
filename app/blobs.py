@@ -23,9 +23,12 @@ class LocalBlobs:
         os.makedirs(root, exist_ok=True)
 
     def _p(self, key: str) -> str:
-        # keys may be nested ("sessionid/final.png"); keep them under root
+        # keys may be nested ("sessionid/final.png"); keep them under root. Compare
+        # path components, not string prefixes: startswith let "../blobs-evil/x"
+        # escape a root named "blobs" (red-team).
         path = os.path.normpath(os.path.join(self.root, key))
-        if not path.startswith(os.path.normpath(self.root)):
+        root = os.path.normpath(self.root)
+        if os.path.commonpath([root, path]) != root:
             raise ValueError("blob key escapes store root")
         return path
 

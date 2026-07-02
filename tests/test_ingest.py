@@ -150,6 +150,21 @@ def test_kml_malformed_coords_skipped_not_crash():
     tracks = load_kml_tracks(kml, REGION)
     assert len(tracks) == 1 and tracks[0].coords.shape[0] >= 2
 
+def test_gpx_route_only_file_parses():
+    # <rte>/<rtept> route exports (Garmin, planning apps) used to yield zero tracks
+    # and fail the whole upload with a generic 400 (red-team).
+    from app.ingest import load_tracks
+    rte = ('<?xml version="1.0"?>'
+           '<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">'
+           '<rte><name>Planned Loop</name>'
+           '<rtept lat="39.30" lon="-111.5"></rtept>'
+           '<rtept lat="39.32" lon="-111.5"></rtept>'
+           '<rtept lat="39.34" lon="-111.5"></rtept>'
+           '</rte></gpx>').encode()
+    tracks = load_tracks(rte, REGION, filename="route.gpx")
+    assert len(tracks) == 1 and tracks[0].day is None
+    assert tracks[0].coords.shape[0] >= 2
+
 def test_out_of_zone_point_dropped_not_inf():
     # A point far outside UTM 12N validity reprojects to (inf, inf). It must be
     # dropped rather than emitted, or it crashes density downstream.

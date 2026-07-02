@@ -124,6 +124,68 @@ def test_job_queue_captures_error():
     s = q.status(jid)
     assert s["state"] == "error" and "nope" in s["error"]
 
+def test_blobs_escape_with_sibling_prefix_rejected(tmp_path):
+    # red-team: startswith let "../<root>-evil/x" escape a root named "<root>"
+    b = blobs.LocalBlobs(str(tmp_path / "blobs"))
+    import pytest
+    with pytest.raises(ValueError):
+        b.path("../blobs-evil/x")
+
+def test_ttl_zero_disables_eviction(tmp_path):
+    # the documented TTL=0 "archival run" contract had zero coverage (red-team)
+    b = blobs.LocalBlobs(str(tmp_path / "blobs"), ttl_seconds=0)
+    p = b.put("old/final.png", b"X")
+    import os
+    os.utime(p, (1, 1))                              # ancient
+    assert b.sweep() == 0 and b.exists("old/final.png")
+    q = jobs.ThreadJobQueue(ttl_seconds=0)
+    jid = q.submit(lambda: 1)
+    for _ in range(200):
+        if q.status(jid)["state"] == "done":
+            break
+        time.sleep(0.01)
+    with q._lock:
+        q._jobs[jid]["finished"] = 1                 # ancient
+    q.submit(lambda: 2)                              # would evict if TTL were active
+    assert q.status(jid)["state"] == "done"          # still there
+
+def test_job_queue_bounds_concurrency():
+    # red-team: every submit used to spawn an unbounded thread; with one slot, a
+    # second job must wait (stay queued/running never both running at once) and
+    # still complete.
+    import threading
+    q = jobs.ThreadJobQueue(max_concurrency=1)
+    running = []
+    peak = []
+    lock = threading.Lock()
+    def work():
+        with lock:
+            running.append(1)
+            peak.append(len(running))
+        time.sleep(0.15)
+        with lock:
+            running.pop()
+        return True
+    jids = [q.submit(work) for _ in range(3)]
+    for jid in jids:
+        for _ in range(600):
+            if q.status(jid)["state"] in ("done", "error"):
+                break
+            time.sleep(0.01)
+        assert q.status(jid)["state"] == "done"
+    assert max(peak) == 1, f"jobs overlapped: peak concurrency {max(peak)}"
+
+def test_spec_round_trip_carries_track_days_and_tolerates_unknown_keys():
+    # persistence contract (red-team): track_days must survive the sqlite round
+    # trip, and a row written by an OLDER build (extra field since removed, e.g.
+    # track_color) must load instead of TypeError-ing the session.
+    data = _session()
+    data["spec"].track_days = ["2024-06-01", None]
+    dumped = serialize.dump_session(data)
+    dumped["spec"]["track_color"] = [1, 2, 3]        # legacy field from an old row
+    back = serialize.load_session(dumped)
+    assert back["spec"].track_days == ["2024-06-01", None]
+
 def test_job_queue_evicts_finished_after_ttl():
     # red-team V1-8: finished job records must not grow unbounded. A done record older
     # than the TTL is evicted the next time a job is submitted.
