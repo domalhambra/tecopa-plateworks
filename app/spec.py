@@ -38,20 +38,28 @@ class CompositionSpec:
     tracks: list          # list of (N,2) arrays in CRS meters
     hotspots: list        # list of {"x","y","weight", and optional "label"/"icon"/"photo"}
     seed: int = 7
+    # Journey identity, parallel to `tracks` (None -> each track is its own journey).
+    # Devices split one outing into several segments at auto-pause/stop-resume; the
+    # renderer groups segments sharing a day into ONE journey so the worn-width pass
+    # counts distinct outings (not segments) and terminus pins mark real start/end.
+    track_days: list | None = None
 
-    # physical style values (invariant 2): everything visual sized in print units
-    track_width_pt: float = 1.4
+    # physical style values (invariant 2): everything visual sized in print units.
+    # Defaults follow the V1-10 "pronounced" pass (approved by Dom): the route,
+    # markers, and photos are sized to read at poster viewing distance (2-3 m),
+    # not arm's length -- legibility-first, like a mapping app.
+    track_width_pt: float = 2.6
     track_color: tuple = (38, 36, 33)        # basalt-ish
-    track_max_darken: float = 0.85           # overlap darkening ceiling
-    marker_diameter_in: float = 0.18
+    track_max_darken: float = 0.9            # ink ceiling (grain still shows through)
+    marker_diameter_in: float = 0.24
     grain_cell_in: float = 0.014
     grain_strength: float = 0.05
     title_pt: float = 22.0
     title_text: str = ""
     # rich markers (v1.1): labels, vector icons, and pinned photos -- all picture
     # decisions, so they live on the spec; sizes physical so proof == final layout.
-    label_pt: float = 11.0                   # marker label text size
-    photo_box_in: float = 1.15               # long edge of a pinned photo thumbnail
+    label_pt: float = 13.0                   # marker label text size
+    photo_box_in: float = 1.5                # long edge of a pinned photo thumbnail
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))

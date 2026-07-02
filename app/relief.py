@@ -15,6 +15,12 @@ HYPSO_STOPS = [
 TEXTURE_STRENGTH = 0.35        # ridge crispness (high-pass blend)
 VALLEY_STRENGTH = 0.30         # soft darkening in deep valleys
 HILLSHADE_GAMMA = 1.1          # contrast of the light
+# Figure-ground (V1-10, approved by Dom): lift the terrain slightly toward paper so
+# the route/markers own the contrast budget -- the terrain stays the beauty, the
+# journey becomes the subject. Applied after the stop interpolation in hypsometric()
+# (equivalent to lifting every stop, but keeps the by-eye stop values intact above).
+PAPER = (243, 237, 223)
+PAPER_LIFT = 0.10
 # Blur radii are tied to a GROUND distance (metres), converted to pixels at paint
 # time via res_m -- so the same crop yields the same relief at any DPI ("one spec,
 # painted at many sizes"). render.py passes ground/res_m; the px fallbacks below
@@ -59,9 +65,10 @@ def hypsometric(elev, elev_min, elev_max):
     stops = HYPSO_STOPS
     xs = np.array([s[0] for s in stops])
     rgb = np.zeros(elev.shape + (3,), dtype="float32")
+    paper = np.array(PAPER, dtype="float32")
     for ch in range(3):
         ys = np.array([s[1][ch] for s in stops], dtype="float32")
-        rgb[..., ch] = np.interp(norm, xs, ys)
+        rgb[..., ch] = np.interp(norm, xs, ys) * (1.0 - PAPER_LIFT) + paper[ch] * PAPER_LIFT
     return rgb / 255.0
 
 def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
