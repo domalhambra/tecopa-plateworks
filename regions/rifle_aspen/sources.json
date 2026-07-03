@@ -1,0 +1,51 @@
+{
+  "id": "rifle_aspen",
+  "built": "2026-07-03",
+  "fetch_bbox_4326": [
+    -107.72,
+    39.05,
+    -106.62,
+    39.62
+  ],
+  "crs": "EPSG:32613",
+  "rebuild": "python region_prep.py --id rifle_aspen --name <name> --bbox -107.72 39.05 -106.62 39.62 --epsg 32613 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "938409897faf4222b86c2091e6b94f8e772dba17617f6bba7f6e8db9ccbefe9c",
+      "bytes": 260294107
+    },
+    "hydro.json": {
+      "sha256": "532aa70466d424abdf6e11acb9d3ab92d81b2f1f39922212822d0a70ae4ecf88",
+      "bytes": 142397
+    },
+    "region.json": {
+      "sha256": "f8d5a3472e647e7a85d69466b7e51de7fffbdd43d5324fd2e7a16256bc5c7a63",
+      "bytes": 470
+    },
+    "overview.png": {
+      "sha256": "98c0d39eb28cc4eba895036bd6ebfb01032b683032d48f56f184e9577bdf6792",
+      "bytes": 650262
+    },
+    "landcover.tif": {
+      "sha256": "23106432459cff4e513ff96ee14bc5cbbf7eab227edd8f0e06e623832654f9db",
+      "bytes": 992920
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "py3dep.get_dem",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    }
+  ]
+}

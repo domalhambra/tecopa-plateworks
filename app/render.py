@@ -624,11 +624,22 @@ CONTOUR_INDEX_PT = 0.8
 COMPASS_DIAMETER_IN = 0.85      # rose size on the sheet
 # -----------------------------------------------------------------------------
 
-def _contour_interval(range_m):
-    """The smallest conventional interval giving at most ~18 lines across the
-    crop's local relief (~26 max) -- dense enough to read, sparse enough not to shade."""
+CONTOUR_MAX_LINES = 26          # local-relief cap: never pack more than this across a crop
+# Scale floor (Dom): the interval must track the map's zoom, like a real topo series --
+# fine when zoomed into one valley, coarse across a whole corridor -- so lines stay
+# legible up close and don't mat into shading when zoomed out. `ground_m_per_in` is the
+# ground metres one printed inch spans (the DPI-independent zoom); the interval is held
+# to at least this fraction of it, so a 24 in sheet spanning ~3.6 km/in lands on a ~200 m
+# interval while a ~0.3 km/in valley crop drops to ~20 m. Conventional intervals only.
+CONTOUR_SCALE_FRAC = 0.05
+
+def _contour_interval(range_m, ground_m_per_in):
+    """The finest conventional interval that is (a) coarse enough for the map scale --
+    at least CONTOUR_SCALE_FRAC of the ground-per-inch, so density tracks zoom -- and
+    (b) still under the local-relief line cap. Both bounds met => readable at any zoom."""
+    floor = CONTOUR_SCALE_FRAC * ground_m_per_in
     for iv in (5, 10, 20, 25, 50, 100, 200, 250, 500, 1000):
-        if range_m / iv <= 26:
+        if iv >= floor and range_m / iv <= CONTOUR_MAX_LINES:
             return iv
     return 2000
 
@@ -646,15 +657,15 @@ def _contour_alpha(elev, interval, width_px):
     a = np.clip(1.0 - d_px / max(width_px, 0.5), 0.0, 1.0)
     return a, np.round(t).astype(np.int64)
 
-def _draw_contours(rgb_u8, elev_core, dpi):
+def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in):
     """Composite elevation contours over the relief (under water/tracks): minor
-    lines at the auto interval, index lines every 5th level slightly firmer."""
+    lines at the scale-aware interval, index lines every 5th level slightly firmer."""
     from app.relief import _fill_nan
     elev = _fill_nan(np.array(elev_core, dtype="float32", copy=True))
     rng = float(elev.max() - elev.min())
     if rng < 1.0:                              # a dead-flat crop has no contours
         return rgb_u8
-    iv = _contour_interval(rng)
+    iv = _contour_interval(rng, ground_m_per_in)
     a_minor, levels = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_MINOR_PT, dpi))
     a_index, _ = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_INDEX_PT, dpi))
     is_index = (levels % 5 == 0)
@@ -788,7 +799,10 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # optional elevation contours: over the relief, under water/tracks, computed on
     # the SAME trimmed elevation window the relief was painted from (registration).
     if spec.contours:
-        rgb = _draw_contours(rgb, elev[pad_y:pad_y+out_h, pad_x:pad_x+out_w], dpi)
+        # ground metres one printed inch spans -- the DPI-independent zoom the contour
+        # interval tracks (proof and final share it, so they draw the same lines).
+        gmpi = (spec.crop[2] - spec.crop[0]) / spec.print_w_in
+        rgb = _draw_contours(rgb, elev[pad_y:pad_y+out_h, pad_x:pad_x+out_w], dpi, gmpi)
 
     # water sits on the relief, under the tracks (relief -> water -> tracks -> markers)
     if hydro is None:

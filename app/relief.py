@@ -15,12 +15,21 @@ HYPSO_STOPS = [
 TEXTURE_STRENGTH = 0.35        # ridge crispness (high-pass blend)
 VALLEY_STRENGTH = 0.30         # soft darkening in deep valleys
 HILLSHADE_GAMMA = 1.1          # contrast of the light
+# Tonal range + finish (the "punch" pass). The old relief floored every shaded slope
+# at 0.45 brightness -- a compressed mid-tone band that reads muddy, especially on a
+# mountain sheet where the whole story is light vs. shadow. SHADOW_FLOOR deepens the
+# darkest slope; the finishing curve + saturation are the cartographer's "levels +
+# curves + vibrance" (Tom Patterson's relief workflow, Swiss-style), applied per pixel
+# so they're DPI-invariant (proof == final, invariant 1).
+SHADOW_FLOOR = 0.26            # light kept on the deepest-shaded slope (was 0.45)
+RELIEF_CONTRAST = 0.30        # S-curve strength around mid; 0 = linear, 1 = full smoothstep
+RELIEF_SATURATION = 1.20      # mid-tone chroma lift -- pulls the muddy olive/tan apart
 # Figure-ground (V1-10, approved by Dom): lift the terrain slightly toward paper so
 # the route/markers own the contrast budget -- the terrain stays the beauty, the
 # journey becomes the subject. Applied after the stop interpolation in hypsometric()
 # (equivalent to lifting every stop, but keeps the by-eye stop values intact above).
 PAPER = (243, 237, 223)
-PAPER_LIFT = 0.10
+PAPER_LIFT = 0.06
 # Biome tint (v1.2, Dom): hue from NLCD land cover, lightness from elevation + shade
 # (Imhof's naturalistic method), so forests read green and high desert reads sage-tan
 # while the relief keeps its full tonal punch. The alpine fade returns the summits to
@@ -63,11 +72,15 @@ VALLEY_RADIUS_PX = 40
 # (Leland Brown / Tom Patterson), and aerial perspective (Imhof) -- plus a salt-pan
 # treatment so playa reads as luminous salt rather than a beige void. Every blur,
 # octave, and mottle below is sized in GROUND units, so proof == final (invariant 1).
-HAZE = (205, 202, 192)          # atmospheric grey the low ground recedes into
+HAZE = (176, 190, 206)          # COOL bluish atmosphere the low ground recedes into --
+                                # warm sunlit peaks vs. cool distant valleys is the
+                                # Imhof aerial-perspective punch (was a flat light grey
+                                # that only muted the sheet)
 SALT = (240, 236, 228)          # luminous warm-white for playa / salt flats
 MULTIDIR_MAX = 0.55             # multidirectional light blended in at full depth
 TEXTURE_DEPTH_MAX = 0.85        # extra multiscale-texture contrast at full depth
-AERIAL_MAX = 0.26               # haze on the lowest ground at full depth
+AERIAL_MAX = 0.18               # haze on the lowest ground at full depth (was 0.26 -- a
+                                # lighter grey wash that flattened the mountain valleys)
 SALT_MAX = 0.55                 # luminous lift on the flattest, lowest ground
 SALT_LOW_NORM = 0.16            # 'low ground' = below this fraction of the elev range
 MOTTLE_CELL_M = 240.0           # salt-mottle cell, ground metres (dpi-stable grid)
@@ -153,6 +166,24 @@ def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     img = img * (1.0 + (mottle - 1.0)[..., None] * np.clip(sw * 3.0, 0, 1)[..., None])
     return img
 
+def _tonal_finish(img):
+    """The cartographer's finishing move: a gentle contrast S-curve + a mid-tone
+    saturation lift, applied to the composed relief. This is what pulls a flat,
+    muddy sheet into one with punch -- deeper shadows, cleaner highlights, and
+    colours that separate instead of collapsing into olive-brown. Both are pure
+    per-pixel functions, so the proof and the final transform identically (invariant
+    1). Endpoints are fixed (0->0, 1->1), so nothing clips to black or blows out."""
+    if RELIEF_CONTRAST > 0:
+        x = np.clip(img, 0.0, 1.0)
+        s_curve = x * x * (3.0 - 2.0 * x)                 # smoothstep: fixes 0,0.5,1
+        img = (1.0 - RELIEF_CONTRAST) * x + RELIEF_CONTRAST * s_curve
+    if RELIEF_SATURATION != 1.0:
+        # luminance-preserving chroma scale (Rec. 601 weights); keeps the value the
+        # contrast curve just set, only spreads the colour away from grey.
+        lum = (img * np.array([0.299, 0.587, 0.114], np.float32)).sum(axis=2, keepdims=True)
+        img = lum + (img - lum) * RELIEF_SATURATION
+    return np.clip(img, 0.0, 1.0)
+
 def hypsometric(elev, elev_min, elev_max):
     norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
     stops = HYPSO_STOPS
@@ -230,7 +261,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         tex_ms = multiscale_texture(elev, texture_radius_px)
         tex = np.clip(tex + TEXTURE_DEPTH_MAX * d * (tex_ms - 0.5), 0, 1)
 
-    light = (0.45 + 0.55 * hs)                                    # never fully black
+    light = (SHADOW_FLOOR + (1.0 - SHADOW_FLOOR) * hs)            # never fully black
     light = light * (1.0 - VALLEY_STRENGTH * val)                # sink the valleys
     light = light[..., None]
 
@@ -239,5 +270,6 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     img = img * (1.0 + TEXTURE_STRENGTH * (tex[..., None] - 0.5))
     if depth > 0:
         img = _depth_atmosphere(img, elev, norm, tex, res_m, seed, float(np.clip(depth, 0, 1.5)))
+    img = _tonal_finish(img)                                      # levels + curves + vibrance
     img = img * grain(elev.shape, grain_cell_px, grain_strength, seed)[..., None]
     return (np.clip(img, 0, 1) * 255).astype("uint8")
