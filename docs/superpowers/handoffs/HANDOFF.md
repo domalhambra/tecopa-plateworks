@@ -93,7 +93,7 @@ docs/superpowers/   specs/ and plans/ — the design + implementation plan for t
 
 - **Python 3.14 only** on this Mac (no pyenv, no 3.11/3.12). All scientific wheels (rasterio, pyproj, scipy, geopandas, pynhd) install cleanly on 3.14.
 - **USGS NHD SSL:** python.org Python on macOS ships **no system CA bundle**, so `api.water.usgs.gov` fails cert verification. `region_prep.py` sets `SSL_CERT_FILE` from `certifi` **at the very top, before importing py3dep/pynhd** (aiohttp captures its SSL config at import — setting it later races onto the empty store and large concurrent fetches fail). It also fetches hydro **before** the DEM (a prior large py3dep fetch leaves SSL dirty). If you add new network code, keep this ordering.
-- **py3dep returns EPSG:5070 (CONUS Albers), in metres — not 4326.** `to_cog` reprojects from the DataArray's own CRS via rioxarray, then clips to the bbox UTM box to kill NaN corners.
+- **py3dep returns EPSG:5070 (CONUS Albers), in metres — not 4326.** `build_dem_cog` warps each fetched slice from the DataArray's own CRS onto one shared region grid (inset 500 m, so no NaN fringe to trim); `plan_build` picks the resolution and slice count before any fetch, so a corridor-scale bbox can't OOM the build (the 15.8 GB lesson).
 - **`cache/`** (requests-cache from NHD/3DEP) and **`regions/*/dem.tif`, `final_*.png`, `tune.png`, `poster.png`, `comparison.png`** are gitignored. `region.json` / `overview.png` / `hydro.json` ARE committed; the DEM is regenerated via `region_prep.py`.
 
 ---

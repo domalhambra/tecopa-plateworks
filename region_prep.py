@@ -8,6 +8,11 @@ Usage:
         --name "Lassen County, California" \
         --bbox -120.90 40.33 -120.50 40.78 \
         --epsg 32610
+
+Resolution is picked automatically from the bbox (finest of 10/30/60 m whose grid
+fits the budget) and the DEM is always fetched in memory-bounded slices; pass an
+explicit --resolution only to override the planner. The plan (grid, file size,
+slice count) prints before anything is fetched.
 """
 import os
 import certifi
@@ -23,35 +28,75 @@ import argparse, json
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
-from affine import Affine
 from PIL import Image
 # pandas / py3dep / pynhd are imported lazily inside the functions that fetch or
 # bake: importing THIS module then only needs the core stack, so the pure-logic
-# tests (_trim_nan_edges, bake_hydro) run in CI without the ~200 MB fetch stack.
+# tests (plan_build, bake_hydro) run in CI without the ~200 MB fetch stack.
 
-def _trim_nan_edges(dst, max_edge_nan=0.005):
-    """Return (r0, r1, c0, c1) bounding a NaN-clean rectangle. Greedily peel whichever
-    single edge (top/bottom/left/right) is currently the most NaN, and stop once the
-    worst remaining edge is under max_edge_nan. Peeling the worst edge each step removes
-    the reproject's NaN frame and triangular corners without over-trimming a clean side
-    (a naive per-edge pass over-trims, since a perpendicular NaN band makes every row or
-    column look bad). The small tolerance avoids peeling a whole row/col for one stray
-    pixel; sparse interior NaN is left for relief._fill_nan."""
-    finite = np.isfinite(dst)
-    r0, r1, c0, c1 = 0, dst.shape[0], 0, dst.shape[1]
-    while r1 - r0 > 1 and c1 - c0 > 1:
-        fr = [1.0 - finite[r0, c0:c1].mean(),       # top
-              1.0 - finite[r1-1, c0:c1].mean(),     # bottom
-              1.0 - finite[r0:r1, c0].mean(),       # left
-              1.0 - finite[r0:r1, c1-1].mean()]     # right
-        k = int(np.argmax(fr))
-        if fr[k] <= max_edge_nan:
+# ---- build planning: decide resolution, grid, and slicing BEFORE any fetch ------
+# The 15.8 GB lesson (elko_bonneville): a corridor-scale bbox built one-shot holds
+# the whole source + reprojection scratch + the NLCD tile merge in RAM at once and
+# OOMs. The planner makes the cost visible up front; the slicer bounds the peak.
+DEM_RES_CHOICES = (10, 30, 60)
+GRID_BUDGET_MPX = 200      # auto-resolution ceiling for the projected DEM grid
+SLICE_BUDGET_MPX = 40      # max Mpx fetched + warped at once (bounds peak RSS)
+LANDCOVER_BUDGET_MPX = 60  # ceiling for the (uint8) landcover grid
+GRID_INSET_M = 500.0       # grid sits inside fetched data: no reproject NaN fringe
+
+def _densified_edge(bbox_4326, n=41):
+    """Lon/lat points along all four bbox edges. Meridians and parallels curve in a
+    projected CRS, so 4 corners under-bound a wide box; the densified ring doesn't."""
+    w, s, e, n_ = bbox_4326
+    t = np.linspace(0.0, 1.0, n)
+    lons = np.concatenate([w + t*(e-w), w + t*(e-w), np.full(n, w), np.full(n, e)])
+    lats = np.concatenate([np.full(n, s), np.full(n, n_), s + t*(n_-s), s + t*(n_-s)])
+    return lons, lats
+
+def projected_grid(bbox_4326, dst_crs, resolution_m):
+    """The target grid for a bbox at a resolution: (width_px, height_px, transform),
+    inset GRID_INSET_M so the grid sits strictly inside what a fetch returns, and
+    snapped to the resolution."""
+    from pyproj import Transformer
+    from rasterio.transform import from_origin
+    fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
+    xs, ys = fwd.transform(*_densified_edge(bbox_4326))
+    minx, maxx = float(np.min(xs)) + GRID_INSET_M, float(np.max(xs)) - GRID_INSET_M
+    miny, maxy = float(np.min(ys)) + GRID_INSET_M, float(np.max(ys)) - GRID_INSET_M
+    minx = resolution_m * round(minx / resolution_m)
+    miny = resolution_m * round(miny / resolution_m)
+    w = int((maxx - minx) // resolution_m)
+    h = int((maxy - miny) // resolution_m)
+    return w, h, from_origin(minx, miny + h * resolution_m, resolution_m, resolution_m)
+
+def plan_build(bbox_4326, dst_crs, resolution_m=None):
+    """Everything main() needs to know before fetching: the DEM resolution (auto =
+    finest of DEM_RES_CHOICES whose grid fits GRID_BUDGET_MPX; explicit overrides
+    but is flagged when over budget), the slice count that keeps peak memory
+    bounded, the landcover resolution, and honest size estimates."""
+    auto = resolution_m is None
+    if auto:
+        resolution_m = DEM_RES_CHOICES[-1]
+        for res in DEM_RES_CHOICES:
+            w, h, _ = projected_grid(bbox_4326, dst_crs, res)
+            if w * h <= GRID_BUDGET_MPX * 1e6:
+                resolution_m = res
+                break
+    w, h, transform = projected_grid(bbox_4326, dst_crs, resolution_m)
+    mpx = w * h / 1e6
+    lc_res = 60
+    for res in (30, 60):
+        wl, hl, _ = projected_grid(bbox_4326, dst_crs, res)
+        if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
+            lc_res = res
             break
-        if k == 0: r0 += 1
-        elif k == 1: r1 -= 1
-        elif k == 2: c0 += 1
-        else: c1 -= 1
-    return r0, r1, c0, c1
+    n_slices = max(1, int(np.ceil(mpx / SLICE_BUDGET_MPX)))
+    return {"resolution_m": resolution_m, "auto": auto,
+            "grid": (w, h), "transform": transform, "grid_mpx": mpx,
+            "over_budget": mpx > GRID_BUDGET_MPX,
+            "n_slices": n_slices,
+            "landcover_resolution_m": lc_res,
+            "est_dem_mb": mpx * 4,           # float32; terrain barely deflates
+            "est_peak_gb": mpx / n_slices * 4 * 10 / 1024}
 
 def _exterior_rings(geom):
     if geom.geom_type == "Polygon":
@@ -156,51 +201,65 @@ def bake_landcover(bbox, dst_crs, out_path, resolution_m=30, year=2021):
         f.write(arr, 1)
     return out_path
 
-def to_cog(dem_da, dst_crs, out_path, bbox_4326, resolution_m=10):
-    # py3dep returns a rioxarray DataArray that already carries its own CRS
-    # (3DEP serves CONUS Albers, EPSG:5070, with coords in metres). Trust that
-    # CRS and reproject straight to the region CRS at a fixed metre grid, rather
-    # than assuming EPSG:4326 and rebuilding the transform from lon/lat bounds.
-    if dem_da.rio.crs is None:
-        dem_da = dem_da.rio.write_crs("EPSG:4326")
-    dem_da = dem_da.rio.reproject(dst_crs, resolution=resolution_m,
-                                  resampling=Resampling.bilinear, nodata=np.nan)
-    # Clip to the UTM box of the requested geographic bbox. py3dep over-returns and
-    # the Albers->UTM reprojection leaves NaN corners; the bbox sits strictly inside
-    # the data, so this trims to a clean, fully-valid rectangle (honest bounds).
+def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
+    """Fetch 3DEP and write the region COG onto ONE shared grid, in longitude slices
+    (plan['n_slices']) so peak memory stays bounded no matter the bbox size: each
+    slice is fetched, warped into its window of the target grid, merged prefer-finite
+    with the 0.03 deg overlap, and released before the next begins. Replaces the old
+    whole-bbox to_cog, which held source + destination + reprojection scratch for the
+    entire region simultaneously and OOM'd at corridor scale. py3dep returns CONUS
+    Albers (EPSG:5070); each slice is warped straight onto the region grid, and the
+    GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming."""
     from pyproj import Transformer
+    from rasterio.warp import reproject
+    from rasterio.windows import from_bounds as win_from_bounds
+    w_px, h_px = plan["grid"]
+    T = plan["transform"]
+    res = plan["resolution_m"]
+    n = plan["n_slices"]
     fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
-    w, s, e, n = bbox_4326
-    # Densify the bbox edges before projecting: meridians/parallels curve in UTM, so
-    # 4 corners can mis-bound a wide/high-latitude box. (NaN-freeness then relies on
-    # py3dep over-returning past the bbox, which it reliably does.)
-    t = np.linspace(0.0, 1.0, 25)
-    lons = np.concatenate([w + t*(e-w), w + t*(e-w), np.full(25, w), np.full(25, e)])
-    lats = np.concatenate([np.full(25, s), np.full(25, n), s + t*(n-s), s + t*(n-s)])
-    xs, ys = fwd.transform(lons, lats)
-    dem_da = dem_da.rio.clip_box(float(np.min(xs)), float(np.min(ys)),
-                                 float(np.max(xs)), float(np.max(ys)))
-    dst = np.asarray(dem_da.values, dtype="float32")
-    dst_transform = dem_da.rio.transform()
-    # The Albers->UTM reproject can still leave NaN at the corners when py3dep didn't
-    # over-return far enough past the bbox on a side (worse for wide/zone-straddling
-    # boxes). Trim whole edge rows/cols while they are mostly NaN so the COG is an
-    # honest, fully-valid rectangle (no dark wedges in the poster or aim view), and
-    # shift the transform origin to match.
-    r0, r1, c0, c1 = _trim_nan_edges(dst)
-    dst = dst[r0:r1, c0:c1]
-    dst_transform = dst_transform * Affine.translation(c0, r0)
-    dh, dw = dst.shape
-
     profile = dict(driver="GTiff", dtype="float32", count=1,
-                   height=dh, width=dw, crs=dst_crs, transform=dst_transform,
+                   height=h_px, width=w_px, crs=dst_crs, transform=T,
                    nodata=np.nan, tiled=True, blockxsize=512, blockysize=512,
-                   compress="deflate")
-    with rasterio.open(out_path, "w", **profile) as ds:
-        ds.write(dst, 1)
+                   compress="deflate", BIGTIFF="IF_SAFER")
+    edges = np.linspace(bbox_4326[0], bbox_4326[2], n + 1)
+    minx, maxy = T.c, T.f
+    # create the nodata-filled target, then reopen r+ ("w" datasets are write-only
+    # in rasterio, and the slice-overlap merge must read back what's written)
+    with rasterio.open(out_path, "w", **profile):
+        pass
+    with rasterio.open(out_path, "r+") as dst:
+        for i in range(n):
+            sb = (float(edges[i]) - 0.03, bbox_4326[1],
+                  float(edges[i + 1]) + 0.03, bbox_4326[3])
+            if n > 1:
+                print(f"  slice {i + 1}/{n}: fetching 3DEP "
+                      f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
+            da = fetch_dem(sb, res)
+            src = np.asarray(da.values, dtype="float32")
+            if src.ndim == 3:
+                src = src[0]
+            # destination window on the shared grid = this slice's projected extent
+            sxs, sys_ = fwd.transform(*_densified_edge(sb, n=21))
+            wminx = max(minx, float(np.min(sxs)))
+            wmaxx = min(minx + w_px * res, float(np.max(sxs)))
+            wminy = max(maxy - h_px * res, float(np.min(sys_)))
+            wmaxy = min(maxy, float(np.max(sys_)))
+            win = win_from_bounds(wminx, wminy, wmaxx, wmaxy,
+                                  transform=T).round_offsets().round_lengths()
+            dst_arr = np.full((int(win.height), int(win.width)), np.nan, "float32")
+            reproject(source=src, destination=dst_arr,
+                      src_transform=da.rio.transform(), src_crs=da.rio.crs,
+                      src_nodata=np.nan,
+                      dst_transform=rasterio.windows.transform(win, T),
+                      dst_crs=dst_crs, dst_nodata=np.nan,
+                      resampling=Resampling.bilinear)
+            existing = dst.read(1, window=win)
+            dst.write(np.where(np.isnan(dst_arr), existing, dst_arr), 1, window=win)
+            del da, src, dst_arr, existing
         # Overviews are the image pyramid: coarse copies for zoomed-out reads.
-        ds.build_overviews([2, 4, 8, 16, 32], Resampling.average)
-        ds.update_tags(ns="rio_overview", resampling="average")
+        dst.build_overviews([2, 4, 8, 16, 32], Resampling.average)
+        dst.update_tags(ns="rio_overview", resampling="average")
     return out_path
 
 def overview_png(cog_path, out_png, long_edge=1400):
@@ -272,13 +331,30 @@ def main():
                     help="west south east north (lon/lat)")
     ap.add_argument("--epsg", type=int, required=True,
                     help="projected CRS for the region, e.g. a local UTM zone")
-    ap.add_argument("--resolution", type=int, default=10, choices=(10, 30, 60),
-                    help="DEM grid in metres (10 m default; 30 m for huge regions)")
+    ap.add_argument("--resolution", default="auto", choices=("auto", "10", "30", "60"),
+                    help="DEM grid in metres; 'auto' (default) picks the finest that "
+                         "fits the grid budget, so a huge bbox can't OOM the build")
     args = ap.parse_args()
 
     out_dir = os.path.join("regions", args.id)
     os.makedirs(out_dir, exist_ok=True)
     dst_crs = f"EPSG:{args.epsg}"
+
+    # Plan first, fetch second: the operator sees the full cost of this bbox --
+    # resolution, grid, disk, slices, peak memory -- before a byte is downloaded.
+    plan = plan_build(tuple(args.bbox), dst_crs,
+                      None if args.resolution == "auto" else int(args.resolution))
+    gw, gh = plan["grid"]
+    print(f"Build plan: {plan['resolution_m']} m"
+          f"{' (auto)' if plan['auto'] else ''} -> grid {gw}x{gh} "
+          f"({plan['grid_mpx']:.0f} Mpx), dem.tif ~{plan['est_dem_mb']:.0f} MB, "
+          f"{plan['n_slices']} slice(s), peak ~{plan['est_peak_gb']:.1f} GB RAM, "
+          f"landcover @ {plan['landcover_resolution_m']} m")
+    if plan["over_budget"]:
+        print(f"  WARNING: grid exceeds the {GRID_BUDGET_MPX} Mpx budget. The slice "
+              f"builder keeps memory bounded, but the DEM will be "
+              f"~{plan['est_dem_mb'] / 1024:.1f} GB on disk and renders will be "
+              f"slow. Consider a coarser --resolution.")
 
     # Fetch hydrography first, while aiohttp's SSL context is fresh (a prior large
     # DEM fetch can leave it in a state where concurrent NHD requests fail SSL).
@@ -295,30 +371,33 @@ def main():
 
     print("Fetching NLCD land cover...")
     try:
-        bake_landcover(tuple(args.bbox), dst_crs, os.path.join(out_dir, "landcover.tif"))
+        bake_landcover(tuple(args.bbox), dst_crs, os.path.join(out_dir, "landcover.tif"),
+                       resolution_m=plan["landcover_resolution_m"])
     except Exception as ex:
         # biome tint is optional; the render falls back to pure elevation tint
         print(f"  land cover failed, continuing without biome tint: {ex}")
 
     print("Fetching 3DEP DEM...")
-    dem = fetch_dem(tuple(args.bbox), args.resolution)
-    cog = to_cog(dem, dst_crs, os.path.join(out_dir, "dem.tif"), tuple(args.bbox),
-                 resolution_m=args.resolution)
+    cog = build_dem_cog(tuple(args.bbox), dst_crs,
+                        os.path.join(out_dir, "dem.tif"), plan)
 
     print("Building aim-view overview...")
     size, bounds, crs = overview_png(cog, os.path.join(out_dir, "overview.png"))
 
     with rasterio.open(cog) as ds:
-        elev = ds.read(1)
-        valid = np.isfinite(elev)
-        emin, emax = float(np.nanpercentile(elev[valid], 0.5)), float(np.nanpercentile(elev[valid], 99.5))
+        # decimated read: percentile color anchors don't need every pixel, and a
+        # corridor-scale DEM read whole would defeat the slice builder's memory cap
+        elev = ds.read(1, out_shape=(max(1, ds.height // 4), max(1, ds.width // 4)),
+                       resampling=Resampling.average)
+        finite = elev[np.isfinite(elev)]
+        emin, emax = float(np.percentile(finite, 0.5)), float(np.percentile(finite, 99.5))
 
     region = {
         "id": args.id, "name": args.name, "crs": crs,
         "bounds": list(bounds), "overview_size": list(size),
         "dem_path": "dem.tif", "overview_path": "overview.png",
         "hydro_path": "hydro.json",
-        "native_resolution_m": args.resolution,
+        "native_resolution_m": plan["resolution_m"],
         # absolute color scale + fixed light keep every crop consistent (invariant 4):
         "elevation_min": emin, "elevation_max": emax,
         "light_azimuth": 315, "light_altitude": 45, "z_factor": 1.0,
@@ -326,7 +405,7 @@ def main():
     with open(os.path.join(out_dir, "region.json"), "w") as f:
         json.dump(region, f, indent=2)
     write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs,
-                           resolution_m=args.resolution)
+                           resolution_m=plan["resolution_m"])
     print(f"Region ready: {out_dir}")
 
 if __name__ == "__main__":

@@ -420,7 +420,18 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
 KEYLINE_INSET_IN = 0.25         # thin frame inset from the sheet edge
 KEYLINE_PT = 0.6
 TITLE_INSET_IN = 0.35           # title block inset from the sheet corner
+FURNITURE_BASE_IN2 = 18.0 * 24.0   # the sheet all furniture sizes were designed on
+FURNITURE_SCALE_MIN = 0.75         # small sheets: shrink a little, stay legible
+FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
 # ------------------------------------------------------------------------------------
+
+def _furniture_scale(spec):
+    """Furniture grows with the sheet (Dom): a 24x36 hangs farther from the eye than
+    an 18x24, so the compass, cartouche and scale bar scale with the sheet's linear
+    size (sqrt of area) relative to the 18x24 they were designed on. A pure function
+    of the spec's print dimensions, so proof == final at any DPI (invariant 1)."""
+    s = (spec.print_w_in * spec.print_h_in / FURNITURE_BASE_IN2) ** 0.5
+    return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX)
 
 def _stats_line(spec, dpi):
     """A deterministic cartographic caption from the spec alone: approximate scale
@@ -485,26 +496,33 @@ def _tracked_text(d, xy, text, font, fill, tracking):
         d.text((x, y), ch, fill=fill, font=font)
         x += d.textlength(ch, font=font) + tracking
 
-def _scale_bar_miles(spec, dpi):
+def _scale_bar_miles(spec, dpi, fs=1.0):
     """(miles, px) for the graphic scale bar: the 'nice' mileage whose true length
-    on the sheet is closest to the target. Derived from the spec alone (invariant 3)."""
+    on the sheet is closest to the target. Derived from the spec alone (invariant 3).
+    `fs` scales the TARGET length only -- the returned px length is always the true
+    ground length at the real output dpi, or the bar would lie on large sheets."""
     gpp = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * dpi)   # ground m / px
-    target_px = SCALE_BAR_TARGET_IN * dpi
+    target_px = SCALE_BAR_TARGET_IN * fs * dpi
     best = min(NICE_MILES, key=lambda mi: abs(mi * 1609.344 / gpp - target_px))
     return best, best * 1609.344 / gpp
 
 def _title_block_metrics(spec, d, dpi):
     """Measured geometry of the cartouche (None when there's no title). Shared by
-    _draw_title_block and the compass placement above it, so they can't drift."""
+    _draw_title_block and the compass placement above it, so they can't drift.
+    Everything physical is sized at `fdpi` -- the furniture-effective dpi -- so the
+    whole plate enlarges as one engraving on big sheets; only the scale bar's ground
+    length is computed at the real dpi (it must stay true)."""
     if not spec.title_text.strip():
         return None
+    fs = _furniture_scale(spec)
+    fdpi = dpi * fs
     title = spec.title_text.strip().upper()
     stats = _stats_line(spec, dpi)
-    t_size = max(12, round(_pt_to_px(spec.title_pt, dpi)))
-    s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, dpi)))
+    t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi)))
+    s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, fdpi)))
     title_font = _font(t_size)
     stats_font = _font(s_size)
-    bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, dpi))))
+    bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, fdpi))))
     # track off the requested size, not font.size (the bitmap fallback has none)
     t_track = round(t_size * TITLE_TRACKING_EM)
     s_track = round(s_size * STATS_TRACKING_EM)
@@ -517,13 +535,13 @@ def _title_block_metrics(spec, d, dpi):
         sw = _tracked_width(d, stats, stats_font, s_track)
     else:
         st_ = sh = sw = 0
-    miles, bar_px = _scale_bar_miles(spec, dpi)
-    bar_h = max(3, round(SCALE_BAR_H_IN * dpi))
+    miles, bar_px = _scale_bar_miles(spec, dpi, fs)
+    bar_h = max(3, round(SCALE_BAR_H_IN * fdpi))
     _, lt, _, lb = d.textbbox((0, 0), f"{miles:g} MI", font=bar_font)
     lbl_h = lb - lt
     gap = max(3, round(0.35 * (sh or th)))
     rule_h = gap * 2                          # rule row: hairline + air on both sides
-    pad = max(6, round(0.16 * dpi))
+    pad = max(6, round(0.16 * fdpi))
     content_w = max(tw, sw, round(bar_px))
     bh = pad + th + rule_h + (sh + gap if stats else 0) + bar_h + 2 + lbl_h + pad
     return {"title": title, "stats": stats, "title_font": title_font,
@@ -531,7 +549,7 @@ def _title_block_metrics(spec, d, dpi):
             "t_track": t_track, "s_track": s_track,
             "tt": tt, "th": th, "tw": tw, "st": st_, "sh": sh, "sw": sw,
             "miles": miles, "bar_px": round(bar_px), "bar_h": bar_h, "lbl_h": lbl_h,
-            "gap": gap, "rule_h": rule_h, "pad": pad,
+            "gap": gap, "rule_h": rule_h, "pad": pad, "fdpi": fdpi,
             "bw": content_w + 2 * pad, "bh": bh}
 
 def _draw_title_block(img, spec, out_w, out_h, dpi):
@@ -542,12 +560,12 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
     m = _title_block_metrics(spec, d, dpi)
     if m is None:
         return img
-    inset = round(TITLE_INSET_IN * dpi)
+    inset = round(TITLE_INSET_IN * m["fdpi"])
     x, y = inset, out_h - inset - m["bh"]
     bw, pad = m["bw"], m["pad"]
     cx = x + bw / 2
     d.rectangle([x, y, x + bw, y + m["bh"]], fill=LABEL_PLATE + (235,))
-    kl = max(1, round(_pt_to_px(0.5, dpi)))
+    kl = max(1, round(_pt_to_px(0.5, m["fdpi"])))
     d.rectangle([x + kl + 1, y + kl + 1, x + bw - kl - 1, y + m["bh"] - kl - 1],
                 outline=TERMINUS_INK + (170,), width=kl)
     cy = y + pad
@@ -557,7 +575,7 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
     rw = max(m["tw"], m["sw"]) * 0.8          # the hairline rule, centred
     ry = cy + m["rule_h"] / 2
     d.line([(cx - rw / 2, ry), (cx + rw / 2, ry)],
-           fill=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.4, dpi))))
+           fill=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.4, m["fdpi"]))))
     cy += m["rule_h"]
     if m["stats"]:
         _tracked_text(d, (cx - m["sw"] / 2, cy - m["st"]), m["stats"],
@@ -570,7 +588,7 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
         fill = TERMINUS_INK + (230,) if i % 2 == 0 else LABEL_PLATE + (255,)
         d.rectangle([bx + i * seg, cy, bx + (i + 1) * seg, cy + m["bar_h"]], fill=fill)
     d.rectangle([bx, cy, bx + m["bar_px"], cy + m["bar_h"]],
-                outline=TERMINUS_INK + (220,), width=max(1, round(_pt_to_px(0.35, dpi))))
+                outline=TERMINUS_INK + (220,), width=max(1, round(_pt_to_px(0.35, m["fdpi"]))))
     ly = cy + m["bar_h"] + 2
     d.text((bx, ly), "0", fill=LABEL_INK + (190,), font=m["bar_font"])
     lbl = f"{m['miles']:g} MI"
@@ -638,21 +656,22 @@ def _draw_compass(img, spec, out_w, out_h, dpi):
         return img
     import math as _m
     d = ImageDraw.Draw(img, "RGBA")
-    R = COMPASS_DIAMETER_IN * dpi / 2.0
-    inset = round(TITLE_INSET_IN * dpi)
+    fdpi = dpi * _furniture_scale(spec)   # the rose enlarges as one engraving
+    R = COMPASS_DIAMETER_IN * fdpi / 2.0
+    inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
-    base_y = out_h - inset - ((m["bh"] + round(0.16 * dpi)) if m else 0)
+    base_y = out_h - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
     cx, cy = inset + R, base_y - R
     # a soft paper ground, keyline-edged so it reads as a set medallion, not a blob
     d.ellipse([cx - R * 1.16, cy - R * 1.16, cx + R * 1.16, cy + R * 1.16],
               fill=LABEL_PLATE + (160,),
-              outline=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.35, dpi))))
+              outline=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.35, fdpi))))
     # double ring: the outer line and an inner hairline
     d.ellipse([cx - R, cy - R, cx + R, cy + R],
-              outline=TERMINUS_INK + (210,), width=max(1, round(_pt_to_px(0.6, dpi))))
+              outline=TERMINUS_INK + (210,), width=max(1, round(_pt_to_px(0.6, fdpi))))
     r2 = R * 0.78
     d.ellipse([cx - r2, cy - r2, cx + r2, cy + r2],
-              outline=TERMINUS_INK + (130,), width=max(1, round(_pt_to_px(0.35, dpi))))
+              outline=TERMINUS_INK + (130,), width=max(1, round(_pt_to_px(0.35, fdpi))))
 
     def point(angle_deg, length, half_w, dark_a=235, light_a=245):
         a = _m.radians(angle_deg - 90)                     # 0 deg = north, y down
@@ -670,10 +689,10 @@ def _draw_compass(img, spec, out_w, out_h, dpi):
     d.ellipse([cx - hub, cy - hub, cx + hub, cy + hub], fill=TERMINUS_INK + (255,))
     hub2 = R * 0.032
     d.ellipse([cx - hub2, cy - hub2, cx + hub2, cy + hub2], fill=TERMINUS_RING + (255,))
-    f = _font(max(10, round(_pt_to_px(11.5, dpi))))
+    f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
     nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
     nw, nh = nr - nl, nb - nt
-    nx, ny = cx - nw / 2, cy - R - nh - round(0.05 * dpi)
+    nx, ny = cx - nw / 2, cy - R - nh - round(0.05 * fdpi)
     pad = max(2, round(nh * 0.22))
     # a mini paper plate behind the N (house label style) -- the bare letter sat on
     # terrain above the rose's ground disc and vanished over dark ridges

@@ -2,7 +2,7 @@
 // the panes to canvas.js / markers.js / api.js. Single nav paradigm: one named
 // primary button drives each step forward; the stepper only clicks BACK to a
 // completed step.
-import { state, loadPrefs, savePref, activeRegion } from './state.js';
+import { state, loadPrefs, savePref, activeRegion, trackAspectIsWide } from './state.js';
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as markers from './markers.js';
@@ -55,6 +55,9 @@ function go(step) {
     // offer the way forward when nothing changed since the last proof.
     $('backToProof').hidden = !(step === 'frame' && state.hasSpec && !state.proofStale);
     $('markersBox').hidden = !(state.hotspots.length);
+    // 'auto' orientation reads the tracks now on board -- decide the print dims
+    // BEFORE setMode seeds the starter crop, so the first frame has the right aspect
+    if (step === 'frame') applyPrintSize();
     canvas.setMode(step);
     if (step === 'tracks') {
       setStatus(state.tracks.length
@@ -155,6 +158,17 @@ function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>$
 
 // --- a11y live-region announcements ---
 function announce(msg) { const el = $('a11yStatus'); if (el) el.textContent = msg || ''; }
+
+// Print dims = the chosen sheet (the size select stores portrait-first) turned by
+// the orientation control. 'auto' lets the tracks decide: a wide journey lies down,
+// a tall one stands up. Called on Frame entry and whenever size/orientation change.
+function applyPrintSize() {
+  const [a, b] = $('size').value.split(',').map(Number);
+  const landscape = state.orientation === 'auto'
+    ? trackAspectIsWide() : state.orientation === 'landscape';
+  state.printW = landscape ? Math.max(a, b) : Math.min(a, b);
+  state.printH = landscape ? Math.min(a, b) : Math.max(a, b);
+}
 
 // disable proof when the region physically can't hold the selected print size, with
 // an honest "pick a smaller size" message (vs. the "draw wider" case for a tight box).
@@ -388,13 +402,22 @@ function wire() {
   }
 
   const prefs = loadPrefs();
-  if (prefs.printSize) {
-    const [w, h] = prefs.printSize.split(',').map(Number);
-    if (w && h) { state.printW = w; state.printH = h; $('size').value = prefs.printSize; }
+  if (prefs.printSize && /^\d+,\d+$/.test(prefs.printSize) &&
+      [...$('size').options].some((o) => o.value === prefs.printSize)) {
+    $('size').value = prefs.printSize;
   }
+  if (['auto', 'landscape', 'portrait'].includes(prefs.orient)) {
+    state.orientation = prefs.orient; $('orient').value = prefs.orient;
+  }
+  applyPrintSize();
   $('size').onchange = (e) => {
-    const [w, h] = e.target.value.split(',').map(Number);
-    state.printW = w; state.printH = h; savePref('printSize', e.target.value);
+    savePref('printSize', e.target.value);
+    applyPrintSize();
+    canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
+  };
+  $('orient').onchange = (e) => {
+    state.orientation = e.target.value; savePref('orient', e.target.value);
+    applyPrintSize();
     canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
   };
 }
