@@ -91,6 +91,13 @@ cd /home/user/badwatertrails
 **The one feature I flagged and held:**
 - **Named geography labels** — range/desert/lake names in tracked caps across the sheet (e.g. "GREAT SALT LAKE DESERT"). At poster scale, typography *is* visual interest — the natural next lever after terrain depth. Source: USGS GNIS (public domain). Held because **placement quality needs real care** (collision avoidance, along-feature curved labels). Its own focused piece.
 
+**Planned with Dom (2026-07-03, not started): self-describing posters — "the file is the artwork".**
+Embed a provenance manifest in every final PNG (one compressed zTXt chunk: the full spec via `serialize.spec_to_json`, sha256s of the source GPX files, engine version), plus a stateless `POST /api/reprint` (+ `/api/reprint/inspect`) that re-renders any TrailPrint PNG at any size from the file alone — no session, no DB row. Falls out of invariants 1+3: same spec → pixel-identical reprint (enforce with a determinism test). Design essentials to keep when building it:
+  - New `app/provenance.py` owns the manifest format; embedding happens in `main._encode_final` (PNG only — Pillow's PDF writer has no metadata seam); `embed_spec=true` form toggle defaulting on, off for share copies (the manifest carries exact track coordinates — privacy note in docs).
+  - Upload endpoint starts hashing payloads; `sources` rides the session with `.get(..., [])` drift tolerance in `serialize.py`.
+  - **Security-critical:** a reprint spec is untrusted input, and `render._draw_photos` calls `Image.open` on `hotspots[*].photo` paths — sanitize (realpath inside `UPLOADS_DIR`, else drop) or a crafted PNG reads server files into the poster. Resizing safety is free: `spec.validate(FINAL_DPI)` already covers aspect, the 120 MP ceiling, and the zoom cap.
+  - `spec_from_json`'s schema-drift tolerance becomes a **forever-contract** with users' printed files — add a frozen v1 manifest fixture test the day this ships.
+
 **Documented-for-Dom open product decisions (need his input, not started):**
 - Zoom-cap floor product decision (what a too-tight crop should do beyond the current honest 422).
 - Honey Lake "taste knob" — it's real perennial water (NHD LakePond fcode 39009), not playa, so the playa filter correctly keeps it; whether to hide it is taste.
