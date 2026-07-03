@@ -30,7 +30,8 @@ PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
-                "marker_diameter_in": (0.1, 0.5), "marker_ring": (0.0, 0.25)}
+                "marker_diameter_in": (0.1, 0.5), "marker_ring": (0.0, 0.25),
+                "furniture_scale": (0.6, 1.6)}
 
 @dataclass
 class CompositionSpec:
@@ -75,6 +76,9 @@ class CompositionSpec:
     track_halo: float = 0.7                  # paper-halo strength; 0 = no outline
     marker_ring: float = 0.09                # POI ring width, fraction of diameter; 0 = none
     photo_frame_style: str = "mat"           # mat | keyline | borderless | polaroid
+    furniture_scale: float = 1.0             # client multiplier on the automatic
+                                             # sheet-size furniture scale (compass +
+                                             # cartouche); 1.0 = auto-appropriate
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))

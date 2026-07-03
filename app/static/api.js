@@ -77,7 +77,7 @@ export async function proof(sessionId, cropOv, printW, printH,
     track_width_pt: style.width, track_halo: style.halo,
     track_color: style.color || undefined,
     marker_size_in: style.marker, marker_ring: style.ring,
-    photo_style: style.photoStyle,
+    photo_style: style.photoStyle, furniture_scale: style.furniture,
   });
   if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();

@@ -428,10 +428,11 @@ FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
 def _furniture_scale(spec):
     """Furniture grows with the sheet (Dom): a 24x36 hangs farther from the eye than
     an 18x24, so the compass, cartouche and scale bar scale with the sheet's linear
-    size (sqrt of area) relative to the 18x24 they were designed on. A pure function
-    of the spec's print dimensions, so proof == final at any DPI (invariant 1)."""
+    size (sqrt of area) relative to the 18x24 they were designed on -- then the
+    client's furniture_scale slider multiplies the auto-appropriate size. A pure
+    function of the spec, so proof == final at any DPI (invariant 1)."""
     s = (spec.print_w_in * spec.print_h_in / FURNITURE_BASE_IN2) ** 0.5
-    return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX)
+    return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX) * spec.furniture_scale
 
 def _stats_line(spec, dpi):
     """A deterministic cartographic caption from the spec alone: approximate scale

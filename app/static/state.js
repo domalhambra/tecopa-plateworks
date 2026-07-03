@@ -25,6 +25,7 @@ export const state = {
   biome: false,           // NLCD land-cover tint (forests green, desert sage-tan)
   style: {                // the Style panel's knobs (server defaults mirrored here)
     width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
+    furniture: 1.0,       // multiplier on the automatic sheet-size furniture scale
   },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)

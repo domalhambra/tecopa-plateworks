@@ -139,6 +139,17 @@ def test_cartouche_and_compass_grow_with_print_size():
     assert ml["bh"] > ms["bh"] * 1.2 and ml["tw"] > ms["tw"] * 1.2
 
 
+def test_furniture_slider_multiplies_the_auto_scale():
+    # the Style panel's "Legend & compass size" knob rides the spec and multiplies
+    # the sheet-appropriate automatic scale -- proof == final, and 1.0 is a no-op
+    base = _spec(print_w_in=18, print_h_in=24)
+    assert render._furniture_scale(base) == 1.0
+    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24,
+                                         furniture_scale=1.4)) == 1.4
+    big = _spec(print_w_in=24, print_h_in=36, furniture_scale=0.75)
+    assert abs(render._furniture_scale(big) - (864 / 432) ** 0.5 * 0.75) < 1e-9
+
+
 def test_scale_bar_stays_truthful_when_furniture_scales():
     # 32 km crop over 18 in at 96 dpi -> gpp is fixed by the picture, not the furniture:
     # a scaled bar may pick a LONGER nice mileage, but its px length must equal
