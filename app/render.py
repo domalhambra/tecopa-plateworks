@@ -55,6 +55,30 @@ RIVER_COLOR = (92, 118, 126)
 RIVER_BASE_PT = 0.7             # width of an order-3 river, in points
 RIVER_STEP_PT = 0.5             # extra width per stream order above 3
 RIVER_MAX_PT = 3.0
+
+# ---- named geography (GNIS labels, v1.4): terrain names from labels.json (ranges,
+# summits, passes, valleys) + water names already in hydro.json, placed with priority
+# + greedy collision avoidance. Physical sizes so proof == final; a knockout paper halo
+# keeps them legible over busy relief. Ranges/deserts read as wide tracked caps (the
+# cartographic convention for an area name); everything else is a titlecase point label.
+GEO_LABEL_INK = (46, 38, 30)          # warm dark umber, the map-ink family
+GEO_LABEL_HALO = (244, 238, 225)      # paper, drawn as a knockout halo behind the ink
+GEO_HALO_PT = 1.1                     # halo stroke, points
+GEO_TRACKING_EM = 0.18                # tracked-caps letterspacing for area names
+# per-kind (point size in pt, ALL-CAPS tracked?, keep-rank). Rank orders both the
+# collision pass and, with the density cap, which names survive on a busy sheet.
+GEO_KINDS = {
+    "range":   (12.5, True,  100),    # the headline: a range name in wide tracked caps
+    "summit":  (7.6,  False, 85),     # peaks are the iconic terrain -> above the meadows
+    "lake":    (7.0,  False, 66),
+    "gap":     (7.0,  False, 60),     # passes / saddles
+    "flat":    (10.0, True,  52),     # playa / desert (reads big on the NV/UT sheets)
+    "basin":   (9.0,  True,  50),
+    "valley":  (6.8,  False, 44),     # incl. Colorado's many "... Park" meadows
+    "river":   (6.8,  False, 40),
+}
+GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 sq inch
+GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
 # ------------------------------------------------------------------------------
 
 def _pt_to_px(pt, dpi):  # points -> pixels
@@ -746,6 +770,116 @@ def _load_hydro(region_dir):
     p = os.path.join(region_dir, "hydro.json")
     return json.load(open(p)) if os.path.exists(p) else None
 
+def _load_labels(region_dir):
+    p = os.path.join(region_dir, "labels.json")
+    return json.load(open(p)) if os.path.exists(p) else None
+
+def _label_candidates(labels, hydro, spec, out_w, out_h):
+    """Build the ranked label candidates in output pixels, from the terrain names
+    (labels.json) and the water names already in hydro.json. Each candidate is
+    (rank, kind, text, anchor_px). A feature is a candidate only if it actually falls
+    in the crop; a multi-point feature (range/valley/river) anchors at the centroid of
+    the part inside the frame, so a range crossing the sheet is named where it lies."""
+    def to_px(x, y):
+        return _crs_to_px(x, y, spec.crop, out_w, out_h)
+    def inside(px, py):
+        return 0 <= px <= out_w and 0 <= py <= out_h
+    cands = []
+    for feat in ((labels or {}).get("features", []) if labels else []):
+        kind = feat.get("kind")
+        spec_kind = GEO_KINDS.get(kind)
+        name = (feat.get("name") or "").strip()
+        if not spec_kind or not name:
+            continue
+        pxs = [to_px(x, y) for x, y in (feat.get("coords") or [])]
+        inpts = [(px, py) for px, py in pxs if inside(px, py)]
+        if not inpts:
+            continue
+        ax = sum(px for px, _ in inpts) / len(inpts)
+        ay = sum(py for _, py in inpts) / len(inpts)
+        cands.append((spec_kind[2], kind, name, (ax, ay)))
+    # water names ride in hydro.json (lakes: polygon centroid; rivers: one label per
+    # distinct name at the midpoint of its longest in-frame run).
+    if hydro:
+        for lake in hydro.get("lakes", []):
+            name = (lake.get("name") or "").strip()
+            pts = [to_px(x, y) for x, y, *_ in (lake.get("coords") or [])]
+            inpts = [p for p in pts if inside(*p)]
+            if name and len(inpts) >= 1:
+                ax = sum(p[0] for p in inpts) / len(inpts)
+                ay = sum(p[1] for p in inpts) / len(inpts)
+                cands.append((GEO_KINDS["lake"][2], "lake", name, (ax, ay)))
+        rivers = {}
+        for r in hydro.get("rivers", []):
+            name = (r.get("name") or "").strip()
+            if not name or name == " ":
+                continue
+            pts = [to_px(x, y) for x, y, *_ in (r.get("coords") or [])]
+            inpts = [p for p in pts if inside(*p)]
+            if len(inpts) > rivers.get(name, (0, None))[0]:
+                mid = inpts[len(inpts) // 2]
+                rivers[name] = (len(inpts), mid)
+        for name, (_, mid) in rivers.items():
+            if mid is not None:
+                cands.append((GEO_KINDS["river"][2], "river", name, mid))
+    cands.sort(key=lambda c: -c[0])
+    return cands
+
+def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
+    """Place named geography with priority + greedy collision avoidance: strongest
+    names first (range > summit > lake > pass > valley > river), each kept only if its
+    haloed text box clears every already-placed box and the bottom-left cartouche/
+    compass keep-out. A density cap keeps a name-dense region from over-inking."""
+    cands = _label_candidates(labels, hydro, spec, out_w, out_h)
+    if not cands:
+        return img
+    d = ImageDraw.Draw(img, "RGBA")
+    edge = round(GEO_EDGE_IN * dpi)
+    halo = max(1, round(_pt_to_px(GEO_HALO_PT, dpi)))
+    cap = max(6, round(spec.print_w_in * spec.print_h_in / 100.0 * GEO_LABELS_PER_100IN2))
+    # keep-out for the furniture stack (cartouche + compass, bottom-left corner)
+    fs = _furniture_scale(spec)
+    keepout = [(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
+    placed, occupied = [], list(keepout)
+
+    def overlaps(box):
+        ax0, ay0, ax1, ay1 = box
+        for bx0, by0, bx1, by1 in occupied:
+            if ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1:
+                return True
+        return False
+
+    for rank, kind, name, (ax, ay) in cands:
+        if len(placed) >= cap:
+            break
+        pt_size, caps, _ = GEO_KINDS[kind]
+        text = name.upper() if caps else name
+        tracking = _pt_to_px(pt_size, dpi) * GEO_TRACKING_EM if caps else 0
+        font = _font(max(9, round(_pt_to_px(pt_size, dpi))))
+        tw = _tracked_width(d, text, font, tracking)
+        l, t, r, b = d.textbbox((0, 0), text, font=font)
+        th = b - t
+        x0 = round(ax - tw / 2)              # centered on the anchor
+        y0 = round(ay - th / 2)
+        box = (x0 - halo, y0 - halo, x0 + tw + halo, y0 + th + halo)
+        if box[0] < edge or box[1] < edge or box[2] > out_w - edge or box[3] > out_h - edge:
+            continue
+        if overlaps(box):
+            continue
+        occupied.append(box)
+        placed.append((x0, y0 - t, text, font, tracking, halo))
+
+    for x0, y0, text, font, tracking, halo in placed:
+        # knockout paper halo: the same tracked string stamped around the ink so the
+        # name reads over dark ridges and bright snow alike (classic map label halo).
+        for dx in (-halo, 0, halo):
+            for dy in (-halo, 0, halo):
+                if dx or dy:
+                    _tracked_text(d, (x0 + dx, y0 + dy), text, font,
+                                  GEO_LABEL_HALO + (235,), tracking)
+        _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
+    return img
+
 def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
     """Composite baked water over the relief: lakes filled flat with a DPI-scaled
     shoreline, rivers as order-weighted lines. All widths in physical units."""
@@ -770,7 +904,7 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
     return img
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False, hydro=None, cfg=None) -> Image.Image:
+              watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
     spec.validate(dpi)
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
@@ -824,6 +958,12 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         raise ValueError(f"hydro CRS {hydro['crs']} != region CRS {cfg['crs']}")
     himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
                        hydro, spec, out_w, out_h, dpi)
+    # named geography: on the terrain, under the route/markers (the journey stays the
+    # subject). Opt-in (spec.labels); terrain names from labels.json, water from hydro.
+    if spec.labels:
+        if labels is None:
+            labels = _load_labels(region_dir)
+        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi)
     rgb = np.asarray(himg.convert("RGB"))
 
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0

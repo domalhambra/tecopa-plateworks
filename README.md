@@ -36,6 +36,19 @@ required.
 - `app/provenance.py` — the self-describing-poster manifest (embed / extract / sanitize)
 - `app/main.py` — the endpoints over the engine (upload, proof, final, reprint)
 - `region_prep.py` — offline, one-time: fetch 3DEP DEM, build COG + overview + region.json
+- `scripts/build_labels.py` — offline: fetch GNIS terrain names → `regions/<id>/labels.json`
+
+## Named geography (GNIS labels)
+
+The `Place names` toggle draws named geography on the sheet: terrain features (ranges,
+summits, passes, valleys, desert flats) from `regions/<id>/labels.json` — built offline
+by `scripts/build_labels.py` from the USGS GNIS Landforms service — plus the water names
+already carried in `hydro.json`. `render._draw_labels` places them with priority +
+greedy collision avoidance (range → summit → lake → pass → valley → river), a knockout
+paper halo for legibility, and a per-sheet density cap. Ranges/deserts read as wide
+tracked caps; everything else is a haloed point label. All sizes are physical, so the
+proof and final place the same names (invariant 1). Rebuild after adding a region:
+`python scripts/build_labels.py <id>`.
 
 ## Self-describing posters ("the file is the artwork")
 

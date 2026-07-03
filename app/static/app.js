@@ -205,7 +205,7 @@ async function renderProof() {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
                                    compass: state.compass, biome: state.biome,
-                                   style: state.style });
+                                   labels: state.labels, style: state.style });
     if (proofUrl) URL.revokeObjectURL(proofUrl);
     proofUrl = URL.createObjectURL(blob);
     $('posterImg').src = proofUrl;
@@ -428,6 +428,10 @@ function wire() {
   };
   $('biomeChk').onchange = (e) => {
     state.biome = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('labelsChk').onchange = (e) => {
+    state.labels = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
 

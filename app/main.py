@@ -426,7 +426,7 @@ def _parse_hex_rgb(s: str):
         raise HTTPException(422, "track_color must be #rrggbb")
 
 def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True,
-                style=None, biome=False):
+                style=None, biome=False, labels=False):
     st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
@@ -443,7 +443,7 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         tracks=[t.coords for t in st["tracks"]],
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
         hotspots=st["hotspots"], seed=7, title_text=title,
-        contours=contours, compass=compass, biome=biome, **(style or {}))
+        contours=contours, compass=compass, biome=biome, labels=labels, **(style or {}))
     spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
@@ -456,7 +456,7 @@ async def proof(session_id: str = Form(...),
                 print_w: float = Form(18.0), print_h: float = Form(24.0),
                 title: str = Form(""),
                 contours: bool = Form(False), compass: bool = Form(True),
-                biome: bool = Form(False),
+                biome: bool = Form(False), labels: bool = Form(False),
                 track_width_pt: float = Form(2.6), track_halo: float = Form(0.7),
                 track_color: str = Form(""), marker_size_in: float = Form(0.24),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
@@ -472,7 +472,7 @@ async def proof(session_id: str = Form(...),
         style["track_rgb"] = _parse_hex_rgb(track_color)
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
-                                   title, contours, compass, style, biome)
+                                   title, contours, compass, style, biome, labels)
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()

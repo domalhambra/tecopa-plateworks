@@ -67,13 +67,13 @@ export async function moveMarker(sessionId, i, px, py) {
 // `contours`/`compass` are the optional furniture toggles.
 export async function proof(sessionId, cropOv, printW, printH,
                             { title = '', contours = false, compass = true,
-                              biome = false, style = {} } = {}) {
+                              biome = false, labels = false, style = {} } = {}) {
   const [x0, y0, x1, y1] = cropOv;
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
     title: title || undefined,
     contours: contours ? 'true' : 'false', compass: compass ? 'true' : 'false',
-    biome: biome ? 'true' : 'false',
+    biome: biome ? 'true' : 'false', labels: labels ? 'true' : 'false',
     track_width_pt: style.width, track_halo: style.halo,
     track_color: style.color || undefined,
     marker_size_in: style.marker, marker_ring: style.ring,
