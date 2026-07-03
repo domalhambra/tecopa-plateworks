@@ -224,6 +224,26 @@ def test_contours_and_compass_flags_stamped_through_endpoint():
     spec = sess_mod.get(j["session"])["spec"]
     assert spec.contours is False and spec.compass is True
 
+def test_style_knobs_stamped_through_endpoint():
+    # the Style panel's values must ride the stamped spec (invariant 1), the hex
+    # swatch must parse, and bad values must 422 -- not render something else.
+    from app import session as sess_mod
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    styled = {**data, "track_width_pt": 3.4, "track_halo": 0.2,
+              "track_color": "#b24c2b", "marker_size_in": 0.3,
+              "marker_ring": 0.0, "photo_style": "polaroid"}
+    assert c.post("/api/proof", data=styled).status_code == 200
+    spec = sess_mod.get(j["session"])["spec"]
+    assert spec.track_width_pt == 3.4 and spec.track_halo == 0.2
+    assert spec.track_rgb == (178, 76, 43)
+    assert spec.marker_diameter_in == 0.3 and spec.marker_ring == 0.0
+    assert spec.photo_frame_style == "polaroid"
+    # invalid values -> clean 422s
+    assert c.post("/api/proof", data={**data, "track_color": "notahex"}).status_code == 422
+    assert c.post("/api/proof", data={**data, "photo_style": "vignette"}).status_code == 422
+    assert c.post("/api/proof", data={**data, "track_width_pt": 9}).status_code == 422
+
 def test_track_days_stamped_through_endpoint():
     # journey grouping is a rendering-semantics contract: the spec stamped by the
     # endpoint must carry the per-track days ingest parsed (a mutation dropping

@@ -63,6 +63,45 @@
           <button id="resetFrame" class="ghost" type="button">Reset frame</button>
         </div>
 
+        <details id="stylePanel" class="style-panel" hidden>
+          <summary>Style</summary>
+          <div class="style-grid">
+            <label>Track width
+              <input type="range" id="sWidth" min="1.2" max="5" step="0.1" value="2.6">
+              <output id="vWidth">2.6 pt</output>
+            </label>
+            <label>Track outline
+              <input type="range" id="sHalo" min="0" max="0.9" step="0.05" value="0.7">
+              <output id="vHalo">0.70</output>
+            </label>
+            <div class="swatch-row" role="radiogroup" aria-label="Track color">
+              <span class="swatch-label">Track color</span>
+              <button type="button" class="swatch sel" data-hex="#d69e3a" style="background:#d69e3a" aria-label="Desert gold"></button>
+              <button type="button" class="swatch" data-hex="#b24c2b" style="background:#b24c2b" aria-label="Rust"></button>
+              <button type="button" class="swatch" data-hex="#4a6936" style="background:#4a6936" aria-label="Forest"></button>
+              <button type="button" class="swatch" data-hex="#7a4a66" style="background:#7a4a66" aria-label="Plum"></button>
+              <button type="button" class="swatch" data-hex="#33415e" style="background:#33415e" aria-label="Midnight"></button>
+              <button type="button" class="swatch" data-hex="#3a3733" style="background:#3a3733" aria-label="Charcoal"></button>
+            </div>
+            <label>Marker size
+              <input type="range" id="sMarker" min="0.14" max="0.4" step="0.01" value="0.24">
+              <output id="vMarker">0.24 in</output>
+            </label>
+            <label>Marker outline
+              <input type="range" id="sRing" min="0" max="0.2" step="0.01" value="0.09">
+              <output id="vRing">0.09</output>
+            </label>
+            <label>Photo frame
+              <select id="sPhotoStyle">
+                <option value="mat">Classic mat</option>
+                <option value="keyline">Thin keyline</option>
+                <option value="borderless">Borderless</option>
+                <option value="polaroid">Polaroid</option>
+              </select>
+            </label>
+          </div>
+        </details>
+
         <div class="map-wrap">
           <div id="mapPane" class="map-pane">
             <canvas id="map" tabindex="0"

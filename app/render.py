@@ -157,19 +157,21 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     # per-journey coverage at both widths (overlap across journeys = frequency)
     visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups), feather)
 
-    # 1) paper halo under the line, following the worn width where paths repeat.
+    # 1) paper halo under the line (strength = the client's outline slider; 0 skips
+    #    the halo work entirely), following the worn width where paths repeat.
     #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
-    cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
-    if worn_possible:
-        cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
-        cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
-        del cas_worn
-    cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
-    casing_op = (CASING_STRENGTH * np.clip(cas, 0, 1))[..., None]
-    del cas
-    casing_col = np.array(TRACK_CASING, np.float32) / 255.0
-    img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
-    del casing_op
+    if spec.track_halo > 0:
+        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
+        if worn_possible:
+            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
+            cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
+            del cas_worn
+        cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
+        casing_op = (spec.track_halo * np.clip(cas, 0, 1))[..., None]
+        del cas
+        casing_col = np.array(TRACK_CASING, np.float32) / 255.0
+        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+        del casing_op
 
     # 2) the line: base width at near-solid ink; repeat journeys widen it (saturating)
     op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
@@ -182,7 +184,7 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     op = np.clip(op, 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
-    ink = np.array(TRACK_INK, np.float32) / 255.0
+    ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
     # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
     # toward gold would only darken the terrain to a muddy brown); grain in `op`
     # keeps the paper texture so it still sits on the sheet rather than floating.
@@ -298,8 +300,11 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
         yy = int(np.clip(cy, 0, out_h-1)); xx = int(np.clip(cx, 0, out_w-1))
         on_dark = elev_lum[yy, xx] < 0.5
         ring = (243, 237, 223, 235) if on_dark else (43, 42, 40, 230)
-        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,), outline=ring,
-                  width=max(1, round(dia * 0.09)))
+        # ring width = the client's marker-outline slider (fraction of diameter; 0 = none)
+        ring_w = round(dia * spec.marker_ring)
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
+                  outline=ring if ring_w > 0 else None,
+                  width=max(1, ring_w))
         icon = (hs.get("icon") or "").strip()
         if icon:
             _draw_glyph(d, icon, cx, cy, r * 0.62, ICON_INK)
@@ -319,15 +324,30 @@ def _draw_label(d, text, x, cy, font, out_w, out_h):
                         radius=pad, fill=LABEL_PLATE + (220,))
     d.text((x + pad - l, y + pad - t), text, fill=LABEL_INK + (255,), font=font)
 
+def _photo_frame_params(style, box, dpi):
+    """(mat_side, mat_top, mat_bottom, edge_w) per photo frame style. All derived
+    from the photo box (physical), so proof == final for every style."""
+    m = max(2, round(box * 0.05))
+    if style == "keyline":
+        k = max(1, round(box * 0.012))
+        return k, k, k, max(1, round(_pt_to_px(0.8, dpi)))
+    if style == "borderless":
+        return 0, 0, 0, 0
+    if style == "polaroid":
+        return m, m, max(4, round(box * 0.16)), max(1, m // 3)
+    return m, m, m, max(1, m // 2)                     # "mat" (the classic default)
+
 def _draw_photos(img, spec, out_w, out_h, dpi):
-    """Pin user photos to their markers: a fitted thumbnail in a cream mat with a
-    thin keyline, a drop shadow, and a short stem back to the anchor point. Tolerant
-    of a missing/unreadable file (skip it) so one bad photo can't fail the render."""
+    """Pin user photos to their markers in the client's chosen frame style (classic
+    mat / thin keyline / borderless / polaroid), each with a drop shadow and a short
+    stem back to the anchor point. Tolerant of a missing/unreadable file (skip it)
+    so one bad photo can't fail the render."""
     if not any(hs.get("photo") for hs in spec.hotspots):
         return img
     box = max(24, round(spec.photo_box_in * dpi))
-    mat = max(2, round(box * 0.05))
+    ms, mt, mb, edge_w = _photo_frame_params(spec.photo_frame_style, box, dpi)
     stem = max(1, round(box * 0.02))
+    shadow_r = max(1.0, box * 0.04)
     d = ImageDraw.Draw(img, "RGBA")
     for hs in spec.hotspots:
         path = hs.get("photo")
@@ -339,19 +359,24 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
             continue
         photo.thumbnail((box, box))
         pw, ph = photo.size
+        fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
         ax, ay = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
         # place the framed photo up-and-right of the anchor, clamped to the frame
-        fx = int(np.clip(ax + box*0.35, 0, out_w - pw - 2*mat - 1))
-        fy = int(np.clip(ay - ph - 2*mat - box*0.35, 0, out_h - ph - 2*mat - 1))
+        fx = int(np.clip(ax + box * 0.35, 0, out_w - fw - 1))
+        fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
         # stem from anchor to the frame's near corner
-        d.line([(ax, ay), (fx + mat, fy + ph + mat)], fill=PHOTO_EDGE + (255,), width=stem)
+        d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
+               fill=PHOTO_EDGE + (255,), width=stem)
         shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], fill=(20, 16, 12, 110))
-        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1.0, mat*0.8))))
+        ImageDraw.Draw(shadow).rectangle([fx, fy, fx + fw, fy + fh], fill=(20, 16, 12, 110))
+        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(shadow_r)))
         d = ImageDraw.Draw(img, "RGBA")
-        d.rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], fill=PHOTO_FRAME + (255,))
-        img.paste(photo, (fx+mat, fy+mat))
-        d.rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], outline=PHOTO_EDGE + (255,), width=max(1, mat//2))
+        if ms or mt or mb:
+            d.rectangle([fx, fy, fx + fw, fy + fh], fill=PHOTO_FRAME + (255,))
+        img.paste(photo, (fx + ms, fy + mt))
+        if edge_w:
+            d.rectangle([fx, fy, fx + fw, fy + fh],
+                        outline=PHOTO_EDGE + (255,), width=edge_w)
     return img
 
 # ---- finished-sheet furniture (V1-10 print-correctness): keyline + title block ----

@@ -51,3 +51,44 @@ def test_photo_pin_composites_and_tolerates_missing(tmp_path):
     # a missing file must not crash the render -- it is simply skipped
     spec2 = _spec([{"x": 500, "y": 500, "weight": 3, "photo": str(tmp_path / "nope.png")}])
     render._draw_photos(_blank(w, h), spec2, w, h, dpi=96)
+
+def test_marker_ring_slider_and_size():
+    # ring=0 -> no outline ring pixels; a bigger marker_diameter_in -> more disc pixels
+    w = h = 400
+    lum = np.zeros((h, w), np.float32)               # dark bg -> would get a PAPER ring
+    base_kw = dict(marker_diameter_in=0.5)
+    ringed = np.asarray(render._draw_markers(
+        _blank(w, h), _spec([{"x": 500, "y": 500, "weight": 3}], **base_kw),
+        lum, w, h, dpi=96).convert("RGB"))
+    ringless = np.asarray(render._draw_markers(
+        _blank(w, h), _spec([{"x": 500, "y": 500, "weight": 3}], marker_ring=0.0, **base_kw),
+        lum, w, h, dpi=96).convert("RGB"))
+    paper = lambda a: ((a[..., 0] > 230) & (a[..., 1] > 225) & (a[..., 2] > 210)).sum()
+    assert paper(ringed) > 50, "no ring drawn at default"
+    assert paper(ringless) < paper(ringed) / 4, "ring=0 still draws a ring"
+    small = np.asarray(render._draw_markers(
+        _blank(w, h), _spec([{"x": 500, "y": 500, "weight": 3}], marker_diameter_in=0.14),
+        lum, w, h, dpi=96).convert("RGB"))
+    gold = lambda a: ((np.abs(a[..., 0].astype(int) - 190) < 40) & (a[..., 2] < 130)).sum()
+    assert gold(ringless) > gold(small) * 3, "marker size slider has no effect"
+
+def test_photo_frame_styles(tmp_path):
+    from PIL import Image as _Im
+    w = h = 600
+    p = tmp_path / "pic.png"
+    _Im.new("RGB", (80, 80), (255, 0, 255)).save(p)
+    def frame_pixels(style):
+        spec = _spec([{"x": 500, "y": 500, "weight": 3, "photo": str(p)}],
+                     photo_box_in=2.0, photo_frame_style=style)
+        out = np.asarray(render._draw_photos(_blank(w, h), spec, w, h, dpi=96).convert("RGB"))
+        cream = ((out[..., 0] > 230) & (out[..., 1] > 225) & (out[..., 2] > 200)).sum()
+        magenta = ((out[..., 0] > 200) & (out[..., 1] < 80) & (out[..., 2] > 200)).sum()
+        return cream, magenta
+    mat_cream, mat_mag = frame_pixels("mat")
+    pol_cream, pol_mag = frame_pixels("polaroid")
+    bare_cream, bare_mag = frame_pixels("borderless")
+    key_cream, key_mag = frame_pixels("keyline")
+    assert all(m > 200 for m in (mat_mag, pol_mag, bare_mag, key_mag))  # photo lands in all
+    assert pol_cream > mat_cream, "polaroid bottom mat missing"
+    assert bare_cream < mat_cream / 10, "borderless still draws a mat"
+    assert key_cream < mat_cream / 2, "keyline mat too heavy"

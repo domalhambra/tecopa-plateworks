@@ -21,6 +21,9 @@ export const state = {
   title: '',              // poster title ('' -> region name; '-' -> no title block)
   contours: false,        // elevation contour lines
   compass: true,          // compass rose above the title block
+  style: {                // the Style panel's knobs (server defaults mirrored here)
+    width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
+  },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };

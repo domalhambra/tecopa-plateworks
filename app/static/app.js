@@ -47,6 +47,7 @@ function go(step) {
     $('h-workspace').textContent = WORKSPACE_HEADING[step];
     $('filesBlock').hidden = step !== 'tracks';
     $('frameControls').hidden = step !== 'frame';
+    $('stylePanel').hidden = step !== 'frame';
     $('toFrame').hidden = step !== 'tracks';
     $('renderProof').hidden = step !== 'frame';
     $('expressBtn').hidden = step !== 'frame';
@@ -176,7 +177,7 @@ async function renderProof() {
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
-                                   compass: state.compass });
+                                   compass: state.compass, style: state.style });
     $('posterImg').src = URL.createObjectURL(blob);
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
@@ -346,6 +347,33 @@ function wire() {
     state.compass = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
+
+  // Style panel: every knob is a picture decision -> stale the proof on change.
+  const styleSliders = [
+    ['sWidth', 'vWidth', 'width', (v) => `${v} pt`],
+    ['sHalo', 'vHalo', 'halo', (v) => Number(v).toFixed(2)],
+    ['sMarker', 'vMarker', 'marker', (v) => `${v} in`],
+    ['sRing', 'vRing', 'ring', (v) => Number(v).toFixed(2)],
+  ];
+  for (const [sid, vid, key, fmt] of styleSliders) {
+    $(sid).oninput = (e) => {
+      state.style[key] = Number(e.target.value);
+      $(vid).textContent = fmt(e.target.value);
+      if (state.hasSpec) state.proofStale = true;
+    };
+  }
+  $('sPhotoStyle').onchange = (e) => {
+    state.style.photoStyle = e.target.value;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  for (const sw of document.querySelectorAll('.swatch')) {
+    sw.onclick = () => {
+      for (const el of document.querySelectorAll('.swatch')) el.classList.remove('sel');
+      sw.classList.add('sel');
+      state.style.color = sw.dataset.hex;
+      if (state.hasSpec) state.proofStale = true;
+    };
+  }
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
   };

@@ -110,3 +110,21 @@ def test_out_of_frame_terminus_skipped_not_crash():
     off = np.array([[-500.0, 500.0], [2000.0, 500.0]])       # both ends outside the crop
     img = Image.new("RGBA", (w, h), (128, 128, 128, 255))
     render._draw_termini(img, _spec([off]), w, h, dpi=300)   # must not raise
+
+
+def test_track_color_swatch_honored():
+    # the client's swatch drives the ink: a rust track must render near rust, not gold
+    rust = (178, 76, 43)
+    out = _ink([LINE], track_rgb=rust)
+    core = out[200, 200].astype(float)
+    assert np.linalg.norm(core - np.array(rust)) < 30, f"core {core} not rust"
+    assert np.linalg.norm(core - np.array(render.TRACK_INK)) > 60, "still gold"
+
+
+def test_track_halo_zero_removes_outline():
+    # halo slider at 0: the pixels flanking the line stay background, not paper
+    out = _ink([LINE], track_halo=0.0)
+    col = out[:, 200, :].astype(int)
+    rows = np.where(np.linalg.norm(col - np.array(render.TRACK_INK), axis=1) < 70)[0]
+    above = col[rows.min() - 3]
+    assert abs(int(above.sum()) - 3 * 128) < 30, f"halo still present: {above}"

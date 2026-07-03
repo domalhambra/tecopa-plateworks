@@ -64,3 +64,18 @@ def test_zoom_cap_allows_exactly_native():
     s = CompositionSpec(**base_kwargs(crop=(430000.0, 4345000.0, 484000.0, 4417000.0)))
     assert s.ground_per_pixel(300) == 10.0
     assert s.validate(dpi=300) is s   # does not raise
+
+def test_style_bounds_rejected():
+    # style knobs outside the slider bounds 422 via SpecError, not render weirdly
+    import pytest as _pt
+    for kw in ({"track_width_pt": 9.0}, {"track_halo": 2.0},
+               {"marker_ring": 0.5}, {"marker_diameter_in": 0.9},
+               {"photo_frame_style": "vignette"},
+               {"track_rgb": (300, 0, 0)}, {"track_rgb": (1, 2)}):
+        with _pt.raises(SpecError):
+            CompositionSpec(**base_kwargs(**kw)).validate(dpi=300)
+
+def test_style_defaults_validate():
+    # the Style panel's server defaults pass validation on a cap-clearing crop
+    s = CompositionSpec(**base_kwargs(crop=(430000.0, 4345000.0, 484000.0, 4417000.0)))
+    assert s.validate(dpi=300) is s
