@@ -1,8 +1,10 @@
 # TrailPrint — Session Handoff
 
-_Last updated: 2026-06-30 · branch `claude/handoff-continuation-vinei8` (PR #1) · 64 tests green · pushed to `git@github.com:domalhambra/badwatertrails.git`_
+> **⏩ Latest state: [`2026-07-03-session-handoff.md`](2026-07-03-session-handoff.md)** — read that first. It covers the shipped v1.2/v1.3 run (style controls, biome tint, the Elko–Bonneville corridor region, furniture scaling + orientation, the memory-safe region-build planner, and the terrain-depth pass), the current 173-test state, and what's next. The document below is the older architecture-level handoff; its **invariants, file map, and environment gotchas remain true**, but its "current state" and "what's next" are superseded.
 
-Read this first to continue in a fresh session. It captures state, how to run, the invariants you must protect, the gotchas already paid for, and what's next.
+_Original: 2026-06-30 · 64 tests green. Superseded by the 2026-07-03 handoff above._
+
+Read this for the long-lived architecture notes. It captures state, how to run, the invariants you must protect, the gotchas already paid for, and what's next.
 
 ---
 
