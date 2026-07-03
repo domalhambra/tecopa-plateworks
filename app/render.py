@@ -78,6 +78,17 @@ def _terrain_depth(spec):
     scale_denom = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * 0.0254)
     return _smoothstep(DEPTH_SCALE_LO, DEPTH_SCALE_HI, scale_denom) * spec.terrain_depth
 
+# Cast-shadow working grid: shadows/AO are ray-marched on a grid whose GROUND
+# resolution is a pure function of the spec (96 samples per print inch -- exactly the
+# proof's own pixel grid), never the render DPI. The proof and the final therefore
+# march the same terrain and their shadow masks agree by construction (invariant 1);
+# the 300-dpi final also gets a ~3x smaller (cheaper) shadow computation for free.
+SHADOW_GRID_SPI = 96.0
+
+def _shadow_res_m(spec):
+    """Ground metres per shadow-grid sample. A pure function of the spec."""
+    return (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * SHADOW_GRID_SPI)
+
 def _read_window(region_dir, cfg, crop, out_w, out_h):
     """Read the DEM for the crop (plus a margin) at the output resolution.
     rasterio picks the right overview level for us (the image pyramid)."""
@@ -792,7 +803,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         # physical (ground-metre) blur radii -> identical relief at any DPI
         texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
         valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
-        biome=biome, depth=_terrain_depth(spec))
+        biome=biome, depth=_terrain_depth(spec),
+        shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec))
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 

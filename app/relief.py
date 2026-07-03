@@ -1,7 +1,7 @@
 # app/relief.py
 from __future__ import annotations
 import numpy as np
-from scipy.ndimage import gaussian_filter, distance_transform_edt
+from scipy.ndimage import gaussian_filter, distance_transform_edt, rotate, zoom
 
 # ---- tuning surface: edit these by eye against the reference maps ----
 HYPSO_STOPS = [
@@ -85,6 +85,27 @@ SALT_MAX = 0.55                 # luminous lift on the flattest, lowest ground
 SALT_LOW_NORM = 0.16            # 'low ground' = below this fraction of the elev range
 MOTTLE_CELL_M = 240.0           # salt-mottle cell, ground metres (dpi-stable grid)
 MOTTLE_STRENGTH = 0.06
+
+# ---- cast shadows + sky occlusion (the "Blender relief" look, Dom): terrain
+# occlusion along the sun direction -- a peak actually shades the valley beside it --
+# plus a multi-scale sky-openness term, after Tom Patterson's Blender relief workflow.
+# All lighting above is local-slope only; this is the pass that makes the sheet read
+# three-dimensional. Shadows are COOL (blue skylight fills them -- Imhof) and never
+# black. Every length is in GROUND METRES; render.py additionally pins the working
+# grid to a spec-derived ground resolution so the proof and the final ray-march the
+# same terrain (invariant 1). Gated on `shadow` (0 = strict no-op, the pre-shadow
+# look) exactly like the depth pass.
+SHADOW_RAMP_M = 40.0            # metres below the sun horizon -> full shadow
+PENUMBRA_M = 120.0              # soft-shadow edge width, ground metres
+SHADOW_PRESMOOTH_FRAC = 0.6     # pre-smooth sigma as a fraction of the working res
+CAST_DARKEN = 0.45              # light removed in full shadow at knob 1.0
+CAST_LIGHT_FLOOR = 0.12         # absolute floor: shadows stay luminous, never black
+CAST_TINT = (0.86, 0.94, 1.10)  # per-channel skylight multiplier (cool blue fill)
+CAST_TINT_MAX = 0.65            # how far full shadow moves toward the cool tint
+AO_RADII_M = (200.0, 800.0, 3200.0)   # sky-occlusion neighbourhood scales
+AO_WEIGHTS = (0.5, 0.3, 0.2)
+AO_SLOPE = 0.15                 # horizon slope that counts as fully occluded
+AO_MAX = 0.22                   # light removed in the deepest concavity at knob 1.0
 # ---------------------------------------------------------------------
 
 def _fill_nan(elev):
@@ -145,6 +166,80 @@ def multiscale_texture(elev, base_radius_px):
         acc += wt * np.clip(0.5 + hp / (4 * s), 0, 1)
         wsum += wt
     return acc / wsum
+
+def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
+    """Terrain-occlusion shadow (0 = lit, 1 = fully shadowed): rotate the grid so the
+    light travels along +columns, sweep a running sun-horizon down each row, rotate the
+    bounded mask back, and soften the edge by a ground-metre penumbra.
+
+    theta = azimuth + 90 maps the light's travel bearing (azimuth + 180) onto +columns;
+    verified empirically on all four cardinal azimuths (a NW sun casts SE, etc.) --
+    see test_cast_shadow_falls_on_the_far_side. cval=-1e9 marks off-array ground as
+    infinitely deep, so the frame edge casts nothing; the mask is bounded to 0..1
+    BEFORE the un-rotation so the cval=0 padding interpolates cleanly."""
+    e = (elev * z_factor).astype("float32")
+    theta = (azimuth + 90.0) % 360.0
+    rot = rotate(e, theta, reshape=True, order=1, cval=-1e9)
+    drop = np.tan(np.radians(altitude)) * res_m      # horizon fall per pixel step
+    h = np.full(rot.shape[0], -np.inf, dtype="float32")
+    depth = np.empty_like(rot)
+    for j in range(rot.shape[1]):                    # vectorized over rows
+        h = np.maximum(h - drop, rot[:, j])
+        depth[:, j] = h - rot[:, j]
+    depth[rot < -1e8] = 0.0                          # padding neither casts nor darkens
+    m = np.clip(depth / SHADOW_RAMP_M, 0.0, 1.0)
+    back = rotate(m, -theta, reshape=True, order=1, cval=0.0)
+    r0 = (back.shape[0] - elev.shape[0]) // 2
+    c0 = (back.shape[1] - elev.shape[1]) // 2
+    m = back[r0:r0 + elev.shape[0], c0:c0 + elev.shape[1]]
+    return gaussian_filter(m, max(0.6, PENUMBRA_M / res_m))
+
+def sky_occlusion(elev, res_m):
+    """Multi-scale sky-openness occlusion (0 = open, 1 = deep concavity): depth below
+    the neighbourhood mean at several ground radii, each normalized by the horizon
+    slope that radius implies (depth / (r * AO_SLOPE)) -- physical and content-
+    independent, unlike valley_pass's percentile normalization (which stays untouched:
+    it is part of the frozen shadow=0 base look)."""
+    acc = np.zeros_like(elev, dtype="float32")
+    for r_m, wt in zip(AO_RADII_M, AO_WEIGHTS):
+        big = gaussian_filter(elev, max(1.0, r_m / res_m))
+        acc += wt * np.clip((big - elev) / (r_m * AO_SLOPE), 0.0, 1.0)
+    return acc / sum(AO_WEIGHTS)
+
+def _resize_to(a, shape):
+    """Bilinear-resize `a` to an exact 2-D shape (zoom rounds; guard the off-by-one)."""
+    if a.shape == tuple(shape):
+        return a
+    out = zoom(a, (shape[0] / a.shape[0], shape[1] / a.shape[1]), order=1)
+    if out.shape != tuple(shape):                     # pragma: no cover - zoom rounding
+        out = out[:shape[0], :shape[1]]
+        pad = ((0, shape[0] - out.shape[0]), (0, shape[1] - out.shape[1]))
+        out = np.pad(out, pad, mode="edge")
+    return out
+
+def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
+                  shadow_res_m=None):
+    """(cast, ao) at elev's grid, computed on a fixed GROUND-resolution working grid
+    (shadow_res_m, normally the proof's own pixel grid -- see render._shadow_res_m).
+    The proof and the final thereby ray-march the same terrain, so the masks agree
+    across DPIs by construction; the rotate+sweep also runs on the small grid (cheap).
+    A ground-unit pre-smooth makes the native and decimated grids converge on the
+    same smoothed field before any ray is cast."""
+    work_res = float(max(res_m, shadow_res_m or 0.0))
+    e = elev.astype("float32")
+    sig_px = SHADOW_PRESMOOTH_FRAC * work_res / res_m
+    if sig_px >= 0.3:
+        e = gaussian_filter(e, sig_px)
+    if work_res / res_m > 1.1:                        # work grid meaningfully coarser
+        small = zoom(e, res_m / work_res, order=1)
+        cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor)
+        ao = sky_occlusion(small, work_res)
+        cast = np.clip(_resize_to(cast, elev.shape), 0.0, 1.0)
+        ao = np.clip(_resize_to(ao, elev.shape), 0.0, 1.0)
+    else:
+        cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor)
+        ao = sky_occlusion(e, res_m)
+    return cast.astype("float32"), ao.astype("float32")
 
 def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     """Aerial perspective + salt-pan, both scaled by `depth`. Low ground recedes into
@@ -224,7 +319,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                   azimuth=315, altitude=45, z_factor=1.0, seed=7,
                   grain_cell_px=2.0, grain_strength=0.05,
                   texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX,
-                  biome=None, depth=0.0):
+                  biome=None, depth=0.0, shadow=0.0, shadow_res_m=None):
     """biome: optional (tint01, weight01) from render._biome_layers -- an RGB tint
     field (0..1) and per-pixel confidence, aligned to `elev`. Applied to the
     hypsometric base with luminance matching + the alpine fade (see BIOME_MIX).
@@ -233,7 +328,13 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     byte-identical to the single-light relief (county scale, every existing test); as
     it rises it adds multidirectional light, multiscale texture, aerial perspective,
     and the salt-pan treatment so a zoomed-out sheet stays sculptural (see the depth
-    constants above)."""
+    constants above).
+
+    shadow: 0..1 cast-shadow + sky-occlusion strength (the client's shadow_strength
+    knob). 0 (the parameter default) is a strict no-op -- the pre-shadow look, every
+    direct caller unchanged; render.py supplies the spec's value. shadow_res_m pins
+    the shadow working grid to a spec-derived ground resolution so proof == final
+    (see _shadow_terms)."""
     elev = _fill_nan(elev.astype("float32"))
     norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
     base = hypsometric(elev, elev_min, elev_max)                  # color
@@ -263,9 +364,22 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
 
     light = (SHADOW_FLOOR + (1.0 - SHADOW_FLOOR) * hs)            # never fully black
     light = light * (1.0 - VALLEY_STRENGTH * val)                # sink the valleys
+
+    # cast shadows + sky occlusion: at shadow 0 this block is skipped entirely
+    # (strict no-op, like the depth pass); shadows darken with an absolute floor so
+    # they stay luminous, then fill with cool skylight rather than going grey-black.
+    s = float(np.clip(shadow, 0.0, 1.0))
+    if s > 0:
+        cast, ao = _shadow_terms(elev, res_m, azimuth, altitude, z_factor, shadow_res_m)
+        light = light * (1.0 - CAST_DARKEN * s * cast) * (1.0 - AO_MAX * s * ao)
+        light = np.maximum(light, CAST_LIGHT_FLOOR)
     light = light[..., None]
 
     img = base * light
+    if s > 0:                                         # cool skylight in the shadows
+        w = (CAST_TINT_MAX * s * cast)[..., None]
+        cool = np.array(CAST_TINT, np.float32)[None, None, :]
+        img = img * (1.0 - w + cool * w)
     # blend texture as a soft dodge/burn around mid-gray
     img = img * (1.0 + TEXTURE_STRENGTH * (tex[..., None] - 0.5))
     if depth > 0:

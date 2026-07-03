@@ -237,7 +237,7 @@ def test_style_knobs_stamped_through_endpoint():
     styled = {**data, "track_width_pt": 3.4, "track_halo": 0.2,
               "track_color": "#b24c2b", "marker_size_in": 0.3,
               "marker_ring": 0.0, "photo_style": "polaroid",
-              "furniture_scale": 1.3, "terrain_depth": 0.7}
+              "furniture_scale": 1.3, "terrain_depth": 0.7, "shadow_strength": 0.3}
     assert c.post("/api/proof", data=styled).status_code == 200
     spec = sess_mod.get(j["session"])["spec"]
     assert spec.track_width_pt == 3.4 and spec.track_halo == 0.2
@@ -245,12 +245,14 @@ def test_style_knobs_stamped_through_endpoint():
     assert spec.marker_diameter_in == 0.3 and spec.marker_ring == 0.0
     assert spec.photo_frame_style == "polaroid"
     assert spec.furniture_scale == 1.3 and spec.terrain_depth == 0.7
+    assert spec.shadow_strength == 0.3
     # invalid values -> clean 422s
     assert c.post("/api/proof", data={**data, "track_color": "notahex"}).status_code == 422
     assert c.post("/api/proof", data={**data, "photo_style": "vignette"}).status_code == 422
     assert c.post("/api/proof", data={**data, "track_width_pt": 9}).status_code == 422
     assert c.post("/api/proof", data={**data, "furniture_scale": 0.3}).status_code == 422
     assert c.post("/api/proof", data={**data, "terrain_depth": 2.0}).status_code == 422
+    assert c.post("/api/proof", data={**data, "shadow_strength": 1.5}).status_code == 422
 
 def test_track_days_stamped_through_endpoint():
     # journey grouping is a rendering-semantics contract: the spec stamped by the
