@@ -177,7 +177,8 @@ async function renderProof() {
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
-                                   compass: state.compass, style: state.style });
+                                   compass: state.compass, biome: state.biome,
+                                   style: state.style });
     $('posterImg').src = URL.createObjectURL(blob);
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
@@ -345,6 +346,10 @@ function wire() {
   };
   $('compassChk').onchange = (e) => {
     state.compass = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('biomeChk').onchange = (e) => {
+    state.biome = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
 

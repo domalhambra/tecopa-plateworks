@@ -6,9 +6,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Region assets that region_prep.py regenerates (DEMs are large)
+# The DEM is the one large regenerable asset (see sources.json to verify a rebuild).
+# landcover.tif is small (<1 MB) and IS committed -- no broad *.tif rule.
 regions/*/dem.tif
-regions/*/*.tif
 
 # requests-cache from the NHD/3DEP fetches
 cache/

@@ -21,6 +21,31 @@ HILLSHADE_GAMMA = 1.1          # contrast of the light
 # (equivalent to lifting every stop, but keeps the by-eye stop values intact above).
 PAPER = (243, 237, 223)
 PAPER_LIFT = 0.10
+# Biome tint (v1.2, Dom): hue from NLCD land cover, lightness from elevation + shade
+# (Imhof's naturalistic method), so forests read green and high desert reads sage-tan
+# while the relief keeps its full tonal punch. The alpine fade returns the summits to
+# the pure hypsometric near-white above ~70% of the region's elevation range.
+BIOME_MIX = 0.55               # tint weight where land cover is known
+ALPINE_FADE_START = 0.70       # normalized elevation where the tint starts fading
+ALPINE_FADE_END = 0.88         # fully hypsometric above this
+# curated NLCD class palette -- muted, earthy, sits with the paper-lift + gold track
+BIOME_TINT = {
+    41: (110, 125, 82),   # deciduous forest - soft leaf green
+    42: (86, 106, 74),    # evergreen forest - deep sage
+    43: (100, 116, 78),   # mixed forest
+    52: (156, 143, 100),  # shrub/scrub - warm sage-tan (the high desert)
+    71: (163, 158, 112),  # grassland - pale olive
+    31: (190, 178, 148),  # barren - bone/sand
+    81: (146, 152, 100),  # pasture/hay
+    82: (140, 148, 96),   # cultivated crops
+    90: (104, 122, 104),  # woody wetlands - slate green
+    95: (112, 128, 108),  # herbaceous wetlands
+    12: (232, 230, 222),  # perennial snow/ice
+    21: (168, 156, 138),  # developed, open space -> warm grays
+    22: (164, 150, 132),
+    23: (158, 144, 126),
+    24: (152, 138, 120),
+}
 # Blur radii are tied to a GROUND distance (metres), converted to pixels at paint
 # time via res_m -- so the same crop yields the same relief at any DPI ("one spec,
 # painted at many sizes"). render.py passes ground/res_m; the px fallbacks below
@@ -99,9 +124,23 @@ def grain(shape, cell_px, strength, seed):
 def shaded_relief(elev, res_m, elev_min, elev_max,
                   azimuth=315, altitude=45, z_factor=1.0, seed=7,
                   grain_cell_px=2.0, grain_strength=0.05,
-                  texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX):
+                  texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX,
+                  biome=None):
+    """biome: optional (tint01, weight01) from render._biome_layers -- an RGB tint
+    field (0..1) and per-pixel confidence, aligned to `elev`. Applied to the
+    hypsometric base with luminance matching + the alpine fade (see BIOME_MIX)."""
     elev = _fill_nan(elev.astype("float32"))
     base = hypsometric(elev, elev_min, elev_max)                  # color
+    if biome is not None:
+        tint, weight = biome
+        base_lum = base.mean(axis=2, keepdims=True)
+        tint_lum = tint.mean(axis=2, keepdims=True) + 1e-6
+        matched = np.clip(tint * (base_lum / tint_lum), 0, 1)    # hue only; keep light
+        norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
+        fade = np.clip((ALPINE_FADE_END - norm) /
+                       (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
+        w3 = (weight * BIOME_MIX * fade)[..., None]
+        base = base * (1 - w3) + matched * w3
     hs = hillshade(elev, res_m, azimuth, altitude, z_factor) ** HILLSHADE_GAMMA
     tex = texture_pass(elev, texture_radius_px)
     val = valley_pass(elev, valley_radius_px)

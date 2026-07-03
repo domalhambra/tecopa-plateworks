@@ -68,6 +68,7 @@ class CompositionSpec:
     # relief) and the compass rose above the title block. Picture decisions -> spec.
     contours: bool = False
     compass: bool = True
+    biome: bool = False    # NLCD land-cover tint (hue from cover, light from relief)
     # client style controls (v1.2): the knobs the wizard's Style panel exposes.
     # All picture decisions -> spec, so the final renders exactly the styled proof.
     track_rgb: tuple = (214, 158, 58)        # route ink (curated swatches in the UI)

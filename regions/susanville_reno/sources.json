@@ -1,6 +1,6 @@
 {
   "id": "susanville_reno",
-  "built": "2026-07-02",
+  "built": "2026-07-03",
   "fetch_bbox_4326": [
     -120.7051,
     39.5929,
@@ -25,6 +25,10 @@
     "overview.png": {
       "sha256": "7b6ebd29a3cfb4f9cb98171873cfbf5ac7892f31578c0cecb35466ea6374ba51",
       "bytes": 582802
+    },
+    "landcover.tif": {
+      "sha256": "2f6f965b0687db97c1e6d3980c1a0113a7a81341ae1e581ae8f4fdeff574989b",
+      "bytes": 762929
     }
   },
   "sources": [
@@ -37,6 +41,11 @@
       "dataset": "USGS NHD waterbodies + network flowlines",
       "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
       "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
     }
   ]
 }

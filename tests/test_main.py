@@ -223,6 +223,10 @@ def test_contours_and_compass_flags_stamped_through_endpoint():
     assert c.post("/api/proof", data=data).status_code == 200          # defaults
     spec = sess_mod.get(j["session"])["spec"]
     assert spec.contours is False and spec.compass is True
+    assert spec.biome is False
+    # the biome toggle stamps through too (both regions ship committed landcover)
+    assert c.post("/api/proof", data={**data, "biome": "true"}).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].biome is True
 
 def test_style_knobs_stamped_through_endpoint():
     # the Style panel's values must ride the stamped spec (invariant 1), the hex

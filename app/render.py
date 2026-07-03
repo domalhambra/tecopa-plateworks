@@ -77,6 +77,43 @@ def _read_window(region_dir, cfg, crop, out_w, out_h):
     ground_per_px = (crop[2]-crop[0]) / out_w
     return elev, pad_x, pad_y, ground_per_px
 
+BIOME_EDGE_BLUR_PX96 = 1.6      # soften 30 m NLCD class edges (scaled by dpi)
+
+def _biome_layers(region_dir, cfg, crop, pads, shape, dpi):
+    """(tint01, weight01) aligned to the padded render window, from the region's
+    baked NLCD landcover -- or None when the asset is absent (graceful fallback to
+    the pure elevation tint). Same windowed-read discipline as the DEM, so the tint
+    registers with the terrain by construction."""
+    p = os.path.join(region_dir, cfg.get("landcover_path", "landcover.tif"))
+    if not os.path.exists(p):
+        return None
+    from app.relief import BIOME_TINT
+    pad_x, pad_y = pads
+    out_h = shape[0] - 2 * pad_y
+    out_w = shape[1] - 2 * pad_x
+    gx = (crop[2] - crop[0]) / out_w
+    gy = (crop[3] - crop[1]) / out_h
+    big = (crop[0] - pad_x * gx, crop[1] - pad_y * gy,
+           crop[2] + pad_x * gx, crop[3] + pad_y * gy)
+    with rasterio.open(p) as ds:
+        win = from_bounds(*big, transform=ds.transform)
+        lc = ds.read(1, window=win, out_shape=shape,
+                     resampling=Resampling.nearest, boundless=True, fill_value=0)
+    tint = np.zeros(shape + (3,), np.float32)
+    weight = np.zeros(shape, np.float32)
+    for cls, rgb in BIOME_TINT.items():
+        m = lc == cls
+        tint[m] = rgb
+        weight[m] = 1.0
+    # soften class edges without bleeding tint into untinted ground:
+    # blur(tint*weight)/blur(weight) is a weighted (normalized) blur
+    sigma = BIOME_EDGE_BLUR_PX96 * dpi / 96.0
+    wb = gaussian_filter(weight, sigma)
+    safe = wb + 1e-6
+    for ch in range(3):
+        tint[..., ch] = gaussian_filter(tint[..., ch] * weight, sigma) / safe
+    return tint / 255.0, np.clip(wb, 0, 1)
+
 def _offdem_fraction(region_dir, cfg, crop):
     """Fraction of the crop (margin excluded) with no DEM coverage, sampled on a fixed
     probe grid so the value does not depend on the render DPI. Nearest resampling: we
@@ -691,6 +728,11 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
             f"Pan or shrink the crop to keep it inside the region.")
 
     elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
+    # optional biome tint (Dom, v1.2): hue from the region's baked NLCD land cover,
+    # lightness from elevation + shade; None (asset absent or toggle off) falls back
+    # to the pure elevation tint.
+    biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_y), elev.shape, dpi)
+             if spec.biome else None)
     rgb = shaded_relief(
         elev, res_m=gpp,
         elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
@@ -700,7 +742,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         grain_strength=spec.grain_strength,
         # physical (ground-metre) blur radii -> identical relief at any DPI
         texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
-        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp))
+        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
+        biome=biome)
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 

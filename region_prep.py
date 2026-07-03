@@ -112,10 +112,11 @@ def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
                                "order": order, "name": str(row.get("gnis_name") or "")})
     return {"crs": dst_crs, "lakes": lakes, "rivers": rivers}
 
-def fetch_dem(bbox):
-    # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard.
+def fetch_dem(bbox, resolution_m=10):
+    # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard; 30 m
+    # for corridor-scale regions where 10 m would be a multi-GB build.
     import py3dep
-    return py3dep.get_dem(bbox, resolution=10)  # xarray DataArray, EPSG:4326
+    return py3dep.get_dem(bbox, resolution=resolution_m)  # xarray DataArray, EPSG:4326
 
 def fetch_hydro(bbox):
     """Fetch NHD waterbodies + network flowlines for the bbox (EPSG:4326).
@@ -131,6 +132,29 @@ def fetch_hydro(bbox):
     except Exception as ex:
         print(f"  no flowlines: {ex}")
     return wb, fl
+
+def bake_landcover(bbox, dst_crs, out_path, resolution_m=30, year=2021):
+    """Fetch NLCD land cover for the bbox and write it as a compact uint8 GeoTIFF in
+    the region CRS (~0.5 MB per county-scale region -- committed, unlike the DEM).
+    Drives the optional biome tint: hue from land cover, lightness from elevation.
+    NLCD is US-only, public domain (USGS/MRLC)."""
+    import geopandas as gpd
+    import pygeohydro
+    from shapely.geometry import box
+    geom = gpd.GeoSeries([box(*bbox)], crs=4326)
+    ds = pygeohydro.nlcd_bygeom(geom, resolution=resolution_m,
+                                years={"cover": [year]})
+    da = (list(ds.values())[0] if isinstance(ds, dict) else ds)[f"cover_{year}"]
+    da = da.rio.reproject(dst_crs, resolution=resolution_m,
+                          resampling=Resampling.nearest, nodata=0)
+    arr = np.asarray(da.values).astype("uint8")
+    profile = dict(driver="GTiff", dtype="uint8", count=1,
+                   height=arr.shape[0], width=arr.shape[1], crs=dst_crs,
+                   transform=da.rio.transform(), nodata=0,
+                   tiled=True, compress="deflate")
+    with rasterio.open(out_path, "w", **profile) as f:
+        f.write(arr, 1)
+    return out_path
 
 def to_cog(dem_da, dst_crs, out_path, bbox_4326, resolution_m=10):
     # py3dep returns a rioxarray DataArray that already carries its own CRS
@@ -226,9 +250,12 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None):
             {"dataset": "USGS NHD waterbodies + network flowlines",
              "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
              "license": "Public domain (USGS)"},
+            {"dataset": "NLCD 2021 land cover (30 m)",
+             "via": "pygeohydro.nlcd_bygeom",
+             "license": "Public domain (USGS/MRLC)"},
         ],
     }
-    for name in ("dem.tif", "hydro.json", "region.json", "overview.png"):
+    for name in ("dem.tif", "hydro.json", "region.json", "overview.png", "landcover.tif"):
         p = os.path.join(out_dir, name)
         if os.path.exists(p):
             manifest["assets"][name] = {"sha256": _sha256(p), "bytes": os.path.getsize(p)}
@@ -244,6 +271,8 @@ def main():
                     help="west south east north (lon/lat)")
     ap.add_argument("--epsg", type=int, required=True,
                     help="projected CRS for the region, e.g. a local UTM zone")
+    ap.add_argument("--resolution", type=int, default=10, choices=(10, 30, 60),
+                    help="DEM grid in metres (10 m default; 30 m for huge regions)")
     args = ap.parse_args()
 
     out_dir = os.path.join("regions", args.id)
@@ -263,9 +292,17 @@ def main():
         json.dump(hydro, f)
     print(f"  lakes: {len(hydro['lakes'])}  rivers: {len(hydro['rivers'])}")
 
+    print("Fetching NLCD land cover...")
+    try:
+        bake_landcover(tuple(args.bbox), dst_crs, os.path.join(out_dir, "landcover.tif"))
+    except Exception as ex:
+        # biome tint is optional; the render falls back to pure elevation tint
+        print(f"  land cover failed, continuing without biome tint: {ex}")
+
     print("Fetching 3DEP DEM...")
-    dem = fetch_dem(tuple(args.bbox))
-    cog = to_cog(dem, dst_crs, os.path.join(out_dir, "dem.tif"), tuple(args.bbox))
+    dem = fetch_dem(tuple(args.bbox), args.resolution)
+    cog = to_cog(dem, dst_crs, os.path.join(out_dir, "dem.tif"), tuple(args.bbox),
+                 resolution_m=args.resolution)
 
     print("Building aim-view overview...")
     size, bounds, crs = overview_png(cog, os.path.join(out_dir, "overview.png"))
@@ -280,7 +317,7 @@ def main():
         "bounds": list(bounds), "overview_size": list(size),
         "dem_path": "dem.tif", "overview_path": "overview.png",
         "hydro_path": "hydro.json",
-        "native_resolution_m": 10,
+        "native_resolution_m": args.resolution,
         # absolute color scale + fixed light keep every crop consistent (invariant 4):
         "elevation_min": emin, "elevation_max": emax,
         "light_azimuth": 315, "light_altitude": 45, "z_factor": 1.0,

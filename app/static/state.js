@@ -21,6 +21,7 @@ export const state = {
   title: '',              // poster title ('' -> region name; '-' -> no title block)
   contours: false,        // elevation contour lines
   compass: true,          // compass rose above the title block
+  biome: false,           // NLCD land-cover tint (forests green, desert sage-tan)
   style: {                // the Style panel's knobs (server defaults mirrored here)
     width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
   },
