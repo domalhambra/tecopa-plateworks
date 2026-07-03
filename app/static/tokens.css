@@ -24,6 +24,43 @@
   --color-error: #B56B4A;
   --card-shadow: 0 2px 8px rgba(0, 0, 0, .30), 0 1px 2px rgba(0, 0, 0, .18);
   --tp-accent: var(--color-accent-gold);
+
+  /* --- app-chrome tokens (macOS-flavored) --- */
+  /* The UI chrome speaks the system font; the *poster* stays Georgia (canvas.js),
+     so the deliverable is unchanged -- only the app around it reads native. */
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+             "Segoe UI", system-ui, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, monospace;
+
+  /* Interactive tint: warm brand accent used for selection/fill/focus, the way a
+     macOS app swaps in a custom accent colour but keeps the native control shapes. */
+  --tint: #D4B464;
+  --tint-strong: #C8A24A;
+  --on-tint: #1B1712;
+  --focus-ring: rgba(212, 180, 100, 0.55);
+
+  /* Layered surfaces: window base -> content -> raised panel (vibrancy-style stack). */
+  --window: #202024;
+  --sidebar: #1B1B1F;
+  --content: #232327;
+  --panel: #2A2A2F;
+  --panel-2: #2F2F35;
+  --hairline: rgba(255, 255, 255, 0.09);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+  --control: #35353B;
+  --control-hover: #3D3D44;
+  --control-inset: #171719;
+  --text: #ECECEE;
+  --text-2: #A6A6AD;
+  --text-3: #74747C;
+
+  --radius-window: 12px;
+  --radius-lg: 11px;
+  --radius: 8px;
+  --radius-sm: 6px;
+  --shadow-panel: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.28);
+  --shadow-pop: 0 10px 34px rgba(0,0,0,.42);
+  --shadow-btn: 0 1px 1.5px rgba(0,0,0,.28), 0 1px 0 rgba(255,255,255,.05) inset;
 }
 
 :root[data-color-scheme="light"] {
@@ -48,4 +85,27 @@
   --color-error: #B56B4A;
   --card-shadow: 0 2px 8px rgba(0, 0, 0, .06), 0 1px 2px rgba(0, 0, 0, .04);
   --tp-accent: var(--color-accent-gold);
+
+  --tint: #B98B22;
+  --tint-strong: #A5791A;
+  --on-tint: #FFFFFF;
+  --focus-ring: rgba(185, 139, 34, 0.45);
+
+  --window: #ECEBE7;
+  --sidebar: #E7E5E0;
+  --content: #F6F5F2;
+  --panel: #FFFFFF;
+  --panel-2: #FBFAF8;
+  --hairline: rgba(0, 0, 0, 0.09);
+  --hairline-strong: rgba(0, 0, 0, 0.14);
+  --control: #FFFFFF;
+  --control-hover: #F2F1EE;
+  --control-inset: #EAE8E3;
+  --text: #26251F;
+  --text-2: #5C5B54;
+  --text-3: #8E8D85;
+
+  --shadow-panel: 0 1px 0 rgba(255,255,255,.6) inset, 0 8px 24px rgba(0,0,0,.08);
+  --shadow-pop: 0 10px 34px rgba(0,0,0,.16);
+  --shadow-btn: 0 1px 1.5px rgba(0,0,0,.10), 0 1px 0 rgba(255,255,255,.7) inset;
 }

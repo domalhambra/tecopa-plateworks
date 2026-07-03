@@ -15,167 +15,222 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <h1>TrailPrint <span>Studio</span></h1>
-      <span id="regionName" class="region-name"></span>
-    </div>
-    <div class="header-actions">
-      <button id="startOver" class="ghost danger" type="button" hidden>Start over</button>
-      <button id="themeToggle" class="ghost" type="button" aria-label="Toggle day and night theme" hidden>Day</button>
-    </div>
-  </header>
-
-  <main>
-    <div id="a11yStatus" class="sr-only" aria-live="polite" role="status"></div>
-    <nav id="stepper" aria-label="Progress"></nav>
-
-    <section id="stage">
-      <!-- STEP: Region -->
-      <div class="pane" id="pane-region" hidden>
-        <h2 id="h-region" tabindex="-1">Choose a region</h2>
-        <p class="lede">Turn your tracks into a shaded-relief poster.</p>
-        <div id="regionGallery" class="region-gallery"></div>
-        <div class="actions">
-          <button id="toTracks" class="primary" type="button" disabled>Continue to Tracks</button>
-        </div>
+  <div class="app">
+    <header class="toolbar">
+      <div class="tb-group">
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <span id="regionName" class="doc-title"></span>
       </div>
+      <div class="tb-group header-actions">
+        <button id="themeToggle" class="tb-btn" type="button" aria-label="Toggle day and night theme" hidden>
+          <span class="tb-ico">◐</span><span class="tb-txt">Day</span>
+        </button>
+        <button id="startOver" class="tb-btn danger" type="button" hidden>
+          <span class="tb-ico">↺</span><span class="tb-txt">Start over</span>
+        </button>
+      </div>
+    </header>
 
-      <!-- STEPS: Tracks &amp; Frame (share one map) -->
-      <div class="pane" id="workspace" hidden>
-        <h2 id="h-workspace" tabindex="-1">Add your tracks</h2>
+    <main class="body">
+      <div id="a11yStatus" class="sr-only" aria-live="polite" role="status"></div>
+      <nav id="stepper" class="rail" aria-label="Progress"></nav>
 
-        <div id="frameControls" class="frame-controls" hidden>
-          <label>Print size
-            <select id="size">
-              <option value="18,24">18 × 24 in</option>
-              <option value="24,36">24 × 36 in</option>
-              <option value="12,16">12 × 16 in</option>
-              <option value="9,12">9 × 12 in</option>
-            </select>
-          </label>
-          <label>Orientation
-            <select id="orient">
-              <option value="auto">Auto — fit the tracks</option>
-              <option value="landscape">Landscape</option>
-              <option value="portrait">Portrait</option>
-            </select>
-          </label>
-          <label>Poster title
-            <input id="titleInput" type="text" maxlength="60"
-                   placeholder="Region name — type “-” for none">
-          </label>
-          <label class="check"><input type="checkbox" id="contoursChk"> Contour lines</label>
-          <label class="check"><input type="checkbox" id="compassChk" checked> Compass</label>
-          <label class="check"><input type="checkbox" id="biomeChk"> Biome color</label>
-          <button id="resetFrame" class="ghost" type="button">Reset frame</button>
+      <section id="stage" class="stage">
+        <!-- STEP: Region -->
+        <div class="pane pane-region" id="pane-region" hidden>
+          <div class="pane-head">
+            <h2 id="h-region" tabindex="-1">Choose a region</h2>
+            <p class="lede">Turn your GPX tracks into a shaded-relief poster.</p>
+          </div>
+          <div id="regionGallery" class="region-gallery"></div>
+          <div class="pane-foot">
+            <button id="toTracks" class="primary" type="button" disabled>Continue</button>
+          </div>
         </div>
 
-        <details id="stylePanel" class="style-panel" hidden>
-          <summary>Style</summary>
-          <div class="style-grid">
-            <label>Track width
-              <input type="range" id="sWidth" min="1.2" max="5" step="0.1" value="2.6">
-              <output id="vWidth">2.6 pt</output>
-            </label>
-            <label>Track outline
-              <input type="range" id="sHalo" min="0" max="0.9" step="0.05" value="0.7">
-              <output id="vHalo">0.70</output>
-            </label>
-            <div class="swatch-row" role="radiogroup" aria-label="Track color">
-              <span class="swatch-label">Track color</span>
-              <button type="button" class="swatch sel" data-hex="#d69e3a" style="background:#d69e3a" aria-label="Desert gold"></button>
-              <button type="button" class="swatch" data-hex="#b24c2b" style="background:#b24c2b" aria-label="Rust"></button>
-              <button type="button" class="swatch" data-hex="#4a6936" style="background:#4a6936" aria-label="Forest"></button>
-              <button type="button" class="swatch" data-hex="#7a4a66" style="background:#7a4a66" aria-label="Plum"></button>
-              <button type="button" class="swatch" data-hex="#33415e" style="background:#33415e" aria-label="Midnight"></button>
-              <button type="button" class="swatch" data-hex="#3a3733" style="background:#3a3733" aria-label="Charcoal"></button>
+        <!-- STEPS: Tracks & Frame (document + inspector) -->
+        <div class="pane workspace" id="workspace" hidden>
+          <div class="doc">
+            <div class="doc-head">
+              <h2 id="h-workspace" tabindex="-1">Add your tracks</h2>
             </div>
-            <label>Marker size
-              <input type="range" id="sMarker" min="0.14" max="0.4" step="0.01" value="0.24">
-              <output id="vMarker">0.24 in</output>
-            </label>
-            <label>Marker outline
-              <input type="range" id="sRing" min="0" max="0.2" step="0.01" value="0.09">
-              <output id="vRing">0.09</output>
-            </label>
-            <label>Photo frame
-              <select id="sPhotoStyle">
-                <option value="mat">Classic mat</option>
-                <option value="keyline">Thin keyline</option>
-                <option value="borderless">Borderless</option>
-                <option value="polaroid">Polaroid</option>
-              </select>
-            </label>
-            <label>Legend &amp; compass size
-              <input type="range" id="sFurniture" min="0.6" max="1.6" step="0.05" value="1">
-              <output id="vFurniture">1.00×</output>
-            </label>
-            <label>Terrain depth <span class="hint-inline">(large prints)</span>
-              <input type="range" id="sTerrain" min="0" max="1.5" step="0.1" value="1">
-              <output id="vTerrain">1.0×</output>
-            </label>
-            <label>Cast shadows <span class="hint-inline">(sun &amp; sky light)</span>
-              <input type="range" id="sShadow" min="0" max="1" step="0.1" value="0.5">
-              <output id="vShadow">0.5</output>
-            </label>
-          </div>
-        </details>
-
-        <div class="map-wrap">
-          <div id="mapPane" class="map-pane">
-            <canvas id="map" tabindex="0"
-                    aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
-                    hidden></canvas>
-            <button id="dropzone" class="dropzone" type="button">
-              <b>Drop GPX / KML / KMZ</b>
-              <span>or click to browse — files accumulate</span>
-            </button>
-            <div id="hint" class="hint" hidden></div>
+            <div class="map-pane" id="mapPane">
+              <canvas id="map" tabindex="0"
+                      aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
+                      hidden></canvas>
+              <button id="dropzone" class="dropzone" type="button">
+                <span class="dz-ico" aria-hidden="true">↧</span>
+                <b>Drop GPX, KML or KMZ</b>
+                <span>or click to browse — files accumulate</span>
+              </button>
+              <div id="hint" class="hint" hidden></div>
+            </div>
           </div>
 
-          <aside class="side">
-            <div id="filesBlock">
-              <button id="addFiles" class="ghost small" type="button" hidden>+ Add more files</button>
-              <ul id="fileList" class="file-list"></ul>
+          <aside class="inspector" aria-label="Inspector">
+            <div class="insp-body">
+              <!-- Tracks step -->
+              <section id="filesBlock" class="insp-group">
+                <div class="insp-head">
+                  <span class="insp-title">Files</span>
+                  <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
+                </div>
+                <ul id="fileList" class="file-list"></ul>
+              </section>
+
+              <!-- Frame step: page setup -->
+              <section id="frameControls" class="insp-group" hidden>
+                <div class="insp-head"><span class="insp-title">Page</span>
+                  <button id="resetFrame" class="mini" type="button">Reset frame</button>
+                </div>
+                <div class="field">
+                  <label for="size">Print size</label>
+                  <div class="select-wrap">
+                    <select id="size">
+                      <option value="18,24">18 × 24 in</option>
+                      <option value="24,36">24 × 36 in</option>
+                      <option value="12,16">12 × 16 in</option>
+                      <option value="9,12">9 × 12 in</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="field">
+                  <label>Orientation</label>
+                  <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">
+                    <button type="button" role="radio" data-val="auto">Auto</button>
+                    <button type="button" role="radio" data-val="landscape">Landscape</button>
+                    <button type="button" role="radio" data-val="portrait">Portrait</button>
+                  </div>
+                  <select id="orient" class="sr-only" tabindex="-1" aria-hidden="true">
+                    <option value="auto">Auto</option>
+                    <option value="landscape">Landscape</option>
+                    <option value="portrait">Portrait</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="titleInput">Poster title</label>
+                  <input id="titleInput" type="text" maxlength="60"
+                         placeholder="Region name — “-” for none">
+                </div>
+                <div class="switch-row">
+                  <label for="contoursChk">Contour lines</label>
+                  <span class="switch"><input type="checkbox" id="contoursChk"><span class="slider"></span></span>
+                </div>
+                <div class="switch-row">
+                  <label for="compassChk">Compass rose</label>
+                  <span class="switch"><input type="checkbox" id="compassChk" checked><span class="slider"></span></span>
+                </div>
+                <div class="switch-row">
+                  <label for="biomeChk">Biome color</label>
+                  <span class="switch"><input type="checkbox" id="biomeChk"><span class="slider"></span></span>
+                </div>
+              </section>
+
+              <!-- Frame step: style -->
+              <section id="stylePanel" class="insp-group" hidden>
+                <div class="insp-head"><span class="insp-title">Style</span></div>
+                <div class="swatch-row" role="radiogroup" aria-label="Track color">
+                  <span class="field-label">Track color</span>
+                  <div class="swatches">
+                    <button type="button" class="swatch sel" data-hex="#d69e3a" style="--sw:#d69e3a" aria-label="Desert gold"></button>
+                    <button type="button" class="swatch" data-hex="#b24c2b" style="--sw:#b24c2b" aria-label="Rust"></button>
+                    <button type="button" class="swatch" data-hex="#4a6936" style="--sw:#4a6936" aria-label="Forest"></button>
+                    <button type="button" class="swatch" data-hex="#7a4a66" style="--sw:#7a4a66" aria-label="Plum"></button>
+                    <button type="button" class="swatch" data-hex="#33415e" style="--sw:#33415e" aria-label="Midnight"></button>
+                    <button type="button" class="swatch" data-hex="#3a3733" style="--sw:#3a3733" aria-label="Charcoal"></button>
+                  </div>
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sWidth">Track width</label><output id="vWidth">2.6 pt</output></div>
+                  <input type="range" id="sWidth" min="1.2" max="5" step="0.1" value="2.6">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sHalo">Track outline</label><output id="vHalo">0.70</output></div>
+                  <input type="range" id="sHalo" min="0" max="0.9" step="0.05" value="0.7">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sShadow">Cast shadows</label><output id="vShadow">0.5</output></div>
+                  <input type="range" id="sShadow" min="0" max="1" step="0.1" value="0.5">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sTerrain">Terrain depth</label><output id="vTerrain">1.0×</output></div>
+                  <input type="range" id="sTerrain" min="0" max="1.5" step="0.1" value="1">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sMarker">Marker size</label><output id="vMarker">0.24 in</output></div>
+                  <input type="range" id="sMarker" min="0.14" max="0.4" step="0.01" value="0.24">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sRing">Marker outline</label><output id="vRing">0.09</output></div>
+                  <input type="range" id="sRing" min="0" max="0.2" step="0.01" value="0.09">
+                </div>
+                <div class="slider-row">
+                  <div class="slider-top"><label for="sFurniture">Legend &amp; compass size</label><output id="vFurniture">1.00×</output></div>
+                  <input type="range" id="sFurniture" min="0.6" max="1.6" step="0.05" value="1">
+                </div>
+                <div class="field">
+                  <label for="sPhotoStyle">Photo frame</label>
+                  <div class="select-wrap">
+                    <select id="sPhotoStyle">
+                      <option value="mat">Classic mat</option>
+                      <option value="keyline">Thin keyline</option>
+                      <option value="borderless">Borderless</option>
+                      <option value="polaroid">Polaroid</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+
+              <!-- Places (both steps, when hotspots exist) -->
+              <section id="markersBox" class="insp-group" hidden>
+                <div class="insp-head"><span class="insp-title">Places</span>
+                  <span class="insp-note">name · icon · photo</span>
+                </div>
+                <div id="markerList"></div>
+              </section>
             </div>
-            <div id="markersBox" class="markers" hidden>
-              <div class="side-label">Places — name, icon, photo <span class="optional">(optional)</span></div>
-              <div id="markerList"></div>
+
+            <div class="insp-foot actions">
+              <span id="status" class="status"></span>
+              <button id="backToProof" class="ghost" type="button" hidden>Back to proof</button>
+              <button id="expressBtn" class="ghost" type="button" hidden>Proof + final</button>
+              <button id="toFrame" class="primary" type="button" disabled>Continue</button>
+              <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
             </div>
           </aside>
         </div>
 
-        <div class="actions">
-          <span id="status" class="status"></span>
-          <button id="backToProof" class="ghost" type="button" hidden>Back to proof</button>
-          <button id="toFrame" class="primary" type="button" disabled>Continue to Frame</button>
-          <button id="expressBtn" class="ghost" type="button" hidden>Proof + render final</button>
-          <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
+        <!-- STEP: Proof -->
+        <div class="pane pane-proof" id="pane-proof" hidden>
+          <div class="pane-head">
+            <h2 id="h-proof" tabindex="-1">Your poster proof</h2>
+            <p class="lede">A watermarked preview. Accept to render the full-resolution final.</p>
+          </div>
+          <div class="proof-wrap">
+            <div class="poster-card"><img id="posterImg" alt="Poster proof"></div>
+          </div>
+          <div class="pane-foot">
+            <span id="proofStatus" class="status"></span>
+            <div class="field inline">
+              <label for="finalFormat">Format</label>
+              <div class="segmented" data-for="finalFormat" role="radiogroup" aria-label="Format">
+                <button type="button" role="radio" data-val="png">PNG</button>
+                <button type="button" role="radio" data-val="pdf">PDF</button>
+              </div>
+              <select id="finalFormat" class="sr-only" tabindex="-1" aria-hidden="true">
+                <option value="png">PNG</option>
+                <option value="pdf">PDF (print shop)</option>
+              </select>
+            </div>
+            <button id="downloadAgain" class="ghost" type="button" hidden>Download again</button>
+            <button id="reframe" class="ghost" type="button">Reframe</button>
+            <button id="accept" class="primary" type="button">Accept &amp; render final</button>
+          </div>
         </div>
-      </div>
-
-      <!-- STEP: Proof -->
-      <div class="pane" id="pane-proof" hidden>
-        <h2 id="h-proof" tabindex="-1">Your poster proof</h2>
-        <div class="proof-wrap">
-          <div class="poster-card"><img id="posterImg" alt="Poster proof"></div>
-        </div>
-        <div class="actions">
-          <span id="proofStatus" class="status"></span>
-          <label class="format-label">Format
-            <select id="finalFormat">
-              <option value="png">PNG</option>
-              <option value="pdf">PDF (print shop)</option>
-            </select>
-          </label>
-          <button id="downloadAgain" class="ghost" type="button" hidden>Download again</button>
-          <button id="reframe" class="ghost" type="button">Reframe</button>
-          <button id="accept" class="primary" type="button">Accept &amp; render final</button>
-        </div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
 
   <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>
   <script type="module" src="app.js"></script>

@@ -305,8 +305,35 @@ function currentScheme() {
 function applyTheme(scheme) {
   document.documentElement.setAttribute('data-color-scheme', scheme);
   const btn = $('themeToggle');
-  btn.textContent = scheme === 'light' ? 'Night' : 'Day';
+  const txt = btn.querySelector('.tb-txt') || btn;
+  txt.textContent = scheme === 'light' ? 'Night' : 'Day';
   btn.setAttribute('aria-label', scheme === 'light' ? 'Switch to night theme' : 'Switch to day theme');
+}
+
+// Segmented controls are a native-feeling face over a hidden <select>: clicking a
+// segment sets the select's value and fires its 'change' event, so every existing
+// select handler (orientation, final format) keeps working untouched.
+function wireSegmented() {
+  for (const seg of document.querySelectorAll('.segmented[data-for]')) {
+    const sel = $(seg.dataset.for);
+    if (!sel) continue;
+    const sync = () => {
+      for (const b of seg.querySelectorAll('button')) {
+        const on = b.dataset.val === sel.value;
+        b.classList.toggle('on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+      }
+    };
+    for (const b of seg.querySelectorAll('button')) {
+      b.onclick = () => {
+        if (sel.value === b.dataset.val) return;
+        sel.value = b.dataset.val;
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+        sync();
+      };
+    }
+    sync();
+  }
 }
 function initTheme() {
   const btn = $('themeToggle'); btn.hidden = false;
@@ -423,6 +450,10 @@ function wire() {
     applyPrintSize();
     canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
   };
+
+  // segmented faces reflect the (pref-seeded) hidden selects -- wire last so their
+  // initial .on state matches the values set from prefs above.
+  wireSegmented();
 }
 
 wire();
