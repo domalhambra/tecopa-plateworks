@@ -71,6 +71,7 @@ class CompositionSpec:
     contours: bool = False
     compass: bool = True
     biome: bool = False    # NLCD land-cover tint (hue from cover, light from relief)
+    labels: bool = False   # named geography (GNIS terrain + water names)
     # client style controls (v1.2): the knobs the wizard's Style panel exposes.
     # All picture decisions -> spec, so the final renders exactly the styled proof.
     track_rgb: tuple = (214, 158, 58)        # route ink (curated swatches in the UI)

@@ -205,7 +205,7 @@ async function renderProof() {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
                                    compass: state.compass, biome: state.biome,
-                                   style: state.style });
+                                   labels: state.labels, style: state.style });
     if (proofUrl) URL.revokeObjectURL(proofUrl);
     proofUrl = URL.createObjectURL(blob);
     $('posterImg').src = proofUrl;
@@ -271,7 +271,7 @@ async function acceptFinal() {
   setStatus('Queuing final render…', 'proofStatus');
   const fmt = state.finalFormat;
   try {
-    const { job } = await api.submitFinal(state.session, fmt);
+    const { job } = await api.submitFinal(state.session, fmt, state.embedSpec);
     let misses = 0;
     for (;;) {
       await sleep(600);
@@ -430,6 +430,10 @@ function wire() {
     state.biome = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
+  $('labelsChk').onchange = (e) => {
+    state.labels = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
 
   // Style panel: every knob is a picture decision -> stale the proof on change.
   const styleSliders = [
@@ -462,6 +466,10 @@ function wire() {
   }
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
+  };
+  $('embedSpecChk').onchange = (e) => {
+    state.embedSpec = e.target.checked;
+    // PDF can't carry the manifest anyway; the toggle only affects PNG.
   };
   const fmtPref = loadPrefs().finalFormat;
   if (fmtPref === 'pdf' || fmtPref === 'png') {
