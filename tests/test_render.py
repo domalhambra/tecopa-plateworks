@@ -115,6 +115,33 @@ def test_terrain_depth_changes_relief_at_corridor_scale():
     on = np.asarray(rasterize(mk(1.0), dpi=64, region_dir="regions/elko_bonneville", hydro=nw))
     assert not np.array_equal(off, on), "terrain depth did nothing at corridor scale"
 
+def test_shadow_res_m_is_dpi_independent():
+    # the shadow working grid is a pure function of the spec (96 samples per print
+    # inch), never the render DPI -- proof and final ray-march the same terrain.
+    from app.render import _shadow_res_m
+    spec = CompositionSpec(region_id="x", crs="EPSG:32611",
+                           crop=(0, 0, 86400, 57600), print_w_in=24, print_h_in=16,
+                           native_resolution_m=10, tracks=[], hotspots=[], seed=7)
+    assert abs(_shadow_res_m(spec) - 86400 / (24 * 96)) < 1e-9   # 37.5 m/sample
+    # no dpi anywhere in the function: same value regardless of render size
+
+def test_shadow_strength_changes_the_render():
+    # end-to-end: shadow_strength=1 differs from 0 through rasterize (synthetic DEM).
+    cfg = json.load(open("regions/elko_bonneville/region.json"))
+    bx = cfg["bounds"]; cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    half = 100000.0
+    crop = (cx-half, cy-half*2/3, cx+half, cy+half*2/3)
+    def mk(ss):
+        return CompositionSpec(region_id="elko_bonneville", crs=cfg["crs"], crop=crop,
+                               print_w_in=36, print_h_in=24,
+                               native_resolution_m=cfg["native_resolution_m"],
+                               tracks=[], hotspots=[], seed=7, title_text="-",
+                               compass=False, shadow_strength=ss)
+    nw = {"lakes": [], "rivers": []}
+    off = np.asarray(rasterize(mk(0.0), dpi=64, region_dir="regions/elko_bonneville", hydro=nw))
+    on = np.asarray(rasterize(mk(1.0), dpi=64, region_dir="regions/elko_bonneville", hydro=nw))
+    assert not np.array_equal(off, on), "shadow_strength did nothing"
+
 def test_rasterize_composites_terminus_pins():
     # the pins must actually be wired into rasterize (the unit tests call
     # _draw_termini directly and would stay green if the call were dropped).
