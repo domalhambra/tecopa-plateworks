@@ -219,7 +219,8 @@ def overview_png(cog_path, out_png, long_edge=1400):
     Image.fromarray(img, "L").convert("RGB").save(out_png)
     return (ow, oh), (bounds.left, bounds.bottom, bounds.right, bounds.top), crs
 
-def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None):
+def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
+                           resolution_m=10):
     """Record what this region was built FROM (V1-12 continuity): source datasets,
     licenses, the exact fetch bbox, and sha256 of the produced assets. The DEM itself
     is gitignored; the committed manifest lets a rebuild be verified against what was
@@ -242,10 +243,10 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None):
         "crs": dst_crs,
         "rebuild": (f"python region_prep.py --id {region_id} --name <name> "
                     f"--bbox {' '.join(str(v) for v in bbox_4326)} "
-                    f"--epsg {dst_crs.split(':')[1]}"),
+                    f"--epsg {dst_crs.split(':')[1]} --resolution {resolution_m}"),
         "assets": {},
         "sources": [
-            {"dataset": "USGS 3DEP 10 m DEM", "via": "py3dep.get_dem",
+            {"dataset": f"USGS 3DEP {resolution_m} m DEM", "via": "py3dep.get_dem",
              "license": "Public domain (USGS)"},
             {"dataset": "USGS NHD waterbodies + network flowlines",
              "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
@@ -324,7 +325,8 @@ def main():
     }
     with open(os.path.join(out_dir, "region.json"), "w") as f:
         json.dump(region, f, indent=2)
-    write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs)
+    write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs,
+                           resolution_m=args.resolution)
     print(f"Region ready: {out_dir}")
 
 if __name__ == "__main__":

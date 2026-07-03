@@ -1,0 +1,24 @@
+{
+  "id": "elko_bonneville",
+  "name": "Elko\u2013Bonneville, NV/UT",
+  "crs": "EPSG:32611",
+  "bounds": [
+    504630.0,
+    4339470.0,
+    987510.0,
+    4670280.0
+  ],
+  "overview_size": [
+    1400,
+    959
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 30,
+  "elevation_min": 1277.6500244140625,
+  "elevation_max": 2967.040283203125,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}

@@ -1,0 +1,51 @@
+{
+  "id": "elko_bonneville",
+  "built": "2026-07-03",
+  "fetch_bbox_4326": [
+    -116.95,
+    39.2,
+    -111.35,
+    42.05
+  ],
+  "crs": "EPSG:32611",
+  "rebuild": "python region_prep.py --id elko_bonneville --name <name> --bbox -116.95 39.2 -111.35 42.05 --epsg 32611 --resolution 30",
+  "assets": {
+    "dem.tif": {
+      "sha256": "576ab5d6a2ce8dad1d62ceb6b22347c9d17a97d1ebbf47ef24f1d9e60ecb6cda",
+      "bytes": 703568015
+    },
+    "hydro.json": {
+      "sha256": "26c55d3fe146dc6a6dc0fe9d064e11e6bb06b8c72bfc51ed679e5e60127ac55d",
+      "bytes": 4032618
+    },
+    "region.json": {
+      "sha256": "4bf0e02a7c2669309f2639fc7af6d63c829ac341a37b0e6aa8edae96cee9de09",
+      "bytes": 476
+    },
+    "overview.png": {
+      "sha256": "b615ae0d4527413c5c02a9fe1afa918969e3cc78be895d311fb51d9da8564b5a",
+      "bytes": 808748
+    },
+    "landcover.tif": {
+      "sha256": "db491d1d502215b1e36f915fa6d11352fd60ffb73cc2126677eb866ca944e0f5",
+      "bytes": 4166636
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 30 m DEM",
+      "via": "py3dep.get_dem",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    }
+  ]
+}
