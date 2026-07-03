@@ -93,9 +93,13 @@ function selectRegion(id) {
 function buildRegionGallery() {
   const host = $('regionGallery'); host.innerHTML = '';
   for (const r of state.regions) {
+    // built with DOM APIs, not interpolated HTML: region.json is our own data, but
+    // a hostile/typo'd region name must render as text, never as markup (red-team).
     const b = document.createElement('button');
     b.type = 'button'; b.className = 'region-card'; b.dataset.id = r.id;
-    b.innerHTML = `<img src="${r.overview}" alt=""><span>${r.name}</span>`;
+    const img = document.createElement('img'); img.src = r.overview; img.alt = '';
+    const span = document.createElement('span'); span.textContent = r.name;
+    b.append(img, span);
     b.onclick = () => selectRegion(r.id);
     host.appendChild(b);
   }
@@ -182,18 +186,29 @@ function updateFrameFeasibility() {
 }
 
 // --- proof step ---
+// One proof at a time (red-team S3): the server renders /api/proof synchronously,
+// so a double-click used to fire two concurrent multi-hundred-MB renders. The flag
+// gates every entry point (button, Enter on the canvas, express).
+let proofInFlight = false;
+let proofUrl = null;   // last object URL, revoked on replace (red-team F2: leak)
+
 async function renderProof() {
+  if (proofInFlight) return false;
   // honor the infeasible-size guard from every entry point (button, Enter, express)
   if (canvas.sizeInfeasibleForRegion()) { updateFrameFeasibility(); return false; }
   const ov = cropForProof();
   if (!ov) { setStatus('Draw a frame first', 'status'); return false; }
+  proofInFlight = true;
+  $('renderProof').disabled = true; $('expressBtn').disabled = true;
   setStatus('Rendering proof…', 'status');
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
                                    compass: state.compass, biome: state.biome,
                                    style: state.style });
-    $('posterImg').src = URL.createObjectURL(blob);
+    if (proofUrl) URL.revokeObjectURL(proofUrl);
+    proofUrl = URL.createObjectURL(blob);
+    $('posterImg').src = proofUrl;
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
     go('proof');
@@ -213,6 +228,13 @@ async function renderProof() {
       setStatus(msg, 'status');
     } else { setStatus('Proof failed: ' + e.message, 'status'); }
     return false;
+  } finally {
+    proofInFlight = false;
+    // restore the buttons' real (feasibility) state WITHOUT updateFrameFeasibility,
+    // whose status side-effect would wipe the humanized 422 set in the catch above.
+    const infeasible = canvas.sizeInfeasibleForRegion();
+    $('renderProof').disabled = infeasible;
+    $('expressBtn').disabled = infeasible;
   }
 }
 
@@ -236,6 +258,8 @@ async function downloadFinal(url, fmt) {
   const blob = await api.fetchBlob(url);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = `trailprint.${fmt}`; a.click();
+  // the click has queued the download; release the blob (a 300-dpi PNG is ~50 MB)
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
 
 async function acceptFinal() {
@@ -312,26 +336,39 @@ function applyTheme(scheme) {
 
 // Segmented controls are a native-feeling face over a hidden <select>: clicking a
 // segment sets the select's value and fires its 'change' event, so every existing
-// select handler (orientation, final format) keeps working untouched.
+// select handler (orientation, final format) keeps working untouched. Keyboard
+// follows the WAI-ARIA radio-group pattern (red-team S5): roving tabindex — one
+// tab stop per group — and arrow keys move both the selection and the focus.
 function wireSegmented() {
   for (const seg of document.querySelectorAll('.segmented[data-for]')) {
     const sel = $(seg.dataset.for);
     if (!sel) continue;
+    const btns = [...seg.querySelectorAll('button')];
     const sync = () => {
-      for (const b of seg.querySelectorAll('button')) {
+      for (const b of btns) {
         const on = b.dataset.val === sel.value;
         b.classList.toggle('on', on);
         b.setAttribute('aria-checked', on ? 'true' : 'false');
+        b.tabIndex = on ? 0 : -1;
       }
     };
-    for (const b of seg.querySelectorAll('button')) {
-      b.onclick = () => {
-        if (sel.value === b.dataset.val) return;
-        sel.value = b.dataset.val;
+    const set = (val, focus) => {
+      if (sel.value !== val) {
+        sel.value = val;
         sel.dispatchEvent(new Event('change', { bubbles: true }));
-        sync();
+      }
+      sync();
+      if (focus) btns.find((b) => b.dataset.val === val)?.focus();
+    };
+    btns.forEach((b, i) => {
+      b.onclick = () => set(b.dataset.val, false);
+      b.onkeydown = (e) => {
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+        if (!step) return;
+        e.preventDefault();
+        set(btns[(i + step + btns.length) % btns.length].dataset.val, true);
       };
-    }
+    });
     sync();
   }
 }

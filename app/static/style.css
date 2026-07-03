@@ -284,7 +284,10 @@ input[type="range"]:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--f
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .actions .status { flex: 1 1 100%; order: -1; font-size: 12px; color: var(--text-2); min-height: 0; }
 .actions .status:empty { display: none; }
-.insp-foot .primary, .insp-foot .ghost { flex: 1; min-width: 0; }
+.insp-foot .primary, .insp-foot .ghost { flex: 1; min-width: 0; white-space: nowrap; }
+/* three actions (Back to proof + Proof + final + Render proof) don't fit one 320px
+   row: the secondary "back" takes its own full-width row above the working pair */
+.insp-foot #backToProof { flex: 1 1 100%; }
 
 /* buttons */
 button.primary {
@@ -308,5 +311,13 @@ button:disabled { opacity: .4; cursor: default; }
   .rail { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--hairline); overflow-x: auto; }
   .workspace { flex-direction: column; overflow-y: auto; }
   .inspector { width: auto; border-left: 0; border-top: 1px solid var(--hairline); }
-  .map-pane { min-height: 46vh; }
+  .map-pane { min-height: 46vh; flex: none; }
+  /* the primary action must never sit below the fold (red-team S6): pin the action
+     bar to the bottom of the scrolling workspace */
+  .insp-foot { position: sticky; bottom: 0; z-index: 5; box-shadow: 0 -6px 16px rgba(0,0,0,.18); }
+}
+
+/* honor the OS setting: no decorative motion for users who asked for none */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
 }
