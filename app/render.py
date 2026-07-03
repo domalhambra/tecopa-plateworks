@@ -1,6 +1,6 @@
 # app/render.py
 from __future__ import annotations
-import json, os
+import json, math as _m, os
 import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
@@ -79,6 +79,13 @@ GEO_KINDS = {
 }
 GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 sq inch
 GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
+# Curved along-feature labels: a linear landform (range, valley) sets its name along its
+# own spine -- the NatGeo/USGS convention -- instead of a horizontal block at the
+# centroid. Point/area kinds stay straight. A path shorter than the text falls back to a
+# straight centered label, so a hairpinned or barely-in-frame feature never crams.
+GEO_CURVE_KINDS = {"range", "valley"}
+GEO_PATH_SMOOTH_M = 1200.0            # spine-smoothing window in GROUND metres (dpi-stable)
+GEO_MIN_PATH_IN = 1.1                 # min in-frame spine length (inches) to bother curving
 # ------------------------------------------------------------------------------
 
 def _pt_to_px(pt, dpi):  # points -> pixels
@@ -797,7 +804,10 @@ def _label_candidates(labels, hydro, spec, out_w, out_h):
             continue
         ax = sum(px for px, _ in inpts) / len(inpts)
         ay = sum(py for _, py in inpts) / len(inpts)
-        cands.append((spec_kind[2], kind, name, (ax, ay)))
+        # linear landforms carry their ordered in-crop spine so the name can arc along
+        # it (curved labels); points/areas carry no path and label at the centroid.
+        path = inpts if (kind in GEO_CURVE_KINDS and len(inpts) >= 2) else None
+        cands.append((spec_kind[2], kind, name, (ax, ay), path))
     # water names ride in hydro.json (lakes: polygon centroid; rivers: one label per
     # distinct name at the midpoint of its longest in-frame run).
     if hydro:
@@ -808,7 +818,7 @@ def _label_candidates(labels, hydro, spec, out_w, out_h):
             if name and len(inpts) >= 1:
                 ax = sum(p[0] for p in inpts) / len(inpts)
                 ay = sum(p[1] for p in inpts) / len(inpts)
-                cands.append((GEO_KINDS["lake"][2], "lake", name, (ax, ay)))
+                cands.append((GEO_KINDS["lake"][2], "lake", name, (ax, ay), None))
         rivers = {}
         for r in hydro.get("rivers", []):
             name = (r.get("name") or "").strip()
@@ -821,9 +831,102 @@ def _label_candidates(labels, hydro, spec, out_w, out_h):
                 rivers[name] = (len(inpts), mid)
         for name, (_, mid) in rivers.items():
             if mid is not None:
-                cands.append((GEO_KINDS["river"][2], "river", name, mid))
+                cands.append((GEO_KINDS["river"][2], "river", name, mid, None))
     cands.sort(key=lambda c: -c[0])
     return cands
+
+def _resample_path(poly, step_px, smooth_px):
+    """Densify `poly` to ~step_px spacing, then moving-average smooth it over a
+    ~smooth_px window so a name laid along it follows the spine instead of jittering on
+    a jagged ridge. Pure geometry; step/smooth arrive in px converted from GROUND metres
+    by the caller, so the smoothed spine is identical at any DPI (proof == final)."""
+    if len(poly) < 2:
+        return [tuple(p) for p in poly]
+    dense = []
+    for (x0, y0), (x1, y1) in zip(poly, poly[1:]):
+        seg = _m.hypot(x1 - x0, y1 - y0)
+        n = max(1, int(seg / max(1.0, step_px)))
+        for k in range(n):
+            t = k / n
+            dense.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+    dense.append(tuple(poly[-1]))
+    w = int(round(smooth_px / max(1.0, step_px)))
+    if w <= 1 or len(dense) <= 2:
+        return dense
+    xs = [p[0] for p in dense]; ys = [p[1] for p in dense]
+    n = len(dense)
+    return [((sum(xs[max(0, i-w):min(n, i+w+1)]) / (min(n, i+w+1) - max(0, i-w))),
+             (sum(ys[max(0, i-w):min(n, i+w+1)]) / (min(n, i+w+1) - max(0, i-w))))
+            for i in range(n)]
+
+def _arclen(poly):
+    cum = [0.0]
+    for (x0, y0), (x1, y1) in zip(poly, poly[1:]):
+        cum.append(cum[-1] + _m.hypot(x1 - x0, y1 - y0))
+    return cum
+
+def _point_at(poly, cum, s):
+    """(x, y, angle_rad) at arc-length s along poly (clamped to the ends); angle is the
+    local tangent in image coords (y down)."""
+    s = min(max(s, 0.0), cum[-1])
+    i = 0
+    while i < len(poly) - 2 and cum[i + 1] < s:
+        i += 1
+    seg = cum[i + 1] - cum[i]
+    t = 0.0 if seg <= 0 else (s - cum[i]) / seg
+    (x0, y0), (x1, y1) = poly[i], poly[i + 1]
+    return x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, _m.atan2(y1 - y0, x1 - x0)
+
+def _curved_plan(d, poly, text, font, tracking, halo, min_len):
+    """Lay `text` along `poly` (px), centered on the spine midpoint. Returns
+    (glyphs, bbox) where glyphs is [(ch, cx, cy, angle_rad)] anchored at each glyph
+    CENTRE, or None when the spine is shorter than the text or than min_len -- the caller
+    then falls back to a straight centered label, so nothing ever crams or hairpins."""
+    cum = _arclen(poly); L = cum[-1]
+    if L < min_len:
+        return None
+    advances = [d.textlength(ch, font=font) + tracking for ch in text]
+    T = sum(advances) - tracking                       # drop the trailing track
+    if T > L:
+        return None
+    # reading direction: if the spine mostly points left, reverse it so text is upright
+    _, _, a0 = _point_at(poly, cum, L * 0.25)
+    _, _, a1 = _point_at(poly, cum, L * 0.75)
+    if _m.cos(a0) + _m.cos(a1) < 0:
+        poly = poly[::-1]; cum = _arclen(poly)
+    ascent, descent = font.getmetrics(); th = ascent + descent
+    s = (L - T) / 2.0
+    glyphs = []; minx = miny = 1e18; maxx = maxy = -1e18
+    for ch, adv in zip(text, advances):
+        gw = adv - tracking
+        cx, cy, ang = _point_at(poly, cum, s + gw / 2.0)
+        glyphs.append((ch, cx, cy, ang))
+        r = th / 2 + gw / 2 + halo                     # conservative per-glyph footprint
+        minx = min(minx, cx - r); maxx = max(maxx, cx + r)
+        miny = min(miny, cy - r); maxy = max(maxy, cy + r)
+        s += adv
+    return glyphs, (round(minx), round(miny), round(maxx), round(maxy))
+
+def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo):
+    """One glyph, centred at `center` and rotated to the path tangent, with the same
+    knockout paper halo the straight labels use. angle_rad is measured y-down, so the
+    tile rotates by -angle to align its +x axis with the tangent."""
+    l, t, r, b = font.getbbox(ch)
+    gw, gh = r - l, b - t
+    if gw <= 0 or gh <= 0:
+        return
+    pad = halo + 2
+    tile = Image.new("RGBA", (gw + 2 * pad, gh + 2 * pad), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tile)
+    ox, oy = pad - l, pad - t
+    for dx in (-halo, 0, halo):
+        for dy in (-halo, 0, halo):
+            if dx or dy:
+                td.text((ox + dx, oy + dy), ch, font=font, fill=GEO_LABEL_HALO + (235,))
+    td.text((ox, oy), ch, font=font, fill=GEO_LABEL_INK + (255,))
+    rot = tile.rotate(-_m.degrees(angle_rad), expand=True, resample=Image.BILINEAR)
+    img.alpha_composite(rot, (round(center[0] - rot.width / 2),
+                              round(center[1] - rot.height / 2)))
 
 def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
     """Place named geography with priority + greedy collision avoidance: strongest
@@ -849,35 +952,60 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
                 return True
         return False
 
-    for rank, kind, name, (ax, ay) in cands:
+    # ground metres per output px -> spine smoothing sized in GROUND units, so the
+    # curved geometry (and thus every glyph angle) is identical at proof and final dpi.
+    gpp = (spec.crop[2] - spec.crop[0]) / out_w
+    smooth_px = GEO_PATH_SMOOTH_M / gpp
+    min_path = round(GEO_MIN_PATH_IN * dpi)
+
+    def in_frame(box):
+        return not (box[0] < edge or box[1] < edge or box[2] > out_w - edge or box[3] > out_h - edge)
+
+    for rank, kind, name, (ax, ay), path in cands:
         if len(placed) >= cap:
             break
         pt_size, caps, _ = GEO_KINDS[kind]
         text = name.upper() if caps else name
         tracking = _pt_to_px(pt_size, dpi) * GEO_TRACKING_EM if caps else 0
         font = _font(max(9, round(_pt_to_px(pt_size, dpi))))
+
+        # curved along the spine for a long-enough linear landform; else straight.
+        if kind in GEO_CURVE_KINDS and path and len(path) >= 2:
+            spine = _resample_path(path, max(1.0, smooth_px / 6.0), smooth_px)
+            plan = _curved_plan(d, spine, text, font, tracking, halo, min_path)
+            if plan is not None:
+                glyphs, box = plan
+                if in_frame(box) and not overlaps(box):
+                    occupied.append(box)
+                    placed.append(("curved", glyphs, font, halo))
+                continue
+
         tw = _tracked_width(d, text, font, tracking)
         l, t, r, b = d.textbbox((0, 0), text, font=font)
         th = b - t
         x0 = round(ax - tw / 2)              # centered on the anchor
         y0 = round(ay - th / 2)
         box = (x0 - halo, y0 - halo, x0 + tw + halo, y0 + th + halo)
-        if box[0] < edge or box[1] < edge or box[2] > out_w - edge or box[3] > out_h - edge:
-            continue
-        if overlaps(box):
+        if not in_frame(box) or overlaps(box):
             continue
         occupied.append(box)
-        placed.append((x0, y0 - t, text, font, tracking, halo))
+        placed.append(("straight", x0, y0 - t, text, font, tracking, halo))
 
-    for x0, y0, text, font, tracking, halo in placed:
-        # knockout paper halo: the same tracked string stamped around the ink so the
-        # name reads over dark ridges and bright snow alike (classic map label halo).
-        for dx in (-halo, 0, halo):
-            for dy in (-halo, 0, halo):
-                if dx or dy:
-                    _tracked_text(d, (x0 + dx, y0 + dy), text, font,
-                                  GEO_LABEL_HALO + (235,), tracking)
-        _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
+    for entry in placed:
+        if entry[0] == "curved":
+            _, glyphs, font, halo = entry
+            for ch, cx, cy, ang in glyphs:
+                _draw_glyph_rotated(img, ch, (cx, cy), ang, font, halo)
+        else:
+            _, x0, y0, text, font, tracking, halo = entry
+            # knockout paper halo: the tracked string stamped around the ink so the name
+            # reads over dark ridges and bright snow alike (classic map label halo).
+            for dx in (-halo, 0, halo):
+                for dy in (-halo, 0, halo):
+                    if dx or dy:
+                        _tracked_text(d, (x0 + dx, y0 + dy), text, font,
+                                      GEO_LABEL_HALO + (235,), tracking)
+            _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
     return img
 
 def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):

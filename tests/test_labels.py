@@ -98,6 +98,54 @@ def test_label_placement_is_a_faithful_scale_across_dpi():
     mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
     assert mad < 3.0, f"labels shift with DPI: MAD {mad:.2f}/255"
 
+def test_curved_plan_follows_a_diagonal_spine():
+    import math
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (400, 400)))
+    font = render._font(22)
+    poly = [(40, 360), (200, 200), (360, 40)]           # up-right diagonal
+    plan = render._curved_plan(d, poly, "RANGE", font, 3, 2, 10)
+    assert plan is not None
+    glyphs, box = plan
+    xs = [cx for _, cx, _, _ in glyphs]
+    assert xs[-1] > xs[0], "text must advance along the path (+x here)"
+    angs = [math.degrees(a) for _, _, _, a in glyphs]
+    assert all(abs(a - (-45)) < 20 for a in angs), f"glyph tangents should track ~-45deg: {angs}"
+
+def test_curved_plan_falls_back_when_path_too_short():
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (200, 200)))
+    font = render._font(22)
+    assert render._curved_plan(d, [(0, 0), (6, 0)], "LONGRANGENAME", font, 3, 2, 5) is None
+
+def test_reading_direction_flips_leftward_spines():
+    # a spine pointing left is reversed so glyphs stay upright and read left-to-right
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (400, 200)))
+    font = render._font(22)
+    glyphs, _ = render._curved_plan(d, [(360, 100), (40, 100)], "ABCD", font, 2, 2, 5)
+    xs = [cx for _, cx, _, _ in glyphs]
+    assert xs[-1] > xs[0], "leftward spine should have been flipped to read +x"
+
+def test_diagonal_range_is_dpi_stable():
+    # the gating risk: rotated-glyph curved labels must still downscale faithfully.
+    cfg = _cfg(); bx = cfg["bounds"]
+    cx = (bx[0] + bx[2]) / 2; cy = (bx[1] + bx[3]) / 2
+    half = 18000.0
+    crop = (cx - half, cy - half * 12 / 9, cx + half, cy + half * 12 / 9)
+    spec = CompositionSpec(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                           print_w_in=9, print_h_in=12, native_resolution_m=10,
+                           tracks=[], hotspots=[], seed=7, title_text="-", compass=False, labels=True)
+    # a long diagonal range spanning the crop -> exercises glyph rotation
+    diag = {"crs": cfg["crs"], "features": [{"name": "Diagonal Range", "kind": "range", "rank": 100,
+            "coords": [[cx - 14000, cy - 20000], [cx, cy], [cx + 14000, cy + 20000]]}]}
+    nw = {"lakes": [], "rivers": []}
+    proof = render.rasterize(spec, dpi=96, region_dir=REGION_DIR, hydro=nw, labels=diag)
+    final = render.rasterize(spec, dpi=300, region_dir=REGION_DIR, hydro=nw, labels=diag)
+    final_ds = final.resize(proof.size, Image.LANCZOS)
+    mad = np.abs(np.asarray(proof, np.float32) - np.asarray(final_ds, np.float32)).mean()
+    assert mad < 3.0, f"curved labels shift with DPI: MAD {mad:.2f}/255"
+
 def test_shipped_region_labels_files_are_wellformed():
     # every built region ships a labels.json in its CRS with ranked terrain features.
     for rid in os.listdir("regions"):
