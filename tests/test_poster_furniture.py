@@ -69,10 +69,22 @@ def test_keyline_frames_the_sheet():
 # ---- v1.2 furniture: contours + compass ----
 
 def test_contour_interval_picks_conventional_steps():
-    assert render._contour_interval(90) == 5        # 18 lines
-    assert render._contour_interval(985) == 50      # ~20 lines
-    assert render._contour_interval(3000) == 200
-    assert render._contour_interval(60000) == 2000  # beyond the table
+    # ground_m_per_in ~ 0 isolates the local-relief cap: the range alone picks the step.
+    assert render._contour_interval(90, 0.0) == 5        # 18 lines
+    assert render._contour_interval(985, 0.0) == 50      # ~20 lines
+    assert render._contour_interval(3000, 0.0) == 200
+    assert render._contour_interval(60000, 0.0) == 2000  # beyond the table
+
+
+def test_contour_interval_tracks_map_scale():
+    # Dom: the interval must follow the zoom -- fine when zoomed into one valley, coarse
+    # across a whole corridor -- so lines stay legible up close and don't mat when far.
+    # Same terrain range (500 m), three zooms: the interval grows as the sheet zooms out.
+    zoomed_in = render._contour_interval(500, 200)     # ~0.2 km/in -> a single valley
+    mid = render._contour_interval(500, 800)           # ~0.8 km/in
+    zoomed_out = render._contour_interval(500, 4000)   # ~4 km/in -> a whole corridor
+    assert zoomed_in < mid < zoomed_out, (zoomed_in, mid, zoomed_out)
+    assert (zoomed_in, mid, zoomed_out) == (20, 50, 200)
 
 
 def test_contours_draw_on_slope_not_on_flat():
@@ -82,8 +94,8 @@ def test_contours_draw_on_slope_not_on_flat():
     slope = np.tile(np.linspace(1000, 1500, w, dtype="float32"), (h, 1))
     flat = np.full((h, w), 1200.0, dtype="float32")     # exactly on a 50 m level
     base = np.full((h, w, 3), 180, np.uint8)
-    out_slope = render._draw_contours(base.copy(), slope, dpi=96)
-    out_flat = render._draw_contours(base.copy(), flat, dpi=96)
+    out_slope = render._draw_contours(base.copy(), slope, dpi=96, ground_m_per_in=200.0)
+    out_flat = render._draw_contours(base.copy(), flat, dpi=96, ground_m_per_in=200.0)
     assert (out_slope != base).any(), "no contour ink on a slope"
     changed_cols = np.unique(np.where((out_slope != base).any(axis=2))[1])
     assert len(changed_cols) < w * 0.5, "contours shade the slope instead of lining it"

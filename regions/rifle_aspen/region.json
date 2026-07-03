@@ -1,0 +1,24 @@
+{
+  "id": "rifle_aspen",
+  "name": "Rifle\u2013Aspen, Colorado",
+  "crs": "EPSG:32613",
+  "bounds": [
+    265120.0,
+    4324070.0,
+    360450.0,
+    4388610.0
+  ],
+  "overview_size": [
+    1400,
+    947
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1680.4317626953125,
+  "elevation_max": 3842.60498046875,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}
