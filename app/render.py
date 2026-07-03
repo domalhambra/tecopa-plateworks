@@ -60,6 +60,24 @@ RIVER_MAX_PT = 3.0
 def _pt_to_px(pt, dpi):  # points -> pixels
     return pt * dpi / 72.0
 
+# Terrain-depth ramp (v1.3, Dom): keyed to the DPI-INDEPENDENT map-scale denominator
+# (ground metres per print metre), NOT gpp -- gpp varies with dpi, the scale does not,
+# so proof and final share one depth value. 0 below ~1:150k (county scale, where the
+# single-light look is already right and every relief test renders), full by ~1:430k
+# (corridor scale). The Lassen proof/final MAD test sits at ~1:118k -> a strict no-op.
+DEPTH_SCALE_LO = 150_000.0
+DEPTH_SCALE_HI = 430_000.0
+
+def _smoothstep(lo, hi, x):
+    t = min(1.0, max(0.0, (x - lo) / (hi - lo)))
+    return t * t * (3.0 - 2.0 * t)
+
+def _terrain_depth(spec):
+    """0..1 terrain-depth strength for this spec's map scale, times the client's
+    terrain_depth multiplier. A pure function of the spec, so proof == final."""
+    scale_denom = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * 0.0254)
+    return _smoothstep(DEPTH_SCALE_LO, DEPTH_SCALE_HI, scale_denom) * spec.terrain_depth
+
 def _read_window(region_dir, cfg, crop, out_w, out_h):
     """Read the DEM for the crop (plus a margin) at the output resolution.
     rasterio picks the right overview level for us (the image pyramid)."""
@@ -763,7 +781,7 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         # physical (ground-metre) blur radii -> identical relief at any DPI
         texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
         valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
-        biome=biome)
+        biome=biome, depth=_terrain_depth(spec))
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 

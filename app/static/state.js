@@ -26,6 +26,7 @@ export const state = {
   style: {                // the Style panel's knobs (server defaults mirrored here)
     width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
     furniture: 1.0,       // multiplier on the automatic sheet-size furniture scale
+    terrain: 1.0,         // multiplier on the scale-keyed terrain-depth pass
   },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)

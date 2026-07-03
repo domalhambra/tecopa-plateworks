@@ -442,12 +442,13 @@ async def proof(session_id: str = Form(...),
                 track_width_pt: float = Form(2.6), track_halo: float = Form(0.7),
                 track_color: str = Form(""), marker_size_in: float = Form(0.24),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
-                furniture_scale: float = Form(1.0)):
+                furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0)):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
              "marker_diameter_in": marker_size_in, "marker_ring": marker_ring,
-             "photo_frame_style": photo_style, "furniture_scale": furniture_scale}
+             "photo_frame_style": photo_style, "furniture_scale": furniture_scale,
+             "terrain_depth": terrain_depth}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
     try:

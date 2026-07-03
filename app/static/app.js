@@ -374,6 +374,7 @@ function wire() {
     ['sMarker', 'vMarker', 'marker', (v) => `${v} in`],
     ['sRing', 'vRing', 'ring', (v) => Number(v).toFixed(2)],
     ['sFurniture', 'vFurniture', 'furniture', (v) => `${Number(v).toFixed(2)}×`],
+    ['sTerrain', 'vTerrain', 'terrain', (v) => `${Number(v).toFixed(1)}×`],
   ];
   for (const [sid, vid, key, fmt] of styleSliders) {
     $(sid).oninput = (e) => {

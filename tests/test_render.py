@@ -82,6 +82,39 @@ def test_proof_track_treatment_is_a_faithful_scale_of_final():
     assert mad < 16.0, f"track treatment shifts with DPI: corridor MAD {mad:.2f}/255"
     assert diff.mean() < 3.5, f"whole-image drift: {diff.mean():.2f}/255"
 
+def test_terrain_depth_scale_keying():
+    # the depth strength is a pure function of the DPI-independent map scale: off at
+    # county scale (where every other relief test renders), full at corridor scale.
+    from app.render import _terrain_depth
+    def mk(crop_w_m, print_w, td=1.0):
+        return CompositionSpec(region_id="x", crs="EPSG:32611",
+                               crop=(0, 0, crop_w_m, crop_w_m * 2 / 3),
+                               print_w_in=print_w, print_h_in=print_w * 2 / 3,
+                               native_resolution_m=30, tracks=[], hotspots=[],
+                               seed=7, terrain_depth=td)
+    assert _terrain_depth(mk(27000, 9)) == 0.0        # ~1:118k -> no-op
+    assert _terrain_depth(mk(437000, 36)) == 1.0      # ~1:478k -> full
+    assert abs(_terrain_depth(mk(437000, 36, td=0.5)) - 0.5) < 1e-9
+    assert _terrain_depth(mk(437000, 36, td=0.0)) == 0.0   # client can force it off
+
+def test_terrain_depth_changes_relief_at_corridor_scale():
+    # end-to-end: a corridor-scale render with the depth pass on differs from the same
+    # render with it forced off (synthetic DEM hydrated by conftest for elko_bonneville).
+    cfg = json.load(open("regions/elko_bonneville/region.json"))
+    bx = cfg["bounds"]; cx = (bx[0]+bx[2])/2; cy = (bx[1]+bx[3])/2
+    half = 215000.0
+    crop = (cx-half, cy-half*2/3, cx+half, cy+half*2/3)
+    def mk(td):
+        return CompositionSpec(region_id="elko_bonneville", crs=cfg["crs"], crop=crop,
+                               print_w_in=36, print_h_in=24,
+                               native_resolution_m=cfg["native_resolution_m"],
+                               tracks=[], hotspots=[], seed=7, title_text="-",
+                               compass=False, terrain_depth=td)
+    nw = {"lakes": [], "rivers": []}
+    off = np.asarray(rasterize(mk(0.0), dpi=64, region_dir="regions/elko_bonneville", hydro=nw))
+    on = np.asarray(rasterize(mk(1.0), dpi=64, region_dir="regions/elko_bonneville", hydro=nw))
+    assert not np.array_equal(off, on), "terrain depth did nothing at corridor scale"
+
 def test_rasterize_composites_terminus_pins():
     # the pins must actually be wired into rasterize (the unit tests call
     # _draw_termini directly and would stay green if the call were dropped).
