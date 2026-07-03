@@ -11,7 +11,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks
 from app.density import hotspots
 from app.spec import CompositionSpec, SpecError
-from app import session, render, regions, blobs, jobs, logconfig
+from app import session, render, regions, blobs, jobs, logconfig, provenance
 
 logconfig.setup_logging()
 log = logging.getLogger("trailprint.api")
@@ -57,7 +57,7 @@ try:
 except Exception:                                          # pragma: no cover
     SRGB_PROFILE = None
 
-def _encode_final(img, fmt: str) -> bytes:
+def _encode_final(img, fmt: str, manifest=None) -> bytes:
     pil_fmt, _ = FINAL_FORMATS[fmt]
     buf = io.BytesIO()
     if fmt == "pdf":
@@ -65,12 +65,19 @@ def _encode_final(img, fmt: str) -> bytes:
         # the libjpeg defaults (quality 75, 4:2:0 chroma subsampling) fringe exactly
         # our crisp features -- a saturated gold line on desaturated paper -- so pass
         # print-grade encoder params through (they reach the embedded JPEG encoder).
-        # (Pillow cannot embed a PDF output intent; the PNG carries the sRGB profile.)
+        # (Pillow cannot embed a PDF output intent; the PNG carries the sRGB profile
+        # AND the reprint manifest -- so self-describing posters are PNG-only.)
         img.save(buf, pil_fmt, resolution=FINAL_DPI, quality=95, subsampling=0)
-    elif SRGB_PROFILE:
-        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI), icc_profile=SRGB_PROFILE)
     else:
-        img.save(buf, pil_fmt, dpi=(FINAL_DPI, FINAL_DPI))  # a print shop reads true size
+        kw = {"dpi": (FINAL_DPI, FINAL_DPI)}                # a print shop reads true size
+        if SRGB_PROFILE:
+            kw["icc_profile"] = SRGB_PROFILE
+        if manifest is not None:
+            # the provenance manifest, one compressed zTXt chunk -- the file becomes
+            # stateless-reprintable (POST /api/reprint). Embedded at encode time so we
+            # never re-encode the PNG (self-describing posters).
+            kw["pnginfo"] = provenance.manifest_pnginfo(manifest)
+        img.save(buf, pil_fmt, **kw)
     return buf.getvalue()
 
 def _require_format(fmt: str) -> str:
@@ -79,11 +86,11 @@ def _require_format(fmt: str) -> str:
         raise HTTPException(422, f"format must be one of {sorted(FINAL_FORMATS)}")
     return fmt
 
-def _render_to_blob(spec, region_dir, key, fmt="png"):
+def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     """The render worker: rasterize the stamped spec at print DPI and store the
     encoded output. Runs on a queue thread, so it touches only its arguments."""
     img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region_dir, watermark=False)
-    BLOBS.put(key, _encode_final(img, fmt))
+    BLOBS.put(key, _encode_final(img, fmt, manifest))
     return key                                         # job result = the blob key
 
 def _region_or_404(rid):
@@ -229,11 +236,14 @@ async def upload(files: List[UploadFile] = File(...),
     # actually belong to a different built region (not a plain auto-detect).
     recovered = bool(region_id and region.id != region_id
                      and not (session_id and session.has(session_id)))
-    old_spots = []
+    # source-file hashes for the self-describing manifest (accumulate with the tracks).
+    new_sources = [provenance.source_entry(data, fn) for data, fn in payloads]
+    old_spots, old_sources = [], []
     if session_id and session.has(session_id):
         st = session.get(session_id)
         tracks = st["tracks"] + new                                    # accumulate
         old_spots = st["hotspots"]
+        old_sources = st.get("sources", [])
         sid = session_id
     else:
         tracks, sid = new, None
@@ -241,12 +251,14 @@ async def upload(files: List[UploadFile] = File(...),
         raise HTTPException(400, "No usable tracks in file(s)")
     spots = _carry_annotations(old_spots,
                                hotspots(tracks, region_bounds=region.cfg["bounds"]))
+    sources = old_sources + new_sources
     if sid is None:
-        sid = session.create({"tracks": tracks, "hotspots": spots, "region_id": region.id})
+        sid = session.create({"tracks": tracks, "hotspots": spots,
+                              "region_id": region.id, "sources": sources})
     else:
         # invalidate any stamped spec: the track set changed, so /api/final must
         # not render a stale proof (it re-enforces "approve a proof first").
-        session.update(sid, tracks=tracks, hotspots=spots, spec=None)
+        session.update(sid, tracks=tracks, hotspots=spots, spec=None, sources=sources)
     # project to overview pixels for the aim canvas; carry any marker metadata so
     # the editor can show current label/icon/photo state after a reload.
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
@@ -307,12 +319,18 @@ def _require_session(session_id):
 
 def _require_stamped(session_id):
     """The shared gate for both final endpoints: session -> 404, no stamped spec ->
-    400 (approve a proof first), and the region it renders against."""
+    400 (approve a proof first), the region it renders against, and the source hashes
+    (for the self-describing manifest)."""
     st = _require_session(session_id)
     spec = st.get("spec")
     if spec is None:
         raise HTTPException(400, "Approve a proof first")
-    return spec, _region_or_404(st["region_id"])
+    return spec, _region_or_404(st["region_id"]), st.get("sources", [])
+
+def _final_manifest(spec, sources, embed_spec):
+    """Build the provenance manifest for a final, or None when the client opted out of
+    embedding (a share copy: the manifest carries the exact track coordinates)."""
+    return provenance.build_manifest(spec, sources) if embed_spec else None
 
 @app.post("/api/markers")
 async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
@@ -473,9 +491,10 @@ async def proof(session_id: str = Form(...),
     return StreamingResponse(buf, media_type="image/png")
 
 @app.post("/api/final")
-async def final(session_id: str = Form(...), format: str = Form("png")):
+async def final(session_id: str = Form(...), format: str = Form("png"),
+                embed_spec: bool = Form(True)):
     fmt = _require_format(format)
-    spec, region = _require_stamped(session_id)
+    spec, region, sources = _require_stamped(session_id)
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir,
@@ -486,20 +505,22 @@ async def final(session_id: str = Form(...), format: str = Form("png")):
     # Route the final through the blob seam (V1-8): stop littering region.dir with
     # final_*.png. Same key + encoding as the async path, so both serve identically.
     key = f"{session_id}/final.{fmt}"
-    BLOBS.put(key, _encode_final(img, fmt))
-    log.info("event=final session=%s region=%s dpi=%d fmt=%s ms=%d",
-             session_id, region.id, FINAL_DPI, fmt, int((time.time() - t0) * 1000))
+    BLOBS.put(key, _encode_final(img, fmt, _final_manifest(spec, sources, embed_spec)))
+    log.info("event=final session=%s region=%s dpi=%d fmt=%s embed=%s ms=%d",
+             session_id, region.id, FINAL_DPI, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
                         filename=f"trailprint.{fmt}")
 
 @app.post("/api/final/submit")
-async def final_submit(session_id: str = Form(...), format: str = Form("png")):
+async def final_submit(session_id: str = Form(...), format: str = Form("png"),
+                       embed_spec: bool = Form(True)):
     """Async final: enqueue the render at the compose->rasterize boundary and return
     a job id, so the request thread doesn't block on a 300 dpi paint. Same gate as
     the sync path (a proof must be stamped first)."""
     fmt = _require_format(format)
-    spec, region = _require_stamped(session_id)
-    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt)
+    spec, region, sources = _require_stamped(session_id)
+    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
+                       _final_manifest(spec, sources, embed_spec))
     return {"job": jid}
 
 @app.get("/api/jobs/{jid}")
@@ -527,6 +548,86 @@ async def job_result(jid: str):
     fmt = "pdf" if key.endswith(".pdf") else "png"     # blob key carries the format
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
                         filename=f"trailprint.{fmt}")
+
+# ---- self-describing posters: reprint from the file alone (no session, no DB) ----
+# A TrailPrint PNG carries its own spec (see provenance.py). These two endpoints read
+# it back: /inspect returns the manifest, /reprint re-renders at print resolution.
+REPRINT_MAX_BYTES = 96 * 1024 * 1024   # a 300-dpi PNG is tens of MB; cap the upload
+
+async def _read_capped(file: UploadFile) -> bytes:
+    data = await file.read()
+    if len(data) > REPRINT_MAX_BYTES:
+        raise HTTPException(422, "File exceeds the size limit")
+    return data
+
+def _manifest_or_422(data: bytes) -> dict:
+    m = provenance.extract(data)
+    if m is None:
+        raise HTTPException(422, "This file carries no TrailPrint manifest — it can't be reprinted. "
+                                 "Only PNG finals exported with reprint data embedded are self-describing.")
+    return m
+
+@app.post("/api/reprint/inspect")
+async def reprint_inspect(file: UploadFile = File(...)):
+    """Read a poster's provenance without rendering: which region, the source-file
+    hashes, and a spec summary. Pure read of the embedded manifest -- never decodes the
+    image, so it's cheap and safe on any uploaded PNG."""
+    manifest = _manifest_or_422(await _read_capped(file))
+    spec_d = manifest.get("spec", {})
+    region_id = manifest.get("region_id") or spec_d.get("region_id")
+    return {
+        "manifest_version": manifest.get("manifest_version"),
+        "engine": manifest.get("engine"),
+        "region_id": region_id,
+        "region_available": region_id in REGIONS,
+        "sources": manifest.get("sources", []),
+        "print_size_in": [spec_d.get("print_w_in"), spec_d.get("print_h_in")],
+        "title": spec_d.get("title_text", ""),
+        "tracks": len(spec_d.get("tracks", []) or []),
+        "hotspots": len(spec_d.get("hotspots", []) or []),
+    }
+
+@app.post("/api/reprint")
+async def reprint(file: UploadFile = File(...), format: str = Form("png"),
+                  embed_spec: bool = Form(True)):
+    """Re-render a TrailPrint PNG at print resolution from the file alone. Stateless:
+    the spec rides the file, so no session or DB row is needed -- a printed poster is
+    reproducible forever. The embedded spec is UNTRUSTED input; photo paths are
+    sanitized to inside the uploads dir (provenance.sanitize_photos) and spec.validate
+    re-enforces aspect / the 120 MP ceiling / the zoom cap before any pixels are made."""
+    fmt = _require_format(format)
+    manifest = _manifest_or_422(await _read_capped(file))
+    try:
+        spec = provenance.manifest_to_spec(manifest)
+    except Exception:
+        raise HTTPException(422, "This file's TrailPrint manifest is malformed.")
+    region = REGIONS.get(spec.region_id)
+    if region is None:
+        raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
+                                 "so this poster can't be reprinted here.")
+    provenance.sanitize_photos(spec, UPLOADS_DIR)   # drop any out-of-uploads photo path
+    try:
+        spec.validate(FINAL_DPI)                    # untrusted spec: re-gate the geometry
+    except SpecError as e:
+        raise HTTPException(422, str(e))
+    t0 = time.time()
+    try:
+        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir,
+                               watermark=False, cfg=region.cfg)
+    except SpecError as e:
+        raise HTTPException(422, str(e))
+    except Exception:
+        # untrusted input: any other render failure (a malformed hotspot, a degenerate
+        # geometry the validator doesn't cover) is the FILE's fault, not a server bug --
+        # a clean 422, never a 500. Logged so a genuine regression is still visible.
+        log.exception("event=reprint.render_error region=%s", spec.region_id)
+        raise HTTPException(422, "This poster's embedded recipe couldn't be rendered.")
+    # the reprint is itself self-describing (re-embed), unless the client opts out.
+    out = _encode_final(img, fmt, _final_manifest(spec, manifest.get("sources", []), embed_spec))
+    log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
+             spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
+    return StreamingResponse(io.BytesIO(out), media_type=FINAL_FORMATS[fmt][1],
+                             headers={"Content-Disposition": f'attachment; filename="trailprint.{fmt}"'})
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

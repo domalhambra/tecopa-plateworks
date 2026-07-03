@@ -271,7 +271,7 @@ async function acceptFinal() {
   setStatus('Queuing final render…', 'proofStatus');
   const fmt = state.finalFormat;
   try {
-    const { job } = await api.submitFinal(state.session, fmt);
+    const { job } = await api.submitFinal(state.session, fmt, state.embedSpec);
     let misses = 0;
     for (;;) {
       await sleep(600);
@@ -462,6 +462,10 @@ function wire() {
   }
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
+  };
+  $('embedSpecChk').onchange = (e) => {
+    state.embedSpec = e.target.checked;
+    // PDF can't carry the manifest anyway; the toggle only affects PNG.
   };
   const fmtPref = loadPrefs().finalFormat;
   if (fmtPref === 'pdf' || fmtPref === 'png') {

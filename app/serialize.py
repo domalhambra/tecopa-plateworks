@@ -44,6 +44,9 @@ def dump_session(data: dict) -> dict:
         "hotspots": data["hotspots"],
         "tracks": [track_to_json(t) for t in data["tracks"]],
         "spec": spec_to_json(data["spec"]) if data.get("spec") else None,
+        # source-file provenance (self-describing posters): carried so the final's
+        # embedded manifest can hash-name the GPX. .get keeps old rows loadable.
+        "sources": data.get("sources", []),
     }
 
 def load_session(d: dict) -> dict:
@@ -53,4 +56,5 @@ def load_session(d: dict) -> dict:
         "hotspots": d["hotspots"],
         "tracks": [track_from_json(t) for t in d["tracks"]],
         "spec": spec_from_json(d["spec"]) if d.get("spec") else None,
+        "sources": d.get("sources", []),      # drift tolerance: absent in pre-feature rows
     }

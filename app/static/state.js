@@ -30,6 +30,7 @@ export const state = {
     shadow: 0.5,          // cast-shadow + sky-occlusion strength ("Blender relief")
   },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
+  embedSpec: true,        // embed the reprint manifest in the PNG (off = a share copy)
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };
 

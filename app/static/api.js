@@ -84,8 +84,9 @@ export async function proof(sessionId, cropOv, printW, printH,
   return res.blob();
 }
 
-export async function submitFinal(sessionId, format = 'png') {
-  const res = await postForm('/api/final/submit', { session_id: sessionId, format });
+export async function submitFinal(sessionId, format = 'png', embedSpec = true) {
+  const res = await postForm('/api/final/submit',
+    { session_id: sessionId, format, embed_spec: embedSpec ? 'true' : 'false' });
   return asJson(res);   // { job }
 }
 
