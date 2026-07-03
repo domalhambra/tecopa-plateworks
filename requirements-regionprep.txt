@@ -5,3 +5,4 @@
 -r requirements.txt
 py3dep>=0.16
 pynhd>=0.19
+pygeohydro>=0.19          # NLCD land cover for the biome tint

@@ -1,6 +1,7 @@
 # tests/test_relief.py
 import numpy as np
-from app.relief import shaded_relief, hillshade, _fill_nan
+from app.relief import (shaded_relief, hillshade, _fill_nan,
+                        multidirectional_hillshade)
 
 def synthetic_terrain(h=256, w=320):
     yy, xx = np.mgrid[0:h, 0:w]
@@ -42,6 +43,46 @@ def test_fill_nan_all_nodata_is_flat_not_crash():
     a = np.full((4, 4), np.nan, dtype="float32")
     out = _fill_nan(a.copy())
     assert np.isfinite(out).all() and np.all(out == 0.0)
+
+def test_terrain_depth_zero_is_a_strict_noop():
+    # invariant: depth=0 (county scale, every existing test) must be byte-identical to
+    # the single-light relief -- the depth blocks are skipped, nothing perturbs it.
+    elev = synthetic_terrain()
+    base = shaded_relief(elev, 30.0, 1000, 2000, 315, 45, 1.0, seed=7)
+    depth0 = shaded_relief(elev, 30.0, 1000, 2000, 315, 45, 1.0, seed=7, depth=0.0)
+    assert np.array_equal(base, depth0)
+
+def test_terrain_depth_changes_the_render_and_stays_deterministic():
+    elev = synthetic_terrain()
+    flat = shaded_relief(elev, 30.0, 1000, 2000, 315, 45, 1.0, seed=7, depth=0.0)
+    deep_a = shaded_relief(elev, 30.0, 1000, 2000, 315, 45, 1.0, seed=7, depth=1.0)
+    deep_b = shaded_relief(elev, 30.0, 1000, 2000, 315, 45, 1.0, seed=7, depth=1.0)
+    assert not np.array_equal(flat, deep_a), "depth=1 changed nothing"
+    assert np.array_equal(deep_a, deep_b), "depth pass is not deterministic (invariant 3)"
+
+def test_multidirectional_recovers_a_range_parallel_to_the_sun():
+    # a N-S ridge lit from the north (azimuth 0) sits in its own shadow under one
+    # light; the flanking lights of the multidirectional blend model it, so its mean
+    # brightness rises relative to the single light.
+    h, w = 64, 64
+    col = np.abs(np.arange(w) - w / 2)              # a ridge running north-south
+    elev = (200.0 - 8.0 * col).astype("float32")    # crest down the middle column
+    elev = np.tile(elev, (h, 1))
+    one = hillshade(elev, 30.0, azimuth=0, altitude=45)
+    multi = multidirectional_hillshade(elev, 30.0, azimuth=0, altitude=45)
+    assert multi.std() > one.std(), "multidirectional did not add cross-light modelling"
+
+def test_salt_pan_lifts_flat_low_ground():
+    # a dead-flat basin at the very bottom of the elevation range should read brighter
+    # under the depth pass (the salt-pan luminous lift), while a high flat should not.
+    low = np.full((64, 64), 1010.0, dtype="float32")     # norm ~ 0.01, flat
+    high = np.full((64, 64), 1990.0, dtype="float32")    # norm ~ 0.99, flat
+    low0 = shaded_relief(low, 30.0, 1000, 2000, seed=7, depth=0.0).mean()
+    low1 = shaded_relief(low, 30.0, 1000, 2000, seed=7, depth=1.0).mean()
+    high0 = shaded_relief(high, 30.0, 1000, 2000, seed=7, depth=0.0).mean()
+    high1 = shaded_relief(high, 30.0, 1000, 2000, seed=7, depth=1.0).mean()
+    assert low1 > low0 + 4, "salt pan did not brighten the low flat"
+    assert abs(high1 - high0) < abs(low1 - low0), "depth hit the high flat like the salt pan"
 
 def test_hillshade_comes_from_requested_azimuth():
     # Registration/correctness guard for the light: a slope must be brightest when

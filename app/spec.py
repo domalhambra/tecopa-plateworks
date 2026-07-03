@@ -26,6 +26,13 @@ class OffDemError(SpecError):
 # so this leaves headroom for any real poster while blocking a gigapixel request.
 MAX_OUTPUT_PIXELS = 120_000_000
 
+PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
+# Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
+# anything outside them so a hand-rolled API call can't render something absurd.
+STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
+                "marker_diameter_in": (0.1, 0.5), "marker_ring": (0.0, 0.25),
+                "furniture_scale": (0.6, 1.6), "terrain_depth": (0.0, 1.5)}
+
 @dataclass
 class CompositionSpec:
     region_id: str
@@ -62,6 +69,20 @@ class CompositionSpec:
     # relief) and the compass rose above the title block. Picture decisions -> spec.
     contours: bool = False
     compass: bool = True
+    biome: bool = False    # NLCD land-cover tint (hue from cover, light from relief)
+    # client style controls (v1.2): the knobs the wizard's Style panel exposes.
+    # All picture decisions -> spec, so the final renders exactly the styled proof.
+    track_rgb: tuple = (214, 158, 58)        # route ink (curated swatches in the UI)
+    track_halo: float = 0.7                  # paper-halo strength; 0 = no outline
+    marker_ring: float = 0.09                # POI ring width, fraction of diameter; 0 = none
+    photo_frame_style: str = "mat"           # mat | keyline | borderless | polaroid
+    furniture_scale: float = 1.0             # client multiplier on the automatic
+                                             # sheet-size furniture scale (compass +
+                                             # cartouche); 1.0 = auto-appropriate
+    terrain_depth: float = 1.0               # client multiplier on the automatic,
+                                             # scale-keyed terrain-depth pass (multi-
+                                             # directional light, texture shading,
+                                             # aerial perspective, salt pan); 0 = off
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
@@ -90,6 +111,17 @@ class CompositionSpec:
                 f"{w_px}x{h_px}px ({w_px * h_px / 1e6:.0f} MP) exceeds the "
                 f"{MAX_OUTPUT_PIXELS // 1_000_000} MP output ceiling; "
                 f"choose a smaller print size")
+        # style knobs: refuse out-of-range values rather than clamping silently (the
+        # UI sliders can't produce them; a raw API call gets an honest 422)
+        for name, (lo, hi) in STYLE_BOUNDS.items():
+            v = getattr(self, name)
+            if not (math.isfinite(v) and lo <= v <= hi):
+                raise SpecError(f"{name} must be between {lo} and {hi}")
+        if self.photo_frame_style not in PHOTO_FRAME_STYLES:
+            raise SpecError(f"photo_frame_style must be one of {PHOTO_FRAME_STYLES}")
+        if (len(tuple(self.track_rgb)) != 3
+                or not all(isinstance(c, int) and 0 <= c <= 255 for c in self.track_rgb)):
+            raise SpecError("track_rgb must be three 0-255 integers")
         # crop must be a real box, and its aspect must match the print aspect -- the
         # renderer maps crop -> full sheet, so a mismatch would stretch the terrain
         # anisotropically with no error anywhere downstream (red-team).

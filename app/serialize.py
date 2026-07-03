@@ -28,6 +28,8 @@ def spec_to_json(s: CompositionSpec) -> dict:
 def spec_from_json(d: dict) -> CompositionSpec:
     d = dict(d)
     d["crop"] = tuple(d["crop"])
+    if "track_rgb" in d:
+        d["track_rgb"] = tuple(d["track_rgb"])   # JSON lists -> the tuple validate expects
     d["tracks"] = [np.asarray(a, float) for a in d["tracks"]]
     # tolerate schema drift in persisted rows, both directions: a row written by an
     # older build lacks new fields (dataclass defaults fill them), and a row written

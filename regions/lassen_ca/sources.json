@@ -1,6 +1,6 @@
 {
   "id": "lassen_ca",
-  "built": "2026-07-02",
+  "built": "2026-07-03",
   "fetch_bbox_4326": [
     -121.06,
     40.16,
@@ -25,6 +25,10 @@
     "overview.png": {
       "sha256": "fd3c3f1a27a16ad4043aff3fd4f3770f18b124ccfbe717ed88ac6c1d9ebbe436",
       "bytes": 636491
+    },
+    "landcover.tif": {
+      "sha256": "540b09b123ee0ed297e33c55e0cb0d5f9cd6fb28066c7e8c0da89a89cc913360",
+      "bytes": 456444
     }
   },
   "sources": [
@@ -37,6 +41,11 @@
       "dataset": "USGS NHD waterbodies + network flowlines",
       "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
       "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
     }
   ]
 }

@@ -101,8 +101,9 @@ def test_compass_draws_above_title_block_and_toggles_off():
     spec = _spec(title_text="Eagle Lake", print_w_in=10, print_h_in=12)
     img = render._draw_compass(_blank(w, h), spec, w, h, dpi=96)
     out = np.asarray(img.convert("RGB")).astype(int)
-    inset = round(render.TITLE_INSET_IN * 96)
-    R = render.COMPASS_DIAMETER_IN * 96 / 2
+    fdpi = 96 * render._furniture_scale(spec)      # furniture scales with the sheet
+    inset = round(render.TITLE_INSET_IN * fdpi)
+    R = render.COMPASS_DIAMETER_IN * fdpi / 2
     cx = int(inset + R)
     band = out[h - inset - 260:h - inset - 20, max(0, cx - 60):cx + 60]
     dark = (band.sum(axis=2) < 260).sum()                # umber half-points / ring
@@ -113,3 +114,48 @@ def test_compass_draws_above_title_block_and_toggles_off():
     base = np.asarray(_blank(w, h).convert("RGB"))
     off = render._draw_compass(_blank(w, h), _spec(compass=False), w, h, dpi=96)
     assert np.array_equal(base, np.asarray(off.convert("RGB")))
+
+
+# ---- furniture scales with the sheet (Dom): same crop, bigger print -> bigger
+# compass/cartouche, but the scale bar keeps telling the truth ----
+
+def test_furniture_scale_tracks_sheet_size():
+    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24)) == 1.0
+    big = render._furniture_scale(_spec(print_w_in=24, print_h_in=36))
+    assert abs(big - (864 / 432) ** 0.5) < 1e-9                  # sqrt(area ratio)
+    assert render._furniture_scale(_spec(print_w_in=9, print_h_in=12)) == \
+        render.FURNITURE_SCALE_MIN                               # clamped, not tiny
+    assert render._furniture_scale(_spec(print_w_in=60, print_h_in=90)) == \
+        render.FURNITURE_SCALE_MAX
+
+
+def test_cartouche_and_compass_grow_with_print_size():
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(_blank(100, 100), "RGBA")
+    small = _spec(title_text="Eagle Lake", print_w_in=18, print_h_in=24)
+    large = _spec(title_text="Eagle Lake", print_w_in=24, print_h_in=36)
+    ms = render._title_block_metrics(small, d, dpi=96)
+    ml = render._title_block_metrics(large, d, dpi=96)
+    assert ml["bh"] > ms["bh"] * 1.2 and ml["tw"] > ms["tw"] * 1.2
+
+
+def test_furniture_slider_multiplies_the_auto_scale():
+    # the Style panel's "Legend & compass size" knob rides the spec and multiplies
+    # the sheet-appropriate automatic scale -- proof == final, and 1.0 is a no-op
+    base = _spec(print_w_in=18, print_h_in=24)
+    assert render._furniture_scale(base) == 1.0
+    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24,
+                                         furniture_scale=1.4)) == 1.4
+    big = _spec(print_w_in=24, print_h_in=36, furniture_scale=0.75)
+    assert abs(render._furniture_scale(big) - (864 / 432) ** 0.5 * 0.75) < 1e-9
+
+
+def test_scale_bar_stays_truthful_when_furniture_scales():
+    # 32 km crop over 18 in at 96 dpi -> gpp is fixed by the picture, not the furniture:
+    # a scaled bar may pick a LONGER nice mileage, but its px length must equal
+    # miles * 1609.344 / gpp exactly, or the printed bar lies.
+    s = _spec(print_w_in=18, print_h_in=24)
+    gpp = (s.crop[2] - s.crop[0]) / (s.print_w_in * 96)
+    for fs in (1.0, 1.41, 2.0):
+        miles, px = render._scale_bar_miles(s, 96, fs)
+        assert abs(px - miles * 1609.344 / gpp) < 1e-6

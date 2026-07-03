@@ -2,7 +2,7 @@
 // the panes to canvas.js / markers.js / api.js. Single nav paradigm: one named
 // primary button drives each step forward; the stepper only clicks BACK to a
 // completed step.
-import { state, loadPrefs, savePref, activeRegion } from './state.js';
+import { state, loadPrefs, savePref, activeRegion, trackAspectIsWide } from './state.js';
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as markers from './markers.js';
@@ -47,6 +47,7 @@ function go(step) {
     $('h-workspace').textContent = WORKSPACE_HEADING[step];
     $('filesBlock').hidden = step !== 'tracks';
     $('frameControls').hidden = step !== 'frame';
+    $('stylePanel').hidden = step !== 'frame';
     $('toFrame').hidden = step !== 'tracks';
     $('renderProof').hidden = step !== 'frame';
     $('expressBtn').hidden = step !== 'frame';
@@ -54,6 +55,9 @@ function go(step) {
     // offer the way forward when nothing changed since the last proof.
     $('backToProof').hidden = !(step === 'frame' && state.hasSpec && !state.proofStale);
     $('markersBox').hidden = !(state.hotspots.length);
+    // 'auto' orientation reads the tracks now on board -- decide the print dims
+    // BEFORE setMode seeds the starter crop, so the first frame has the right aspect
+    if (step === 'frame') applyPrintSize();
     canvas.setMode(step);
     if (step === 'tracks') {
       setStatus(state.tracks.length
@@ -155,6 +159,17 @@ function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>$
 // --- a11y live-region announcements ---
 function announce(msg) { const el = $('a11yStatus'); if (el) el.textContent = msg || ''; }
 
+// Print dims = the chosen sheet (the size select stores portrait-first) turned by
+// the orientation control. 'auto' lets the tracks decide: a wide journey lies down,
+// a tall one stands up. Called on Frame entry and whenever size/orientation change.
+function applyPrintSize() {
+  const [a, b] = $('size').value.split(',').map(Number);
+  const landscape = state.orientation === 'auto'
+    ? trackAspectIsWide() : state.orientation === 'landscape';
+  state.printW = landscape ? Math.max(a, b) : Math.min(a, b);
+  state.printH = landscape ? Math.min(a, b) : Math.max(a, b);
+}
+
 // disable proof when the region physically can't hold the selected print size, with
 // an honest "pick a smaller size" message (vs. the "draw wider" case for a tight box).
 function updateFrameFeasibility() {
@@ -176,7 +191,8 @@ async function renderProof() {
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
-                                   compass: state.compass });
+                                   compass: state.compass, biome: state.biome,
+                                   style: state.style });
     $('posterImg').src = URL.createObjectURL(blob);
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null; $('downloadAgain').hidden = true;   // new spec, old final void
@@ -346,6 +362,39 @@ function wire() {
     state.compass = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
+  $('biomeChk').onchange = (e) => {
+    state.biome = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
+
+  // Style panel: every knob is a picture decision -> stale the proof on change.
+  const styleSliders = [
+    ['sWidth', 'vWidth', 'width', (v) => `${v} pt`],
+    ['sHalo', 'vHalo', 'halo', (v) => Number(v).toFixed(2)],
+    ['sMarker', 'vMarker', 'marker', (v) => `${v} in`],
+    ['sRing', 'vRing', 'ring', (v) => Number(v).toFixed(2)],
+    ['sFurniture', 'vFurniture', 'furniture', (v) => `${Number(v).toFixed(2)}×`],
+    ['sTerrain', 'vTerrain', 'terrain', (v) => `${Number(v).toFixed(1)}×`],
+  ];
+  for (const [sid, vid, key, fmt] of styleSliders) {
+    $(sid).oninput = (e) => {
+      state.style[key] = Number(e.target.value);
+      $(vid).textContent = fmt(e.target.value);
+      if (state.hasSpec) state.proofStale = true;
+    };
+  }
+  $('sPhotoStyle').onchange = (e) => {
+    state.style.photoStyle = e.target.value;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  for (const sw of document.querySelectorAll('.swatch')) {
+    sw.onclick = () => {
+      for (const el of document.querySelectorAll('.swatch')) el.classList.remove('sel');
+      sw.classList.add('sel');
+      state.style.color = sw.dataset.hex;
+      if (state.hasSpec) state.proofStale = true;
+    };
+  }
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
   };
@@ -355,13 +404,22 @@ function wire() {
   }
 
   const prefs = loadPrefs();
-  if (prefs.printSize) {
-    const [w, h] = prefs.printSize.split(',').map(Number);
-    if (w && h) { state.printW = w; state.printH = h; $('size').value = prefs.printSize; }
+  if (prefs.printSize && /^\d+,\d+$/.test(prefs.printSize) &&
+      [...$('size').options].some((o) => o.value === prefs.printSize)) {
+    $('size').value = prefs.printSize;
   }
+  if (['auto', 'landscape', 'portrait'].includes(prefs.orient)) {
+    state.orientation = prefs.orient; $('orient').value = prefs.orient;
+  }
+  applyPrintSize();
   $('size').onchange = (e) => {
-    const [w, h] = e.target.value.split(',').map(Number);
-    state.printW = w; state.printH = h; savePref('printSize', e.target.value);
+    savePref('printSize', e.target.value);
+    applyPrintSize();
+    canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
+  };
+  $('orient').onchange = (e) => {
+    state.orientation = e.target.value; savePref('orient', e.target.value);
+    applyPrintSize();
     canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
   };
 }

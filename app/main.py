@@ -397,7 +397,18 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
     return {"ok": True, "px": cpx, "py": cpy}
 
-def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True):
+def _parse_hex_rgb(s: str):
+    """'#rrggbb' -> (r, g, b), or a clean 422 -- the track-color swatch value."""
+    s = (s or "").strip().lstrip("#")
+    if len(s) != 6:
+        raise HTTPException(422, "track_color must be #rrggbb")
+    try:
+        return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        raise HTTPException(422, "track_color must be #rrggbb")
+
+def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True,
+                style=None, biome=False):
     st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
@@ -414,7 +425,7 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         tracks=[t.coords for t in st["tracks"]],
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
         hotspots=st["hotspots"], seed=7, title_text=title,
-        contours=contours, compass=compass)
+        contours=contours, compass=compass, biome=biome, **(style or {}))
     spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
@@ -426,10 +437,23 @@ async def proof(session_id: str = Form(...),
                 x1: float = Form(...), y1: float = Form(...),
                 print_w: float = Form(18.0), print_h: float = Form(24.0),
                 title: str = Form(""),
-                contours: bool = Form(False), compass: bool = Form(True)):
+                contours: bool = Form(False), compass: bool = Form(True),
+                biome: bool = Form(False),
+                track_width_pt: float = Form(2.6), track_halo: float = Form(0.7),
+                track_color: str = Form(""), marker_size_in: float = Form(0.24),
+                marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
+                furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0)):
+    # the Style panel's knobs: all picture decisions, so they ride the spec and the
+    # final renders exactly the styled proof. Out-of-range values 422 via validate().
+    style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
+             "marker_diameter_in": marker_size_in, "marker_ring": marker_ring,
+             "photo_frame_style": photo_style, "furniture_scale": furniture_scale,
+             "terrain_depth": terrain_depth}
+    if track_color.strip():
+        style["track_rgb"] = _parse_hex_rgb(track_color)
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
-                                   title, contours, compass)
+                                   title, contours, compass, style, biome)
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()

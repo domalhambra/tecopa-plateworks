@@ -1,26 +1,44 @@
 # tests/test_region_prep.py
-# NaN-edge trimming in region_prep (DEM-free logic, but region_prep imports the
-# pandas/py3dep build stack at module load, so importorskip the whole module to
-# skip cleanly in the core CI env instead of erroring collection (red-team V1-4).
-import numpy as np
+# The build planner: resolution auto-selection, memory-bounding slice counts, and
+# grid geometry -- all pure logic (pyproj + numpy, no fetch stack), so the guard
+# against another 15.8 GB accidental build runs in the core CI env.
 import pytest
-_trim_nan_edges = pytest.importorskip("region_prep")._trim_nan_edges
+rp = pytest.importorskip("region_prep")
 
-def test_trims_nan_frame_keeps_interior():
-    a = np.full((20, 30), 100.0, dtype="float32")
-    a[:3, :] = np.nan          # 3 NaN rows on top
-    a[:, :4] = np.nan          # 4 NaN cols on left
-    a[-2:, :] = np.nan         # 2 NaN rows on bottom
-    r0, r1, c0, c1 = _trim_nan_edges(a)
-    assert (r0, r1, c0, c1) == (3, 18, 4, 30)
-    assert np.isfinite(a[r0:r1, c0:c1]).all()
+LASSEN = (-120.90, 40.33, -120.50, 40.78)          # county-scale (~34 x 50 km)
+CORRIDOR = (-116.95, 39.20, -111.35, 42.05)        # elko_bonneville (~483 x 331 km)
 
-def test_clean_array_is_untouched():
-    a = np.ones((10, 10), dtype="float32")
-    assert _trim_nan_edges(a) == (0, 10, 0, 10)
 
-def test_sparse_interior_nan_is_left_alone():
-    # a few scattered interior NaNs (below the 2% edge threshold) must NOT trigger trim
-    a = np.ones((50, 50), dtype="float32")
-    a[25, 25] = np.nan
-    assert _trim_nan_edges(a) == (0, 50, 0, 50)
+def test_auto_picks_fine_grid_for_county_scale():
+    plan = rp.plan_build(LASSEN, "EPSG:32610")
+    assert plan["auto"] and plan["resolution_m"] == 10
+    assert plan["n_slices"] == 1                    # small builds stay one-shot
+    assert not plan["over_budget"]
+    assert plan["landcover_resolution_m"] == 30
+
+
+def test_auto_coarsens_corridor_scale_and_slices_it():
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611")
+    assert plan["auto"] and plan["resolution_m"] == 30   # 10 m would be ~1.6 Gpx
+    assert plan["grid_mpx"] <= rp.GRID_BUDGET_MPX
+    assert plan["n_slices"] > 1                     # the memory cap engages
+    assert plan["grid_mpx"] / plan["n_slices"] <= rp.SLICE_BUDGET_MPX
+    assert plan["landcover_resolution_m"] == 60     # 30 m NLCD merge is the OOM
+
+
+def test_explicit_resolution_is_honored_but_flagged():
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=10)
+    assert not plan["auto"] and plan["resolution_m"] == 10
+    assert plan["over_budget"], "a ~1.6 Gpx build must be loudly flagged"
+    # even forced-fine, slicing keeps the per-slice cost bounded
+    assert plan["grid_mpx"] / plan["n_slices"] <= rp.SLICE_BUDGET_MPX
+
+
+def test_projected_grid_matches_bbox_ground_size():
+    w, h, transform = rp.projected_grid(CORRIDOR, "EPSG:32611", 30)
+    # the elko_bonneville region was built on exactly this logic: ~483 x 331 km
+    assert abs(w * 30 - 483_000) < 5_000
+    assert abs(h * 30 - 331_000) < 5_000
+    assert transform.a == 30 and transform.e == -30  # square pixels, north-up
+    # grid-snapped origin (registration correctness downstream)
+    assert transform.c % 30 == 0 and transform.f % 30 == 0

@@ -15,17 +15,24 @@ export const state = {
   starterCrop: null,      // [x0,y0,x1,y1] in OVERVIEW px (from /api/upload)
   printW: 18,
   printH: 24,
+  orientation: 'auto',    // 'auto' (tracks decide) | 'landscape' | 'portrait'
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)
   title: '',              // poster title ('' -> region name; '-' -> no title block)
   contours: false,        // elevation contour lines
   compass: true,          // compass rose above the title block
+  biome: false,           // NLCD land-cover tint (forests green, desert sage-tan)
+  style: {                // the Style panel's knobs (server defaults mirrored here)
+    width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
+    furniture: 1.0,       // multiplier on the automatic sheet-size furniture scale
+    terrain: 1.0,         // multiplier on the scale-keyed terrain-depth pass
+  },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };
 
-const LS_KEY = 'trailprint';   // { region, printSize, theme }
+const LS_KEY = 'trailprint';   // { region, printSize, orient, theme, finalFormat }
 
 export function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; }
@@ -48,6 +55,18 @@ export function metresPerPx() {
   if (!r || !r.overview_size) return null;
   const [minx, , maxx] = r.bounds;
   return (maxx - minx) / r.overview_size[0];
+}
+
+// True when the loaded tracks read wider than tall (overview px are isotropic, so
+// the pixel bbox aspect IS the ground aspect). Drives 'auto' orientation: a wide
+// journey lies down, a tall one stands up. False with no tracks (portrait default).
+export function trackAspectIsWide() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const t of state.tracks) for (const [x, y] of t) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return x1 > x0 && (x1 - x0) > (y1 - y0);
 }
 
 // The current crop expressed in OVERVIEW px (ordered), or null. Shared by the

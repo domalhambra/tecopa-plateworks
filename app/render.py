@@ -60,6 +60,24 @@ RIVER_MAX_PT = 3.0
 def _pt_to_px(pt, dpi):  # points -> pixels
     return pt * dpi / 72.0
 
+# Terrain-depth ramp (v1.3, Dom): keyed to the DPI-INDEPENDENT map-scale denominator
+# (ground metres per print metre), NOT gpp -- gpp varies with dpi, the scale does not,
+# so proof and final share one depth value. 0 below ~1:150k (county scale, where the
+# single-light look is already right and every relief test renders), full by ~1:430k
+# (corridor scale). The Lassen proof/final MAD test sits at ~1:118k -> a strict no-op.
+DEPTH_SCALE_LO = 150_000.0
+DEPTH_SCALE_HI = 430_000.0
+
+def _smoothstep(lo, hi, x):
+    t = min(1.0, max(0.0, (x - lo) / (hi - lo)))
+    return t * t * (3.0 - 2.0 * t)
+
+def _terrain_depth(spec):
+    """0..1 terrain-depth strength for this spec's map scale, times the client's
+    terrain_depth multiplier. A pure function of the spec, so proof == final."""
+    scale_denom = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * 0.0254)
+    return _smoothstep(DEPTH_SCALE_LO, DEPTH_SCALE_HI, scale_denom) * spec.terrain_depth
+
 def _read_window(region_dir, cfg, crop, out_w, out_h):
     """Read the DEM for the crop (plus a margin) at the output resolution.
     rasterio picks the right overview level for us (the image pyramid)."""
@@ -76,6 +94,43 @@ def _read_window(region_dir, cfg, crop, out_w, out_h):
                        resampling=Resampling.bilinear, boundless=True, fill_value=np.nan)
     ground_per_px = (crop[2]-crop[0]) / out_w
     return elev, pad_x, pad_y, ground_per_px
+
+BIOME_EDGE_BLUR_PX96 = 1.6      # soften 30 m NLCD class edges (scaled by dpi)
+
+def _biome_layers(region_dir, cfg, crop, pads, shape, dpi):
+    """(tint01, weight01) aligned to the padded render window, from the region's
+    baked NLCD landcover -- or None when the asset is absent (graceful fallback to
+    the pure elevation tint). Same windowed-read discipline as the DEM, so the tint
+    registers with the terrain by construction."""
+    p = os.path.join(region_dir, cfg.get("landcover_path", "landcover.tif"))
+    if not os.path.exists(p):
+        return None
+    from app.relief import BIOME_TINT
+    pad_x, pad_y = pads
+    out_h = shape[0] - 2 * pad_y
+    out_w = shape[1] - 2 * pad_x
+    gx = (crop[2] - crop[0]) / out_w
+    gy = (crop[3] - crop[1]) / out_h
+    big = (crop[0] - pad_x * gx, crop[1] - pad_y * gy,
+           crop[2] + pad_x * gx, crop[3] + pad_y * gy)
+    with rasterio.open(p) as ds:
+        win = from_bounds(*big, transform=ds.transform)
+        lc = ds.read(1, window=win, out_shape=shape,
+                     resampling=Resampling.nearest, boundless=True, fill_value=0)
+    tint = np.zeros(shape + (3,), np.float32)
+    weight = np.zeros(shape, np.float32)
+    for cls, rgb in BIOME_TINT.items():
+        m = lc == cls
+        tint[m] = rgb
+        weight[m] = 1.0
+    # soften class edges without bleeding tint into untinted ground:
+    # blur(tint*weight)/blur(weight) is a weighted (normalized) blur
+    sigma = BIOME_EDGE_BLUR_PX96 * dpi / 96.0
+    wb = gaussian_filter(weight, sigma)
+    safe = wb + 1e-6
+    for ch in range(3):
+        tint[..., ch] = gaussian_filter(tint[..., ch] * weight, sigma) / safe
+    return tint / 255.0, np.clip(wb, 0, 1)
 
 def _offdem_fraction(region_dir, cfg, crop):
     """Fraction of the crop (margin excluded) with no DEM coverage, sampled on a fixed
@@ -157,19 +212,21 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     # per-journey coverage at both widths (overlap across journeys = frequency)
     visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups), feather)
 
-    # 1) paper halo under the line, following the worn width where paths repeat.
+    # 1) paper halo under the line (strength = the client's outline slider; 0 skips
+    #    the halo work entirely), following the worn width where paths repeat.
     #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
-    cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
-    if worn_possible:
-        cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
-        cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
-        del cas_worn
-    cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
-    casing_op = (CASING_STRENGTH * np.clip(cas, 0, 1))[..., None]
-    del cas
-    casing_col = np.array(TRACK_CASING, np.float32) / 255.0
-    img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
-    del casing_op
+    if spec.track_halo > 0:
+        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
+        if worn_possible:
+            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
+            cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
+            del cas_worn
+        cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
+        casing_op = (spec.track_halo * np.clip(cas, 0, 1))[..., None]
+        del cas
+        casing_col = np.array(TRACK_CASING, np.float32) / 255.0
+        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+        del casing_op
 
     # 2) the line: base width at near-solid ink; repeat journeys widen it (saturating)
     op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
@@ -182,7 +239,7 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
     op = np.clip(op, 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
-    ink = np.array(TRACK_INK, np.float32) / 255.0
+    ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
     # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
     # toward gold would only darken the terrain to a muddy brown); grain in `op`
     # keeps the paper texture so it still sits on the sheet rather than floating.
@@ -298,8 +355,11 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
         yy = int(np.clip(cy, 0, out_h-1)); xx = int(np.clip(cx, 0, out_w-1))
         on_dark = elev_lum[yy, xx] < 0.5
         ring = (243, 237, 223, 235) if on_dark else (43, 42, 40, 230)
-        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,), outline=ring,
-                  width=max(1, round(dia * 0.09)))
+        # ring width = the client's marker-outline slider (fraction of diameter; 0 = none)
+        ring_w = round(dia * spec.marker_ring)
+        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
+                  outline=ring if ring_w > 0 else None,
+                  width=max(1, ring_w))
         icon = (hs.get("icon") or "").strip()
         if icon:
             _draw_glyph(d, icon, cx, cy, r * 0.62, ICON_INK)
@@ -319,15 +379,30 @@ def _draw_label(d, text, x, cy, font, out_w, out_h):
                         radius=pad, fill=LABEL_PLATE + (220,))
     d.text((x + pad - l, y + pad - t), text, fill=LABEL_INK + (255,), font=font)
 
+def _photo_frame_params(style, box, dpi):
+    """(mat_side, mat_top, mat_bottom, edge_w) per photo frame style. All derived
+    from the photo box (physical), so proof == final for every style."""
+    m = max(2, round(box * 0.05))
+    if style == "keyline":
+        k = max(1, round(box * 0.012))
+        return k, k, k, max(1, round(_pt_to_px(0.8, dpi)))
+    if style == "borderless":
+        return 0, 0, 0, 0
+    if style == "polaroid":
+        return m, m, max(4, round(box * 0.16)), max(1, m // 3)
+    return m, m, m, max(1, m // 2)                     # "mat" (the classic default)
+
 def _draw_photos(img, spec, out_w, out_h, dpi):
-    """Pin user photos to their markers: a fitted thumbnail in a cream mat with a
-    thin keyline, a drop shadow, and a short stem back to the anchor point. Tolerant
-    of a missing/unreadable file (skip it) so one bad photo can't fail the render."""
+    """Pin user photos to their markers in the client's chosen frame style (classic
+    mat / thin keyline / borderless / polaroid), each with a drop shadow and a short
+    stem back to the anchor point. Tolerant of a missing/unreadable file (skip it)
+    so one bad photo can't fail the render."""
     if not any(hs.get("photo") for hs in spec.hotspots):
         return img
     box = max(24, round(spec.photo_box_in * dpi))
-    mat = max(2, round(box * 0.05))
+    ms, mt, mb, edge_w = _photo_frame_params(spec.photo_frame_style, box, dpi)
     stem = max(1, round(box * 0.02))
+    shadow_r = max(1.0, box * 0.04)
     d = ImageDraw.Draw(img, "RGBA")
     for hs in spec.hotspots:
         path = hs.get("photo")
@@ -339,26 +414,43 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
             continue
         photo.thumbnail((box, box))
         pw, ph = photo.size
+        fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
         ax, ay = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
         # place the framed photo up-and-right of the anchor, clamped to the frame
-        fx = int(np.clip(ax + box*0.35, 0, out_w - pw - 2*mat - 1))
-        fy = int(np.clip(ay - ph - 2*mat - box*0.35, 0, out_h - ph - 2*mat - 1))
+        fx = int(np.clip(ax + box * 0.35, 0, out_w - fw - 1))
+        fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
         # stem from anchor to the frame's near corner
-        d.line([(ax, ay), (fx + mat, fy + ph + mat)], fill=PHOTO_EDGE + (255,), width=stem)
+        d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
+               fill=PHOTO_EDGE + (255,), width=stem)
         shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], fill=(20, 16, 12, 110))
-        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(max(1.0, mat*0.8))))
+        ImageDraw.Draw(shadow).rectangle([fx, fy, fx + fw, fy + fh], fill=(20, 16, 12, 110))
+        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(shadow_r)))
         d = ImageDraw.Draw(img, "RGBA")
-        d.rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], fill=PHOTO_FRAME + (255,))
-        img.paste(photo, (fx+mat, fy+mat))
-        d.rectangle([fx, fy, fx+pw+2*mat, fy+ph+2*mat], outline=PHOTO_EDGE + (255,), width=max(1, mat//2))
+        if ms or mt or mb:
+            d.rectangle([fx, fy, fx + fw, fy + fh], fill=PHOTO_FRAME + (255,))
+        img.paste(photo, (fx + ms, fy + mt))
+        if edge_w:
+            d.rectangle([fx, fy, fx + fw, fy + fh],
+                        outline=PHOTO_EDGE + (255,), width=edge_w)
     return img
 
 # ---- finished-sheet furniture (V1-10 print-correctness): keyline + title block ----
 KEYLINE_INSET_IN = 0.25         # thin frame inset from the sheet edge
 KEYLINE_PT = 0.6
 TITLE_INSET_IN = 0.35           # title block inset from the sheet corner
+FURNITURE_BASE_IN2 = 18.0 * 24.0   # the sheet all furniture sizes were designed on
+FURNITURE_SCALE_MIN = 0.75         # small sheets: shrink a little, stay legible
+FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
 # ------------------------------------------------------------------------------------
+
+def _furniture_scale(spec):
+    """Furniture grows with the sheet (Dom): a 24x36 hangs farther from the eye than
+    an 18x24, so the compass, cartouche and scale bar scale with the sheet's linear
+    size (sqrt of area) relative to the 18x24 they were designed on -- then the
+    client's furniture_scale slider multiplies the auto-appropriate size. A pure
+    function of the spec, so proof == final at any DPI (invariant 1)."""
+    s = (spec.print_w_in * spec.print_h_in / FURNITURE_BASE_IN2) ** 0.5
+    return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX) * spec.furniture_scale
 
 def _stats_line(spec, dpi):
     """A deterministic cartographic caption from the spec alone: approximate scale
@@ -423,26 +515,33 @@ def _tracked_text(d, xy, text, font, fill, tracking):
         d.text((x, y), ch, fill=fill, font=font)
         x += d.textlength(ch, font=font) + tracking
 
-def _scale_bar_miles(spec, dpi):
+def _scale_bar_miles(spec, dpi, fs=1.0):
     """(miles, px) for the graphic scale bar: the 'nice' mileage whose true length
-    on the sheet is closest to the target. Derived from the spec alone (invariant 3)."""
+    on the sheet is closest to the target. Derived from the spec alone (invariant 3).
+    `fs` scales the TARGET length only -- the returned px length is always the true
+    ground length at the real output dpi, or the bar would lie on large sheets."""
     gpp = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * dpi)   # ground m / px
-    target_px = SCALE_BAR_TARGET_IN * dpi
+    target_px = SCALE_BAR_TARGET_IN * fs * dpi
     best = min(NICE_MILES, key=lambda mi: abs(mi * 1609.344 / gpp - target_px))
     return best, best * 1609.344 / gpp
 
 def _title_block_metrics(spec, d, dpi):
     """Measured geometry of the cartouche (None when there's no title). Shared by
-    _draw_title_block and the compass placement above it, so they can't drift."""
+    _draw_title_block and the compass placement above it, so they can't drift.
+    Everything physical is sized at `fdpi` -- the furniture-effective dpi -- so the
+    whole plate enlarges as one engraving on big sheets; only the scale bar's ground
+    length is computed at the real dpi (it must stay true)."""
     if not spec.title_text.strip():
         return None
+    fs = _furniture_scale(spec)
+    fdpi = dpi * fs
     title = spec.title_text.strip().upper()
     stats = _stats_line(spec, dpi)
-    t_size = max(12, round(_pt_to_px(spec.title_pt, dpi)))
-    s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, dpi)))
+    t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi)))
+    s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, fdpi)))
     title_font = _font(t_size)
     stats_font = _font(s_size)
-    bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, dpi))))
+    bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, fdpi))))
     # track off the requested size, not font.size (the bitmap fallback has none)
     t_track = round(t_size * TITLE_TRACKING_EM)
     s_track = round(s_size * STATS_TRACKING_EM)
@@ -455,13 +554,13 @@ def _title_block_metrics(spec, d, dpi):
         sw = _tracked_width(d, stats, stats_font, s_track)
     else:
         st_ = sh = sw = 0
-    miles, bar_px = _scale_bar_miles(spec, dpi)
-    bar_h = max(3, round(SCALE_BAR_H_IN * dpi))
+    miles, bar_px = _scale_bar_miles(spec, dpi, fs)
+    bar_h = max(3, round(SCALE_BAR_H_IN * fdpi))
     _, lt, _, lb = d.textbbox((0, 0), f"{miles:g} MI", font=bar_font)
     lbl_h = lb - lt
     gap = max(3, round(0.35 * (sh or th)))
     rule_h = gap * 2                          # rule row: hairline + air on both sides
-    pad = max(6, round(0.16 * dpi))
+    pad = max(6, round(0.16 * fdpi))
     content_w = max(tw, sw, round(bar_px))
     bh = pad + th + rule_h + (sh + gap if stats else 0) + bar_h + 2 + lbl_h + pad
     return {"title": title, "stats": stats, "title_font": title_font,
@@ -469,7 +568,7 @@ def _title_block_metrics(spec, d, dpi):
             "t_track": t_track, "s_track": s_track,
             "tt": tt, "th": th, "tw": tw, "st": st_, "sh": sh, "sw": sw,
             "miles": miles, "bar_px": round(bar_px), "bar_h": bar_h, "lbl_h": lbl_h,
-            "gap": gap, "rule_h": rule_h, "pad": pad,
+            "gap": gap, "rule_h": rule_h, "pad": pad, "fdpi": fdpi,
             "bw": content_w + 2 * pad, "bh": bh}
 
 def _draw_title_block(img, spec, out_w, out_h, dpi):
@@ -480,12 +579,12 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
     m = _title_block_metrics(spec, d, dpi)
     if m is None:
         return img
-    inset = round(TITLE_INSET_IN * dpi)
+    inset = round(TITLE_INSET_IN * m["fdpi"])
     x, y = inset, out_h - inset - m["bh"]
     bw, pad = m["bw"], m["pad"]
     cx = x + bw / 2
     d.rectangle([x, y, x + bw, y + m["bh"]], fill=LABEL_PLATE + (235,))
-    kl = max(1, round(_pt_to_px(0.5, dpi)))
+    kl = max(1, round(_pt_to_px(0.5, m["fdpi"])))
     d.rectangle([x + kl + 1, y + kl + 1, x + bw - kl - 1, y + m["bh"] - kl - 1],
                 outline=TERMINUS_INK + (170,), width=kl)
     cy = y + pad
@@ -495,7 +594,7 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
     rw = max(m["tw"], m["sw"]) * 0.8          # the hairline rule, centred
     ry = cy + m["rule_h"] / 2
     d.line([(cx - rw / 2, ry), (cx + rw / 2, ry)],
-           fill=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.4, dpi))))
+           fill=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.4, m["fdpi"]))))
     cy += m["rule_h"]
     if m["stats"]:
         _tracked_text(d, (cx - m["sw"] / 2, cy - m["st"]), m["stats"],
@@ -508,7 +607,7 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
         fill = TERMINUS_INK + (230,) if i % 2 == 0 else LABEL_PLATE + (255,)
         d.rectangle([bx + i * seg, cy, bx + (i + 1) * seg, cy + m["bar_h"]], fill=fill)
     d.rectangle([bx, cy, bx + m["bar_px"], cy + m["bar_h"]],
-                outline=TERMINUS_INK + (220,), width=max(1, round(_pt_to_px(0.35, dpi))))
+                outline=TERMINUS_INK + (220,), width=max(1, round(_pt_to_px(0.35, m["fdpi"]))))
     ly = cy + m["bar_h"] + 2
     d.text((bx, ly), "0", fill=LABEL_INK + (190,), font=m["bar_font"])
     lbl = f"{m['miles']:g} MI"
@@ -576,21 +675,22 @@ def _draw_compass(img, spec, out_w, out_h, dpi):
         return img
     import math as _m
     d = ImageDraw.Draw(img, "RGBA")
-    R = COMPASS_DIAMETER_IN * dpi / 2.0
-    inset = round(TITLE_INSET_IN * dpi)
+    fdpi = dpi * _furniture_scale(spec)   # the rose enlarges as one engraving
+    R = COMPASS_DIAMETER_IN * fdpi / 2.0
+    inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
-    base_y = out_h - inset - ((m["bh"] + round(0.16 * dpi)) if m else 0)
+    base_y = out_h - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
     cx, cy = inset + R, base_y - R
     # a soft paper ground, keyline-edged so it reads as a set medallion, not a blob
     d.ellipse([cx - R * 1.16, cy - R * 1.16, cx + R * 1.16, cy + R * 1.16],
               fill=LABEL_PLATE + (160,),
-              outline=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.35, dpi))))
+              outline=TERMINUS_INK + (110,), width=max(1, round(_pt_to_px(0.35, fdpi))))
     # double ring: the outer line and an inner hairline
     d.ellipse([cx - R, cy - R, cx + R, cy + R],
-              outline=TERMINUS_INK + (210,), width=max(1, round(_pt_to_px(0.6, dpi))))
+              outline=TERMINUS_INK + (210,), width=max(1, round(_pt_to_px(0.6, fdpi))))
     r2 = R * 0.78
     d.ellipse([cx - r2, cy - r2, cx + r2, cy + r2],
-              outline=TERMINUS_INK + (130,), width=max(1, round(_pt_to_px(0.35, dpi))))
+              outline=TERMINUS_INK + (130,), width=max(1, round(_pt_to_px(0.35, fdpi))))
 
     def point(angle_deg, length, half_w, dark_a=235, light_a=245):
         a = _m.radians(angle_deg - 90)                     # 0 deg = north, y down
@@ -608,10 +708,10 @@ def _draw_compass(img, spec, out_w, out_h, dpi):
     d.ellipse([cx - hub, cy - hub, cx + hub, cy + hub], fill=TERMINUS_INK + (255,))
     hub2 = R * 0.032
     d.ellipse([cx - hub2, cy - hub2, cx + hub2, cy + hub2], fill=TERMINUS_RING + (255,))
-    f = _font(max(10, round(_pt_to_px(11.5, dpi))))
+    f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
     nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
     nw, nh = nr - nl, nb - nt
-    nx, ny = cx - nw / 2, cy - R - nh - round(0.05 * dpi)
+    nx, ny = cx - nw / 2, cy - R - nh - round(0.05 * fdpi)
     pad = max(2, round(nh * 0.22))
     # a mini paper plate behind the N (house label style) -- the bare letter sat on
     # terrain above the rose's ground disc and vanished over dark ridges
@@ -666,6 +766,11 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
             f"Pan or shrink the crop to keep it inside the region.")
 
     elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
+    # optional biome tint (Dom, v1.2): hue from the region's baked NLCD land cover,
+    # lightness from elevation + shade; None (asset absent or toggle off) falls back
+    # to the pure elevation tint.
+    biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_y), elev.shape, dpi)
+             if spec.biome else None)
     rgb = shaded_relief(
         elev, res_m=gpp,
         elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
@@ -675,7 +780,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         grain_strength=spec.grain_strength,
         # physical (ground-metre) blur radii -> identical relief at any DPI
         texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
-        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp))
+        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
+        biome=biome, depth=_terrain_depth(spec))
     # trim the margin back to the exact crop
     rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 
