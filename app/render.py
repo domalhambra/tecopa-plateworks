@@ -942,7 +942,15 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
     cap = max(6, round(spec.print_w_in * spec.print_h_in / 100.0 * GEO_LABELS_PER_100IN2))
     # keep-out for the furniture stack (cartouche + compass, bottom-left corner)
     fs = _furniture_scale(spec)
-    keepout = [(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
+    # only reserve the bottom-left corner when the furniture stack actually draws
+    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
+    # title-less print) must not blot labels out of a third of the sheet for nothing.
+    keepout = ([(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
+               if (spec.title_text or spec.compass) else [])
+    if spec.top_clear_frac > 0:
+        # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
+        # so auto-placed geography stays out of that band (user-placed markers don't).
+        keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
     placed, occupied = [], list(keepout)
 
     def overlaps(box):
@@ -1101,7 +1109,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
     img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
 
-    img = _draw_keyline(img, out_w, out_h, dpi)
+    if spec.keyline:
+        img = _draw_keyline(img, out_w, out_h, dpi)
     img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
     img = _draw_title_block(img, spec, out_w, out_h, dpi)
 
