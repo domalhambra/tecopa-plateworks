@@ -16,6 +16,10 @@ export const state = {
   printW: 18,
   printH: 24,
   orientation: 'auto',    // 'auto' (tracks decide) | 'landscape' | 'portrait'
+  output: 'print',        // 'print' | 'wallpaper' (a screen is a sheet with a known ppi)
+  wpPresets: [],          // /api/wallpapers/presets metadata (id,name,px,ppi,device_class)
+  wpPreset: '',           // active device preset id (wallpaper mode)
+  bundlePicks: [],        // preset ids ticked in the post-proof bundle card
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)
@@ -58,6 +62,23 @@ export function metresPerPx() {
   if (!r || !r.overview_size) return null;
   const [minx, , maxx] = r.bounds;
   return (maxx - minx) / r.overview_size[0];
+}
+
+// The active wallpaper preset's metadata (null when none / print mode).
+export function activePreset() {
+  return state.wpPresets.find((p) => p.id === state.wpPreset) || null;
+}
+
+// The FINAL's output width in pixels -- what the zoom-cap floor is judged against.
+// Prints render at 300 dpi; a wallpaper renders the device's exact native pixels.
+// Every client-side floor check keys on this, so wallpaper mode never inherits the
+// print path's hardcoded 300.
+export function finalWidthPx() {
+  if (state.output === 'wallpaper') {
+    const p = activePreset();
+    if (p) return p.px[0];
+  }
+  return Math.round(state.printW * 300);
 }
 
 // True when the loaded tracks read wider than tall (overview px are isotropic, so
