@@ -10,8 +10,8 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks
 from app.density import hotspots
-from app.spec import CompositionSpec, SpecError
-from app import session, render, regions, blobs, jobs, logconfig, provenance
+from app.spec import CompositionSpec, SpecError, FINAL_DPI
+from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper
 
 logconfig.setup_logging()
 log = logging.getLogger("trailprint.api")
@@ -23,8 +23,13 @@ log = logging.getLogger("trailprint.api")
 REGIONS_ROOT = os.environ.get("TRAILPRINT_REGIONS", "regions")
 REGIONS = regions.discover(REGIONS_ROOT)
 
+# PROOF_DPI / FINAL_DPI describe the PRINT path (FINAL_DPI lives on app.spec -- one
+# source of truth). A wallpaper's final dpi is its screen's ppi (spec.final_dpi());
+# its proof keeps the same preview ratio: final_dpi * PROOF_DPI / FINAL_DPI.
 PROOF_DPI = 96    # cheap mid-fidelity preview
-FINAL_DPI = 300   # print resolution -- the zoom cap is judged against THIS
+
+def _proof_dpi(spec):
+    return spec.final_dpi() * PROOF_DPI / FINAL_DPI    # 96 for a print, ppi*0.32 for a wallpaper
 
 # Lifecycle TTL (red-team V1-8): a back-to-back concierge day otherwise leaks disk +
 # memory (finals, blobs, job records, uploaded photos were never evicted). Default 24h;
@@ -57,7 +62,7 @@ try:
 except Exception:                                          # pragma: no cover
     SRGB_PROFILE = None
 
-def _encode_final(img, fmt: str, manifest=None) -> bytes:
+def _encode_final(img, fmt: str, manifest=None, dpi: float = FINAL_DPI) -> bytes:
     pil_fmt, _ = FINAL_FORMATS[fmt]
     buf = io.BytesIO()
     if fmt == "pdf":
@@ -69,7 +74,7 @@ def _encode_final(img, fmt: str, manifest=None) -> bytes:
         # AND the reprint manifest -- so self-describing posters are PNG-only.)
         img.save(buf, pil_fmt, resolution=FINAL_DPI, quality=95, subsampling=0)
     else:
-        kw = {"dpi": (FINAL_DPI, FINAL_DPI)}                # a print shop reads true size
+        kw = {"dpi": (dpi, dpi)}   # a print shop (or a wallpaper's ppi) reads true size
         if SRGB_PROFILE:
             kw["icc_profile"] = SRGB_PROFILE
         if manifest is not None:
@@ -80,17 +85,61 @@ def _encode_final(img, fmt: str, manifest=None) -> bytes:
         img.save(buf, pil_fmt, **kw)
     return buf.getvalue()
 
-def _require_format(fmt: str) -> str:
+def _require_format(fmt: str, spec=None) -> str:
     fmt = (fmt or "png").lower()
     if fmt not in FINAL_FORMATS:
         raise HTTPException(422, f"format must be one of {sorted(FINAL_FORMATS)}")
+    if spec is not None and spec.output_kind == "wallpaper" and fmt != "png":
+        # a wallpaper is a screen deliverable: PDF is the print-shop path, and it
+        # can't carry the reprint manifest anyway -- refuse honestly, never coerce.
+        raise HTTPException(422, "wallpapers are PNG-only — PDF is a print deliverable")
     return fmt
 
 def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
-    """The render worker: rasterize the stamped spec at print DPI and store the
-    encoded output. Runs on a queue thread, so it touches only its arguments."""
-    img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region_dir, watermark=False)
-    BLOBS.put(key, _encode_final(img, fmt, manifest))
+    """The render worker: rasterize the stamped spec at ITS final resolution (print
+    dpi, or the device's ppi for a wallpaper) and store the encoded output. Runs on a
+    queue thread, so it touches only its arguments."""
+    dpi = spec.final_dpi()
+    img = render.rasterize(spec, dpi=dpi, region_dir=region_dir, watermark=False)
+    BLOBS.put(key, _encode_final(img, fmt, manifest, dpi=dpi))
+    return key                                         # job result = the blob key
+
+def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec):
+    """The wallpaper-bundle worker: rasterize each per-device spec at its own ppi and
+    store one zip. PNGs are already compressed, so the zip only containers them.
+    Region assets (cfg/hydro/labels) are loaded ONCE and shared across the loop --
+    only the DEM window read legitimately differs per device. Manifests are built
+    here, per item, so N near-identical track copies never sit pinned in the queue.
+    A device whose re-fit crop trips a render-time guard (off-DEM: the refit is never
+    proofed) is skipped and named in SKIPPED.txt -- one bad device must not void the
+    zip. All devices failing = a real error."""
+    import zipfile
+    hydro = render._load_hydro(region_dir)
+    labels = (render._load_labels(region_dir)
+              if any(spec.labels for spec, _ in items) else None)
+    buf = io.BytesIO()
+    skipped = []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for spec, arcname in items:
+            dpi = spec.final_dpi()
+            try:
+                img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
+                                       watermark=False, hydro=hydro, cfg=cfg,
+                                       labels=labels)
+            except SpecError as e:
+                skipped.append(f"{arcname}: {e}")
+                continue
+            z.writestr(arcname,
+                       _encode_final(img, "png",
+                                     _final_manifest(spec, sources, embed_spec), dpi=dpi))
+        if skipped:
+            z.writestr("SKIPPED.txt",
+                       "These devices could not be rendered for this region:\n"
+                       + "\n".join(skipped) + "\n")
+    if len(skipped) == len(items):
+        raise RuntimeError("no requested device could be rendered: "
+                           + "; ".join(skipped))
+    BLOBS.put(key, buf.getvalue())
     return key                                         # job result = the blob key
 
 def _region_or_404(rid):
@@ -426,7 +475,7 @@ def _parse_hex_rgb(s: str):
         raise HTTPException(422, "track_color must be #rrggbb")
 
 def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True,
-                style=None, biome=False, labels=False):
+                style=None, biome=False, labels=False, preset=None):
     st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
@@ -436,18 +485,30 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
     title = (title or "").strip() or region.name
     if title == "-":
         title = ""
+    # wallpaper: the sheet IS the device's glass and the deliverable is a clean map
+    # (preset.spec_fields is the single definition); the operator's frame (crop),
+    # style knobs, and the labels/contours/biome toggles all still apply.
+    kw = (preset.spec_fields() if preset is not None
+          else dict(print_w_in=print_w, print_h_in=print_h,
+                    title_text=title, compass=compass))
     spec = CompositionSpec(
         region_id=region.id, crs=region.cfg["crs"], crop=crop,
-        print_w_in=print_w, print_h_in=print_h,
         native_resolution_m=region.cfg["native_resolution_m"],
         tracks=[t.coords for t in st["tracks"]],
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
-        hotspots=st["hotspots"], seed=7, title_text=title,
-        contours=contours, compass=compass, biome=biome, labels=labels, **(style or {}))
-    spec.validate(FINAL_DPI)   # gate on the resolution the PRINT uses, not the proof's
+        hotspots=st["hotspots"], seed=7,
+        contours=contours, biome=biome, labels=labels, **kw, **(style or {}))
+    spec.validate(spec.final_dpi())   # gate on the resolution the FINAL uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
     return spec, region
+
+def _preset_or_422(preset_id: str):
+    p = wallpaper.PRESETS.get((preset_id or "").strip())
+    if p is None:
+        raise HTTPException(422, f"unknown wallpaper preset {preset_id!r}; "
+                                 f"see GET /api/wallpapers/presets")
+    return p
 
 @app.post("/api/proof")
 async def proof(session_id: str = Form(...),
@@ -461,7 +522,8 @@ async def proof(session_id: str = Form(...),
                 track_color: str = Form(""), marker_size_in: float = Form(0.24),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
                 furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0),
-                shadow_strength: float = Form(0.5)):
+                shadow_strength: float = Form(0.5),
+                output: str = Form("print"), wallpaper_preset: str = Form("")):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
@@ -470,14 +532,21 @@ async def proof(session_id: str = Form(...),
              "terrain_depth": terrain_depth, "shadow_strength": shadow_strength}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
+    # an unknown output must 422, not silently build a print (same honest-422 pattern
+    # as photo_style / track_color / the preset id itself)
+    if output not in ("print", "wallpaper"):
+        raise HTTPException(422, "output must be 'print' or 'wallpaper'")
+    # wallpaper mode: the preset (not the print_w/print_h form fields) sets the sheet
+    preset = _preset_or_422(wallpaper_preset) if output == "wallpaper" else None
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
-                                   title, contours, compass, style, biome, labels)
+                                   title, contours, compass, style, biome, labels,
+                                   preset=preset)
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()
     try:
-        img = render.rasterize(spec, dpi=PROOF_DPI, region_dir=region.dir,
+        img = render.rasterize(spec, dpi=_proof_dpi(spec), region_dir=region.dir,
                                watermark=True, cfg=region.cfg)
     except SpecError as e:
         log.info("event=proof.reject session=%s reason=%s", session_id, e)
@@ -485,19 +554,23 @@ async def proof(session_id: str = Form(...),
     # stamp only now (invariant 1): a clean proof means the final renders from this same
     # spec. The off-DEM verdict is DPI-independent, so a stamped spec always renders.
     session.update(session_id, spec=spec)
-    log.info("event=proof session=%s region=%s dpi=%d ms=%d",
-             session_id, region.id, PROOF_DPI, int((time.time() - t0) * 1000))
+    log.info("event=proof session=%s region=%s kind=%s dpi=%.0f ms=%d",
+             session_id, region.id, spec.output_kind, _proof_dpi(spec),
+             int((time.time() - t0) * 1000))
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
 @app.post("/api/final")
 async def final(session_id: str = Form(...), format: str = Form("png"),
                 embed_spec: bool = Form(True)):
-    fmt = _require_format(format)
+    fmt = _require_format(format)      # membership first: a bad format is a 422 even
+                                       # when the session is gone (the old contract)
     spec, region, sources = _require_stamped(session_id)
+    _require_format(fmt, spec)         # the wallpaper PNG-only policy needs the spec
+    dpi = spec.final_dpi()
     t0 = time.time()
     try:
-        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir,
+        img = render.rasterize(spec, dpi=dpi, region_dir=region.dir,
                                watermark=False, cfg=region.cfg)
     except SpecError as e:
         log.info("event=final.reject session=%s reason=%s", session_id, e)
@@ -505,9 +578,9 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # Route the final through the blob seam (V1-8): stop littering region.dir with
     # final_*.png. Same key + encoding as the async path, so both serve identically.
     key = f"{session_id}/final.{fmt}"
-    BLOBS.put(key, _encode_final(img, fmt, _final_manifest(spec, sources, embed_spec)))
-    log.info("event=final session=%s region=%s dpi=%d fmt=%s embed=%s ms=%d",
-             session_id, region.id, FINAL_DPI, fmt, embed_spec, int((time.time() - t0) * 1000))
+    BLOBS.put(key, _encode_final(img, fmt, _final_manifest(spec, sources, embed_spec), dpi=dpi))
+    log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
+             session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
                         filename=f"trailprint.{fmt}")
 
@@ -515,13 +588,56 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
 async def final_submit(session_id: str = Form(...), format: str = Form("png"),
                        embed_spec: bool = Form(True)):
     """Async final: enqueue the render at the compose->rasterize boundary and return
-    a job id, so the request thread doesn't block on a 300 dpi paint. Same gate as
-    the sync path (a proof must be stamped first)."""
+    a job id, so the request thread doesn't block on a full-resolution paint. Same
+    gate as the sync path (a proof must be stamped first)."""
     fmt = _require_format(format)
     spec, region, sources = _require_stamped(session_id)
+    _require_format(fmt, spec)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
                        _final_manifest(spec, sources, embed_spec))
     return {"job": jid}
+
+
+# ---- wallpapers: the device-preset table + the multi-device bundle ----
+
+@app.get("/api/wallpapers/presets")
+async def wallpaper_presets():
+    """The device-preset table (single source of truth: app/wallpaper.py). The wizard
+    builds its picker from this -- device sizes are never hardcoded client-side."""
+    return [p.meta() for p in wallpaper.PRESETS.values()]
+
+@app.post("/api/wallpapers/submit")
+async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...),
+                            embed_spec: bool = Form(True)):
+    """The bundle: re-target the ACCEPTED composition at each requested device (crop
+    re-fit per aspect, sheet re-derived from the glass) and enqueue ONE job that
+    renders them all into a zip. Same gate as a final (a proof must be stamped).
+    `presets` is a comma-separated list of preset ids. A device the region can't
+    satisfy (zoom cap / off-DEM) is skipped and reported, never silently dropped;
+    if NO device fits, that's an honest 422."""
+    spec, region, sources = _require_stamped(session_id)
+    # dedupe while keeping order: a repeated id would write two identical arcnames
+    # into one zip (most unzip tools silently keep only one) and render twice.
+    ids = list(dict.fromkeys(p.strip() for p in presets.split(",") if p.strip()))
+    if not ids:
+        raise HTTPException(422, "presets must name at least one wallpaper preset")
+    items, skipped = [], []
+    for pid in ids:
+        p = _preset_or_422(pid)
+        try:
+            pspec = wallpaper.spec_for_preset(spec, p, tuple(region.cfg["bounds"]))
+        except SpecError as e:
+            skipped.append({"preset": pid, "reason": str(e)})
+            continue
+        items.append((pspec, f"trailprint_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
+    if not items:
+        raise HTTPException(422, "No requested device fits this region: "
+                            + "; ".join(s["reason"] for s in skipped))
+    jid = QUEUE.submit(_render_bundle_to_blob, items, region.dir,
+                       f"{session_id}/wallpapers.zip", region.cfg, sources, embed_spec)
+    log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
+             session_id, region.id, len(items), len(skipped))
+    return {"job": jid, "count": len(items), "skipped": skipped}
 
 @app.get("/api/jobs/{jid}")
 async def job_status(jid: str):
@@ -545,9 +661,13 @@ async def job_result(jid: str):
     key = s["result"]
     if not BLOBS.exists(key):
         raise HTTPException(404, "result expired")
-    fmt = "pdf" if key.endswith(".pdf") else "png"     # blob key carries the format
-    return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
-                        filename=f"trailprint.{fmt}")
+    # the blob key carries the format: final.png / final.pdf / wallpapers.zip.
+    # FINAL_FORMATS stays the single source of truth for the formats it owns.
+    ext = key.rsplit(".", 1)[-1] if "." in key else "png"
+    media = (FINAL_FORMATS[ext][1] if ext in FINAL_FORMATS
+             else "application/zip" if ext == "zip" else "application/octet-stream")
+    return FileResponse(BLOBS.path(key), media_type=media,
+                        filename=f"trailprint.{ext}")
 
 # ---- self-describing posters: reprint from the file alone (no session, no DB) ----
 # A TrailPrint PNG carries its own spec (see provenance.py). These two endpoints read
@@ -595,24 +715,25 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     reproducible forever. The embedded spec is UNTRUSTED input; photo paths are
     sanitized to inside the uploads dir (provenance.sanitize_photos) and spec.validate
     re-enforces aspect / the 120 MP ceiling / the zoom cap before any pixels are made."""
-    fmt = _require_format(format)
+    fmt = _require_format(format)      # cheap membership check BEFORE reading the file
     manifest = _manifest_or_422(await _read_capped(file))
     try:
         spec = provenance.manifest_to_spec(manifest)
     except Exception:
         raise HTTPException(422, "This file's TrailPrint manifest is malformed.")
+    _require_format(fmt, spec)                      # a wallpaper reprints as PNG only
     region = REGIONS.get(spec.region_id)
     if region is None:
         raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
                                  "so this poster can't be reprinted here.")
     provenance.sanitize_photos(spec, UPLOADS_DIR)   # drop any out-of-uploads photo path
     try:
-        spec.validate(FINAL_DPI)                    # untrusted spec: re-gate the geometry
+        spec.validate(spec.final_dpi())             # untrusted spec: re-gate the geometry
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()
     try:
-        img = render.rasterize(spec, dpi=FINAL_DPI, region_dir=region.dir,
+        img = render.rasterize(spec, dpi=spec.final_dpi(), region_dir=region.dir,
                                watermark=False, cfg=region.cfg)
     except SpecError as e:
         raise HTTPException(422, str(e))
@@ -623,7 +744,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         log.exception("event=reprint.render_error region=%s", spec.region_id)
         raise HTTPException(422, "This poster's embedded recipe couldn't be rendered.")
     # the reprint is itself self-describing (re-embed), unless the client opts out.
-    out = _encode_final(img, fmt, _final_manifest(spec, manifest.get("sources", []), embed_spec))
+    out = _encode_final(img, fmt, _final_manifest(spec, manifest.get("sources", []), embed_spec),
+                        dpi=spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
     return StreamingResponse(io.BytesIO(out), media_type=FINAL_FORMATS[fmt][1],
