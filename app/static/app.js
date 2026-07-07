@@ -2,7 +2,7 @@
 // the panes to canvas.js / markers.js / api.js. Single nav paradigm: one named
 // primary button drives each step forward; the stepper only clicks BACK to a
 // completed step.
-import { state, loadPrefs, savePref, activeRegion, trackAspectIsWide } from './state.js';
+import { state, loadPrefs, savePref, activeRegion, trackAspectIsWide, activePreset } from './state.js';
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as markers from './markers.js';
@@ -57,7 +57,7 @@ function go(step) {
     $('markersBox').hidden = !(state.hotspots.length);
     // 'auto' orientation reads the tracks now on board -- decide the print dims
     // BEFORE setMode seeds the starter crop, so the first frame has the right aspect
-    if (step === 'frame') applyPrintSize();
+    if (step === 'frame') { applyPrintSize(); applyOutputVisibility(); }
     canvas.setMode(step);
     if (step === 'tracks') {
       setStatus(state.tracks.length
@@ -68,6 +68,12 @@ function go(step) {
       setStatus('', 'status');
       updateFrameFeasibility();
     }
+  }
+  if (step === 'proof') {
+    // wallpapers are PNG-only (the server refuses PDF); the bundle card offers the
+    // accepted composition re-rendered for every screen the client picks.
+    $('formatField').hidden = state.output === 'wallpaper';
+    renderBundleCard();
   }
   buildStepper();
   focusHeading(step);
@@ -105,9 +111,9 @@ function buildRegionGallery() {
   }
 }
 
-async function loadRegions() {
+async function loadRegions(pending) {
   let list = [];
-  try { list = await api.getRegions(); } catch { /* leave empty; drop-to-detect still works */ }
+  try { list = await pending; } catch { /* leave empty; drop-to-detect still works */ }
   state.regions = list;
   const prefs = loadPrefs();
   if (list.length <= 1) {                              // auto-skip the Region step
@@ -121,6 +127,37 @@ async function loadRegions() {
     $('startOver').hidden = false;
     go('region');
   }
+}
+
+// The device-preset table comes from the server (single source of truth); the picker
+// groups it by device class. Runs BEFORE wire() so the output pref is restored only
+// once presets exist; with no presets (fetch failed/empty) the whole Output control
+// is hidden and the app stays a plain print wizard -- wallpaper mode is never
+// offered in a state where every proof would 422 on an empty preset id.
+async function loadWallpaperPresets() {
+  try {
+    state.wpPresets = await Promise.race([
+      api.getWallpaperPresets(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 4000)),
+    ]);
+  } catch { state.wpPresets = []; }
+  const sel = $('wpPreset'); sel.innerHTML = '';
+  const groups = [['desktop', 'Desktop'], ['laptop', 'Laptop'],
+                  ['phone', 'Phone'], ['tablet', 'Tablet']];
+  for (const [cls, label] of groups) {
+    const items = state.wpPresets.filter((p) => p.device_class === cls);
+    if (!items.length) continue;
+    const og = document.createElement('optgroup'); og.label = label;
+    for (const p of items) {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = `${p.name} — ${p.px[0]}×${p.px[1]}`;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  const pref = loadPrefs().wpPreset;
+  if (pref && state.wpPresets.some((p) => p.id === pref)) sel.value = pref;
+  state.wpPreset = sel.value || (state.wpPresets[0] ? state.wpPresets[0].id : '');
 }
 
 // --- upload / tracks step ---
@@ -165,8 +202,15 @@ function announce(msg) { const el = $('a11yStatus'); if (el) el.textContent = ms
 
 // Print dims = the chosen sheet (the size select stores portrait-first) turned by
 // the orientation control. 'auto' lets the tracks decide: a wide journey lies down,
-// a tall one stands up. Called on Frame entry and whenever size/orientation change.
+// a tall one stands up. In wallpaper mode the DEVICE is the sheet: px / ppi (a screen
+// is a sheet with a known ppi), and its pixels fix the orientation. Called on Frame
+// entry and whenever output/size/preset/orientation change.
 function applyPrintSize() {
+  if (state.output === 'wallpaper') {
+    const p = activePreset();
+    if (p) { state.printW = p.px[0] / p.ppi; state.printH = p.px[1] / p.ppi; }
+    return;
+  }
   const [a, b] = $('size').value.split(',').map(Number);
   const landscape = state.orientation === 'auto'
     ? trackAspectIsWide() : state.orientation === 'landscape';
@@ -174,14 +218,34 @@ function applyPrintSize() {
   state.printH = landscape ? Math.min(a, b) : Math.max(a, b);
 }
 
-// disable proof when the region physically can't hold the selected print size, with
+// Frame-step controls that only make sense for one output kind: wallpaper swaps the
+// size select for the device picker and drops orientation (the device decides),
+// the title field and the compass (wallpapers render clean, enforced server-side).
+function applyOutputVisibility() {
+  const wp = state.output === 'wallpaper';
+  $('sizeField').hidden = wp;
+  $('wpPresetField').hidden = !wp;
+  $('orientField').hidden = wp;
+  $('titleField').hidden = wp;
+  $('compassRow').hidden = wp;
+}
+
+// the human name of the current sheet, for feasibility / zoom-cap messages
+function sizeLabel() {
+  if (state.output === 'wallpaper') {
+    const p = activePreset(); return p ? p.name : 'this device';
+  }
+  return `${state.printW}×${state.printH}`;
+}
+
+// disable proof when the region physically can't hold the selected output size, with
 // an honest "pick a smaller size" message (vs. the "draw wider" case for a tight box).
 function updateFrameFeasibility() {
   const infeasible = canvas.sizeInfeasibleForRegion();
   $('renderProof').disabled = infeasible;
   $('expressBtn').disabled = infeasible;
   setStatus(infeasible
-    ? `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.` : '',
+    ? `This region is too small for ${sizeLabel()} — pick a smaller size.` : '',
     'status');
 }
 
@@ -205,7 +269,8 @@ async function renderProof() {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
                                  { title: state.title, contours: state.contours,
                                    compass: state.compass, biome: state.biome,
-                                   labels: state.labels, style: state.style });
+                                   labels: state.labels, style: state.style,
+                                   output: state.output, wpPreset: state.wpPreset });
     if (proofUrl) URL.revokeObjectURL(proofUrl);
     proofUrl = URL.createObjectURL(blob);
     $('posterImg').src = proofUrl;
@@ -221,9 +286,9 @@ async function renderProof() {
       // catch-all "draw wider" advice was the OPPOSITE fix for an off-DEM crop.
       let msg = e.message && !/^HTTP /.test(e.message) ? e.message : '';
       if (canvas.sizeInfeasibleForRegion()) {
-        msg = `This region is too small to print at ${state.printW}×${state.printH} — pick a smaller size.`;
+        msg = `This region is too small for ${sizeLabel()} — pick a smaller size.`;
       } else if (!msg || /m\/px/.test(msg)) {
-        msg = `This crop is too tight to print sharp at ${state.printW}×${state.printH} — draw wider or pick a larger size.`;
+        msg = `This crop is too tight to render sharp for ${sizeLabel()} — draw wider or pick a larger size.`;
       }
       setStatus(msg, 'status');
     } else { setStatus('Proof failed: ' + e.message, 'status'); }
@@ -254,6 +319,31 @@ function cropForProof() {
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
+// Poll a render job to a terminal state, narrating into `statusTarget`. ONE loop
+// shared by the final and the bundle, so the retry policy (the 600 ms cadence, the
+// 20-miss give-up, the vanished-job 404) can never drift between the two flows.
+// Resolves to the result URL on done, or null after reporting the failure.
+async function pollJob(jid, statusTarget, runningMsg) {
+  let misses = 0;
+  for (;;) {
+    await sleep(600);
+    let s;
+    try {
+      s = await api.jobStatus(jid);
+      misses = 0;
+    } catch (e) {
+      // a vanished job (404: server restarted, record evicted) can never finish
+      if (e.status === 404) { setStatus('Render lost (server restarted?) — try again.', statusTarget); return null; }
+      if (++misses >= 20) { setStatus('Lost contact with the server — try again.', statusTarget); return null; }
+      continue;
+    }
+    if (s.state === 'queued') { setStatus('Queued…', statusTarget); continue; }
+    if (s.state === 'running') { setStatus(runningMsg, statusTarget); continue; }
+    if (s.state === 'error') { setStatus('Render failed: ' + (s.error || 'render error'), statusTarget); return null; }
+    if (s.state === 'done') return s.result;
+  }
+}
+
 async function downloadFinal(url, fmt) {
   const blob = await api.fetchBlob(url);
   const a = document.createElement('a');
@@ -269,36 +359,65 @@ async function acceptFinal() {
   }
   $('accept').disabled = true;
   setStatus('Queuing final render…', 'proofStatus');
-  const fmt = state.finalFormat;
+  // a wallpaper final is always PNG (native device pixels; the server refuses PDF)
+  const fmt = state.output === 'wallpaper' ? 'png' : state.finalFormat;
   try {
     const { job } = await api.submitFinal(state.session, fmt, state.embedSpec);
-    let misses = 0;
-    for (;;) {
-      await sleep(600);
-      let s;
-      try {
-        s = await api.jobStatus(job);
-        misses = 0;
-      } catch (e) {
-        // a vanished job (404: server restarted, record evicted) can never finish --
-        // the old `continue` polled it forever with the button locked.
-        if (e.status === 404) { setStatus('Final lost (server restarted?) — accept again to re-render.', 'proofStatus'); break; }
-        if (++misses >= 20) { setStatus('Lost contact with the server — accept again to retry.', 'proofStatus'); break; }
-        continue;
-      }
-      if (s.state === 'queued') { setStatus('Queued…', 'proofStatus'); continue; }
-      if (s.state === 'running') { setStatus('Rendering final at 300 dpi…', 'proofStatus'); continue; }
-      if (s.state === 'error') { setStatus('Final failed: ' + (s.error || 'render error'), 'proofStatus'); break; }
-      if (s.state === 'done') {
-        await downloadFinal(s.result, fmt);
-        state.lastFinal = { url: s.result, fmt };        // re-download without re-rendering
-        $('downloadAgain').hidden = false;
-        setStatus(`Final ${fmt.toUpperCase()} downloaded.`, 'proofStatus');
-        break;
-      }
+    const result = await pollJob(job, 'proofStatus', 'Rendering the full-resolution final…');
+    if (result) {
+      await downloadFinal(result, fmt);
+      state.lastFinal = { url: result, fmt };            // re-download without re-rendering
+      $('downloadAgain').hidden = false;
+      setStatus(`Final ${fmt.toUpperCase()} downloaded.`, 'proofStatus');
     }
   } catch (e) { setStatus('Final failed: ' + e.message, 'proofStatus'); }
   $('accept').disabled = false;
+}
+
+// --- wallpaper bundle (post-proof): the accepted composition, re-rendered for every
+// screen the client ticks, downloaded as one zip. The server re-fits the crop per
+// device aspect; a device the region can't satisfy comes back in `skipped`.
+let bundleInFlight = false;
+
+function renderBundleCard() {
+  const card = $('bundleCard');
+  if (!state.wpPresets.length || !state.hasSpec) { card.hidden = true; return; }
+  card.hidden = false;
+  const host = $('bundleList');
+  host.innerHTML = '';
+  for (const p of state.wpPresets) {
+    const lab = document.createElement('label'); lab.className = 'bundle-item';
+    const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = p.id;
+    cb.checked = state.bundlePicks.includes(p.id);
+    cb.onchange = () => {
+      state.bundlePicks = [...host.querySelectorAll('input:checked')].map((i) => i.value);
+      $('bundleBtn').disabled = bundleInFlight || !state.bundlePicks.length;
+    };
+    const span = document.createElement('span');
+    span.textContent = `${p.name} · ${p.px[0]}×${p.px[1]}`;
+    lab.append(cb, span); host.appendChild(lab);
+  }
+  $('bundleBtn').disabled = bundleInFlight || !state.bundlePicks.length;
+}
+
+async function downloadBundle() {
+  if (bundleInFlight || !state.bundlePicks.length) return;
+  bundleInFlight = true; $('bundleBtn').disabled = true;
+  setStatus('Queuing wallpaper renders…', 'bundleStatus');
+  try {
+    const sub = await api.submitWallpapers(state.session, state.bundlePicks, state.embedSpec);
+    const skipped = (sub.skipped || []).map((s) => s.preset);
+    const result = await pollJob(sub.job, 'bundleStatus',
+      `Rendering ${sub.count} wallpaper(s) at native pixels…`);
+    if (result) {
+      await downloadFinal(result, 'zip');
+      setStatus('Bundle downloaded.'
+        + (skipped.length ? ` Skipped (region too small): ${skipped.join(', ')}.` : ''),
+        'bundleStatus');
+    }
+  } catch (e) { setStatus('Bundle failed: ' + e.message, 'bundleStatus'); }
+  bundleInFlight = false;
+  $('bundleBtn').disabled = !state.bundlePicks.length;
 }
 
 // --- start over ---
@@ -476,6 +595,8 @@ function wire() {
     state.finalFormat = fmtPref; $('finalFormat').value = fmtPref;
   }
 
+  $('bundleBtn').onclick = downloadBundle;
+
   const prefs = loadPrefs();
   if (prefs.printSize && /^\d+,\d+$/.test(prefs.printSize) &&
       [...$('size').options].some((o) => o.value === prefs.printSize)) {
@@ -484,16 +605,32 @@ function wire() {
   if (['auto', 'landscape', 'portrait'].includes(prefs.orient)) {
     state.orientation = prefs.orient; $('orient').value = prefs.orient;
   }
+  if (!state.wpPresets.length) {
+    // no preset table -> no wallpaper mode at all (and ignore a stale wallpaper pref)
+    $('outputField').hidden = true;
+  } else if (prefs.output === 'wallpaper' || prefs.output === 'print') {
+    state.output = prefs.output; $('output').value = prefs.output;
+  }
   applyPrintSize();
-  $('size').onchange = (e) => {
-    savePref('printSize', e.target.value);
+  applyOutputVisibility();
+  const reframeForSheet = () => {
     applyPrintSize();
     canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
+    if (state.hasSpec) state.proofStale = true;    // the sheet prints; re-proof it
   };
+  $('size').onchange = (e) => { savePref('printSize', e.target.value); reframeForSheet(); };
   $('orient').onchange = (e) => {
     state.orientation = e.target.value; savePref('orient', e.target.value);
-    applyPrintSize();
-    canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
+    reframeForSheet();
+  };
+  $('output').onchange = (e) => {
+    state.output = e.target.value; savePref('output', e.target.value);
+    applyOutputVisibility();
+    reframeForSheet();
+  };
+  $('wpPreset').onchange = (e) => {
+    state.wpPreset = e.target.value; savePref('wpPreset', e.target.value);
+    reframeForSheet();
   };
 
   // segmented faces reflect the (pref-seeded) hidden selects -- wire last so their
@@ -501,5 +638,14 @@ function wire() {
   wireSegmented();
 }
 
-wire();
-loadRegions();
+// Both fetches start immediately, in parallel. wire() must run after the presets
+// resolve (it decides whether wallpaper mode exists and restores its pref from the
+// table) and before the regions are PROCESSED (go() drives the canvas wire() set
+// up) -- but the regions REQUEST must not wait behind the presets fetch, or a slow
+// presets endpoint blanks the region picker for seconds.
+(async () => {
+  const pendingRegions = api.getRegions();
+  await loadWallpaperPresets();
+  wire();
+  loadRegions(pendingRegions);
+})();

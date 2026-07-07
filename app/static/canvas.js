@@ -3,7 +3,7 @@
 //   frame  mode  -> draw an aspect-locked crop box (fixed to grow in all 4 directions)
 // The side-list (markers.js) stays the unambiguous identity-edit surface, so the map
 // only handles MOVE — no click-vs-drag ambiguity on the dot.
-import { state, activeRegion, metresPerPx, cropOverviewPx } from './state.js';
+import { state, activeRegion, metresPerPx, cropOverviewPx, finalWidthPx } from './state.js';
 import * as api from './api.js';
 
 const BASE_W = 680;            // internal canvas width in px; scaled to overview
@@ -73,7 +73,7 @@ export function refitForSize() {
   const [ovW, ovH] = state.ovSize;
   const aspect = state.printW / state.printH;
   const cx = (c[0] + c[2]) / 2, cy = (c[1] + c[3]) / 2;
-  const floorOv = (r.native_resolution_m * Math.round(state.printW * 300)) / mpp;
+  const floorOv = (r.native_resolution_m * finalWidthPx()) / mpp;
   let w = Math.max(c[2] - c[0], floorOv);
   w = Math.min(w, ovW, ovH * aspect);                 // fit the overview box
   let h = w / aspect;
@@ -96,7 +96,7 @@ export function cropBelowFloor() {
   const c = cropOverviewPx(); const r = activeRegion(); const mpp = metresPerPx();
   if (!c || !r || !mpp) return false;
   const groundW = (c[2] - c[0]) * mpp;
-  return groundW < r.native_resolution_m * Math.round(state.printW * 300);
+  return groundW < r.native_resolution_m * finalWidthPx();
 }
 
 // Can NO in-region crop satisfy the zoom floor at the selected size? The largest
@@ -110,7 +110,7 @@ export function sizeInfeasibleForRegion() {
   const regW = r.bounds[2] - r.bounds[0];
   const regH = r.bounds[3] - r.bounds[1];
   const maxCropW = Math.min(regW, regH * (state.printW / state.printH));
-  return r.native_resolution_m * Math.round(state.printW * 300) > maxCropW;
+  return r.native_resolution_m * finalWidthPx() > maxCropW;
 }
 
 function cropAnnouncement() {

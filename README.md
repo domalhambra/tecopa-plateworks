@@ -34,6 +34,7 @@ required.
 - `app/relief.py` — pure-numpy relief passes (hillshade, hypsometric, texture, valley, grain)
 - `app/render.py` — read DEM window, paint relief + tracks + markers in physical units
 - `app/provenance.py` — the self-describing-poster manifest (embed / extract / sanitize)
+- `app/wallpaper.py` — device presets + `spec_for_preset` (a screen is a sheet with a known ppi)
 - `app/main.py` — the endpoints over the engine (upload, proof, final, reprint)
 - `region_prep.py` — offline, one-time: fetch 3DEP DEM, build COG + overview + region.json
 - `scripts/build_labels.py` — offline: fetch GNIS terrain names → `regions/<id>/labels.json`
@@ -69,6 +70,30 @@ without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
   pixels are made — a crafted PNG can neither read server files nor request a gigapixel.
 - **Forever-contract:** `tests/fixtures/manifest_v1.json` freezes the v1 schema; a
   poster a user printed today must still reprint after future upgrades.
+
+## Wallpapers ("a screen is a sheet with a known ppi")
+
+The Frame step's `Output: Print | Wallpaper` control renders the same composition as a
+pixel-native screen deliverable. A wallpaper is a print whose sheet size is derived
+from the device (`print_w_in = px / ppi`) and whose **final dpi is the device's ppi**
+(`spec.final_dpi()`), so `pixel_size()` returns the device's exact native pixels
+(3840×2160, 1179×2556, …) and every engine invariant — physical units, the zoom cap,
+determinism, provenance/reprint — carries over unchanged. A 2.6 pt track is literally
+2.6 pt on the client's glass.
+
+- Wallpapers render **clean**: no keyline, compass, or cartouche (`spec.keyline` off,
+  empty title). Place names / contours / biome still apply; phone and tablet presets
+  keep auto-placed labels out of the lock-screen clock band (`spec.top_clear_frac`).
+- **PNG-only** — the sRGB profile and the reprint manifest embed as usual; PDF is
+  refused with an honest 422 (it's the print-shop path and can't carry the manifest).
+- The device table lives in `app/wallpaper.py`, served by `GET /api/wallpapers/presets`
+  — the wizard never hardcodes device sizes.
+- **Bundle:** once a proof is accepted, `POST /api/wallpapers/submit` re-targets the
+  composition at each requested device (center-preserving crop re-fit per aspect via
+  `geo.refit_crop_aspect`) and renders them all into one zip through the job queue.
+  A device the region can't satisfy is skipped and reported, never silently dropped.
+- `tests/fixtures/manifest_wallpaper_v1.json` freezes the wallpaper manifest contract,
+  as `manifest_v1.json` does for prints.
 
 ## Invariants
 

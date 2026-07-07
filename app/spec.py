@@ -26,6 +26,19 @@ class OffDemError(SpecError):
 # so this leaves headroom for any real poster while blocking a gigapixel request.
 MAX_OUTPUT_PIXELS = 120_000_000
 
+# A print's final always rasterizes at this dpi; the zoom cap is judged against it
+# (main.py imports it -- one source of truth). A wallpaper's final dpi is its screen's
+# ppi instead (see final_dpi()).
+FINAL_DPI = 300
+
+OUTPUT_KINDS = ("print", "wallpaper")
+# Plausible physical screen densities: an FHD desktop sits near 92 ppi, a phone OLED
+# near 500. Outside this range px/ppi stops describing a real piece of glass.
+SCREEN_PPI_BOUNDS = (72.0, 600.0)
+# Ceiling for the phone lock-screen-clock keep-out band (top_clear_frac): past about
+# a third of the sheet the "band" would dominate label placement, not protect a clock.
+TOP_CLEAR_MAX = 0.35
+
 PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
@@ -90,9 +103,25 @@ class CompositionSpec:
                                              # along the sun with a cool skylight
                                              # fill. Constant across map scale --
                                              # shadows read best zoomed in; 0 = off
+    # wallpaper output (v1.5): a screen is a sheet with a known ppi. print_w_in/h_in
+    # are DERIVED from the device (px / ppi) at spec-build time (app/wallpaper.py), so
+    # pixel_size(screen_ppi) returns the device's exact native pixels and every
+    # physical-unit style value stays true on the glass. No pixel fields ride the spec.
+    output_kind: str = "print"               # "print" | "wallpaper"
+    screen_ppi: float = 0.0                  # device pixels per inch; wallpaper only
+    keyline: bool = True                     # the thin sheet frame; wallpapers go clean
+    top_clear_frac: float = 0.0              # keep AUTO-placed geography labels out of
+                                             # the top fraction of the sheet (the phone
+                                             # lock-screen clock); 0 = no band
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
+
+    def final_dpi(self) -> float:
+        """The dpi the FINAL renders at -- and the resolution the zoom cap is judged
+        against: print resolution for a print, the device's own ppi for a wallpaper
+        (so a wallpaper final is exactly the device's native pixels)."""
+        return self.screen_ppi if self.output_kind == "wallpaper" else float(FINAL_DPI)
 
     def ground_per_pixel(self, dpi: int) -> float:
         w_px, _ = self.pixel_size(dpi)
@@ -107,6 +136,18 @@ class CompositionSpec:
             raise SpecError(f"print size {self.print_w_in}x{self.print_h_in} in is not finite")
         if not all(math.isfinite(v) for v in self.crop):
             raise SpecError("crop bounds are not finite")
+        # output kind + its screen density: checked before any pixel math so a
+        # wallpaper with a garbage ppi 422s with the real reason, not "not renderable".
+        if self.output_kind not in OUTPUT_KINDS:
+            raise SpecError(f"output_kind must be one of {OUTPUT_KINDS}")
+        if self.output_kind == "wallpaper":
+            lo, hi = SCREEN_PPI_BOUNDS
+            if not (math.isfinite(self.screen_ppi) and lo <= self.screen_ppi <= hi):
+                raise SpecError(
+                    f"screen_ppi must be between {lo:.0f} and {hi:.0f} for a wallpaper")
+        if not (math.isfinite(self.top_clear_frac)
+                and 0.0 <= self.top_clear_frac <= TOP_CLEAR_MAX):
+            raise SpecError(f"top_clear_frac must be between 0 and {TOP_CLEAR_MAX}")
         w_px, h_px = self.pixel_size(dpi)
         # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
         if w_px < 1 or h_px < 1:

@@ -1,0 +1,26 @@
+{
+  "manifest_version": 1,
+  "engine": "trailprint",
+  "region_id": "lassen_ca",
+  "sources": [
+    {"filename": "trip.gpx", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "bytes": 123}
+  ],
+  "spec": {
+    "region_id": "lassen_ca",
+    "crs": "EPSG:32610",
+    "crop": [674744.83, 4475075.9, 714744.83, 4497575.9],
+    "print_w_in": 20.869565217391305,
+    "print_h_in": 11.739130434782609,
+    "native_resolution_m": 10,
+    "tracks": [[[680000.0, 4480000.0], [700000.0, 4495000.0]]],
+    "track_days": ["2024-06-01"],
+    "hotspots": [{"x": 690000.0, "y": 4487000.0, "weight": 1, "label": "Camp", "icon": "camp"}],
+    "seed": 7,
+    "title_text": "",
+    "compass": false,
+    "output_kind": "wallpaper",
+    "screen_ppi": 92.0,
+    "keyline": false,
+    "top_clear_frac": 0.0
+  }
+}

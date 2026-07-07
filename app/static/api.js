@@ -67,10 +67,12 @@ export async function moveMarker(sessionId, i, px, py) {
 // `contours`/`compass` are the optional furniture toggles.
 export async function proof(sessionId, cropOv, printW, printH,
                             { title = '', contours = false, compass = true,
-                              biome = false, labels = false, style = {} } = {}) {
+                              biome = false, labels = false, style = {},
+                              output = 'print', wpPreset = '' } = {}) {
   const [x0, y0, x1, y1] = cropOv;
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
+    output, wallpaper_preset: output === 'wallpaper' ? wpPreset : undefined,
     title: title || undefined,
     contours: contours ? 'true' : 'false', compass: compass ? 'true' : 'false',
     biome: biome ? 'true' : 'false', labels: labels ? 'true' : 'false',
@@ -88,6 +90,19 @@ export async function submitFinal(sessionId, format = 'png', embedSpec = true) {
   const res = await postForm('/api/final/submit',
     { session_id: sessionId, format, embed_spec: embedSpec ? 'true' : 'false' });
   return asJson(res);   // { job }
+}
+
+export async function getWallpaperPresets() {
+  const res = await fetch('/api/wallpapers/presets');
+  if (!res.ok) throw new ApiError(res.status, 'could not load wallpaper presets');
+  return res.json();    // [{ id, name, px, ppi, device_class, top_clear_frac }]
+}
+
+export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
+  const res = await postForm('/api/wallpapers/submit',
+    { session_id: sessionId, presets: presetIds.join(','),
+      embed_spec: embedSpec ? 'true' : 'false' });
+  return asJson(res);   // { job, count, skipped: [{preset, reason}] }
 }
 
 export async function jobStatus(jid) {

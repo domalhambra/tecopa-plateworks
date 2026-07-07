@@ -39,6 +39,35 @@ def crop_px_to_crs_window(region: RegionGeo, x0, y0, x1, y1):
     return (ax, ay, bx, by)
 
 
+def refit_crop_aspect(crop, aspect, bounds, floor_w=0.0):
+    """Re-fit a CRS crop window to a new width/height aspect, preserving its center
+    and (roughly) its area, clamped inside `bounds` -- the server-side twin of the
+    Frame step's refitForSize (canvas.js), used when one accepted composition is
+    re-targeted at a differently-shaped sheet (wallpaper presets). `floor_w` (metres)
+    is the zoom-cap floor width for the target output (native_resolution_m * output
+    width in px): the box is grown to it so the result clears the cap whenever the
+    region can hold such a box. A region too small for a floor-sized box at this
+    aspect yields the largest in-bounds crop (best effort) and the too-tight state is
+    surfaced by the caller's validate(), same contract as starter_crop. Returns
+    (min_x, min_y, max_x, max_y) in CRS metres."""
+    min_x, min_y, max_x, max_y = bounds
+    reg_w, reg_h = max_x - min_x, max_y - min_y
+    cx = (crop[0] + crop[2]) / 2.0
+    cy = (crop[1] + crop[3]) / 2.0
+    area = max((crop[2] - crop[0]) * (crop[3] - crop[1]), 1.0)
+    # 1e-6 relative headroom on the floor: at UTM magnitudes (~1e6 m) the caller's
+    # (x0 + w) - x0 round-trip can lose an ulp, and validate()'s zoom cap is a strict
+    # `<` -- a box grown to EXACTLY the floor could spuriously read as too tight.
+    # The nudge is ~1 cm of ground on a 10 km floor: invisible, never load-bearing.
+    w = max((area * aspect) ** 0.5, floor_w * (1.0 + 1e-6))
+    w = min(w, reg_w, reg_h * aspect)          # clamp to what the region box can hold
+    h = w / aspect
+    # keep the center, then slide the box fully inside the region bounds
+    x0 = min(max(cx - w / 2, min_x), max_x - w)
+    y0 = min(max(cy - h / 2, min_y), max_y - h)
+    return (x0, y0, x0 + w, y0 + h)
+
+
 def starter_crop(region: RegionGeo, tracks_px, print_w_in, print_h_in,
                  native_resolution_m, dpi=300, track_fraction=1 / 3):
     """A generous default crop (in overview px) for the Frame step: centered on the

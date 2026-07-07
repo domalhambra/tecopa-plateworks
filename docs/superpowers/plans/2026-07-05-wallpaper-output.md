@@ -1,8 +1,10 @@
 # TrailPrint — Desktop & Mobile Wallpaper Output (design + implementation plan)
 
-_2026-07-05 · Status: **proposed** — design decisions below were made with recommended
-defaults; the "Decision points for Dom" section flags every call that can be reversed
-cheaply before implementation starts._
+_2026-07-05 · Status: **implemented** (2026-07-06, all four phases; verified by the
+test suite and a Playwright end-to-end drive of the wizard). The "Decision points for
+Dom" defaults below shipped as chosen and remain cheap to revise. Still open:
+by-eye wallpaper goldens on a machine with real DEMs (this container renders
+synthetic terrain only)._
 
 ---
 
