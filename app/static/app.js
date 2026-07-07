@@ -111,9 +111,9 @@ function buildRegionGallery() {
   }
 }
 
-async function loadRegions() {
+async function loadRegions(pending) {
   let list = [];
-  try { list = await api.getRegions(); } catch { /* leave empty; drop-to-detect still works */ }
+  try { list = await pending; } catch { /* leave empty; drop-to-detect still works */ }
   state.regions = list;
   const prefs = loadPrefs();
   if (list.length <= 1) {                              // auto-skip the Region step
@@ -638,11 +638,14 @@ function wire() {
   wireSegmented();
 }
 
-// presets first: wire() decides whether wallpaper mode exists (and restores its
-// pref) from the loaded table; regions load in parallel with neither depending on
-// the other.
+// Both fetches start immediately, in parallel. wire() must run after the presets
+// resolve (it decides whether wallpaper mode exists and restores its pref from the
+// table) and before the regions are PROCESSED (go() drives the canvas wire() set
+// up) -- but the regions REQUEST must not wait behind the presets fetch, or a slow
+// presets endpoint blanks the region picker for seconds.
 (async () => {
+  const pendingRegions = api.getRegions();
   await loadWallpaperPresets();
   wire();
-  loadRegions();
+  loadRegions(pendingRegions);
 })();

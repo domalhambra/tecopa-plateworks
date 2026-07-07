@@ -629,6 +629,16 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         except SpecError as e:
             skipped.append({"preset": pid, "reason": str(e)})
             continue
+        # off-DEM probe NOW (cheap, DPI-independent): the re-fit crop was never
+        # proofed, and a render-time OffDemError would only surface inside the zip's
+        # SKIPPED.txt -- probing here keeps the response's `skipped` list (which the
+        # UI shows) the complete truth. The worker's per-item catch stays as backstop.
+        nan_frac = render._offdem_fraction(region.dir, region.cfg, pspec.crop)
+        if nan_frac > render.MAX_OFFDEM_NAN_FRAC:
+            skipped.append({"preset": pid, "reason":
+                            f"the re-fit frame extends past the region's elevation "
+                            f"data ({nan_frac * 100:.0f}% has no DEM coverage)"})
+            continue
         items.append((pspec, f"trailprint_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
     if not items:
         raise HTTPException(422, "No requested device fits this region: "
