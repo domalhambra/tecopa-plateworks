@@ -1,5 +1,6 @@
 # app/main.py
 import io, json, os, shutil, time
+import hashlib
 import logging
 from typing import List, Optional
 from PIL import Image
@@ -8,9 +9,9 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
-from app.ingest import load_tracks
+from app.ingest import load_tracks, Track
 from app.density import hotspots
-from app.spec import CompositionSpec, SpecError, FINAL_DPI
+from app.spec import CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper
 
 logconfig.setup_logging()
@@ -104,7 +105,7 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     BLOBS.put(key, _encode_final(img, fmt, manifest, dpi=dpi))
     return key                                         # job result = the blob key
 
-def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec):
+def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None):
     """The wallpaper-bundle worker: rasterize each per-device spec at its own ppi and
     store one zip. PNGs are already compressed, so the zip only containers them.
     Region assets (cfg/hydro/labels) are loaded ONCE and shared across the loop --
@@ -131,7 +132,8 @@ def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec):
                 continue
             z.writestr(arcname,
                        _encode_final(img, "png",
-                                     _final_manifest(spec, sources, embed_spec), dpi=dpi))
+                                     _final_manifest(spec, sources, embed_spec, lineage),
+                                     dpi=dpi))
         if skipped:
             z.writestr("SKIPPED.txt",
                        "These devices could not be rendered for this region:\n"
@@ -280,6 +282,23 @@ async def upload(files: List[UploadFile] = File(...),
         if len(data) > TRACK_FILE_MAX_BYTES or total > TRACK_BATCH_MAX_BYTES:
             raise HTTPException(422, "Track upload exceeds the size limit")
         payloads.append((data, f.filename))
+    # living-editions dedup: skip any file whose bytes already back this poster (its
+    # sha256 is already a source). Re-dropping last year's GPX -- the natural yearly
+    # ritual when continuing a poster -- must not double-count journeys (which would
+    # thicken the worn-width pass) or bloat the source list. Also collapses a file
+    # dropped twice in one batch. The first occurrence of a hash is always kept, so
+    # this can only empty `payloads` when every file already backs an existing session.
+    existing = session.get(session_id) if (session_id and session.has(session_id)) else None
+    seen_sha = {s.get("sha256") for s in (existing.get("sources", []) if existing else [])}
+    kept, skipped_dupes = [], []
+    for data, fn in payloads:
+        h = hashlib.sha256(data).hexdigest()
+        if h in seen_sha:
+            skipped_dupes.append(fn or "track.gpx")
+            continue
+        seen_sha.add(h)
+        kept.append((data, fn))
+    payloads = kept
     region, new = _resolve_region(payloads, session_id, region_id)
     # recovery = the operator's explicit region was overridden because the tracks
     # actually belong to a different built region (not a plain auto-detect).
@@ -305,9 +324,14 @@ async def upload(files: List[UploadFile] = File(...),
         sid = session.create({"tracks": tracks, "hotspots": spots,
                               "region_id": region.id, "sources": sources})
     else:
-        # invalidate any stamped spec: the track set changed, so /api/final must
-        # not render a stale proof (it re-enforces "approve a proof first").
-        session.update(sid, tracks=tracks, hotspots=spots, spec=None, sources=sources)
+        # invalidate any stamped spec ONLY when the track set actually changed: a
+        # re-drop of files already on the poster (every file deduped -> `new` empty)
+        # is a no-op that must not force a needless re-proof. A real addition re-gates
+        # "approve a proof first" so /api/final can't render a stale subset.
+        kw = dict(tracks=tracks, hotspots=spots, sources=sources)
+        if new:
+            kw["spec"] = None
+        session.update(sid, **kw)
     # project to overview pixels for the aim canvas; carry any marker metadata so
     # the editor can show current label/icon/photo state after a reload.
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
@@ -323,7 +347,8 @@ async def upload(files: List[UploadFile] = File(...),
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
-            "hotspots": hpx, "starter_crop": list(start), "recovered": recovered}
+            "hotspots": hpx, "starter_crop": list(start), "recovered": recovered,
+            "skipped_duplicates": skipped_dupes}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 # env-overridable so the test harness never writes into the operator's live dir
@@ -368,18 +393,20 @@ def _require_session(session_id):
 
 def _require_stamped(session_id):
     """The shared gate for both final endpoints: session -> 404, no stamped spec ->
-    400 (approve a proof first), the region it renders against, and the source hashes
-    (for the self-describing manifest)."""
+    400 (approve a proof first), the region it renders against, the source hashes
+    (for the self-describing manifest), and the edition lineage (living editions)."""
     st = _require_session(session_id)
     spec = st.get("spec")
     if spec is None:
         raise HTTPException(400, "Approve a proof first")
-    return spec, _region_or_404(st["region_id"]), st.get("sources", [])
+    return (spec, _region_or_404(st["region_id"]),
+            st.get("sources", []), st.get("lineage", []))
 
-def _final_manifest(spec, sources, embed_spec):
+def _final_manifest(spec, sources, embed_spec, lineage=None):
     """Build the provenance manifest for a final, or None when the client opted out of
-    embedding (a share copy: the manifest carries the exact track coordinates)."""
-    return provenance.build_manifest(spec, sources) if embed_spec else None
+    embedding (a share copy: the manifest carries the exact track coordinates). The
+    lineage (living editions) rides along; it is emitted only from the 2nd edition on."""
+    return provenance.build_manifest(spec, sources, lineage) if embed_spec else None
 
 @app.post("/api/markers")
 async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
@@ -497,6 +524,7 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         tracks=[t.coords for t in st["tracks"]],
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
         hotspots=st["hotspots"], seed=7,
+        edition=st.get("edition", 1),               # living editions: draws in the cartouche
         contours=contours, biome=biome, labels=labels, **kw, **(style or {}))
     spec.validate(spec.final_dpi())   # gate on the resolution the FINAL uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
@@ -565,7 +593,7 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
                 embed_spec: bool = Form(True)):
     fmt = _require_format(format)      # membership first: a bad format is a 422 even
                                        # when the session is gone (the old contract)
-    spec, region, sources = _require_stamped(session_id)
+    spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)         # the wallpaper PNG-only policy needs the spec
     dpi = spec.final_dpi()
     t0 = time.time()
@@ -578,7 +606,8 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # Route the final through the blob seam (V1-8): stop littering region.dir with
     # final_*.png. Same key + encoding as the async path, so both serve identically.
     key = f"{session_id}/final.{fmt}"
-    BLOBS.put(key, _encode_final(img, fmt, _final_manifest(spec, sources, embed_spec), dpi=dpi))
+    BLOBS.put(key, _encode_final(img, fmt,
+                                 _final_manifest(spec, sources, embed_spec, lineage), dpi=dpi))
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
@@ -591,10 +620,10 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     a job id, so the request thread doesn't block on a full-resolution paint. Same
     gate as the sync path (a proof must be stamped first)."""
     fmt = _require_format(format)
-    spec, region, sources = _require_stamped(session_id)
+    spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
-                       _final_manifest(spec, sources, embed_spec))
+                       _final_manifest(spec, sources, embed_spec, lineage))
     return {"job": jid}
 
 
@@ -615,7 +644,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
     `presets` is a comma-separated list of preset ids. A device the region can't
     satisfy (zoom cap / off-DEM) is skipped and reported, never silently dropped;
     if NO device fits, that's an honest 422."""
-    spec, region, sources = _require_stamped(session_id)
+    spec, region, sources, lineage = _require_stamped(session_id)
     # dedupe while keeping order: a repeated id would write two identical arcnames
     # into one zip (most unzip tools silently keep only one) and render twice.
     ids = list(dict.fromkeys(p.strip() for p in presets.split(",") if p.strip()))
@@ -644,7 +673,8 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         raise HTTPException(422, "No requested device fits this region: "
                             + "; ".join(s["reason"] for s in skipped))
     jid = QUEUE.submit(_render_bundle_to_blob, items, region.dir,
-                       f"{session_id}/wallpapers.zip", region.cfg, sources, embed_spec)
+                       f"{session_id}/wallpapers.zip", region.cfg, sources, embed_spec,
+                       lineage)
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
              session_id, region.id, len(items), len(skipped))
     return {"job": jid, "count": len(items), "skipped": skipped}
@@ -715,6 +745,9 @@ async def reprint_inspect(file: UploadFile = File(...)):
         "title": spec_d.get("title_text", ""),
         "tracks": len(spec_d.get("tracks", []) or []),
         "hotspots": len(spec_d.get("hotspots", []) or []),
+        # living editions: what edition this file is, and its ancestor chain.
+        "edition": manifest.get("edition", spec_d.get("edition", 1)),
+        "lineage": manifest.get("lineage", []),
     }
 
 @app.post("/api/reprint")
@@ -738,6 +771,7 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                                  "so this poster can't be reprinted here.")
     provenance.sanitize_photos(spec, UPLOADS_DIR)   # drop any out-of-uploads photo path
     try:
+        provenance.bound_geometry(spec)             # untrusted spec: refuse a geometry bomb
         spec.validate(spec.final_dpi())             # untrusted spec: re-gate the geometry
     except SpecError as e:
         raise HTTPException(422, str(e))
@@ -753,13 +787,149 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         # a clean 422, never a 500. Logged so a genuine regression is still visible.
         log.exception("event=reprint.render_error region=%s", spec.region_id)
         raise HTTPException(422, "This poster's embedded recipe couldn't be rendered.")
-    # the reprint is itself self-describing (re-embed), unless the client opts out.
-    out = _encode_final(img, fmt, _final_manifest(spec, manifest.get("sources", []), embed_spec),
+    # the reprint is itself self-describing (re-embed), unless the client opts out. A
+    # reprint is a re-render, NOT a new edition: the spec's own edition and the
+    # manifest's own lineage are re-embedded verbatim (never incremented here).
+    out = _encode_final(img, fmt,
+                        _final_manifest(spec, manifest.get("sources", []), embed_spec,
+                                        manifest.get("lineage", [])),
                         dpi=spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
     return StreamingResponse(io.BytesIO(out), media_type=FINAL_FORMATS[fmt][1],
                              headers={"Content-Disposition": f'attachment; filename="trailprint.{fmt}"'})
+
+
+# ---- living editions: the poster is the save file (POST /api/continue) ----
+# Resurrect a live session from a poster's embedded manifest, so last year's PNG + this
+# year's GPX renders the next edition. This is /api/reprint's generative twin: reprint
+# reproduces the same picture; continue re-opens the composition to edit and carry
+# forward. The manifest is UNTRUSTED input, so it reuses reprint's whole posture --
+# capped read, photo-path sanitization, geometry bound, and a full validate.
+
+def _finite_num(v) -> bool:
+    """True for a real, finite number (not a bool, not NaN/inf) -- the guard for an
+    untrusted hotspot coordinate before it reaches coordinate math."""
+    import math
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+def _crop_to_overview_px(geo, crop):
+    """A CRS crop window -> an ordered overview-px rect (x0,y0,x1,y1), the same
+    convention starter_crop returns (image y flips: max_y is the top edge)."""
+    px0, py0 = crs_to_overview_px(geo, crop[0], crop[3])   # top-left  (min_x, max_y)
+    px1, py1 = crs_to_overview_px(geo, crop[2], crop[1])   # bot-right (max_x, min_y)
+    return [min(px0, px1), min(py0, py1), max(px0, px1), max(py0, py1)]
+
+def _match_wallpaper_preset(spec):
+    """The preset id whose native pixels + density match a wallpaper spec, or None (a
+    custom device we can't offer as a preset). px = round(print_in * screen_ppi)."""
+    if spec.output_kind != "wallpaper" or spec.screen_ppi <= 0:
+        return None
+    pw = round(spec.print_w_in * spec.screen_ppi)
+    ph = round(spec.print_h_in * spec.screen_ppi)
+    for p in wallpaper.PRESETS.values():
+        if p.px_w == pw and p.px_h == ph and abs(p.ppi - spec.screen_ppi) < 1.0:
+            return p.id
+    return None
+
+@app.post("/api/continue")
+async def continue_poster(file: UploadFile = File(...)):
+    """Open a TrailPrint PNG for its next edition. Reads the embedded spec, rebuilds a
+    live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
+    extends the lineage chain, and returns the /api/upload response shape plus prefill
+    hints so the wizard lands with everything restored. The client then adds this year's
+    GPX (/api/upload), re-frames if needed, and renders -- one clean proof stamps the
+    new edition (invariant 1 holds: still one spec per accepted proof)."""
+    data = await _read_capped(file)
+    manifest = _manifest_or_422(data)
+    try:
+        spec = provenance.manifest_to_spec(manifest)
+    except Exception:
+        raise HTTPException(422, "This file's TrailPrint manifest is malformed.")
+    region = REGIONS.get(spec.region_id)
+    if region is None:
+        raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
+                                 "so this poster can't be continued here.")
+    # untrusted-manifest hardening (mirrors /api/reprint): drop any photo path that
+    # escapes the uploads dir, then drop any that no longer resolves to a real file
+    # (the TTL usually evicts a prior session's photos within a day) so a stale path
+    # can't fail a later final. Label + icon always survive.
+    provenance.sanitize_photos(spec, UPLOADS_DIR)
+    for hs in spec.hotspots:
+        if isinstance(hs, dict) and hs.get("photo") and not os.path.isfile(hs["photo"]):
+            hs.pop("photo", None)
+    try:
+        provenance.bound_geometry(spec)             # refuse a geometry-bomb manifest
+        spec.validate(spec.final_dpi())             # re-gate the untrusted geometry
+    except SpecError as e:
+        raise HTTPException(422, str(e))
+
+    # rebuild live Track objects from the spec (tracks ride the spec, exactly the
+    # property reprint relies on). track_days is parallel to tracks; normalize its
+    # length rather than trust a crafted mismatch. Track ids only need uniqueness --
+    # density keys on day-or-index, not the id string.
+    import numpy as np
+    days = list(spec.track_days or [])
+    days = (days + [None] * len(spec.tracks))[:len(spec.tracks)]
+    tracks = [Track(track_id=f"edition-{i}", coords=np.asarray(c, dtype=float), day=d)
+              for i, (c, d) in enumerate(zip(spec.tracks, days))]
+    # mutable hotspot copies for the session; drop any crafted entry without finite
+    # x/y so it can't 500 the projection here or a later proof/final render.
+    spots = [dict(s) for s in spec.hotspots
+             if isinstance(s, dict) and _finite_num(s.get("x")) and _finite_num(s.get("y"))]
+
+    # edition + lineage from the UNTRUSTED manifest: parse defensively (a crafted file
+    # can carry a non-int edition or a non-list lineage) -> clamp, drop garbage, never
+    # 500. The top-level `edition` is the parent's number; the child is one past it,
+    # capped at the ceiling (a millennium of yearly editions never reaches it).
+    try:
+        parent_edition = int(manifest.get("edition", 1))
+    except (TypeError, ValueError):
+        parent_edition = 1
+    parent_edition = min(max(parent_edition, 1), EDITION_MAX)
+    raw_lineage = manifest.get("lineage", [])
+    lineage = [e for e in raw_lineage if isinstance(e, dict)] if isinstance(raw_lineage, list) else []
+    lineage = (lineage + [{"sha256": hashlib.sha256(data).hexdigest(),
+                           "edition": parent_edition}])[-provenance.LINEAGE_MAX:]
+    edition = min(parent_edition + 1, EDITION_MAX)
+    raw_sources = manifest.get("sources", [])
+    sources = [s for s in raw_sources if isinstance(s, dict)] if isinstance(raw_sources, list) else []
+
+    sid = session.create({"tracks": tracks, "hotspots": spots, "region_id": region.id,
+                          "sources": sources, "edition": edition, "lineage": lineage})
+
+    tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
+    hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
+            "weight": s.get("weight", 1), "label": s.get("label", ""),
+            "icon": s.get("icon", ""), "photo": bool(s.get("photo"))} for s in spots]
+    r, g, b = (int(c) for c in spec.track_rgb)
+    output = spec.output_kind
+    matched = _match_wallpaper_preset(spec)
+    if output == "wallpaper" and matched is None:
+        output = "print"                            # custom device -> continue as a print
+    prefill = {
+        # a title-less poster carries title_text="" (the "-" choice at proof time). Send
+        # it back as "-" so the edition-2 proof stays title-less: an empty title would
+        # otherwise re-resolve to the region name in _build_spec and regrow a title block.
+        "title": spec.title_text or "-", "print_w_in": spec.print_w_in,
+        "print_h_in": spec.print_h_in, "output": output, "wallpaper_preset": matched,
+        "contours": spec.contours, "compass": spec.compass, "biome": spec.biome,
+        "labels": spec.labels, "edition": edition, "lineage": lineage,
+        "style": {"width": spec.track_width_pt, "halo": spec.track_halo,
+                  "color": f"#{r:02x}{g:02x}{b:02x}", "marker": spec.marker_diameter_in,
+                  "ring": spec.marker_ring, "photoStyle": spec.photo_frame_style,
+                  "furniture": spec.furniture_scale, "terrain": spec.terrain_depth,
+                  "shadow": spec.shadow_strength},
+    }
+    log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
+             sid, region.id, edition, len(tracks), len(spots))
+    return {"session": sid, "region": region.id, "name": region.name,
+            "overview": f"/regions/{region.id}/overview.png",
+            "overview_size": region.cfg["overview_size"], "tracks": tpx,
+            "hotspots": hpx, "starter_crop": _crop_to_overview_px(region.geo, spec.crop),
+            "recovered": False, "skipped_duplicates": [],
+            "edition": edition, "files": [s.get("filename", "track.gpx") for s in sources],
+            "prefill": prefill}
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

@@ -23,6 +23,7 @@ export const state = {
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)
+  edition: 1,             // living editions: 1 = a fresh poster; >=2 = continued
   title: '',              // poster title ('' -> region name; '-' -> no title block)
   contours: false,        // elevation contour lines
   compass: true,          // compass rose above the title block

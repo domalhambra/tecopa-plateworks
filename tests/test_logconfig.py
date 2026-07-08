@@ -31,6 +31,11 @@ def test_json_formatter_includes_exception():
 
 def test_setup_logging_is_idempotent():
     a = logconfig.setup_logging()
+    before = len(a.handlers)
     b = logconfig.setup_logging()
     assert a is b and a.name == "trailprint"
-    assert len(a.handlers) == 1          # not re-added on repeat calls
+    # a repeat call must ADD nothing (the property setup_logging guarantees). Assert no
+    # growth rather than an absolute count of 1: under pytest, the log-capture plugin
+    # may also attach a handler to this non-propagating logger during a run, and that
+    # is orthogonal to setup_logging's own idempotency.
+    assert len(b.handlers) == before

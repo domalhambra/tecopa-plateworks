@@ -44,6 +44,16 @@ export async function upload(files, { sessionId, regionId } = {}) {
   return asJson(res);
 }
 
+// Living editions: open a TrailPrint PNG for its next edition. Resurrects a session
+// from the file's embedded manifest and returns the /api/upload response shape plus a
+// `prefill` block (style, title, size, output, edition, lineage) and `edition`.
+export async function continuePoster(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/continue', { method: 'POST', body: fd });
+  return asJson(res);
+}
+
 export async function setMarkers(sessionId, markers) {
   const res = await postForm('/api/markers', { session_id: sessionId, markers: JSON.stringify(markers) });
   return asJson(res);

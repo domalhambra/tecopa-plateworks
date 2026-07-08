@@ -21,6 +21,7 @@
         <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
+        <span id="editionBadge" class="edition-badge" hidden></span>
       </div>
       <div class="tb-group header-actions">
         <button id="themeToggle" class="tb-btn" type="button" aria-label="Toggle day and night theme" hidden>
@@ -45,6 +46,7 @@
           </div>
           <div id="regionGallery" class="region-gallery"></div>
           <div class="pane-foot">
+            <button id="continuePosterRegion" class="ghost" type="button">Continue a poster…</button>
             <button id="toTracks" class="primary" type="button" disabled>Continue</button>
           </div>
         </div>
@@ -63,6 +65,9 @@
                 <span class="dz-ico" aria-hidden="true">↧</span>
                 <b>Drop GPX, KML or KMZ</b>
                 <span>or click to browse — files accumulate</span>
+              </button>
+              <button id="continuePoster" class="dz-continue" type="button">
+                ↻ Continue a poster — open last year's PNG to add this year
               </button>
               <div id="hint" class="hint" hidden></div>
             </div>
@@ -269,6 +274,7 @@
   </div>
 
   <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>
+  <input type="file" id="posterInput" accept="image/png,.png" hidden>
   <script type="module" src="app.js"></script>
 </body>
 </html>

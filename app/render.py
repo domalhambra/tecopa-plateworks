@@ -494,11 +494,30 @@ def _furniture_scale(spec):
     s = (spec.print_w_in * spec.print_h_in / FURNITURE_BASE_IN2) ** 0.5
     return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX) * spec.furniture_scale
 
+def _year_span(spec):
+    """The min-max year across the dated tracks as 'YYYY' or 'YYYY–YYYY' (en dash),
+    or '' when no track carries a date. Pure function of track_days (invariant 3)."""
+    years = sorted({d[:4] for d in (spec.track_days or [])
+                    if isinstance(d, str) and len(d) >= 4 and d[:4].isdigit()})
+    if not years:
+        return ""
+    return years[0] if years[0] == years[-1] else f"{years[0]}–{years[-1]}"
+
 def _stats_line(spec, dpi):
-    """A deterministic cartographic caption from the spec alone: approximate scale
-    ratio, distinct days, total mileage. No wall clock, no locale (invariant 3)."""
+    """A deterministic cartographic caption from the spec alone: the edition line (from
+    the second edition on), approximate scale ratio, distinct days, total mileage. No
+    wall clock, no locale (invariant 3)."""
     import math
     parts = []
+    # living editions: a poster carried forward wears its edition + the years it spans,
+    # set at the head of the caption. Edition 1 (every pre-feature poster) adds nothing,
+    # so its stats line is byte-identical to before the feature.
+    edition = getattr(spec, "edition", 1) or 1
+    if edition >= 2:
+        parts.append(f"EDITION {edition}")
+        span = _year_span(spec)
+        if span:
+            parts.append(span)
     ratio = (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * 0.0254)
     if ratio > 0:
         mag = 10 ** max(0, int(math.floor(math.log10(ratio))) - 1)

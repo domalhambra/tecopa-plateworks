@@ -39,6 +39,10 @@ SCREEN_PPI_BOUNDS = (72.0, 600.0)
 # a third of the sheet the "band" would dominate label placement, not protect a clock.
 TOP_CLEAR_MAX = 0.35
 
+# Edition ceiling: a poster carried forward once a year for a millennium is still
+# well under this. Bounds the cartouche label and a crafted-manifest edition value.
+EDITION_MAX = 999
+
 PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
@@ -113,6 +117,11 @@ class CompositionSpec:
     top_clear_frac: float = 0.0              # keep AUTO-placed geography labels out of
                                              # the top fraction of the sheet (the phone
                                              # lock-screen clock); 0 = no band
+    # living editions (v1.6): the poster is the save file. Continuing a poster
+    # (POST /api/continue) resurrects its spec and renders the next edition; this is
+    # the edition number the cartouche draws, so it's a picture decision -> the spec.
+    # Default 1 -> every pre-feature poster and manifest is an unlabeled first edition.
+    edition: int = 1
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
@@ -167,6 +176,12 @@ class CompositionSpec:
                 raise SpecError(f"{name} must be between {lo} and {hi}")
         if self.photo_frame_style not in PHOTO_FRAME_STYLES:
             raise SpecError(f"photo_frame_style must be one of {PHOTO_FRAME_STYLES}")
+        # edition: a bounded int (living editions). A crafted manifest could carry a
+        # float, a bool, or a gigantic value; reject anything outside 1..EDITION_MAX
+        # with an honest 422 (bool is an int subclass, so exclude it explicitly).
+        if (isinstance(self.edition, bool) or not isinstance(self.edition, int)
+                or not (1 <= self.edition <= EDITION_MAX)):
+            raise SpecError(f"edition must be an integer between 1 and {EDITION_MAX}")
         if (len(tuple(self.track_rgb)) != 3
                 or not all(isinstance(c, int) and 0 <= c <= 255 for c in self.track_rgb)):
             raise SpecError("track_rgb must be three 0-255 integers")
