@@ -26,11 +26,23 @@ import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
-from app.spec import CompositionSpec
+from app.spec import CompositionSpec, SpecError
 
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword
 MANIFEST_VERSION = 1
 ENGINE = "trailprint"
+
+# Living editions: the ancestor chain that lets a poster prove its lineage from the
+# file alone is capped so a century of yearly editions can't unbound the manifest
+# (past the cap the oldest ancestors drop; the file never refuses to embed).
+LINEAGE_MAX = 100
+
+# A manifest is UNTRUSTED input (see /api/continue, /api/reprint). bound_geometry
+# refuses a crafted spec whose track/point/hotspot counts would balloon the render
+# before validate()/rasterize even runs -- the geometry-bomb guard.
+MAX_MANIFEST_TRACKS = 4096
+MAX_MANIFEST_POINTS = 5_000_000
+MAX_MANIFEST_HOTSPOTS = 64
 
 
 def source_entry(data: bytes, filename: str | None) -> dict:
@@ -40,17 +52,60 @@ def source_entry(data: bytes, filename: str | None) -> dict:
             "bytes": len(data)}
 
 
-def build_manifest(spec: CompositionSpec, sources: list | None = None) -> dict:
+def build_manifest(spec: CompositionSpec, sources: list | None = None,
+                   lineage: list | None = None) -> dict:
     """The provenance record for one poster: schema version, engine, region, the full
     spec, and the source-file hashes. A pure function of its inputs (no timestamp), so
-    the same spec yields the same manifest bytes."""
-    return {
+    the same spec yields the same manifest bytes.
+
+    Living editions: from the SECOND edition on, the manifest also carries `edition`
+    and `lineage` (the ancestor chain, newest-capped at LINEAGE_MAX). These keys are
+    OMITTED for a first edition, so every pre-feature manifest -- including the frozen
+    v1 / wallpaper fixtures -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1
+    (the change is purely additive)."""
+    m = {
         "manifest_version": MANIFEST_VERSION,
         "engine": ENGINE,
         "region_id": spec.region_id,
         "spec": serialize.spec_to_json(spec),
         "sources": list(sources or []),
     }
+    edition = int(getattr(spec, "edition", 1) or 1)
+    if edition >= 2:
+        m["edition"] = edition
+        m["lineage"] = list(lineage or [])[-LINEAGE_MAX:]   # keep newest, drop oldest
+    return m
+
+
+def bound_geometry(spec: CompositionSpec) -> CompositionSpec:
+    """Refuse a manifest-derived spec whose geometry is a resource bomb, BEFORE
+    validate()/rasterize touch it. A crafted PNG could declare millions of points or
+    thousands of tracks that sail past validate() (which checks the crop/sheet, not the
+    track arrays) and only blow up inside the coverage loops. Raises SpecError (the API
+    maps it to 422), so both /api/continue and /api/reprint get the same guard."""
+    tracks = spec.tracks or []
+    if len(tracks) > MAX_MANIFEST_TRACKS:
+        raise SpecError(f"manifest declares {len(tracks)} tracks "
+                        f"(max {MAX_MANIFEST_TRACKS})")
+    total = 0
+    for t in tracks:
+        shape = getattr(t, "shape", None)
+        if shape is not None:
+            # a crafted manifest can carry (N,3) / 1-D / 0-D track arrays that sail
+            # past validate() (it never inspects the track shapes) and then blow up
+            # the (x, y) unpacking in projection / coverage. Demand (N, 2) here.
+            if len(shape) != 2 or shape[1] != 2:
+                raise SpecError("manifest track arrays must be shaped (N, 2)")
+            total += int(shape[0])
+        else:
+            total += len(t)                            # a plain point list
+    if total > MAX_MANIFEST_POINTS:
+        raise SpecError(f"manifest declares {total} track points "
+                        f"(max {MAX_MANIFEST_POINTS})")
+    if len(spec.hotspots or []) > MAX_MANIFEST_HOTSPOTS:
+        raise SpecError(f"manifest declares {len(spec.hotspots)} hotspots "
+                        f"(max {MAX_MANIFEST_HOTSPOTS})")
+    return spec
 
 
 def _manifest_str(manifest: dict) -> str:
@@ -101,6 +156,8 @@ def sanitize_photos(spec: CompositionSpec, uploads_dir: str) -> CompositionSpec:
     root = os.path.realpath(uploads_dir)
     prefix = root + os.sep
     for hs in spec.hotspots:
+        if not isinstance(hs, dict):     # a crafted manifest can carry non-dict entries
+            continue
         p = hs.get("photo")
         if not p:
             continue

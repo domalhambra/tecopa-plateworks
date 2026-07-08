@@ -20,6 +20,13 @@ def _client():
 def _file(name="a.gpx"):
     return ("files", (name, open("tests/fixtures/sample.gpx", "rb").read(), "application/gpx+xml"))
 
+def _file2(name="b.gpx"):
+    # a genuinely different in-region file (same corridor, the next year) so the
+    # accumulation tests append rather than trip the living-editions duplicate-sha256
+    # skip. Same 5 tracks, distinct bytes -> distinct source hash.
+    data = open("tests/fixtures/sample.gpx", "rb").read().replace(b"2024-06-01", b"2025-06-01")
+    return ("files", (name, data, "application/gpx+xml"))
+
 def _upload(c):
     r = c.post("/api/upload", files=[_file()])
     assert r.status_code == 200
@@ -67,14 +74,14 @@ def test_upload_unknown_region_is_404():
 
 def test_upload_multiple_files_accumulate():
     c = _client()
-    r = c.post("/api/upload", files=[_file("a.gpx"), _file("b.gpx")])
+    r = c.post("/api/upload", files=[_file("a.gpx"), _file2("b.gpx")])
     assert r.status_code == 200
     assert len(r.json()["tracks"]) == 10            # 5 + 5 combined
 
 def test_upload_appends_to_session():
     c = _client()
     j = _upload(c)                                   # 5 tracks
-    r = c.post("/api/upload", files=[_file("b.gpx")], data={"session_id": j["session"]})
+    r = c.post("/api/upload", files=[_file2("b.gpx")], data={"session_id": j["session"]})
     assert r.status_code == 200
     assert r.json()["session"] == j["session"]
     assert len(r.json()["tracks"]) == 10

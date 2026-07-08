@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "engine": "trailprint",
+  "region_id": "lassen_ca",
+  "edition": 3,
+  "lineage": [
+    {"sha256": "1111111111111111111111111111111111111111111111111111111111111111", "edition": 1},
+    {"sha256": "2222222222222222222222222222222222222222222222222222222222222222", "edition": 2}
+  ],
+  "sources": [
+    {"filename": "2024.gpx", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "bytes": 123},
+    {"filename": "2025.gpx", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "bytes": 456}
+  ],
+  "spec": {
+    "region_id": "lassen_ca",
+    "crs": "EPSG:32610",
+    "crop": [674744.83, 4459659.23, 714744.83, 4512992.56],
+    "print_w_in": 9,
+    "print_h_in": 12,
+    "native_resolution_m": 10,
+    "tracks": [[[680000.0, 4470000.0], [700000.0, 4500000.0]], [[682000.0, 4472000.0], [698000.0, 4498000.0]]],
+    "track_days": ["2024-06-01", "2025-07-04"],
+    "hotspots": [{"x": 690000.0, "y": 4485000.0, "weight": 2, "label": "Camp", "icon": "camp"}],
+    "seed": 7,
+    "title_text": "Three Summers",
+    "edition": 3
+  }
+}

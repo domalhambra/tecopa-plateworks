@@ -47,6 +47,11 @@ def dump_session(data: dict) -> dict:
         # source-file provenance (self-describing posters): carried so the final's
         # embedded manifest can hash-name the GPX. .get keeps old rows loadable.
         "sources": data.get("sources", []),
+        # living editions: the session's authoritative edition counter + ancestor
+        # chain (set by /api/continue), stamped onto the spec + manifest at final
+        # time. .get -> a pre-feature row loads as an unlabeled first edition.
+        "edition": data.get("edition", 1),
+        "lineage": data.get("lineage", []),
     }
 
 def load_session(d: dict) -> dict:
@@ -57,4 +62,6 @@ def load_session(d: dict) -> dict:
         "tracks": [track_from_json(t) for t in d["tracks"]],
         "spec": spec_from_json(d["spec"]) if d.get("spec") else None,
         "sources": d.get("sources", []),      # drift tolerance: absent in pre-feature rows
+        "edition": d.get("edition", 1),        # living editions (absent -> first edition)
+        "lineage": d.get("lineage", []),
     }

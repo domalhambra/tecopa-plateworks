@@ -174,9 +174,15 @@ async function doUpload(fileList) {
     state.starterCrop = j.starter_crop; state.crop = null;    // set on Frame entry
     state.hasSpec = false; state.proofStale = true;           // new tracks invalidate any spec
     savePref('region', j.region);
-    arr.forEach((f) => state.files.push(f.name)); renderFiles();
+    // living editions: a file already on the poster (same bytes) is skipped server-side,
+    // so don't list it as newly added either.
+    const skipped = j.skipped_duplicates || [];
+    const skippedSet = new Set(skipped);
+    arr.forEach((f) => { if (!skippedSet.has(f.name)) state.files.push(f.name); });
+    renderFiles();
     canvas.setOverview(j.overview, j.overview_size);
-    $('dropzone').hidden = true; $('map').hidden = false; $('addFiles').hidden = false;
+    $('dropzone').hidden = true; $('continuePoster').hidden = true;
+    $('map').hidden = false; $('addFiles').hidden = false;
     $('startOver').hidden = false;               // reset is reachable from any step now
     markers.render($('markerList'), (msg) => setStatus(msg));
     $('toFrame').disabled = state.tracks.length === 0;
@@ -190,12 +196,116 @@ async function doUpload(fileList) {
       announce(`Switched region to ${j.name}`);
     } else {
       showHint('Your tracks are on the map — gold dots mark places you returned to most');
-      setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s) — name places or continue`);
+      const dupNote = skipped.length
+        ? ` (${skipped.length} already on this poster — skipped)` : '';
+      setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — name places or continue`);
     }
   } catch (e) { setStatus('Upload failed: ' + e.message); }
 }
 
 function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${escapeHtml(n)}</li>`).join(''); }
+
+// --- living editions: continue a poster ---
+function updateEditionBadge() {
+  const b = $('editionBadge');
+  if (!b) return;
+  const show = state.edition >= 2;
+  b.textContent = show ? `Edition ${state.edition}` : '';
+  b.hidden = !show;
+}
+
+// Reflect a continued poster's saved recipe into the Frame-step controls, so the
+// restored composition renders exactly as it was composed until the operator edits it.
+function applyPrefill(p) {
+  if (!p) return;
+  state.title = p.title || '';
+  $('titleInput').value = state.title;
+  state.contours = !!p.contours; $('contoursChk').checked = state.contours;
+  state.compass = p.compass !== false; $('compassChk').checked = state.compass;
+  state.biome = !!p.biome; $('biomeChk').checked = state.biome;
+  state.labels = !!p.labels; $('labelsChk').checked = state.labels;
+  const s = p.style || {};
+  Object.assign(state.style, {
+    width: s.width, halo: s.halo, color: s.color || '', marker: s.marker, ring: s.ring,
+    photoStyle: s.photoStyle, furniture: s.furniture, terrain: s.terrain, shadow: s.shadow,
+  });
+  const setSlider = (sid, vid, val, fmt) => {
+    const el = $(sid); if (el != null && val != null) { el.value = val; $(vid).textContent = fmt(val); }
+  };
+  setSlider('sWidth', 'vWidth', s.width, (v) => `${v} pt`);
+  setSlider('sHalo', 'vHalo', s.halo, (v) => Number(v).toFixed(2));
+  setSlider('sShadow', 'vShadow', s.shadow, (v) => Number(v).toFixed(1));
+  setSlider('sTerrain', 'vTerrain', s.terrain, (v) => `${Number(v).toFixed(1)}×`);
+  setSlider('sMarker', 'vMarker', s.marker, (v) => `${v} in`);
+  setSlider('sRing', 'vRing', s.ring, (v) => Number(v).toFixed(2));
+  setSlider('sFurniture', 'vFurniture', s.furniture, (v) => `${Number(v).toFixed(2)}×`);
+  if ($('sPhotoStyle')) $('sPhotoStyle').value = s.photoStyle || 'mat';
+  for (const el of document.querySelectorAll('.swatch')) {
+    el.classList.toggle('sel', (el.dataset.hex || '').toLowerCase() === (s.color || '').toLowerCase());
+  }
+  // output kind + sheet: a continued wallpaper re-enters wallpaper mode on its matched
+  // device; otherwise a print, with the exact restored sheet added as a size option.
+  if (p.output === 'wallpaper' && p.wallpaper_preset && state.wpPresets.length) {
+    state.output = 'wallpaper'; $('output').value = 'wallpaper';
+    state.wpPreset = p.wallpaper_preset; $('wpPreset').value = p.wallpaper_preset;
+  } else {
+    state.output = 'print'; $('output').value = 'print';
+    ensurePrintSize(p.print_w_in, p.print_h_in);
+  }
+  applyOutputVisibility();
+  // re-sync the segmented faces to the programmatically-set selects
+  for (const sel of ['output', 'orient', 'finalFormat']) {
+    const el = $(sel); if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+}
+
+// Ensure the print-size <select> can express the continued poster's exact dimensions,
+// then select them (and set orientation so applyPrintSize reproduces w×h verbatim).
+function ensurePrintSize(w, h) {
+  if (!w || !h) return;
+  const mn = Math.min(w, h), mx = Math.max(w, h);
+  const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+  const val = `${fmt(mn)},${fmt(mx)}`;
+  const sel = $('size');
+  if (![...sel.options].some((o) => o.value === val)) {
+    const o = document.createElement('option');
+    o.value = val; o.textContent = `${fmt(mn)} × ${fmt(mx)} in`;
+    sel.appendChild(o);
+  }
+  sel.value = val;
+  state.orientation = w > h ? 'landscape' : 'portrait';
+  $('orient').value = state.orientation;
+}
+
+async function continueFromPoster(file) {
+  if (!file) return;
+  setStatus('Opening poster…');
+  try {
+    const j = await api.continuePoster(file);
+    state.session = j.session;
+    selectRegion(j.region);
+    state.regionName = j.name; $('regionName').textContent = j.name || '';
+    state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
+    state.starterCrop = j.starter_crop; state.crop = null;
+    state.hasSpec = false; state.proofStale = true;
+    state.edition = j.edition || 2;
+    state.files = (j.files || []).slice();
+    applyPrefill(j.prefill);
+    renderFiles(); updateEditionBadge();
+    canvas.setOverview(j.overview, j.overview_size);
+    $('dropzone').hidden = true; $('continuePoster').hidden = true;
+    $('map').hidden = false; $('addFiles').hidden = false; $('startOver').hidden = false;
+    markers.render($('markerList'), (msg) => setStatus(msg));
+    $('toFrame').disabled = state.tracks.length === 0;
+    if (!state.steps.includes('tracks')) state.steps = ['tracks', 'frame', 'proof'];
+    go('tracks');
+    showHint(`Edition ${state.edition}: last year's poster is restored — drop this year's GPX to add it, then reframe and render.`);
+    setStatus(`Continuing as edition ${state.edition} — ${state.tracks.length} track(s) restored. Add this year's files, or continue to reframe.`);
+    announce(`Continuing poster as edition ${state.edition}`);
+  } catch (e) {
+    setStatus('Could not open that poster: ' + e.message);
+  }
+}
 
 // --- a11y live-region announcements ---
 function announce(msg) { const el = $('a11yStatus'); if (el) el.textContent = msg || ''; }
@@ -428,13 +538,14 @@ function startOver() {
   Object.assign(state, {
     session: null, ovSize: null, scale: 1, tracks: [], hotspots: [],
     crop: null, starterCrop: null, hasSpec: false, proofStale: false, files: [],
-    title: '', lastFinal: null,
+    edition: 1, title: '', lastFinal: null,
   });
   state.regions = regions; state.steps = steps;
   renderFiles(); $('markerList').innerHTML = ''; $('markersBox').hidden = true;
-  $('dropzone').hidden = false; $('map').hidden = true; $('addFiles').hidden = true;
+  $('dropzone').hidden = false; $('continuePoster').hidden = false;
+  $('map').hidden = true; $('addFiles').hidden = true;
   $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
-  $('titleInput').value = ''; $('downloadAgain').hidden = true;
+  $('titleInput').value = ''; $('downloadAgain').hidden = true; updateEditionBadge();
   go(state.steps[0]);
   setStatus('Cleared — drop files to start a new map');
 }
@@ -488,6 +599,9 @@ function wireSegmented() {
         set(btns[(i + step + btns.length) % btns.length].dataset.val, true);
       };
     });
+    // reflect programmatic <select> changes (e.g. a continued poster's restored
+    // output/orientation prefill) back onto the segmented face.
+    sel.addEventListener('change', sync);
     sync();
   }
 }
@@ -515,6 +629,12 @@ function wire() {
   dz.onclick = () => fi.click();
   $('addFiles').onclick = () => fi.click();
   fi.onchange = (e) => { doUpload(e.target.files); e.target.value = ''; };
+  // living editions: "Continue a poster" opens a PNG whose embedded recipe restores
+  // the whole composition. Two entry points (region step + dropzone) share one input.
+  const pi = $('posterInput');
+  pi.onchange = (e) => { continueFromPoster(e.target.files[0]); e.target.value = ''; };
+  $('continuePoster').onclick = () => pi.click();
+  $('continuePosterRegion').onclick = () => pi.click();
   const mapPane = $('mapPane');
   mapPane.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
   mapPane.addEventListener('dragleave', () => dz.classList.remove('over'));
