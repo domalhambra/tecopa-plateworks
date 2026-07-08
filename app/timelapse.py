@@ -126,8 +126,9 @@ def encode_apng(frames, manifest: dict | None = None, step_ms: int = DEFAULT_STE
         raise ValueError("no frames to encode")
     n = len(frames)
     durations = [step_ms] * n
-    durations[0] = leader_ms          # the bare-terrain leader gets a beat
-    durations[-1] = hold_ms           # the complete poster gets a long hold
+    if n > 1:
+        durations[0] = leader_ms      # the bare-terrain leader gets a beat
+    durations[-1] = hold_ms           # the complete poster gets a long hold (n==1: held)
     buf = io.BytesIO()
     kw = dict(save_all=True, append_images=frames[1:], duration=durations, loop=0)
     if manifest is not None:

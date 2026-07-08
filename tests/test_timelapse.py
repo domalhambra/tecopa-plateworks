@@ -292,6 +292,38 @@ def test_still_inspect_has_null_animation():
 
 # ---- the forever-contract: a frozen film fixture still re-renders ----
 
+def test_worker_honors_max_frames_not_the_default():
+    # regression (adversarial review, high): the worker used to call render_frames with
+    # NO plan, so it always rendered DEFAULT_MAX_FRAMES (40) and bypassed the ceiling the
+    # submit path checked against the requested max_frames. With many journeys and a small
+    # max_frames, the encoded APNG must have the ceiling-checked frame count, not 40.
+    from app import main as _main
+    spec = _spec(n_journeys=30)                            # 30 day-distinct journeys
+    pacing = {"max_frames": 5, "step_ms": 220, "hold_ms": 2500, "leader_ms": 700}
+    _main._render_timelapse_to_blob(spec, REGION_DIR, "test/tl.png", 90, pacing, [], True)
+    im = Image.open(_main.BLOBS.path("test/tl.png"))
+    expected = len(timelapse.frame_plan(spec, 5))
+    assert expected <= 5 and im.n_frames == expected      # NOT 31 (the default-40 plan)
+
+def test_reprint_dpi_clamp_rejects_a_crafted_huge_dpi():
+    # a crafted animation.dpi beyond the legit film range falls back to the spec's dpi
+    from app.main import _animation_from_manifest_or_422
+    spec = _spec(n_journeys=2)
+    _, dpi = _animation_from_manifest_or_422({"dpi": 5000}, spec)
+    assert dpi == spec.final_dpi()
+    _, dpi2 = _animation_from_manifest_or_422({"dpi": 120}, spec)
+    assert dpi2 == 120                                    # an in-range dpi is kept verbatim
+
+def test_single_frame_film_degrades_to_a_static_poster():
+    # a 0-journey spec yields one bare frame: encode_apng must degrade to a plain static
+    # PNG (no leader/hold ambiguity), not a one-frame "animation".
+    spec = _spec(n_journeys=0, days=[])
+    frames = list(timelapse.render_frames(spec, 96, REGION_DIR))
+    assert len(frames) == 1
+    data = timelapse.encode_apng(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    im = Image.open(io.BytesIO(data))
+    assert not getattr(im, "is_animated", False)
+
 def test_frozen_animation_fixture_reprints_as_a_film():
     c = _client()
     m = json.load(open("tests/fixtures/manifest_animation_v1.json"))

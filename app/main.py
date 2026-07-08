@@ -119,7 +119,11 @@ def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed
     """The time-lapse worker: paint the base once and stream the day-ordered journey
     prefixes into one APNG. The manifest (with the `animation` block) rides the file so
     it re-renders from itself. Runs on a queue thread, touching only its arguments."""
-    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir)
+    # honor the pacing max_frames that the ceiling was CHECKED against (same spec, same
+    # max_frames): render_frames' default plan is DEFAULT_MAX_FRAMES, so omitting the
+    # plan here would render more frames than the ceiling validated -> a bypass/OOM.
+    plan = timelapse.frame_plan(spec, pacing["max_frames"])
+    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir, plan=plan)
     manifest = None
     if embed_spec:
         anim = timelapse.animation_meta(dpi=dpi, **pacing)
@@ -766,8 +770,11 @@ def _animation_from_manifest_or_422(anim, spec):
         dpi = float(anim.get("dpi"))
     except (TypeError, ValueError):
         dpi = None
-    if dpi is None or not math.isfinite(dpi) or not (0 < dpi <= 1200):
-        dpi = spec.final_dpi()          # unusable stored dpi -> the spec's own resolution
+    # a legit film's dpi is a print dpi (<= FINAL_DPI) or a device ppi (<= 600, the
+    # wallpaper screen-ppi ceiling); anything outside that is a crafted value -> fall
+    # back to the spec's own resolution (consistent with the submit path's caps).
+    if dpi is None or not math.isfinite(dpi) or not (0 < dpi <= 600):
+        dpi = spec.final_dpi()
     return pacing, dpi
 
 def _animation_ceiling_or_422(spec, dpi, max_frames):
