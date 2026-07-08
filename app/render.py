@@ -235,17 +235,21 @@ def _coverage(spec, out_w, out_h, width_px, groups=None):
             cov += np.asarray(layer, np.float32) / 255.0
     return cov
 
-def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
     """Composite tracks as inked, cased lines that pick up the terrain texture and
     paper grain instead of floating on top. Visitation is expressed as WIDTH: any
     pass draws the base line near-solid; segments covered by 2+ distinct passes
-    swell toward the worn width, like a desire path (V1-10)."""
+    swell toward the worn width, like a desire path (V1-10).
+
+    `groups` restricts the ink to a subset of journeys (a time-lapse prefix); None
+    means every journey -- the still-poster behavior. Does NOT mutate rgb_u8 (it
+    copies to float first), so a time-lapse can ink many prefixes onto one base."""
     img = rgb_u8.astype(np.float32) / 255.0
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
     worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
     pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
     feather = max(0.3, _pt_to_px(INK_EDGE_FEATHER_PT, dpi))
-    groups = _journey_groups(spec)
+    groups = _journey_groups(spec) if groups is None else groups
     # a single journey can never be "worn" -- skip both worn rasterizations (a
     # flagship final saves ~4 s and ~300 MB; output is identical since one journey's
     # coverage never exceeds 1, so the worn terms are exactly zero).
@@ -289,18 +293,21 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi):
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
-def _draw_termini(img, spec, out_w, out_h, dpi):
+def _draw_termini(img, spec, out_w, out_h, dpi, groups=None):
     """A small dark pin with a paper ring at each JOURNEY's first and last point --
     the start and end anchor the story (V1-10). Pause-split segments of one day form
     one journey (see _journey_groups), so mid-route stop/resume points get no pin.
-    Sized off the track width (physical units) so proof and final agree."""
+    Sized off the track width (physical units) so proof and final agree.
+
+    `groups` restricts the pins to a subset of journeys (a time-lapse prefix); None
+    means every journey -- the still-poster behavior."""
     d = ImageDraw.Draw(img, "RGBA")
     # pin size rides the marker scale (physical), not the line width: at the old
     # track-width-derived ~1.7 mm the "story anchors" were invisible at poster
     # viewing distance (red-team). 0.42 x a 0.24 in marker ~ a 2.6 mm pin.
     r = max(2.0, spec.marker_diameter_in * dpi * 0.21)
     ring_w = max(1, round(r * 0.45))
-    for g in _journey_groups(spec):
+    for g in (_journey_groups(spec) if groups is None else groups):
         segs = [spec.tracks[i] for i in g if len(spec.tracks[i]) >= 2]
         if not segs:
             continue
@@ -1058,14 +1065,19 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
             d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
     return img
 
-def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
-    spec.validate(dpi)
-    if cfg is None:                        # callers holding regions.Region pass .cfg
-        with open(os.path.join(region_dir, "region.json")) as f:
-            cfg = json.load(f)
-    out_w, out_h = spec.pixel_size(dpi)
+# The compose->rasterize seam, split into three stages so a time-lapse can paint the
+# static base ONCE and re-ink only the route per frame. rasterize = base -> journey(all
+# journeys) -> overlays, byte-identical to the pre-split single function (invariant 1);
+# app/timelapse.py reuses the same three stages so a film's last frame is pixel-equal
+# to the still poster.
 
+def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
+                hydro=None, labels=None):
+    """The static layers UNDER the route -- relief, contours, hydro, geography labels --
+    plus the luminance plane the markers key on. Identical for every frame of a
+    time-lapse, so it is painted once. Returns (rgb_u8, lum). Raises the off-DEM guard
+    (invariant 5) before any pixels are invented under the tracks."""
+    out_w, out_h = spec.pixel_size(dpi)
     # Off-DEM guard: refuse a plausible-but-wrong poster before any painting invents
     # terrain under the tracks (red-team V1-1). DPI-independent probe, so proof and
     # final agree on the same spec (invariant 1).
@@ -1120,19 +1132,27 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
             labels = _load_labels(region_dir)
         himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi)
     rgb = np.asarray(himg.convert("RGB"))
-
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
-    rgb = _ink_tracks(rgb, spec, out_w, out_h, dpi)
+    return rgb, lum
+
+def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None):
+    """The route layer for the given journey groups (None = all): inked tracks + those
+    journeys' terminus pins, over the base. Does NOT mutate base_rgb (_ink_tracks copies
+    it), so a time-lapse can paint prefix after prefix onto one base. Returns RGBA."""
+    rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups)
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
-    img = _draw_termini(img, spec, out_w, out_h, dpi)  # journey start/end pins, under markers
+    img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups)  # under markers
+    return img
+
+def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False):
+    """The layers ABOVE the route, identical across time-lapse frames: markers, photos,
+    keyline, compass, title block, and the optional proof watermark. Returns RGB."""
     img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
     img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
-
     if spec.keyline:
         img = _draw_keyline(img, out_w, out_h, dpi)
     img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
     img = _draw_title_block(img, spec, out_w, out_h, dpi)
-
     if watermark:
         # scale to the sheet (the old fixed 120 px offset + default font was invisible
         # at poster sizes) and center properly; translucent so the proof stays readable.
@@ -1144,3 +1164,14 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         d.text(((out_w - (rt - l)) / 2 - l, out_h * 0.24 - t), "PROOF",
                fill=(255, 255, 255, 80), font=wm_font)
     return img.convert("RGB")
+
+def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
+              watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
+    spec.validate(dpi)
+    if cfg is None:                        # callers holding regions.Region pass .cfg
+        with open(os.path.join(region_dir, "region.json")) as f:
+            cfg = json.load(f)
+    out_w, out_h = spec.pixel_size(dpi)
+    base_rgb, lum = _paint_base(spec, dpi, region_dir, cfg, hydro=hydro, labels=labels)
+    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None)  # all journeys
+    return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark)

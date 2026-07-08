@@ -12,7 +12,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks, Track
 from app.density import hotspots
 from app.spec import CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX
-from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper
+from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse
 
 logconfig.setup_logging()
 log = logging.getLogger("trailprint.api")
@@ -46,6 +46,15 @@ BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"), ttl_second
 QUEUE = jobs.ThreadJobQueue(
     ttl_seconds=TTL_SECONDS,
     max_concurrency=int(os.environ.get("TRAILPRINT_RENDER_CONCURRENCY", 1)))
+
+# Time-lapse ceiling: total painted pixels across all frames (frames x w x h). A film
+# is many frames, so it needs its own guard above the still-render 120 MP ceiling --
+# a 40-frame 4K film is ~330 MP, a 120-frame one ~1 GP. Refuse past this before enqueue
+# with an honest fix ("fewer frames or a smaller target"), never OOM the worker.
+MAX_ANIMATION_PIXELS = 600_000_000
+# a film is watched, not printed -> default to screen-fidelity frames; a print-dpi film
+# is allowed up to the ceiling for whoever wants one.
+TIMELAPSE_DEFAULT_DPI = PROOF_DPI
 
 app = FastAPI()
 
@@ -103,6 +112,21 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     dpi = spec.final_dpi()
     img = render.rasterize(spec, dpi=dpi, region_dir=region_dir, watermark=False)
     BLOBS.put(key, _encode_final(img, fmt, manifest, dpi=dpi))
+    return key                                         # job result = the blob key
+
+def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
+                              lineage=None):
+    """The time-lapse worker: paint the base once and stream the day-ordered journey
+    prefixes into one APNG. The manifest (with the `animation` block) rides the file so
+    it re-renders from itself. Runs on a queue thread, touching only its arguments."""
+    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir)
+    manifest = None
+    if embed_spec:
+        anim = timelapse.animation_meta(dpi=dpi, **pacing)
+        manifest = provenance.build_manifest(spec, sources, lineage, animation=anim)
+    BLOBS.put(key, timelapse.encode_apng(
+        frames, manifest=manifest, step_ms=pacing["step_ms"], hold_ms=pacing["hold_ms"],
+        leader_ms=pacing["leader_ms"], icc_profile=SRGB_PROFILE))
     return key                                         # job result = the blob key
 
 def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None):
@@ -679,6 +703,111 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
              session_id, region.id, len(items), len(skipped))
     return {"job": jid, "count": len(items), "skipped": skipped}
 
+# ---- time-lapse: the poster as a film ----
+
+def _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms):
+    """Bounds-check the pacing knobs (honest 422, like every other control). Pacing is
+    not a picture decision -- it rides the manifest's animation block, not the spec."""
+    lo_f, hi_f = timelapse.FRAMES_BOUNDS
+    lo_d, hi_d = timelapse.DURATION_MS_BOUNDS
+    if not (lo_f <= int(max_frames) <= hi_f):
+        raise HTTPException(422, f"max_frames must be between {lo_f} and {hi_f}")
+    for name, v in (("step_ms", step_ms), ("hold_ms", hold_ms), ("leader_ms", leader_ms)):
+        if not (lo_d <= int(v) <= hi_d):
+            raise HTTPException(422, f"{name} must be between {lo_d} and {hi_d} ms")
+    return {"max_frames": int(max_frames), "step_ms": int(step_ms),
+            "hold_ms": int(hold_ms), "leader_ms": int(leader_ms)}
+
+def _timelapse_target(spec, region, wallpaper_preset, dpi):
+    """The (spec, dpi) to film: a wallpaper preset re-fits the accepted composition to
+    that device (exact native pixels, at its ppi); a wallpaper accepted-spec keeps its
+    own device ppi; a print sheet films at a bounded, screen-default dpi."""
+    if (wallpaper_preset or "").strip():
+        preset = _preset_or_422(wallpaper_preset)
+        try:
+            tspec = wallpaper.spec_for_preset(spec, preset, tuple(region.cfg["bounds"]))
+        except SpecError as e:
+            raise HTTPException(422, str(e))
+        # the re-fit crop was never proofed: off-DEM probe now (as wallpapers_submit does)
+        nan_frac = render._offdem_fraction(region.dir, region.cfg, tspec.crop)
+        if nan_frac > render.MAX_OFFDEM_NAN_FRAC:
+            raise HTTPException(422, f"the {preset.name} frame extends past the region's "
+                                f"elevation data ({nan_frac * 100:.0f}% has no DEM coverage)")
+        return tspec, tspec.final_dpi()
+    if spec.output_kind == "wallpaper":
+        return spec, spec.final_dpi()                    # a wallpaper film uses its ppi
+    import math
+    d = dpi if (dpi and math.isfinite(dpi) and dpi > 0) else TIMELAPSE_DEFAULT_DPI
+    if not (0 < d <= FINAL_DPI):
+        raise HTTPException(422, f"dpi must be between 1 and {FINAL_DPI}")
+    return spec, float(d)
+
+def _animation_from_manifest_or_422(anim, spec):
+    """Pacing + dpi from an UNTRUSTED animation block (a reprint of an animated file):
+    clamp each value to its bound, fall back to the spec's own dpi if the stored dpi is
+    unusable. The frame ceiling is enforced separately. A legit film's values are all
+    in-bounds, so they are reproduced verbatim -> the reprint is byte-identical."""
+    import math
+    def _int(v, d):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return d
+    lo_f, hi_f = timelapse.FRAMES_BOUNDS
+    lo_d, hi_d = timelapse.DURATION_MS_BOUNDS
+    _clamp = lambda v, lo, hi, d: min(max(_int(v, d), lo), hi)
+    pacing = {
+        "max_frames": _clamp(anim.get("max_frames"), lo_f, hi_f, timelapse.DEFAULT_MAX_FRAMES),
+        "step_ms": _clamp(anim.get("step_ms"), lo_d, hi_d, timelapse.DEFAULT_STEP_MS),
+        "hold_ms": _clamp(anim.get("hold_ms"), lo_d, hi_d, timelapse.DEFAULT_HOLD_MS),
+        "leader_ms": _clamp(anim.get("leader_ms"), lo_d, hi_d, timelapse.DEFAULT_LEADER_MS),
+    }
+    try:
+        dpi = float(anim.get("dpi"))
+    except (TypeError, ValueError):
+        dpi = None
+    if dpi is None or not math.isfinite(dpi) or not (0 < dpi <= 1200):
+        dpi = spec.final_dpi()          # unusable stored dpi -> the spec's own resolution
+    return pacing, dpi
+
+def _animation_ceiling_or_422(spec, dpi, max_frames):
+    """Refuse a film past the total-pixel ceiling before any painting; return the frame
+    count. Guards both submit and a reprint of an (untrusted) animated file."""
+    plan = timelapse.frame_plan(spec, max_frames)
+    w, h = spec.pixel_size(dpi)
+    total = len(plan) * w * h
+    if total > MAX_ANIMATION_PIXELS:
+        raise HTTPException(422, f"this film is {total / 1e6:.0f} MP across {len(plan)} "
+                            f"frames, over the {MAX_ANIMATION_PIXELS // 1_000_000} MP "
+                            f"ceiling — choose fewer frames or a smaller target")
+    return len(plan)
+
+@app.post("/api/timelapse/submit")
+async def timelapse_submit(session_id: str = Form(...),
+                           max_frames: int = Form(timelapse.DEFAULT_MAX_FRAMES),
+                           step_ms: int = Form(timelapse.DEFAULT_STEP_MS),
+                           hold_ms: int = Form(timelapse.DEFAULT_HOLD_MS),
+                           leader_ms: int = Form(timelapse.DEFAULT_LEADER_MS),
+                           wallpaper_preset: str = Form(""),
+                           dpi: float = Form(0.0),
+                           embed_spec: bool = Form(True)):
+    """Render an accepted composition as a time-lapse APNG: the day-ordered journeys
+    accumulate over a static terrain base to the complete poster (the last frame IS the
+    still final -- invariant 1). Same stamped-spec gate as a final. Enqueues ONE job ->
+    the existing /api/jobs/{id} -> /result flow (.png already maps correctly). The target
+    is the accepted sheet (bounded, screen-default dpi) or a wallpaper preset (exact
+    device pixels)."""
+    spec, region, sources, lineage = _require_stamped(session_id)
+    pacing = _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms)
+    tspec, target_dpi = _timelapse_target(spec, region, wallpaper_preset, dpi)
+    frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
+    jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
+                       f"{session_id}/timelapse.png", target_dpi, pacing, sources,
+                       embed_spec, lineage)
+    log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f",
+             session_id, region.id, frames, target_dpi)
+    return {"job": jid, "frames": frames}
+
 @app.get("/api/jobs/{jid}")
 async def job_status(jid: str):
     try:
@@ -748,6 +877,8 @@ async def reprint_inspect(file: UploadFile = File(...)):
         # living editions: what edition this file is, and its ancestor chain.
         "edition": manifest.get("edition", spec_d.get("edition", 1)),
         "lineage": manifest.get("lineage", []),
+        # time-lapse: the pacing block if this file is a film (None for a still).
+        "animation": manifest.get("animation"),
     }
 
 @app.post("/api/reprint")
@@ -759,7 +890,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     sanitized to inside the uploads dir (provenance.sanitize_photos) and spec.validate
     re-enforces aspect / the 120 MP ceiling / the zoom cap before any pixels are made."""
     fmt = _require_format(format)      # cheap membership check BEFORE reading the file
-    manifest = _manifest_or_422(await _read_capped(file))
+    data = await _read_capped(file)
+    manifest = _manifest_or_422(data)
     try:
         spec = provenance.manifest_to_spec(manifest)
     except Exception:
@@ -775,6 +907,23 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         spec.validate(spec.final_dpi())             # untrusted spec: re-gate the geometry
     except SpecError as e:
         raise HTTPException(422, str(e))
+    # an animated file re-renders the FILM (the file promises "the file is the artwork",
+    # so honor it for films too). A film render is slow -> through the queue, returning a
+    # job like the other async paths, not a synchronous stream. Stills keep today's
+    # synchronous contract below.
+    anim = manifest.get("animation")
+    if isinstance(anim, dict):
+        if fmt != "png":
+            raise HTTPException(422, "a time-lapse is PNG-only")
+        pacing, tl_dpi = _animation_from_manifest_or_422(anim, spec)
+        frames = _animation_ceiling_or_422(spec, tl_dpi, pacing["max_frames"])
+        key = f"reprint/{hashlib.sha256(data).hexdigest()[:16]}/timelapse.png"
+        jid = QUEUE.submit(_render_timelapse_to_blob, spec, region.dir, key, tl_dpi,
+                           pacing, manifest.get("sources", []), embed_spec,
+                           manifest.get("lineage", []))
+        log.info("event=reprint.timelapse region=%s frames=%d dpi=%.0f",
+                 spec.region_id, frames, tl_dpi)
+        return JSONResponse({"job": jid, "frames": frames})
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=spec.final_dpi(), region_dir=region.dir,

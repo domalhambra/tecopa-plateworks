@@ -53,16 +53,17 @@ def source_entry(data: bytes, filename: str | None) -> dict:
 
 
 def build_manifest(spec: CompositionSpec, sources: list | None = None,
-                   lineage: list | None = None) -> dict:
+                   lineage: list | None = None, animation: dict | None = None) -> dict:
     """The provenance record for one poster: schema version, engine, region, the full
     spec, and the source-file hashes. A pure function of its inputs (no timestamp), so
     the same spec yields the same manifest bytes.
 
     Living editions: from the SECOND edition on, the manifest also carries `edition`
-    and `lineage` (the ancestor chain, newest-capped at LINEAGE_MAX). These keys are
-    OMITTED for a first edition, so every pre-feature manifest -- including the frozen
-    v1 / wallpaper fixtures -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1
-    (the change is purely additive)."""
+    and `lineage` (the ancestor chain, newest-capped at LINEAGE_MAX). Time-lapse: an
+    animated file also carries an `animation` block (the pacing + render dpi) so the
+    film re-renders from the file alone. All three keys are OMITTED when absent, so
+    every pre-feature manifest -- including the frozen v1 / wallpaper / edition fixtures
+    -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1 (purely additive)."""
     m = {
         "manifest_version": MANIFEST_VERSION,
         "engine": ENGINE,
@@ -74,6 +75,8 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
     if edition >= 2:
         m["edition"] = edition
         m["lineage"] = list(lineage or [])[-LINEAGE_MAX:]   # keep newest, drop oldest
+    if animation is not None:
+        m["animation"] = dict(animation)
     return m
 
 

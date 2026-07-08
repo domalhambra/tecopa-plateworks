@@ -247,6 +247,27 @@
               <button id="bundleBtn" class="ghost" type="button" disabled>Download bundle</button>
             </div>
           </div>
+          <div id="timelapseCard" class="bundle-card" hidden>
+            <div class="bundle-head">
+              <span class="insp-title">Time-lapse</span>
+              <span class="insp-note">watch the journeys build to the poster — an animated PNG</span>
+            </div>
+            <div class="tl-controls">
+              <div class="slider-row">
+                <div class="slider-top"><label for="tlFrames">Frames</label><output id="tlFramesVal">40</output></div>
+                <input type="range" id="tlFrames" min="8" max="80" step="1" value="40">
+              </div>
+              <div class="field" id="tlTargetField" hidden>
+                <label for="tlTarget">Target</label>
+                <div class="select-wrap"><select id="tlTarget"></select></div>
+              </div>
+            </div>
+            <div class="tl-preview"><img id="tlPreview" alt="" hidden></div>
+            <div class="bundle-foot">
+              <span id="tlStatus" class="status"></span>
+              <button id="tlBtn" class="ghost" type="button">Render time-lapse</button>
+            </div>
+          </div>
           <div class="pane-foot">
             <span id="proofStatus" class="status"></span>
             <label class="reprint-toggle" title="Embed the poster's recipe (region, tracks, style) in the PNG so it can be reprinted from the file alone. Turn off for a share copy — it keeps your exact track coordinates out of the file.">

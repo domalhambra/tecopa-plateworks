@@ -20,6 +20,8 @@ export const state = {
   wpPresets: [],          // /api/wallpapers/presets metadata (id,name,px,ppi,device_class)
   wpPreset: '',           // active device preset id (wallpaper mode)
   bundlePicks: [],        // preset ids ticked in the post-proof bundle card
+  tlFrames: 40,           // time-lapse frame count
+  tlTarget: '',           // '' = accepted sheet; else a wallpaper preset id
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)

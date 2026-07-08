@@ -1,9 +1,12 @@
 # TrailPrint — Time-lapse Render: the poster as a film (design + implementation plan)
 
-_2026-07-08 · Status: **proposed** (not yet built). Companion plan:
-`2026-07-08-living-editions.md` — build Editions first (pure plumbing, no render
-refactor); this plan touches `render.py` structurally. The two compound: the
-time-lapse of a multi-edition poster is "watch a decade grow"._
+_2026-07-08 · Status: **implemented** (all four phases; the byte-equality gate confirms
+the rasterize refactor is inert, and the master invariant — the film's last frame is
+pixel-equal to `/api/final` — is asserted directly in `tests/test_timelapse.py`). The
+Pillow-APNG-carries-the-manifest assumption (Phase 2) held, so no fallback was needed.
+Companion plan: `2026-07-08-living-editions.md` (shipped first, PR #20). The two
+compound: the time-lapse of a multi-edition poster is "watch a decade grow". Still open:
+the by-eye pacing pass on real terrain (this container renders synthetic DEMs only)._
 
 ---
 
