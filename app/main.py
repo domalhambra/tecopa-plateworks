@@ -324,9 +324,14 @@ async def upload(files: List[UploadFile] = File(...),
         sid = session.create({"tracks": tracks, "hotspots": spots,
                               "region_id": region.id, "sources": sources})
     else:
-        # invalidate any stamped spec: the track set changed, so /api/final must
-        # not render a stale proof (it re-enforces "approve a proof first").
-        session.update(sid, tracks=tracks, hotspots=spots, spec=None, sources=sources)
+        # invalidate any stamped spec ONLY when the track set actually changed: a
+        # re-drop of files already on the poster (every file deduped -> `new` empty)
+        # is a no-op that must not force a needless re-proof. A real addition re-gates
+        # "approve a proof first" so /api/final can't render a stale subset.
+        kw = dict(tracks=tracks, hotspots=spots, sources=sources)
+        if new:
+            kw["spec"] = None
+        session.update(sid, **kw)
     # project to overview pixels for the aim canvas; carry any marker metadata so
     # the editor can show current label/icon/photo state after a reload.
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
@@ -903,7 +908,10 @@ async def continue_poster(file: UploadFile = File(...)):
     if output == "wallpaper" and matched is None:
         output = "print"                            # custom device -> continue as a print
     prefill = {
-        "title": spec.title_text, "print_w_in": spec.print_w_in,
+        # a title-less poster carries title_text="" (the "-" choice at proof time). Send
+        # it back as "-" so the edition-2 proof stays title-less: an empty title would
+        # otherwise re-resolve to the region name in _build_spec and regrow a title block.
+        "title": spec.title_text or "-", "print_w_in": spec.print_w_in,
         "print_h_in": spec.print_h_in, "output": output, "wallpaper_preset": matched,
         "contours": spec.contours, "compass": spec.compass, "biome": spec.biome,
         "labels": spec.labels, "edition": edition, "lineage": lineage,

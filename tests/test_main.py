@@ -92,7 +92,10 @@ def test_reupload_after_proof_requires_reproof():
     c = _client(); j = _upload(c)
     data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
     assert c.post("/api/proof", data=data).status_code == 200
-    c.post("/api/upload", files=[_file("b.gpx")], data={"session_id": j["session"]})
+    # a distinct file genuinely adds tracks -> the stamped proof must invalidate (a
+    # re-drop of the SAME file is deduped and intentionally keeps the proof, covered
+    # in test_editions.py::test_duplicate_reupload_after_proof_keeps_the_proof)
+    c.post("/api/upload", files=[_file2("b.gpx")], data={"session_id": j["session"]})
     assert c.post("/api/final", data={"session_id": j["session"]}).status_code == 400
 
 def test_one_bad_file_does_not_fail_batch():

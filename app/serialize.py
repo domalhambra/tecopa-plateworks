@@ -31,6 +31,16 @@ def spec_from_json(d: dict) -> CompositionSpec:
     if "track_rgb" in d:
         d["track_rgb"] = tuple(d["track_rgb"])   # JSON lists -> the tuple validate expects
     d["tracks"] = [np.asarray(a, float) for a in d["tracks"]]
+    # UNTRUSTED manifests deserialize here too (provenance.manifest_to_spec): a crafted
+    # spec can carry a non-list `hotspots` (null / a number) or `track_days`, which
+    # every consumer iterates (sanitize_photos, bound_geometry, _stats_line, the
+    # continue rebuild). Coerce to safe shapes so a hostile file is a clean 422/no-op,
+    # never a 500. A well-formed spec and every persisted session row is already
+    # list-shaped here, so this is a no-op for them.
+    if not isinstance(d.get("hotspots"), list):
+        d["hotspots"] = []
+    if "track_days" in d and not isinstance(d["track_days"], list):
+        d["track_days"] = None
     # tolerate schema drift in persisted rows, both directions: a row written by an
     # older build lacks new fields (dataclass defaults fill them), and a row written
     # before a field was REMOVED (e.g. track_color) must not TypeError the load.

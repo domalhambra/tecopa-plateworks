@@ -227,6 +227,17 @@ def test_continue_ritual_round_trip():
     assert [e["edition"] for e in cont3["prefill"]["lineage"]] == [1, 2]
 
 
+def test_continue_preserves_a_title_less_poster():
+    # a poster composed with the "-" (no title) choice must stay title-less across
+    # editions: the prefill sends "-" back, not "" (which _build_spec would re-resolve
+    # to the region name and regrow a title block).
+    c = _client()
+    _, png, _ = _final_png(c, [_gpx("2024.gpx", _sample())], proof_extra={"title": "-"})
+    assert provenance.extract(png)["spec"]["title_text"] == ""   # "-" -> no title
+    cont = c.post("/api/continue", files={"file": ("p.png", png, "image/png")}).json()
+    assert cont["prefill"]["title"] == "-"           # round-trips as the no-title sentinel
+
+
 def test_reupload_of_a_file_already_on_the_poster_is_skipped():
     c = _client()
     j = c.post("/api/upload", files=[_gpx("2024.gpx", _sample())]).json()
@@ -380,6 +391,42 @@ def test_continue_clamps_a_crafted_huge_edition():
     cont = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
     assert cont.status_code == 200, cont.text
     assert cont.json()["edition"] == EDITION_MAX             # clamped, never overflows
+
+def test_continue_tolerates_non_list_hotspots_and_track_days():
+    # a crafted non-list container (hotspots: null / a number, track_days: a number)
+    # must not 500 -- naive iteration (`for hs in None`, `list(5)`) would crash. It is
+    # coerced to a safe shape and the request is a clean 200/422, never a 500.
+    import copy
+    c = _client()
+    base = _base_manifest(c)
+    for field, bad in [("hotspots", None), ("hotspots", 5), ("track_days", 7)]:
+        m = copy.deepcopy(base)
+        m["spec"][field] = bad
+        r = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
+        assert r.status_code in (200, 422), f"{field}={bad!r} -> {r.status_code}: {r.text}"
+
+def test_reprint_tolerates_non_list_hotspots():
+    # the same untrusted-container guard hardens reprint (sanitize_photos ran before
+    # its render try/except, so a non-list hotspots used to 500).
+    c = _client()
+    m = _base_manifest(c)
+    m["spec"]["hotspots"] = None
+    r = c.post("/api/reprint", files={"file": ("x.png", _embed(m), "image/png")})
+    assert r.status_code in (200, 422)
+
+def test_duplicate_reupload_after_proof_keeps_the_proof():
+    # re-dropping a file already on the poster changes nothing, so it must NOT force a
+    # needless re-proof: the stamped spec survives and the final still renders.
+    c = _client()
+    j = c.post("/api/upload", files=[_gpx("2024.gpx", _sample())]).json()
+    sid = j["session"]
+    r = c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                   "print_w": 6, "print_h": 8})
+    assert r.status_code == 200, r.text
+    dup = c.post("/api/upload", files=[_gpx("again.gpx", _sample())],
+                 data={"session_id": sid}).json()
+    assert dup["skipped_duplicates"] == ["again.gpx"]
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200
 
 def test_continue_drops_a_stale_photo_path_inside_uploads():
     # a path that resolves INSIDE uploads but no longer exists must drop, not 500 later

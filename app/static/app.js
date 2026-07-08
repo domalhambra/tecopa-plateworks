@@ -86,6 +86,23 @@ function focusHeading(step) {
 
 function showHint(text) { const h = $('hint'); if (!h) return; h.textContent = text; h.hidden = !text; }
 
+// Reflect the hidden <select> values onto their segmented-control faces WITHOUT firing
+// a 'change' event — used after a programmatic value set (e.g. a continued poster's
+// restored output/orientation) so we don't trigger the onchange side-effects
+// (savePref clobbering the user's defaults, a premature reframe before the canvas is up).
+function syncSegmentedFaces() {
+  for (const seg of document.querySelectorAll('.segmented[data-for]')) {
+    const sel = $(seg.dataset.for);
+    if (!sel) continue;
+    for (const b of seg.querySelectorAll('button')) {
+      const on = b.dataset.val === sel.value;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    }
+  }
+}
+
 // --- region step ---
 function selectRegion(id) {
   state.region = id;
@@ -253,10 +270,7 @@ function applyPrefill(p) {
     ensurePrintSize(p.print_w_in, p.print_h_in);
   }
   applyOutputVisibility();
-  // re-sync the segmented faces to the programmatically-set selects
-  for (const sel of ['output', 'orient', 'finalFormat']) {
-    const el = $(sel); if (el) el.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  syncSegmentedFaces();   // update the faces directly; no 'change' side-effects
 }
 
 // Ensure the print-size <select> can express the continued poster's exact dimensions,
@@ -599,9 +613,6 @@ function wireSegmented() {
         set(btns[(i + step + btns.length) % btns.length].dataset.val, true);
       };
     });
-    // reflect programmatic <select> changes (e.g. a continued poster's restored
-    // output/orientation prefill) back onto the segmented face.
-    sel.addEventListener('change', sync);
     sync();
   }
 }
