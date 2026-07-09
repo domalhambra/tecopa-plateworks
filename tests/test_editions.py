@@ -406,8 +406,8 @@ def test_continue_tolerates_non_list_hotspots_and_track_days():
         assert r.status_code in (200, 422), f"{field}={bad!r} -> {r.status_code}: {r.text}"
 
 def test_reprint_tolerates_non_list_hotspots():
-    # the same untrusted-container guard hardens reprint (sanitize_photos ran before
-    # its render try/except, so a non-list hotspots used to 500).
+    # the same untrusted-container guard hardens reprint (drop_unembedded_photos runs
+    # before its render try/except, so a non-list hotspots used to 500).
     c = _client()
     m = _base_manifest(c)
     m["spec"]["hotspots"] = None
@@ -428,8 +428,9 @@ def test_duplicate_reupload_after_proof_keeps_the_proof():
     assert dup["skipped_duplicates"] == ["again.gpx"]
     assert c.post("/api/final", data={"session_id": sid}).status_code == 200
 
-def test_continue_drops_a_stale_photo_path_inside_uploads():
-    # a path that resolves INSIDE uploads but no longer exists must drop, not 500 later
+def test_continue_drops_a_bare_photo_path():
+    # a photo carried as a bare filesystem path (never as embedded bytes) must drop, not
+    # ride into the resurrected session or 500 a later final. Only embedded bytes survive.
     c = _client()
     m = _base_manifest(c)
     uploads = os.environ["TRAILPRINT_UPLOADS"]
@@ -438,3 +439,18 @@ def test_continue_drops_a_stale_photo_path_inside_uploads():
     cont = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
     assert cont.status_code == 200, cont.text
     assert cont.json()["hotspots"][0]["photo"] is False
+
+def test_continue_carries_an_embedded_photo_forward():
+    # last year's poster carries its pinned photo INSIDE the file, so continuing to the
+    # next edition restores that photo with no uploads dir -- the bytes are already here.
+    import base64, io
+    from PIL import Image as _Image
+    from app import provenance
+    c = _client()
+    m = _base_manifest(c)
+    buf = io.BytesIO(); _Image.new("RGB", (80, 80), (200, 30, 120)).save(buf, "JPEG", quality=90)
+    uri = provenance.PHOTO_DATA_PREFIX + base64.b64encode(buf.getvalue()).decode("ascii")
+    m["spec"]["hotspots"] = [{"x": 690000.0, "y": 4485000.0, "weight": 1, "photo": uri}]
+    cont = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
+    assert cont.status_code == 200, cont.text
+    assert cont.json()["hotspots"][0]["photo"] is True     # the embedded photo survived

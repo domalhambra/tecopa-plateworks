@@ -8,10 +8,11 @@ re-renders it at print resolution from the PNG alone, no session and no DB row. 
 spec -> pixel-identical reprint (invariants 1 + 3); the manifest carries no clock, so
 even the embedded file is deterministic.
 
-SECURITY: a reprint spec is UNTRUSTED input, and render._draw_photos opens each
-hotspot's `photo` path with Image.open. `sanitize_photos` keeps a photo only if its
-real path stays inside the uploads dir (else drops the key) -- a crafted PNG must
-never read arbitrary server files into a poster. Resizing safety is already covered by
+SECURITY: a reprint spec is UNTRUSTED input. Pinned photos travel INSIDE the manifest
+as embedded JPEG data URIs (build_final_spec), never as server file paths, so a crafted
+PNG has no path to traverse -- `drop_unembedded_photos` keeps a hotspot photo only if it
+is a size-bounded embedded JPEG and drops anything else, and `load_photo` decodes those
+bytes in memory behind a pixel-count bomb guard. Resizing safety is already covered by
 spec.validate (aspect, the 120 MP ceiling, the zoom cap).
 
 The manifest schema is a FOREVER-CONTRACT: a poster printed today must still reprint
@@ -19,10 +20,12 @@ after future upgrades. `manifest_version` gates that and spec_from_json already
 tolerates added/removed spec fields; test_provenance freezes a v1 fixture to guard it.
 """
 from __future__ import annotations
+import base64
+import copy
+import dataclasses
 import hashlib
 import io
 import json
-import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
@@ -31,6 +34,18 @@ from app.spec import CompositionSpec, SpecError
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword
 MANIFEST_VERSION = 1
 ENGINE = "trailprint"
+
+# Embedded photos ("the file is the whole record"): a pinned photo travels INSIDE the
+# manifest as a render-resolution JPEG data URI -- never as a server file path. So a
+# reprint reproduces the photo forever (no uploads dir, no TTL loss), and an untrusted
+# manifest carries only inert bytes we decode in memory, never a path we could be
+# tricked into reading off disk. build_final_spec canonicalizes a live session's photo
+# paths to this form once, and the SAME spec feeds the render and the manifest, so the
+# final and its reprint decode identical bytes (invariants 1 + 3 hold for photos too).
+PHOTO_DATA_PREFIX = "data:image/jpeg;base64,"
+PHOTO_EMBED_QUALITY = 82
+MAX_PHOTO_EMBED_BYTES = 512 * 1024     # per-photo ceiling on the encoded JPEG
+MAX_PHOTO_EMBED_PIXELS = 8_000_000     # decode guard for an untrusted embedded photo
 
 # Living editions: the ancestor chain that lets a poster prove its lineage from the
 # file alone is capped so a century of yearly editions can't unbound the manifest
@@ -151,20 +166,94 @@ def manifest_to_spec(manifest: dict) -> CompositionSpec:
     return serialize.spec_from_json(manifest["spec"])
 
 
-def sanitize_photos(spec: CompositionSpec, uploads_dir: str) -> CompositionSpec:
-    """SECURITY (see module docstring): keep a hotspot photo only if its real path
-    resolves inside uploads_dir; otherwise drop the key so the render skips it. Mutates
-    and returns the spec. A path-traversal / absolute path (../../etc, /etc/passwd, a
-    symlink out) is dropped rather than opened."""
-    root = os.path.realpath(uploads_dir)
-    prefix = root + os.sep
+def is_embedded_photo(value) -> bool:
+    """True if a hotspot's `photo` is an embedded JPEG data URI (the record's own bytes)
+    rather than a live-session file path."""
+    return isinstance(value, str) and value.startswith(PHOTO_DATA_PREFIX)
+
+
+def _encode_photo(path: str, box_px: int) -> str | None:
+    """Read a photo file and return a render-resolution JPEG data URI, or None if it
+    can't be read/encoded within the per-photo byte ceiling. `box_px` is the pixel long
+    edge the poster paints the photo at (photo_box_in * final_dpi), so the embedded copy
+    is exactly what the sheet shows -- never larger, so the file stays lean. Encoding is
+    deterministic for fixed pixels (invariant 3: the manifest stays byte-stable)."""
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            im.thumbnail((box_px, box_px))
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=PHOTO_EMBED_QUALITY, optimize=True)
+    except Exception:
+        return None
+    raw = buf.getvalue()
+    if len(raw) > MAX_PHOTO_EMBED_BYTES:
+        return None
+    return PHOTO_DATA_PREFIX + base64.b64encode(raw).decode("ascii")
+
+
+def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:
+    """Canonicalize a spec's hotspot photos to embedded JPEG data URIs at `box_px`,
+    returning a COPY (the live session spec is untouched). A photo already embedded (a
+    continued edition, or a re-render) is kept verbatim -- idempotent, so no generation
+    loss and the bytes stay deterministic. A path that can't be read/encoded is dropped,
+    never fails the deliverable. Feed the returned spec to BOTH the render and the
+    manifest so the final and its reprint decode identical bytes (invariants 1 + 3)."""
+    hotspots = copy.deepcopy(list(spec.hotspots or []))
+    for hs in hotspots:
+        if not isinstance(hs, dict):
+            continue
+        p = hs.get("photo")
+        if not p or is_embedded_photo(p):
+            continue                             # absent, or already the record's bytes
+        enc = _encode_photo(p, box_px) if isinstance(p, str) else None
+        if enc is None:
+            hs.pop("photo", None)                # unreadable / oversized: drop cleanly
+        else:
+            hs["photo"] = enc
+    return dataclasses.replace(spec, hotspots=hotspots)
+
+
+def _embedded_within_caps(value: str) -> bool:
+    """True if an embedded photo's base64 decodes to non-empty bytes under the per-photo
+    ceiling. Cheap (no image decode); the pixel-count bomb guard is in load_photo."""
+    try:
+        raw = base64.b64decode(value[len(PHOTO_DATA_PREFIX):], validate=True)
+    except Exception:
+        return False
+    return 0 < len(raw) <= MAX_PHOTO_EMBED_BYTES
+
+
+def drop_unembedded_photos(spec: CompositionSpec) -> CompositionSpec:
+    """SECURITY (see module docstring): for an UNTRUSTED manifest-derived spec, keep a
+    hotspot photo only if it is a well-formed, size-bounded embedded JPEG data URI; drop
+    anything else -- a file path, a non-string, an oversized blob. Replaces the old
+    filesystem path sanitizer: a manifest can no longer carry a server path at all, so
+    there is nothing to traverse. The photo is inert bytes decoded in memory, or it is
+    dropped. Mutates and returns the spec."""
     for hs in spec.hotspots:
         if not isinstance(hs, dict):     # a crafted manifest can carry non-dict entries
             continue
         p = hs.get("photo")
         if not p:
             continue
-        rp = os.path.realpath(p)
-        if rp != root and not rp.startswith(prefix):
+        if not (is_embedded_photo(p) and _embedded_within_caps(p)):
             hs.pop("photo", None)
     return spec
+
+
+def load_photo(value: str) -> Image.Image:
+    """Open a hotspot photo for rendering, as an RGB image. An embedded (data URI) photo
+    decodes from in-memory bytes with a pixel-count guard -- an untrusted manifest could
+    embed a decompression bomb whose small JPEG declares huge dimensions. A bare path is
+    trusted server state (a live session's own upload) and is opened directly. Raises on
+    anything unreadable; the render skips a failed photo so one bad file can't fail a
+    poster."""
+    if is_embedded_photo(value):
+        raw = base64.b64decode(value[len(PHOTO_DATA_PREFIX):], validate=True)
+        im = Image.open(io.BytesIO(raw))
+        w, h = im.size                                   # header read; no full decode yet
+        if w * h > MAX_PHOTO_EMBED_PIXELS:
+            raise ValueError("embedded photo exceeds the pixel guard")
+        return im.convert("RGB")
+    return Image.open(value).convert("RGB")

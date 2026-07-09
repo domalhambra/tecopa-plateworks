@@ -125,11 +125,18 @@ worn-width pass.
 
 ## Engineering commitments (ordered)
 
-1. **Embed photos in the manifest.** `render._draw_photos` reads bytes, not paths;
-   `build_manifest` carries capped per-hotspot image data; delete `sanitize_photos`
-   and the uploads-dir coupling from the reprint/continue path; freeze
-   `manifest_photo_v1.json`. (`/api/photo` keeps its upload caps; embedding happens at
-   manifest build.)
+1. **Embed photos in the manifest. — DONE.** A pinned photo now travels inside the
+   file as a render-resolution JPEG `data:` URI (`provenance.build_final_spec`), carried
+   at every manifest-emitting path (final, async final, reprint, continue, time-lapse,
+   the wallpaper bundle) so no deliverable silently loses it. `render._draw_photos`
+   reads bytes-or-path through `provenance.load_photo`; the old path sanitizer is gone,
+   replaced by `drop_unembedded_photos` (a manifest can no longer carry a server path,
+   so there is nothing to traverse) plus a decompression-bomb guard on decode. Because
+   the same embedded spec feeds the render and the manifest, the final and its reprint
+   are now byte-identical *including the photo*, and a reprint no longer touches the
+   uploads dir — the "reprint loses photos" soft spot is closed and the security surface
+   shrank. Frozen forever by `tests/fixtures/manifest_photo_v1.json`. (`/api/photo`
+   keeps its upload caps; embedding happens at manifest build.)
 2. **One door for untrusted manifests.** A single `provenance` decode function —
    capped read, manifest parse, geometry bound, validate — consumed by reprint,
    inspect, and continue.

@@ -1,0 +1,52 @@
+{
+  "manifest_version": 1,
+  "engine": "trailprint",
+  "region_id": "lassen_ca",
+  "sources": [
+    {
+      "filename": "trip.gpx",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 123
+    }
+  ],
+  "spec": {
+    "region_id": "lassen_ca",
+    "crs": "EPSG:32610",
+    "crop": [
+      674744.83,
+      4459659.23,
+      714744.83,
+      4512992.56
+    ],
+    "print_w_in": 9,
+    "print_h_in": 12,
+    "native_resolution_m": 10,
+    "tracks": [
+      [
+        [
+          680000.0,
+          4470000.0
+        ],
+        [
+          700000.0,
+          4500000.0
+        ]
+      ]
+    ],
+    "track_days": [
+      "2024-06-01"
+    ],
+    "hotspots": [
+      {
+        "x": 690000.0,
+        "y": 4485000.0,
+        "weight": 1,
+        "label": "Camp",
+        "icon": "camp",
+        "photo": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBAUEBAYFBQUGBgYHCQ4JCQgICRINDQoOFRIWFhUSFBQXGiEcFxgfGRQUHScdHyIjJSUlFhwpLCgkKyEkJST/2wBDAQYGBgkICREJCREkGBQYJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCT/wAARCABgAGADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAb/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFgEBAQEAAAAAAAAAAAAAAAAAAAUH/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8AjgFVtAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/9k="
+      }
+    ],
+    "seed": 7,
+    "title_text": "Frozen photo v1"
+  }
+}
