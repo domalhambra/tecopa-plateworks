@@ -362,3 +362,13 @@ button:disabled { opacity: .4; cursor: default; }
 }
 .dz-continue:hover { background: var(--control-hover, var(--surface-recessed)); }
 .dz-continue:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* --- time-lapse card --- */
+.tl-controls { display: flex; flex-direction: column; gap: 10px; margin: 8px 0; }
+.tl-preview { margin: 8px 0; }
+.tl-preview img {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius-sm, 8px);
+  border: 1px solid var(--color-border, var(--hairline));
+}

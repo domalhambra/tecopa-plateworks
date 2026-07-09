@@ -115,6 +115,18 @@ export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
   return asJson(res);   // { job, count, skipped: [{preset, reason}] }
 }
 
+// Time-lapse: render the accepted composition as a film (the day-ordered journeys
+// accumulate to the complete poster). Returns { job, frames }; poll like any render.
+export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = '',
+                                                   embedSpec = true } = {}) {
+  const res = await postForm('/api/timelapse/submit', {
+    session_id: sessionId, max_frames: maxFrames,
+    wallpaper_preset: wpPreset || undefined,
+    embed_spec: embedSpec ? 'true' : 'false',
+  });
+  return asJson(res);   // { job, frames }
+}
+
 export async function jobStatus(jid) {
   const res = await fetch(`/api/jobs/${jid}`);
   return asJson(res);   // { state, error, result? }

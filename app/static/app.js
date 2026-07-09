@@ -74,6 +74,7 @@ function go(step) {
     // accepted composition re-rendered for every screen the client picks.
     $('formatField').hidden = state.output === 'wallpaper';
     renderBundleCard();
+    renderTimelapseCard();
   }
   buildStepper();
   focusHeading(step);
@@ -544,6 +545,55 @@ async function downloadBundle() {
   $('bundleBtn').disabled = !state.bundlePicks.length;
 }
 
+// --- time-lapse (post-proof): the accepted composition as a film, the day-ordered
+// journeys accumulating to the complete poster. The APNG autoplays in the preview.
+let tlInFlight = false;
+let tlUrl = null;
+
+function renderTimelapseCard() {
+  const card = $('timelapseCard');
+  if (!card) return;
+  if (!state.hasSpec) { card.hidden = true; return; }
+  card.hidden = false;
+  const sel = $('tlTarget');
+  // target picker (only when device presets are available): the accepted sheet, or a
+  // wallpaper preset to film at that device's exact native pixels.
+  if (sel && !sel.dataset.filled && state.wpPresets.length) {
+    const o0 = document.createElement('option');
+    o0.value = ''; o0.textContent = 'Accepted sheet';
+    sel.appendChild(o0);
+    for (const p of state.wpPresets) {
+      const o = document.createElement('option');
+      o.value = p.id; o.textContent = `${p.name} — ${p.px[0]}×${p.px[1]}`;
+      sel.appendChild(o);
+    }
+    sel.dataset.filled = '1';
+  }
+  $('tlTargetField').hidden = !state.wpPresets.length;
+  $('tlBtn').disabled = tlInFlight;
+}
+
+async function renderTimelapse() {
+  if (tlInFlight) return;
+  tlInFlight = true; $('tlBtn').disabled = true;
+  setStatus('Queuing time-lapse…', 'tlStatus');
+  try {
+    const sub = await api.submitTimelapse(state.session, {
+      maxFrames: state.tlFrames, wpPreset: state.tlTarget, embedSpec: state.embedSpec });
+    const result = await pollJob(sub.job, 'tlStatus', `Painting ${sub.frames} frames…`);
+    if (result) {
+      const blob = await api.fetchBlob(result);
+      if (tlUrl) URL.revokeObjectURL(tlUrl);
+      tlUrl = URL.createObjectURL(blob);
+      const img = $('tlPreview'); img.src = tlUrl; img.hidden = false;   // APNG autoplays
+      const a = document.createElement('a');
+      a.href = tlUrl; a.download = 'trailprint-timelapse.png'; a.click();
+      setStatus(`Time-lapse ready — ${sub.frames} frames, downloaded.`, 'tlStatus');
+    }
+  } catch (e) { setStatus('Time-lapse failed: ' + e.message, 'tlStatus'); }
+  tlInFlight = false; $('tlBtn').disabled = false;
+}
+
 // --- start over ---
 function startOver() {
   const hasWork = state.session || state.files.length;
@@ -727,6 +777,11 @@ function wire() {
   }
 
   $('bundleBtn').onclick = downloadBundle;
+  $('tlBtn').onclick = renderTimelapse;
+  $('tlFrames').oninput = (e) => {
+    state.tlFrames = Number(e.target.value); $('tlFramesVal').textContent = e.target.value;
+  };
+  $('tlTarget').onchange = (e) => { state.tlTarget = e.target.value; };
 
   const prefs = loadPrefs();
   if (prefs.printSize && /^\d+,\d+$/.test(prefs.printSize) &&
