@@ -35,6 +35,13 @@ MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword
 MANIFEST_VERSION = 1
 ENGINE = "trailprint"
 
+
+class ManifestError(SpecError):
+    """An untrusted manifest can't be turned into a safe, renderable spec because it isn't
+    a well-formed TrailPrint manifest. A SpecError subclass, so a single `except SpecError`
+    in the API catches it alongside the geometry/zoom gates as one 422 (see
+    spec_from_manifest)."""
+
 # Embedded photos ("the file is the whole record"): a pinned photo travels INSIDE the
 # manifest as a render-resolution JPEG data URI -- never as a server file path. So a
 # reprint reproduces the photo forever (no uploads dir, no TTL loss), and an untrusted
@@ -257,3 +264,34 @@ def load_photo(value: str) -> Image.Image:
             raise ValueError("embedded photo exceeds the pixel guard")
         return im.convert("RGB")
     return Image.open(value).convert("RGB")
+
+
+def spec_from_manifest(manifest: dict) -> CompositionSpec:
+    """THE one door an UNTRUSTED manifest passes through to become a safe, render-ready
+    spec. Every file-consuming verb (/api/reprint, /api/continue, and any future one)
+    calls this, so the entire untrusted-input guard chain lives in ONE audited place and
+    a new verb inherits it by construction instead of re-deriving (and possibly
+    mis-copying) it:
+
+      1. manifest_to_spec        -- parse the manifest; a malformed one -> ManifestError.
+      2. drop_unembedded_photos  -- keep only size-bounded embedded photos, so no server
+                                    path can ride in on a hotspot (nothing to traverse).
+      3. bound_geometry          -- refuse a geometry bomb (millions of points / thousands
+                                    of tracks) BEFORE validate/rasterize allocate anything.
+      4. validate(final_dpi)     -- aspect, the 120 MP output ceiling, the zoom cap.
+
+    Raises only SpecError (ManifestError for a bad manifest; ZoomTooTight / OutputTooLarge
+    / plain SpecError for a bad geometry), so one `except SpecError` at the call site maps
+    every rejection to a 422. Region AVAILABILITY is intentionally NOT checked here -- it
+    needs the server's region registry and a verb-specific message -- so the caller does
+    that on the returned spec."""
+    try:
+        spec = manifest_to_spec(manifest)
+    except SpecError:
+        raise
+    except Exception as e:
+        raise ManifestError("This file's TrailPrint manifest is malformed.") from e
+    drop_unembedded_photos(spec)
+    bound_geometry(spec)
+    spec.validate(spec.final_dpi())
+    return spec
