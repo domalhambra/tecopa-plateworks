@@ -1,9 +1,23 @@
 # TrailPrint
 
-A single local app that imports GPX tracks and renders a shaded-relief poster of
-where you've been within one curated region. One FastAPI process serves a thin
-browser aim view and the render engine; all real rendering happens server-side in
-Python.
+A single local app that turns your GPX tracks into a **self-archiving chronicle of a
+life outdoors**: a shaded-relief poster of where you've been within one curated
+region, performed as a print, a wallpaper, or a time-lapse film — every file carrying
+everything needed to reproduce it, continue it, and hand it to the future. No
+account, no database, no cloud: the artifact is the archive, and the poster on your
+wall is the save file. One FastAPI process serves a thin browser aim view and the
+render engine; all real rendering happens server-side in Python.
+
+The scope rests on three pillars (see `docs/scope.md` for the full statement and the
+engineering commitments behind it):
+
+1. **One score, many performances** — the composition is decided once in ground
+   coordinates, then performed at any size (print), any pixel density (wallpaper),
+   and along its own time axis (film).
+2. **The file is the whole record** — the picture, the geometry, the source hashes,
+   and the memories pinned to it all travel inside the PNG.
+3. **The record is alive** — last year's poster plus this year's GPX renders the next
+   edition (`POST /api/continue`), lineage carried in the file itself.
 
 The engine is split at one seam: **compose** decides the picture once in ground
 coordinates and emits a `CompositionSpec`; **rasterize** paints that spec at any

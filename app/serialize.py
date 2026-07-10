@@ -33,7 +33,7 @@ def spec_from_json(d: dict) -> CompositionSpec:
     d["tracks"] = [np.asarray(a, float) for a in d["tracks"]]
     # UNTRUSTED manifests deserialize here too (provenance.manifest_to_spec): a crafted
     # spec can carry a non-list `hotspots` (null / a number) or `track_days`, which
-    # every consumer iterates (sanitize_photos, bound_geometry, _stats_line, the
+    # every consumer iterates (drop_unembedded_photos, bound_geometry, _stats_line, the
     # continue rebuild). Coerce to safe shapes so a hostile file is a clean 422/no-op,
     # never a 500. A well-formed spec and every persisted session row is already
     # list-shaped here, so this is a no-op for them.

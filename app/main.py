@@ -105,6 +105,15 @@ def _require_format(fmt: str, spec=None) -> str:
         raise HTTPException(422, "wallpapers are PNG-only — PDF is a print deliverable")
     return fmt
 
+def _embed_photos(spec, dpi):
+    """Canonicalize a spec's hotspot photos to embedded JPEG bytes at the render box for
+    `dpi` (photo_box_in * dpi, matching render._draw_photos), returning a copy. Feeding
+    the SAME embedded spec to the render and the manifest makes the deliverable and its
+    reprint pixel-identical, and frees the reprint from the uploads dir -- the photo now
+    lives inside the file ("the file is the whole record")."""
+    box_px = max(24, round(spec.photo_box_in * dpi))
+    return provenance.build_final_spec(spec, box_px)
+
 def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     """The render worker: rasterize the stamped spec at ITS final resolution (print
     dpi, or the device's ppi for a wallpaper) and store the encoded output. Runs on a
@@ -122,6 +131,7 @@ def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed
     # honor the pacing max_frames that the ceiling was CHECKED against (same spec, same
     # max_frames): render_frames' default plan is DEFAULT_MAX_FRAMES, so omitting the
     # plan here would render more frames than the ceiling validated -> a bypass/OOM.
+    spec = _embed_photos(spec, dpi)              # photos ride the film, not the uploads dir
     plan = timelapse.frame_plan(spec, pacing["max_frames"])
     frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir, plan=plan)
     manifest = None
@@ -151,6 +161,7 @@ def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lin
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
         for spec, arcname in items:
             dpi = spec.final_dpi()
+            spec = _embed_photos(spec, dpi)      # photos ride each device file, per its ppi
             try:
                 img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
                                        watermark=False, hydro=hydro, cfg=cfg,
@@ -624,6 +635,7 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)         # the wallpaper PNG-only policy needs the spec
     dpi = spec.final_dpi()
+    spec = _embed_photos(spec, dpi)    # canonicalize photos -> the render + manifest share them
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=dpi, region_dir=region.dir,
@@ -650,6 +662,9 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     fmt = _require_format(format)
     spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)
+    # embed photos NOW (sync), so the manifest built here and the worker's render below
+    # paint the identical bytes -- the async final and its reprint stay pixel-identical.
+    spec = _embed_photos(spec, spec.final_dpi())
     jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
                        _final_manifest(spec, sources, embed_spec, lineage))
     return {"job": jid}
@@ -893,9 +908,11 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                   embed_spec: bool = Form(True)):
     """Re-render a TrailPrint PNG at print resolution from the file alone. Stateless:
     the spec rides the file, so no session or DB row is needed -- a printed poster is
-    reproducible forever. The embedded spec is UNTRUSTED input; photo paths are
-    sanitized to inside the uploads dir (provenance.sanitize_photos) and spec.validate
-    re-enforces aspect / the 120 MP ceiling / the zoom cap before any pixels are made."""
+    reproducible forever, photos included (they ride the manifest as embedded bytes).
+    The embedded spec is UNTRUSTED input; a hotspot photo is kept only if it is a
+    size-bounded embedded JPEG (provenance.drop_unembedded_photos -- a manifest can't
+    carry a server path) and spec.validate re-enforces aspect / the 120 MP ceiling /
+    the zoom cap before any pixels are made."""
     fmt = _require_format(format)      # cheap membership check BEFORE reading the file
     data = await _read_capped(file)
     manifest = _manifest_or_422(data)
@@ -908,7 +925,7 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     if region is None:
         raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
                                  "so this poster can't be reprinted here.")
-    provenance.sanitize_photos(spec, UPLOADS_DIR)   # drop any out-of-uploads photo path
+    provenance.drop_unembedded_photos(spec)         # keep only size-bounded embedded photos
     try:
         provenance.bound_geometry(spec)             # untrusted spec: refuse a geometry bomb
         spec.validate(spec.final_dpi())             # untrusted spec: re-gate the geometry
@@ -1006,14 +1023,11 @@ async def continue_poster(file: UploadFile = File(...)):
     if region is None:
         raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
                                  "so this poster can't be continued here.")
-    # untrusted-manifest hardening (mirrors /api/reprint): drop any photo path that
-    # escapes the uploads dir, then drop any that no longer resolves to a real file
-    # (the TTL usually evicts a prior session's photos within a day) so a stale path
-    # can't fail a later final. Label + icon always survive.
-    provenance.sanitize_photos(spec, UPLOADS_DIR)
-    for hs in spec.hotspots:
-        if isinstance(hs, dict) and hs.get("photo") and not os.path.isfile(hs["photo"]):
-            hs.pop("photo", None)
+    # untrusted-manifest hardening (mirrors /api/reprint): keep only size-bounded
+    # embedded photos and drop everything else. The photo now travels inside the file,
+    # so a continued edition carries last year's pinned photos forward with no uploads
+    # dir and no stale-path handling -- the bytes are already here. Label + icon survive.
+    provenance.drop_unembedded_photos(spec)
     try:
         provenance.bound_geometry(spec)             # refuse a geometry-bomb manifest
         spec.validate(spec.final_dpi())             # re-gate the untrusted geometry

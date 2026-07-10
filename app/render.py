@@ -9,6 +9,7 @@ from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError
 from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
+from app import provenance
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 # Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
@@ -454,11 +455,11 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
     shadow_r = max(1.0, box * 0.04)
     d = ImageDraw.Draw(img, "RGBA")
     for hs in spec.hotspots:
-        path = hs.get("photo")
-        if not path:
+        src = hs.get("photo")
+        if not src:
             continue
         try:
-            photo = Image.open(path).convert("RGB")
+            photo = provenance.load_photo(src)     # embedded data URI or a session path
         except Exception:
             continue
         photo.thumbnail((box, box))
