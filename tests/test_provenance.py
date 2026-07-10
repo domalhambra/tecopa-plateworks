@@ -131,6 +131,41 @@ def test_load_photo_guards_a_decompression_bomb():
         pass
 
 
+# ---- unit: the single untrusted-manifest door (spec_from_manifest) ----
+
+def test_spec_from_manifest_runs_the_whole_guard_chain():
+    # one call = parse + drop-unembedded-photos + bound_geometry + validate. A bare photo
+    # path in the manifest is dropped (not opened), and the returned spec is already valid.
+    m = json.load(open("tests/fixtures/manifest_v1.json"))
+    m["spec"]["hotspots"] = [{"x": 690000.0, "y": 4485000.0, "weight": 1, "photo": "/etc/passwd"}]
+    spec = provenance.spec_from_manifest(m)
+    assert "photo" not in spec.hotspots[0]                 # bare path dropped, never opened
+    spec.validate(spec.final_dpi())                        # already gated -> still passes
+
+def test_spec_from_manifest_rejects_a_malformed_manifest():
+    try:
+        provenance.spec_from_manifest({"spec": "not a spec dict"})
+        assert False, "malformed manifest was not refused"
+    except provenance.ManifestError as e:
+        assert "malformed" in str(e).lower()
+
+def test_spec_from_manifest_rejects_a_geometry_bomb():
+    from app.spec import SpecError
+    m = json.load(open("tests/fixtures/manifest_v1.json"))
+    m["spec"]["tracks"] = [[[0.0, 0.0], [1.0, 1.0]]] * (provenance.MAX_MANIFEST_TRACKS + 1)
+    try:
+        provenance.spec_from_manifest(m)
+        assert False, "geometry bomb was not refused"
+    except SpecError:
+        pass
+
+def test_manifest_error_is_a_spec_error():
+    # the whole point of the door: one `except SpecError` at the endpoint maps a bad
+    # manifest AND a bad geometry to a single 422 path.
+    from app.spec import SpecError
+    assert issubclass(provenance.ManifestError, SpecError)
+
+
 # ---- endpoint: embedding + privacy ----
 
 def test_final_embeds_a_reprintable_manifest_by_default():

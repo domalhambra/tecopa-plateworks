@@ -137,9 +137,18 @@ worn-width pass.
    uploads dir — the "reprint loses photos" soft spot is closed and the security surface
    shrank. Frozen forever by `tests/fixtures/manifest_photo_v1.json`. (`/api/photo`
    keeps its upload caps; embedding happens at manifest build.)
-2. **One door for untrusted manifests.** A single `provenance` decode function —
-   capped read, manifest parse, geometry bound, validate — consumed by reprint,
-   inspect, and continue.
+2. **One door for untrusted manifests. — DONE.** A single decode function,
+   `provenance.spec_from_manifest`, is the one place a crafted file becomes a
+   render-ready spec: parse (a malformed manifest → `ManifestError`), drop non-embedded
+   photos, bound the geometry, validate (aspect / 120 MP ceiling / zoom cap). Both
+   `/api/reprint` and `/api/continue` now funnel through it, so the guard chain is
+   audited and tested once and a new file-consuming verb inherits the hardening by
+   construction instead of re-deriving (and possibly mis-copying) it. `ManifestError`
+   subclasses `SpecError`, so one `except SpecError` maps a bad manifest and a bad
+   geometry to the same 422. (`/api/reprint/inspect` intentionally stays lighter — it
+   never builds or validates a spec, only reads manifest fields — and shares the
+   `_read_capped` → `_manifest_or_422` front; region *availability* stays at the call
+   site, since it's a per-server capability check, not spec hardening.)
 3. **Say the goal where people read it.** The README opens with the chronicle framing
    and the three pillars, so the next "should we remove X?" conversation starts from
    the right measuring stick.

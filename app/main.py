@@ -878,6 +878,17 @@ def _manifest_or_422(data: bytes) -> dict:
                                  "Only PNG finals exported with reprint data embedded are self-describing.")
     return m
 
+def _manifest_region_or_422(spec, verb: str):
+    """The built region a manifest names, or a 422: a poster whose region isn't built on
+    THIS server can't be reprinted/continued here. `verb` ("reprinted"/"continued") fills
+    the message. Availability is a per-server capability check, so it lives here rather
+    than in provenance.spec_from_manifest (which only hardens the untrusted spec itself)."""
+    region = REGIONS.get(spec.region_id)
+    if region is None:
+        raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
+                                 f"so this poster can't be {verb} here.")
+    return region
+
 @app.post("/api/reprint/inspect")
 async def reprint_inspect(file: UploadFile = File(...)):
     """Read a poster's provenance without rendering: which region, the source-file
@@ -909,28 +920,19 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     """Re-render a TrailPrint PNG at print resolution from the file alone. Stateless:
     the spec rides the file, so no session or DB row is needed -- a printed poster is
     reproducible forever, photos included (they ride the manifest as embedded bytes).
-    The embedded spec is UNTRUSTED input; a hotspot photo is kept only if it is a
-    size-bounded embedded JPEG (provenance.drop_unembedded_photos -- a manifest can't
-    carry a server path) and spec.validate re-enforces aspect / the 120 MP ceiling /
-    the zoom cap before any pixels are made."""
+    The embedded spec is UNTRUSTED input: it passes through provenance.spec_from_manifest
+    (the single untrusted-manifest door -- parse, drop non-embedded photos, bound the
+    geometry, validate aspect / the 120 MP ceiling / the zoom cap) before any pixels are
+    made, so a crafted file can neither read server files nor request a gigapixel."""
     fmt = _require_format(format)      # cheap membership check BEFORE reading the file
     data = await _read_capped(file)
     manifest = _manifest_or_422(data)
     try:
-        spec = provenance.manifest_to_spec(manifest)
-    except Exception:
-        raise HTTPException(422, "This file's TrailPrint manifest is malformed.")
-    _require_format(fmt, spec)                      # a wallpaper reprints as PNG only
-    region = REGIONS.get(spec.region_id)
-    if region is None:
-        raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
-                                 "so this poster can't be reprinted here.")
-    provenance.drop_unembedded_photos(spec)         # keep only size-bounded embedded photos
-    try:
-        provenance.bound_geometry(spec)             # untrusted spec: refuse a geometry bomb
-        spec.validate(spec.final_dpi())             # untrusted spec: re-gate the geometry
+        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
     except SpecError as e:
         raise HTTPException(422, str(e))
+    _require_format(fmt, spec)                       # a wallpaper reprints as PNG only
+    region = _manifest_region_or_422(spec, "reprinted")
     # an animated file re-renders the FILM (the file promises "the file is the artwork",
     # so honor it for films too). A film render is slow -> through the queue, returning a
     # job like the other async paths, not a synchronous stream. Stills keep today's
@@ -1015,24 +1017,15 @@ async def continue_poster(file: UploadFile = File(...)):
     new edition (invariant 1 holds: still one spec per accepted proof)."""
     data = await _read_capped(file)
     manifest = _manifest_or_422(data)
+    # same untrusted-manifest door as /api/reprint: parse, keep only size-bounded embedded
+    # photos (so last year's pinned photos ride forward from inside the file, with no
+    # uploads dir), bound the geometry, and validate -- one audited guard chain, so a new
+    # verb can't drift from reprint's hardening. Label + icon always survive.
     try:
-        spec = provenance.manifest_to_spec(manifest)
-    except Exception:
-        raise HTTPException(422, "This file's TrailPrint manifest is malformed.")
-    region = REGIONS.get(spec.region_id)
-    if region is None:
-        raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
-                                 "so this poster can't be continued here.")
-    # untrusted-manifest hardening (mirrors /api/reprint): keep only size-bounded
-    # embedded photos and drop everything else. The photo now travels inside the file,
-    # so a continued edition carries last year's pinned photos forward with no uploads
-    # dir and no stale-path handling -- the bytes are already here. Label + icon survive.
-    provenance.drop_unembedded_photos(spec)
-    try:
-        provenance.bound_geometry(spec)             # refuse a geometry-bomb manifest
-        spec.validate(spec.final_dpi())             # re-gate the untrusted geometry
+        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
     except SpecError as e:
         raise HTTPException(422, str(e))
+    region = _manifest_region_or_422(spec, "continued")
 
     # rebuild live Track objects from the spec (tracks ride the spec, exactly the
     # property reprint relies on). track_days is parallel to tracks; normalize its
