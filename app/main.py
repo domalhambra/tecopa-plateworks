@@ -308,6 +308,38 @@ def _carry_annotations(old_spots, new_spots):
             out.append(dict(old))          # keep the annotated spot verbatim
     return out
 
+def _track_key(t) -> str:
+    """A content hash identifying one recording: its day plus its (N,2) float64
+    coordinates. The ingest pipeline (parse -> reproject -> simplify) is deterministic,
+    day is a normalized ISO date string (or None), and coords round-trip float64
+    losslessly through the spec/manifest JSON -- so the SAME recording hashes identically
+    whether it arrives in a fresh file or is rebuilt from a continued poster. The DAY is
+    part of the key on purpose: re-walking the same trail on another day is a distinct
+    journey that must still earn its worn-path weight, while a re-exported copy of one
+    recording (same day, same track) dedups. Distinct recordings of a trail on the same
+    day differ in coords anyway (GPS noise), so they are never wrongly merged."""
+    import numpy as np
+    a = np.ascontiguousarray(t.coords, dtype=np.float64)
+    return hashlib.sha256(str(t.day or "").encode() + b"|" + a.tobytes()).hexdigest()
+
+def _dedup_new_tracks(existing, parsed):
+    """Drop any parsed track whose geometry already backs the poster (or repeats earlier
+    in this same batch), keyed by _track_key. Returns (kept, skipped_count). The
+    track-level twin of the file-level (sha256-of-bytes) dedup in upload(): a re-exported
+    folder that overlaps last year's tracks is a DIFFERENT file -- file-dedup can't catch
+    it -- but its already-present tracks must not double-count into the worn-width pass.
+    First occurrence of a geometry always wins, so this only ever drops true repeats."""
+    seen = {_track_key(t) for t in existing}
+    kept, skipped = [], 0
+    for t in parsed:
+        k = _track_key(t)
+        if k in seen:
+            skipped += 1
+            continue
+        seen.add(k)
+        kept.append(t)
+    return kept, skipped
+
 @app.post("/api/upload")
 async def upload(files: List[UploadFile] = File(...),
                  session_id: Optional[str] = Form(None),
@@ -338,7 +370,7 @@ async def upload(files: List[UploadFile] = File(...),
         seen_sha.add(h)
         kept.append((data, fn))
     payloads = kept
-    region, new = _resolve_region(payloads, session_id, region_id)
+    region, parsed = _resolve_region(payloads, session_id, region_id)
     # recovery = the operator's explicit region was overridden because the tracks
     # actually belong to a different built region (not a plain auto-detect).
     recovered = bool(region_id and region.id != region_id
@@ -348,11 +380,17 @@ async def upload(files: List[UploadFile] = File(...),
     old_spots, old_sources = [], []
     if session_id and session.has(session_id):
         st = session.get(session_id)
+        # track-level dedup: a re-exported folder (new file bytes, so file-dedup missed
+        # it) that overlaps tracks already on the poster must not re-add them.
+        new, skipped_track_dupes = _dedup_new_tracks(st["tracks"], parsed)
         tracks = st["tracks"] + new                                    # accumulate
         old_spots = st["hotspots"]
         old_sources = st.get("sources", [])
         sid = session_id
     else:
+        # a fresh session still dedups WITHIN the batch (the same track dropped twice,
+        # or a folder that carries a duplicate).
+        new, skipped_track_dupes = _dedup_new_tracks([], parsed)
         tracks, sid = new, None
     if not tracks:
         raise HTTPException(400, "No usable tracks in file(s)")
@@ -364,9 +402,9 @@ async def upload(files: List[UploadFile] = File(...),
                               "region_id": region.id, "sources": sources})
     else:
         # invalidate any stamped spec ONLY when the track set actually changed: a
-        # re-drop of files already on the poster (every file deduped -> `new` empty)
-        # is a no-op that must not force a needless re-proof. A real addition re-gates
-        # "approve a proof first" so /api/final can't render a stale subset.
+        # re-drop of files/tracks already on the poster (`new` empty after both dedup
+        # passes) is a no-op that must not force a needless re-proof. A real addition
+        # re-gates "approve a proof first" so /api/final can't render a stale subset.
         kw = dict(tracks=tracks, hotspots=spots, sources=sources)
         if new:
             kw["spec"] = None
@@ -387,7 +425,8 @@ async def upload(files: List[UploadFile] = File(...),
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
             "hotspots": hpx, "starter_crop": list(start), "recovered": recovered,
-            "skipped_duplicates": skipped_dupes}
+            "skipped_duplicates": skipped_dupes,
+            "skipped_duplicate_tracks": skipped_track_dupes}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 # env-overridable so the test harness never writes into the operator's live dir
