@@ -1,0 +1,392 @@
+<title>TrailPrint — your years outdoors, as one artifact</title>
+<style>
+  :root{
+    --ground:#13160e; --ground-2:#1b1f15; --rule:#333829;
+    --paper:#f2efe6; --paper-edge:#d8d2c2;
+    --ink:#e9e9df; --ink-2:#b3b6a5; --ink-3:#83876f;
+    --gold:#d69e3a; --gold-bright:#eab84f; --water:#8098a8; --olive:#79804e;
+    --shadow:0 24px 60px -20px rgba(0,0,0,.7);
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --maxw:1120px;
+  }
+  @media (prefers-color-scheme:light){
+    :root{ --ground:#e9e4d6; --ground-2:#f4f0e6; --rule:#d3ccba;
+      --ink:#20231a; --ink-2:#4d5142; --ink-3:#6f7360;
+      --shadow:0 20px 50px -22px rgba(40,44,28,.45); --paper-edge:#c8c2b0; }
+  }
+  :root[data-theme="dark"]{ --ground:#13160e; --ground-2:#1b1f15; --rule:#333829;
+    --ink:#e9e9df; --ink-2:#b3b6a5; --ink-3:#83876f; --shadow:0 24px 60px -20px rgba(0,0,0,.7); --paper-edge:#d8d2c2; }
+  :root[data-theme="light"]{ --ground:#e9e4d6; --ground-2:#f4f0e6; --rule:#d3ccba;
+    --ink:#20231a; --ink-2:#4d5142; --ink-3:#6f7360; --shadow:0 20px 50px -22px rgba(40,44,28,.45); --paper-edge:#c8c2b0; }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  #topo{position:fixed;inset:0;width:100%;height:100%;z-index:0;opacity:.5;pointer-events:none}
+  .wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  section{position:relative;z-index:1}
+  a{color:inherit}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--gold);margin:0}
+  h1,h2,h3{font-family:var(--serif);font-weight:600;text-wrap:balance;letter-spacing:-.01em}
+  h2{font-size:clamp(26px,3.4vw,40px);margin:0 0 .3em;line-height:1.1}
+  .lede{color:var(--ink-2);font-size:clamp(17px,1.4vw,20px);max-width:60ch}
+
+  /* ---- top bar ---- */
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:22px 0}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:19px;letter-spacing:.01em}
+  .brand b{font-weight:600}
+  .mark{width:22px;height:22px;border:1.5px solid var(--gold);border-radius:50%;position:relative;flex:none}
+  .mark::before{content:"";position:absolute;inset:3px;border-radius:50%;
+    background:conic-gradient(from -30deg,var(--gold),transparent 40% 60%,var(--gold))}
+  .navlink{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-2);text-decoration:none;padding:8px 14px;border:1px solid var(--rule);border-radius:999px}
+  .navlink:hover{color:var(--ink);border-color:var(--gold)}
+
+  /* ---- hero ---- */
+  .hero{display:grid;grid-template-columns:1.05fr .95fr;gap:56px;align-items:center;
+    padding:40px 0 92px}
+  .hero h1{font-size:clamp(38px,5.6vw,66px);line-height:1.02;margin:.35em 0 .3em}
+  .hero .gild{color:var(--gold-bright);font-style:italic}
+  .heroactions{display:flex;gap:14px;flex-wrap:wrap;margin-top:30px;align-items:center}
+  .btn{font-family:var(--mono);font-size:13px;letter-spacing:.06em;text-transform:uppercase;
+    text-decoration:none;padding:14px 22px;border-radius:8px;border:1px solid transparent;transition:.15s}
+  .btn-solid{background:var(--gold);color:#1a1408;font-weight:600}
+  .btn-solid:hover{background:var(--gold-bright)}
+  .btn-ghost{border-color:var(--rule);color:var(--ink-2)}
+  .btn-ghost:hover{border-color:var(--gold);color:var(--ink)}
+  .caption{font-family:var(--mono);font-size:12px;color:var(--ink-3);letter-spacing:.04em}
+
+  /* framed print */
+  .frame{background:var(--paper);padding:14px;border-radius:3px;
+    box-shadow:var(--shadow);border:1px solid var(--paper-edge);
+    transform:rotate(-1.1deg);transition:transform .4s ease}
+  .frame:hover{transform:rotate(0deg)}
+  .frame img{display:block;width:100%;border-radius:1px}
+  .frame .plate{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:#6b6552;text-align:center;padding:9px 0 3px}
+  .hero-frame{max-width:400px;margin-left:auto}
+
+  /* ---- generic section rhythm ---- */
+  .band{padding:84px 0;border-top:1px solid var(--rule)}
+  .band-head{max-width:62ch;margin-bottom:44px}
+
+  /* pillars */
+  .pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--rule);
+    border:1px solid var(--rule);border-radius:14px;overflow:hidden}
+  .pillar{background:var(--ground-2);padding:30px 26px}
+  .pillar .n{font-family:var(--mono);font-size:12px;color:var(--gold);letter-spacing:.14em}
+  .pillar h3{font-size:22px;margin:16px 0 8px}
+  .pillar p{color:var(--ink-2);font-size:15px;margin:0}
+
+  /* magic trick / editions */
+  .trip{display:grid;grid-template-columns:repeat(3,1fr);gap:22px;align-items:end}
+  .ed{position:relative}
+  .ed .frame{transform:none}
+  .ed:nth-child(1){transform:translateY(24px) scale(.94)}
+  .ed:nth-child(2){transform:translateY(10px) scale(.97)}
+  .edtag{position:absolute;top:-14px;left:50%;transform:translateX(-50%);
+    font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    background:var(--gold);color:#1a1408;padding:4px 11px;border-radius:999px;white-space:nowrap}
+  .trip-note{margin-top:40px;display:flex;gap:14px;align-items:flex-start;
+    font-size:15px;color:var(--ink-2);max-width:64ch}
+  .trip-note .k{font-family:var(--mono);color:var(--gold);font-size:12px;letter-spacing:.1em;
+    white-space:nowrap;padding-top:2px}
+
+  /* formats */
+  .formats{display:grid;grid-template-columns:1.3fr 1fr;gap:48px;align-items:center}
+  .fmt-list{list-style:none;padding:0;margin:24px 0 0;display:flex;flex-direction:column;gap:18px}
+  .fmt-list li{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:baseline}
+  .fmt-list .tag{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--gold);border:1px solid var(--rule);border-radius:6px;padding:5px 9px;white-space:nowrap}
+  .fmt-list b{font-weight:600}
+  .fmt-list p{margin:2px 0 0;color:var(--ink-2);font-size:14.5px}
+  .phone{width:236px;margin:0 auto;background:#0c0e08;border-radius:34px;padding:9px;
+    box-shadow:var(--shadow);border:1px solid #2a2e20;position:relative}
+  .phone::before{content:"";position:absolute;top:16px;left:50%;transform:translateX(-50%);
+    width:64px;height:5px;background:#2a2e20;border-radius:3px;z-index:2}
+  .phone img{display:block;width:100%;border-radius:26px}
+
+  /* plates gallery */
+  .plates{display:grid;grid-template-columns:repeat(2,1fr);gap:22px}
+  .plate-card{background:var(--ground-2);border:1px solid var(--rule);border-radius:12px;
+    padding:22px 24px;display:flex;flex-direction:column;gap:6px;position:relative;overflow:hidden}
+  .plate-card .region{font-family:var(--serif);font-size:22px}
+  .plate-card .coord{font-family:var(--mono);font-size:12px;color:var(--ink-3);letter-spacing:.06em}
+  .plate-card .avail{margin-top:12px;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;color:var(--olive)}
+  .plate-card.feat{grid-column:1 / -1;flex-direction:row;gap:28px;align-items:center}
+  .plate-card.feat .frame{transform:none;width:210px;flex:none}
+  .plate-card.feat .body{flex:1}
+  .plate-card .contour{position:absolute;right:-40px;top:-40px;width:160px;height:160px;
+    border-radius:50%;border:1px solid var(--rule);opacity:.5}
+  .plate-card .contour::before,.plate-card .contour::after{content:"";position:absolute;
+    inset:22px;border-radius:50%;border:1px solid var(--rule)}
+  .plate-card .contour::after{inset:44px}
+
+  /* trust strip */
+  .trust{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
+  .trust h3{font-size:19px;margin:0 0 6px;display:flex;gap:10px;align-items:center}
+  .trust h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none}
+  .trust p{color:var(--ink-2);font-size:14.5px;margin:0}
+
+  /* faq */
+  .faq{display:flex;flex-direction:column;gap:2px}
+  details{background:var(--ground-2);border:1px solid var(--rule);border-radius:10px;padding:4px 20px;margin:0}
+  details+details{margin-top:10px}
+  summary{cursor:pointer;padding:16px 0;font-family:var(--serif);font-size:18px;list-style:none;
+    display:flex;justify-content:space-between;align-items:center;gap:16px}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";font-family:var(--mono);color:var(--gold);font-size:20px}
+  details[open] summary::after{content:"–"}
+  details p{color:var(--ink-2);font-size:15px;margin:0 0 18px}
+
+  footer{border-top:1px solid var(--rule);padding:44px 0 60px;color:var(--ink-3)}
+  .foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;
+    font-family:var(--mono);font-size:12px;letter-spacing:.06em}
+
+  .theme{cursor:pointer;background:none;border:1px solid var(--rule);color:var(--ink-2);
+    width:34px;height:34px;border-radius:999px;font-size:14px;flex:none}
+  .theme:hover{border-color:var(--gold);color:var(--ink)}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:4px}
+
+  @media (max-width:860px){
+    .hero{grid-template-columns:1fr;gap:40px;padding-bottom:64px}
+    .hero-frame{margin:0 auto}
+    .pillars,.trust,.plates{grid-template-columns:1fr}
+    .trip{grid-template-columns:1fr;gap:44px}
+    .ed:nth-child(1),.ed:nth-child(2){transform:none}
+    .formats{grid-template-columns:1fr;gap:36px}
+    .plate-card.feat{flex-direction:column;align-items:flex-start}
+    .band{padding:60px 0}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<canvas id="topo" aria-hidden="true"></canvas>
+
+<div class="wrap">
+  <div class="bar">
+    <div class="brand"><span class="mark"></span>TrailPrint <b>Studio</b></div>
+    <div style="display:flex;gap:12px;align-items:center">
+      <a class="navlink" href="#how">How it works</a>
+      <a class="navlink" href="#plates">Regions</a>
+      <button class="theme" id="themeBtn" aria-label="Switch light or dark">◐</button>
+    </div>
+  </div>
+
+  <section class="hero">
+    <div>
+      <p class="eyebrow">GPX in · archival print out</p>
+      <h1>Your years outdoors, as one artifact that <span class="gild">keeps growing</span>.</h1>
+      <p class="lede">Drop in your GPX tracks and TrailPrint renders a museum-quality
+        shaded-relief poster of everywhere you've been — one you can perform as a print,
+        a phone wallpaper, or a film, and add to every single year.</p>
+      <div class="heroactions">
+        <a class="btn btn-solid" href="#how">Make yours</a>
+        <a class="btn btn-ghost" href="#plates">See the regions</a>
+      </div>
+      <p class="caption" style="margin-top:22px">No account · no cloud · the file is the save file.</p>
+    </div>
+    <div class="hero-frame">
+      <figure class="frame" style="margin:0">
+        <img src="../assets/lassen_ca/film.png" alt="A time-lapse of a season of trails inking themselves onto a shaded-relief map">
+        <figcaption class="plate">The year, drawing itself</figcaption>
+      </figure>
+    </div>
+  </section>
+</div>
+
+<section class="band" id="how">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">One score, three performances</p>
+      <h2>Decide the picture once. Perform it many ways.</h2>
+      <p class="lede">TrailPrint fixes your composition in ground coordinates, then paints
+        it at any size or density — so a print, a wallpaper, and a film are the same map,
+        never three separate projects.</p>
+    </div>
+    <div class="pillars">
+      <div class="pillar">
+        <div class="n">01 · PRINT &amp; SCREEN</div>
+        <h3>One picture, every format</h3>
+        <p>The same composition renders as an archival print, a pixel-exact wallpaper cut
+          to your device, and a time-lapse film whose final frame <i>is</i> the poster.</p>
+      </div>
+      <div class="pillar">
+        <div class="n">02 · PROVENANCE</div>
+        <h3>The file is the whole record</h3>
+        <p>Every PNG carries its own recipe, your route data, and even your pinned
+          photos — inside the file. Reprint it years later from the file alone.</p>
+      </div>
+      <div class="pillar">
+        <div class="n">03 · EDITIONS</div>
+        <h3>It grows with you</h3>
+        <p>Next year, drop last year's poster back in with your new tracks. It becomes
+          Edition&nbsp;2 — same frame, more ink, its lineage printed in the corner.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">The magic trick</p>
+      <h2>The poster is the save file.</h2>
+      <p class="lede">Drag a finished poster back into the studio and the whole
+        composition wakes up — tracks, style, crop, photos. Add this year's GPX and the
+        cartouche ticks over. Nothing else on the wall can do this.</p>
+    </div>
+    <div class="trip">
+      <div class="ed"><span class="edtag">Edition 1 · 2024</span>
+        <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/edition_1.png" alt="Edition one of the poster, a single season of tracks"></figure></div>
+      <div class="ed"><span class="edtag">Edition 2 · +1 year</span>
+        <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/edition_2.png" alt="Edition two, more tracks accumulated on the same frame"></figure></div>
+      <div class="ed"><span class="edtag">Edition 3 · +2 years</span>
+        <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/edition_3.png" alt="Edition three, the fullest version of the same map"></figure></div>
+    </div>
+    <div class="trip-note">
+      <span class="k">SAME&nbsp;SPEC →</span>
+      <span>Same frame, same style, same registration — only the ink accumulates. The
+        edition number and its ancestor chain ride inside the file, so the poster proves
+        its own lineage without an account or a server.</span>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <div class="formats">
+      <div>
+        <p class="eyebrow">A screen is a sheet with a known ppi</p>
+        <h2>From the wall to the lock screen.</h2>
+        <p class="lede">Pick a device and TrailPrint re-cuts the exact composition to its
+          native pixels. A 2.6&nbsp;pt trail is literally 2.6&nbsp;pt on the glass.</p>
+        <ul class="fmt-list">
+          <li><span class="tag">Print</span><div><b>Archival poster</b><p>300&nbsp;dpi, framed keyline and cartouche, sized to the data's true resolution.</p></div></li>
+          <li><span class="tag">Wallpaper</span><div><b>Every device preset</b><p>Phone, tablet, laptop, desktop, ultrawide — labels dodge the lock-screen clock.</p></div></li>
+          <li><span class="tag">Film</span><div><b>Time-lapse APNG</b><p>Your journeys reveal in day order over terrain that holds still.</p></div></li>
+        </ul>
+      </div>
+      <div class="phone">
+        <img src="../assets/lassen_ca/wallpaper_iphone.png" alt="The same map cut to a phone lock screen">
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="plates">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Handcrafted plates</p>
+      <h2>Built on real elevation, one region at a time.</h2>
+      <p class="lede">Each region is a curated plate cut from real USGS 3DEP terrain and
+        GNIS place names. We never invent ground — if the data isn't sharp enough, we say so.</p>
+    </div>
+    <div class="plates">
+      <div class="plate-card feat">
+        <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/poster.png" alt="A finished Lassen County poster"><figcaption class="plate">Lassen County · CA</figcaption></figure>
+        <div class="body">
+          <div class="region">Lassen County, California</div>
+          <div class="coord">40.42° N · 120.65° W · Susanville ↔ Eagle Lake</div>
+          <p style="color:var(--ink-2);font-size:14.5px;margin:12px 0 0">The first plate:
+            high desert, volcanic relief, and the lake corridor rendered from 10-metre DEM.</p>
+          <div class="avail">● Available now</div>
+        </div>
+      </div>
+      <div class="plate-card"><span class="contour"></span>
+        <div class="region">Susanville — Reno</div>
+        <div class="coord">CA / NV · 40.0° N · 120.0° W</div>
+        <div class="avail">● Available now</div>
+      </div>
+      <div class="plate-card"><span class="contour"></span>
+        <div class="region">Elko — Bonneville</div>
+        <div class="coord">NV / UT · 40.8° N · 114.5° W</div>
+        <div class="avail">● Available now</div>
+      </div>
+      <div class="plate-card"><span class="contour"></span>
+        <div class="region">Rifle — Aspen</div>
+        <div class="coord">Colorado · 39.4° N · 107.2° W</div>
+        <div class="avail">● Available now</div>
+      </div>
+      <div class="plate-card" style="justify-content:center;border-style:dashed">
+        <div class="region" style="color:var(--gold)">Request the next region →</div>
+        <div class="coord">Tell us where you've been. The most-asked ground gets cut next.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <p class="eyebrow" style="margin-bottom:36px">Why you can trust the file</p>
+    <div class="trust">
+      <div><h3><span class="dot"></span>The proof is the print</h3><p>The low-res proof you approve and the full-resolution print are the same composition, painted twice — pixel-for-pixel, by design.</p></div>
+      <div><h3><span class="dot"></span>Reprint forever</h3><p>A poster you print today re-renders from its own file after any future upgrade. The v1 recipe is frozen and tested against every release.</p></div>
+      <div><h3><span class="dot"></span>Private by default</h3><p>Everything runs locally. Sharing a copy? One toggle strips your exact route coordinates from the shared image.</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap" style="max-width:760px">
+    <p class="eyebrow" style="margin-bottom:28px">Questions</p>
+    <div class="faq">
+      <details open><summary>Why only a few regions?</summary><p>Each plate is built from real 3DEP elevation data, and we refuse to print terrain we can't back with real ground. Adding a region is deliberate craft, not a checkbox — and the request list decides what's cut next.</p></details>
+      <details><summary>What if TrailPrint disappears?</summary><p>Your poster reprints itself. The full recipe — composition, route geometry, source hashes, and embedded photos — lives inside the PNG, so any TrailPrint file re-renders at print resolution from the file alone. No account, no server, no lock-in.</p></details>
+      <details><summary>How do I get my tracks in?</summary><p>Export GPX from Gaia, onX, Strava, or your watch — one bulk file can carry many tracks. Re-export your whole folder every year; a recording counts once, and a repeat visit on a new day still earns its worn-path weight.</p></details>
+      <details><summary>What makes the time-lapse work?</summary><p>Your tracks already carry dates, and rendering is deterministic, so a film isn't a new kind of output — it's one poster painted many times, each frame a prefix of your journeys in day order. The final frame is byte-identical to the still print.</p></details>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot">
+    <div class="brand" style="font-size:16px"><span class="mark"></span>TrailPrint <b>Studio</b></div>
+    <div>Shaded relief · GPX · living editions</div>
+    <div>The poster on your wall is the save file.</div>
+  </div>
+</footer>
+
+<script>
+  // theme toggle: stamp data-theme, mirroring the host viewer's own control
+  (function(){
+    var btn=document.getElementById('themeBtn'), root=document.documentElement;
+    btn.addEventListener('click',function(){
+      var cur=root.getAttribute('data-theme');
+      if(!cur){cur=matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light';}
+      root.setAttribute('data-theme', cur==='dark'?'light':'dark');
+      draw();
+    });
+  })();
+
+  // faint topographic contour field behind the page — drawn, not hand-authored SVG
+  var cv=document.getElementById('topo'), ctx=cv.getContext('2d');
+  function draw(){
+    var w=cv.width=innerWidth, h=cv.height=innerHeight;
+    var light=getComputedStyle(document.documentElement).getPropertyValue('--ground').trim();
+    var isDark=(document.documentElement.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'))==='dark';
+    ctx.clearRect(0,0,w,h);
+    ctx.lineWidth=1;
+    ctx.strokeStyle=isDark?'rgba(214,158,58,0.10)':'rgba(120,110,70,0.16)';
+    // two elevation "peaks" as concentric distance-field contours
+    var peaks=[[w*0.72,h*0.28],[w*0.2,h*0.75]];
+    for(var lv=14;lv<520;lv+=26){
+      ctx.beginPath();
+      for(var a=0;a<=6.3;a+=0.06){
+        var r=lv, x=0,y=0,best=1e9,px,py;
+        // sample radius perturbed by both peaks so lines read as terrain, not rings
+        for(var t=0;t<peaks.length;t++){
+          var dx=Math.cos(a),dy=Math.sin(a);
+          px=peaks[t][0]+dx*(r+40*Math.sin(a*3+t)); py=peaks[t][1]+dy*(r*0.86+30*Math.cos(a*2+t));
+        }
+        if(a===0)ctx.moveTo(px,py); else ctx.lineTo(px,py);
+      }
+      ctx.closePath(); ctx.stroke();
+    }
+  }
+  draw(); addEventListener('resize',draw);
+</script>
