@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TrailPrint Help — getting your tracks in</title>
+  <!-- apply the saved theme before first paint to avoid a flash (same as the studio) -->
+  <script>
+    try {
+      var p = JSON.parse(localStorage.getItem('trailprint') || '{}');
+      if (p.theme) document.documentElement.setAttribute('data-color-scheme', p.theme);
+    } catch (e) { /* private mode */ }
+  </script>
+  <link rel="stylesheet" href="tokens.css">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* document layout for this page only; visual language comes from tokens.css */
+    .help-doc { max-width: 46rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+    .help-doc h1 { font-size: 1.5rem; margin: 1rem 0 .25rem; }
+    .help-doc h2 { font-size: 1.1rem; margin: 2rem 0 .5rem; }
+    .help-doc p, .help-doc li { line-height: 1.55; }
+    .help-doc ol, .help-doc ul { padding-left: 1.4rem; }
+    .help-doc li { margin: .3rem 0; }
+    .help-doc .lede { margin-bottom: 0; }
+    .help-doc .note { border-left: 3px solid var(--accent, #b8860b); padding: .4rem .8rem; margin: .8rem 0; opacity: .92; }
+    .help-doc code { font-size: .9em; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header class="toolbar">
+      <div class="tb-group">
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
+        <span class="tb-sep" aria-hidden="true"></span>
+        <span class="doc-title">Help</span>
+      </div>
+      <div class="tb-group header-actions">
+        <a class="tb-btn" href="./"><span class="tb-ico">←</span><span class="tb-txt">Back to the studio</span></a>
+      </div>
+    </header>
+
+    <main class="help-doc">
+      <h1>Getting your tracks into TrailPrint</h1>
+      <p class="lede">TrailPrint accepts <b>GPX, KML, and KMZ</b> files — and one file can
+      carry <b>many tracks</b>, so the fastest path is always a single bulk export from
+      wherever your tracks live today.</p>
+
+      <h2>From Gaia GPS — export a whole folder as one file</h2>
+      <ol>
+        <li>On <b>gaiagps.com</b> (the website, not the phone app), file the tracks you
+            want into a folder — or use an existing trip or year folder.</li>
+        <li>Open the folder from your Saved Items and choose <b>Export → GPX</b>.</li>
+        <li>One download contains every track in the folder. Drop it here.</li>
+      </ol>
+
+      <h2>From onX (Backcountry / Hunt / Offroad) — multi-select in the Web Map</h2>
+      <ol>
+        <li>Open the onX <b>Web Map</b> on a computer and click <b>My Content</b>.</li>
+        <li>Click <b>Select</b>, tick the checkboxes next to the tracks or whole folders
+            you want, then click <b>Export</b>.</li>
+        <li>Choose <b>GPX</b> for tracks (tracks exported as KML become plain lines).
+            onX colors and icons don't carry over — that's fine; you'll restyle here.</li>
+      </ol>
+
+      <h2>From Strava / Garmin / other watches</h2>
+      <ul>
+        <li><b>Strava:</b> on an activity page, choose <b>Export GPX</b>; for everything
+            at once, request your account archive (Settings → My Account → Download or
+            Delete Your Account → Download Request) — it includes every activity file.</li>
+        <li><b>Garmin Connect:</b> open an activity → gear menu → <b>Export to GPX</b>.</li>
+        <li>Most other platforms (COROS, Suunto, Komoot, Ride with GPS) have a per-activity
+            GPX export; look for "Export" or "Download" on the activity page.</li>
+      </ul>
+
+      <h2>Tips for a better poster (and film)</h2>
+      <ul>
+        <li><b>Prefer recorded tracks over drawn routes.</b> Recordings carry dates, and
+            dates are what group your trips into journeys, drive the worn-path effect
+            where you've returned often, and put the time-lapse film in the right order.
+            Drawn routes have no date and reveal last in the film.</li>
+        <li><b>Drop everything at once or over many visits</b> — tracks accumulate on the
+            poster until you start over.</li>
+        <li><b>Re-dropping a file you already added is safe.</b> TrailPrint recognizes
+            files that already back the poster and skips them.</li>
+      </ul>
+
+      <h2>Continuing a poster next year (editions)</h2>
+      <ol>
+        <li>Choose <b>Continue a poster…</b> and drop last year's TrailPrint PNG. The
+            whole composition comes back — tracks, style, crop, markers, photos. (The
+            poster is the save file: everything travels inside it.)</li>
+        <li>Add this year's GPX and render. The new print becomes <b>Edition 2</b>, with
+            its lineage in the cartouche.</li>
+      </ol>
+      <p class="note"><b>Re-export the whole folder if it's easier.</b> TrailPrint
+      recognizes tracks already on the poster and skips them, so dropping a bundle that
+      mixes last year's recordings with this year's only adds the new ones — a recording
+      counts once, no matter how many times you export it. (Walking the same trail again
+      on a different day <i>is</i> a new journey, and still earns its worn-path weight.)</p>
+
+      <h2>Privacy and reprints</h2>
+      <ul>
+        <li>Finished PNGs embed their own recipe, so any TrailPrint file can be
+            <b>reprinted or continued forever</b> — no account, no cloud, nothing to lose.</li>
+        <li>Sharing a copy? Turn off <b>Reprintable file</b> at the proof step to strip
+            your exact route coordinates from the shared image.</li>
+      </ul>
+    </main>
+  </div>
+</body>
+</html>

@@ -214,8 +214,13 @@ async function doUpload(fileList) {
       announce(`Switched region to ${j.name}`);
     } else {
       showHint('Your tracks are on the map — gold dots mark places you returned to most');
-      const dupNote = skipped.length
-        ? ` (${skipped.length} already on this poster — skipped)` : '';
+      // two dedup passes can skip work: whole files already on the poster (same bytes),
+      // and individual tracks already present (e.g. a re-exported folder that overlaps).
+      const dupTracks = j.skipped_duplicate_tracks || 0;
+      const parts = [];
+      if (skipped.length) parts.push(`${skipped.length} file(s) already added`);
+      if (dupTracks) parts.push(`${dupTracks} track(s) already on the poster`);
+      const dupNote = parts.length ? ` (${parts.join(', ')} — skipped)` : '';
       setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — name places or continue`);
     }
   } catch (e) { setStatus('Upload failed: ' + e.message); }

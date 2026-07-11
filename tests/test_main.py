@@ -21,10 +21,11 @@ def _file(name="a.gpx"):
     return ("files", (name, open("tests/fixtures/sample.gpx", "rb").read(), "application/gpx+xml"))
 
 def _file2(name="b.gpx"):
-    # a genuinely different in-region file (same corridor, the next year) so the
-    # accumulation tests append rather than trip the living-editions duplicate-sha256
-    # skip. Same 5 tracks, distinct bytes -> distinct source hash.
-    data = open("tests/fixtures/sample.gpx", "rb").read().replace(b"2024-06-01", b"2025-06-01")
+    # a genuinely different in-region file: the same corridor a year later, with ALL FIVE
+    # days shifted to 2025 (not just the first), so every track is a distinct journey
+    # (different day) and the accumulation tests truly append. Bumping only one date would
+    # leave four same-day/same-coords recordings that track-level dedup correctly folds.
+    data = open("tests/fixtures/sample.gpx", "rb").read().replace(b"2024-", b"2025-")
     return ("files", (name, data, "application/gpx+xml"))
 
 def _upload(c):

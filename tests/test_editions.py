@@ -34,9 +34,11 @@ def _sample():
     return open("tests/fixtures/sample.gpx", "rb").read()
 
 def _next_year():
-    """A genuinely different in-region file: the same corridor a year later. Different
-    bytes (so upload dedup keeps it) and a 2025 date (so the year span widens)."""
-    return _sample().replace(b"2024-06-01", b"2025-06-01")
+    """A genuinely different in-region file: the same corridor a year later. ALL FIVE days
+    shift to 2025 (not just the first), so every track is a distinct journey (a real repeat
+    visit earns its own worn-path weight) rather than a same-day/same-coords duplicate that
+    track-level dedup would fold. Different bytes too, so file-level dedup keeps it."""
+    return _sample().replace(b"2024-", b"2025-")
 
 def _gpx(name, data):
     return ("files", (name, data, "application/gpx+xml"))
@@ -454,3 +456,88 @@ def test_continue_carries_an_embedded_photo_forward():
     cont = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
     assert cont.status_code == 200, cont.text
     assert cont.json()["hotspots"][0]["photo"] is True     # the embedded photo survived
+
+
+# ---- track-level dedup (a re-exported folder must not double-count journeys) ----
+# A track's identity is its GEOMETRY (coords), not its file: the same recording arriving
+# in a different file (a re-exported folder, or a continued edition) must dedup, while a
+# genuinely different track is always kept. Fixtures make the "different" track differ in
+# geometry, not just date -- coords is the key, so a date-only change would (correctly)
+# still read as the same track.
+
+# two distinct in-region single tracks (synthetic, so track counts are exact); the
+# sample.gpx fixture parses to several tracks, which would make counts ambiguous here.
+_PTS_A = [(40.4160, -120.6530), (40.4170, -120.6550), (40.4180, -120.6530),
+          (40.4190, -120.6550), (40.4200, -120.6540)]
+_PTS_B = [(40.4400, -120.6900), (40.4410, -120.6920), (40.4420, -120.6900),
+          (40.4430, -120.6920), (40.4440, -120.6910)]
+
+def _trk(name, pts, date="2024-06-01"):
+    body = "".join(f'<trkpt lat="{la:.6f}" lon="{lo:.6f}">'
+                   f'<time>{date}T07:3{i}:00Z</time></trkpt>' for i, (la, lo) in enumerate(pts))
+    return f'<trk><name>{name}</name><trkseg>{body}</trkseg></trk>'
+
+def _gpx_doc(*trks):
+    return ('<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            'xmlns="http://www.topografix.com/GPX/1/1">' + "".join(trks) + '</gpx>').encode()
+
+def _A():  return _gpx_doc(_trk("A", _PTS_A))                       # track A alone
+def _A2(): return _gpx_doc(_trk("A-renamed", _PTS_A))              # A's geometry, different bytes
+def _B():  return _gpx_doc(_trk("B", _PTS_B))                       # a distinct track
+def _AB(): return _gpx_doc(_trk("A", _PTS_A), _trk("B", _PTS_B))   # a folder holding both
+
+
+def test_track_key_survives_the_spec_json_round_trip():
+    # the cross-edition guarantee: a track rebuilt from a serialized spec (what
+    # /api/continue does) hashes identically to the freshly-parsed original, so re-dropping
+    # last year's GPX onto a continued poster dedups.
+    from app.main import _track_key, REGIONS
+    from app.ingest import Track, load_tracks
+    tracks = load_tracks(_A(), REGIONS["lassen_ca"].geo)
+    assert tracks
+    for t in tracks:
+        rebuilt = Track(track_id="x", coords=np.asarray(t.coords.tolist(), dtype=float), day=t.day)
+        assert _track_key(rebuilt) == _track_key(t)
+
+def test_upload_dedups_a_track_already_on_the_poster():
+    c = _client()
+    j1 = c.post("/api/upload", files=[_gpx("a.gpx", _A())]).json()
+    sid = j1["session"]; n1 = len(j1["tracks"])
+    # a re-exported folder holding the SAME track plus a new one
+    j2 = c.post("/api/upload", files=[_gpx("folder.gpx", _AB())],
+                data={"session_id": sid}).json()
+    assert j2["skipped_duplicate_tracks"] == 1          # track A was already present
+    assert len(j2["tracks"]) == n1 + 1                  # only track B was added
+
+def test_reexport_of_present_tracks_preserves_the_proof():
+    # re-dropping tracks already on the poster (different file bytes, same geometry) must
+    # be a no-op that does NOT force a re-proof.
+    c = _client()
+    j = c.post("/api/upload", files=[_gpx("a.gpx", _A())]).json(); sid = j["session"]
+    assert c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                      "print_w": 6, "print_h": 8}).status_code == 200
+    j2 = c.post("/api/upload", files=[_gpx("again.gpx", _A2())],
+                data={"session_id": sid}).json()
+    assert j2["skipped_duplicate_tracks"] == 1
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200   # proof survived
+
+def test_intra_batch_track_dedup_on_a_fresh_session():
+    # the same geometry dropped twice in one batch (two files) collapses to one track.
+    c = _client()
+    j = c.post("/api/upload", files=[_gpx("a.gpx", _A()),
+                                     _gpx("a2.gpx", _A2()),
+                                     _gpx("b.gpx", _B())]).json()
+    assert j["skipped_duplicate_tracks"] == 1           # a.gpx and a2.gpx share geometry
+    assert len(j["tracks"]) == 2                         # A + B
+
+def test_continue_then_reexport_dedups_across_editions():
+    # the headline scenario: finish an edition-1 poster, continue it, then drop a
+    # re-exported folder that still contains last year's track plus a new one. Last year's
+    # track dedups across the edition boundary; only the new track is added.
+    c = _client()
+    _, png, _ = _final_png(c, [_gpx("2024.gpx", _A())])
+    sid = c.post("/api/continue", files={"file": ("poster.png", png, "image/png")}).json()["session"]
+    j = c.post("/api/upload", files=[_gpx("folder.gpx", _AB())],
+               data={"session_id": sid}).json()
+    assert j["skipped_duplicate_tracks"] == 1            # edition-1 track carried in the poster
+    assert len(j["tracks"]) == 2                         # edition-1 track + the new one
