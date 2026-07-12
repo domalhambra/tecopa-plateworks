@@ -33,16 +33,23 @@ instead of slogan.
 
 Revenue attaches to what is genuinely scarce, with clear eyes about what isn't:
 
-- **Not legally excludable, so not the moat:** the plates. They are overwhelmingly U.S.
-  federal public-domain facts (Decision 3); under *Feist* there is little-to-no copyright
-  in the packs, and we dedicate them CC0 anyway (below). Plate revenue, if any, is
-  **convenience and freshness** — people pay for curation and packaging of PD data all the
-  time, but nothing stops rehosting. Price accordingly; never build a business plan on
-  plate exclusivity.
-- **Durable revenue:** **physical prints** (fulfillment, color management, craft), the
-  **packaged app experience** (a signed, double-clickable app is worth money even over
-  AGPL source — paying for the build is normal), and **the brand/ritual** (editions,
-  "the Lassen plate," the January tradition).
+- **Free by design, so never the SKU: the plates.** They are overwhelmingly U.S. federal
+  public-domain facts (Decision 3) with little-to-no copyright under *Feist*, we dedicate
+  them CC0 anyway (below) — and, decisively, the reprint-forever promise *requires* them
+  to stay publicly downloadable: a paywalled plate would tax the product's own archival
+  claim, and anyone could legally mirror it regardless. Plates are the **trust layer and
+  the brand device** — provenance on every cartouche, scarcity-as-craft positioning, a
+  release calendar, a demand-signal engine — never a line item. In the concierge model the
+  customer never even touches one. The one plate-shaped thing that IS sold is the
+  commission, below.
+- **Durable revenue:** **physical prints** (fulfillment, color management, craft),
+  **editions** (the yearly ritual — the retention engine), **plate commissions** (a
+  one-time fee that buys the *making* of an uncovered region — bbox curation, the DEM /
+  hydro / labels bakes, look validation on real terrain — plus priority and the first
+  print; the finished plate still publishes free, with the commissioner credited — a
+  `commissioned_by` line in `sources.json` → `PLATE.txt` is a small follow-up), and the
+  **packaged app experience** (a signed, double-clickable build is worth money even over
+  AGPL source — paying for the build is normal).
 - **Retired as strategy:** the hosted-proprietary multi-tenant v2 of the 2026-07-01
   roadmap. A public AGPL engine plus the local-first identity forecloses "sell access to
   the renderer" as the business. Roadmap §3's infrastructure items survive only where they
@@ -138,6 +145,8 @@ Three caveats, each with a home in the implementation plan:
 Every phase of `2026-07-12-honesty-continuity-implementation.md`: the LICENSE is Phase 0's
 anchor; the CC0 schema doc is the third-party-reader escape hatch; the trunk decision kills
 the "is this hosted?" ambiguity that made auth/payments/fulfillment unanswerable; and the
-resale verdict clears the poster business itself. The one thing still waiting on Dom is
-monetization flavor (concierge vs. storefront timing) — and nothing in the build waits
-on it.
+resale verdict clears the poster business itself. The monetization flavor is resolved as
+a working model (2026-07-12, Dom): **concierge-first** — the customer sends GPX,
+TrailPrint returns the poster, digital or printed; a thin storefront can follow volume.
+The outward-facing playbook that operationalizes all of this — pricing, funnel, launch
+sequence, language, branding — is `2026-07-12-marketing-language-branding.md`.
