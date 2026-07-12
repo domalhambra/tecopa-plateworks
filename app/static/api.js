@@ -116,13 +116,17 @@ export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
 }
 
 // Time-lapse: render the accepted composition as a film (the day-ordered journeys
-// accumulate to the complete poster). Returns { job, frames }; poll like any render.
+// accumulate to the complete poster). format: 'apng' (archival, default) or a share
+// twin ('webp' | 'mp4' — no manifest, embed_spec is moot). Returns { job, frames };
+// poll like any render.
 export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = '',
-                                                   embedSpec = true } = {}) {
+                                                   embedSpec = true,
+                                                   format = 'apng' } = {}) {
   const res = await postForm('/api/timelapse/submit', {
     session_id: sessionId, max_frames: maxFrames,
     wallpaper_preset: wpPreset || undefined,
     embed_spec: embedSpec ? 'true' : 'false',
+    format,
   });
   return asJson(res);   // { job, frames }
 }

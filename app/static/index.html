@@ -253,7 +253,7 @@
           <div id="timelapseCard" class="bundle-card" hidden>
             <div class="bundle-head">
               <span class="insp-title">Time-lapse</span>
-              <span class="insp-note">watch the journeys build to the poster — an animated PNG</span>
+              <span class="insp-note">watch the journeys build to the poster — APNG keeps the reprint recipe; WebP/MP4 are share copies</span>
             </div>
             <div class="tl-controls">
               <div class="slider-row">
@@ -263,6 +263,19 @@
               <div class="field" id="tlTargetField" hidden>
                 <label for="tlTarget">Target</label>
                 <div class="select-wrap"><select id="tlTarget"></select></div>
+              </div>
+              <div class="field inline" id="tlFormatField">
+                <label for="tlFormat">Format</label>
+                <div class="segmented" data-for="tlFormat" role="radiogroup" aria-label="Film format">
+                  <button type="button" role="radio" data-val="apng">APNG</button>
+                  <button type="button" role="radio" data-val="webp">WebP</button>
+                  <button type="button" role="radio" data-val="mp4">MP4</button>
+                </div>
+                <select id="tlFormat" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="apng">APNG (archival)</option>
+                  <option value="webp">WebP (share)</option>
+                  <option value="mp4">MP4 (share)</option>
+                </select>
               </div>
             </div>
             <div class="tl-preview"><img id="tlPreview" alt="" hidden></div>

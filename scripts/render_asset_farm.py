@@ -13,6 +13,8 @@ produces, per region:
   film.png              a time-lapse APNG: the journeys ink themselves in day order,
                         ending on the finished poster (the "watch the year draw itself"
                         beat)
+  film.webp / film.mp4  the film's share twins for the social columns (mp4 only when
+                        the share extra is installed) -- lossy, no manifest aboard
   edition_1/2/3.png     the same composition as three growing editions -- the "magic
                         trick": one frame, more ink, the cartouche climbing Edition 1->3
 
@@ -173,22 +175,32 @@ def _wallpapers(region, tracks, spots, out_dir, preset_ids):
 
 
 def _film(region, tracks, spots, out_dir, dpi, max_frames):
+    """The film + its share twins for the social columns: render the frames ONCE, encode
+    thrice -- film.png (the archival APNG, manifest aboard), film.webp (always), and
+    film.mp4 (when the share extra is installed). The twins carry no manifest, by
+    construction (their encoders take none)."""
     spec = _base_spec(region, tracks, spots)
     spec = provenance.build_final_spec(spec, max(24, round(spec.photo_box_in * dpi)))  # embed photo, as the real worker does
     plan = timelapse.frame_plan(spec, max_frames)
-    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region.dir, plan=plan)
+    frames = list(timelapse.render_frames(spec, dpi=dpi, region_dir=region.dir, plan=plan))
     anim = timelapse.animation_meta(max_frames=max_frames, step_ms=timelapse.DEFAULT_STEP_MS,
                                     hold_ms=timelapse.DEFAULT_HOLD_MS,
                                     leader_ms=timelapse.DEFAULT_LEADER_MS, dpi=dpi)
     manifest = provenance.build_manifest(spec, [], animation=anim,
                                          region_pack=provenance.region_pack_block(
                                              region.dir, labels=spec.labels, biome=spec.biome))
-    data = timelapse.encode_apng(frames, manifest=manifest, step_ms=anim["step_ms"],
-                                 hold_ms=anim["hold_ms"], leader_ms=anim["leader_ms"])
-    out = os.path.join(out_dir, "film.png")
-    with open(out, "wb") as f:
-        f.write(data)
-    return out, len(plan)
+    pace = dict(step_ms=anim["step_ms"], hold_ms=anim["hold_ms"],
+                leader_ms=anim["leader_ms"])
+    outs = [(os.path.join(out_dir, "film.png"),
+             timelapse.encode_apng(frames, manifest=manifest, **pace)),
+            (os.path.join(out_dir, "film.webp"), timelapse.encode_webp(frames, **pace))]
+    if timelapse.MP4_AVAILABLE:
+        outs.append((os.path.join(out_dir, "film.mp4"),
+                     timelapse.encode_mp4(frames, **pace)))
+    for out, data in outs:
+        with open(out, "wb") as f:
+            f.write(data)
+    return [out for out, _ in outs], len(plan)
 
 
 def _editions(region, tracks, spots, out_dir, dpi):
@@ -268,8 +280,9 @@ def main():
                 for p, sz in _wallpapers(region, tracks, spots, out_dir, args.wallpapers):
                     print(f"  wallpaper   {sz[0]}x{sz[1]}  {p}"); made.append(p)
             if "film" in want:
-                p, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
-                print(f"  film        {nf} frames  {p}"); made.append(p)
+                ps, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
+                for p in ps:
+                    print(f"  film        {nf} frames  {p}"); made.append(p)
             if "editions" in want:
                 for p, sz in _editions(region, tracks, spots, out_dir, args.dpi):
                     print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)

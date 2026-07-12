@@ -292,6 +292,131 @@ def test_still_inspect_has_null_animation():
     assert body["animation"] is None
 
 
+# ---- share twins: the film travels as WebP / MP4, carrying nothing ----
+
+def _tiny_frames(n=4, size=(33, 47)):
+    # encoder-only tests need PIL frames, not rendered posters: tiny flat fills keep
+    # them instant. ODD dimensions on purpose -- the MP4 even-pad must be exercised.
+    return [Image.new("RGB", size, (10 + 40 * i, 20, 200 - 30 * i)) for i in range(n)]
+
+def _readback_durations(data):
+    im = Image.open(io.BytesIO(data))
+    out = []
+    for i in range(im.n_frames):
+        im.seek(i); im.load()      # WebP fills info["duration"] on load, not on seek
+        out.append(im.info["duration"])
+    return out
+
+def test_durations_helper_pins_the_pacing_pattern():
+    # the leader/step/hold rhythm, pinned ONCE: both encoders consume this list, so
+    # the APNG and its share twins can never drift apart.
+    assert timelapse._durations(5, 220, 2500, 700) == [700, 220, 220, 220, 2500]
+    assert timelapse._durations(2, 220, 2500, 700) == [700, 2500]
+    assert timelapse._durations(1, 220, 2500, 700) == [2500]   # n==1: just held
+    frames = _tiny_frames(4)
+    apng = timelapse.encode_apng(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    webp = timelapse.encode_webp(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    assert (_readback_durations(apng) == _readback_durations(webp)
+            == timelapse._durations(4, 220, 2500, 700))
+
+def test_webp_twin_structure_determinism_and_no_manifest():
+    frames = _tiny_frames(5)
+    mk = lambda: timelapse.encode_webp(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    data = mk()
+    assert data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    im = Image.open(io.BytesIO(data))
+    apng = timelapse.encode_apng(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    assert im.n_frames == Image.open(io.BytesIO(apng)).n_frames == 5
+    assert mk() == data                                    # byte-deterministic
+    assert provenance.extract(data) is None                # no manifest, anywhere
+
+def test_single_frame_webp_degrades_to_static():
+    data = timelapse.encode_webp(_tiny_frames(1), step_ms=220, hold_ms=2500, leader_ms=700)
+    assert not getattr(Image.open(io.BytesIO(data)), "is_animated", False)
+
+def test_mp4_twin_decodes_and_is_deterministic(tmp_path):
+    imageio_ffmpeg = pytest.importorskip("imageio_ffmpeg")
+    frames = _tiny_frames(5)                               # 33x47: odd -> pads to 34x48
+    mk = lambda: timelapse.encode_mp4(frames, step_ms=220, hold_ms=2500, leader_ms=700)
+    data = mk()
+    assert data[4:8] == b"ftyp"                            # an ISO-BMFF (MP4) container
+    # bitexact flags + threads=1 held byte-determinism on this encoder (verified twice
+    # at implementation time); if a future ffmpeg breaks it, downgrade per the comment
+    # in encode_mp4.
+    assert mk() == data
+    assert provenance.extract(data) is None                # no manifest, anywhere
+    # the constant-rate pipe: each film frame repeats round(duration/40) ticks (min 1)
+    p = tmp_path / "film.mp4"; p.write_bytes(data)
+    gen = imageio_ffmpeg.read_frames(str(p))
+    meta = next(gen)
+    assert meta["size"] == (34, 48)                        # even-padded, never cropped
+    expected = sum(max(1, round(d / 40))
+                   for d in timelapse._durations(5, 220, 2500, 700))
+    assert sum(1 for _ in gen) == expected
+
+def test_mp4_without_the_extra_raises():
+    # the module-level guard (the PDF-gate pattern): a direct caller gets an honest
+    # error naming the share extra, never an ImportError mid-encode.
+    if timelapse.MP4_AVAILABLE:
+        pytest.skip("share extra installed; the API-level 422 test monkeypatches instead")
+    with pytest.raises(RuntimeError, match="requirements-share.txt"):
+        timelapse.encode_mp4(_tiny_frames(2))
+
+
+# ---- API: the film's format field ----
+
+def test_submit_webp_twin_serves_image_webp_without_manifest():
+    c = _client()
+    sid, _ = _stamped(c)
+    sub = c.post("/api/timelapse/submit",
+                 data={"session_id": sid, "max_frames": 6, "format": "webp"})
+    assert sub.status_code == 200, sub.text
+    s = _await_job(c, sub.json()["job"])
+    assert s["state"] == "done", s
+    r = c.get(s["result"])
+    assert r.headers["content-type"] == "image/webp"
+    assert r.content[:4] == b"RIFF" and r.content[8:12] == b"WEBP"
+    assert Image.open(io.BytesIO(r.content)).n_frames == sub.json()["frames"]
+    assert provenance.extract(r.content) is None           # a share twin, by construction
+
+def test_submit_mp4_twin_serves_video_mp4():
+    pytest.importorskip("imageio_ffmpeg")
+    c = _client()
+    sid, _ = _stamped(c)
+    sub = c.post("/api/timelapse/submit",
+                 data={"session_id": sid, "max_frames": 6, "format": "mp4"})
+    assert sub.status_code == 200, sub.text
+    s = _await_job(c, sub.json()["job"])
+    assert s["state"] == "done", s
+    r = c.get(s["result"])
+    assert r.headers["content-type"] == "video/mp4"
+    assert r.content[4:8] == b"ftyp"
+
+def test_submit_mp4_without_the_extra_is_422(monkeypatch):
+    # runs even where the extra IS installed: the gate reads MP4_AVAILABLE, not the import
+    monkeypatch.setattr(timelapse, "MP4_AVAILABLE", False)
+    c = _client()
+    r = c.post("/api/timelapse/submit", data={"session_id": "x", "format": "mp4"})
+    assert r.status_code == 422, r.text
+    assert "requirements-share.txt" in r.json()["detail"]
+
+def test_submit_bogus_format_is_422():
+    c = _client()
+    r = c.post("/api/timelapse/submit", data={"session_id": "x", "format": "gif"})
+    assert r.status_code == 422, r.text
+    d = r.json()["detail"]
+    assert "apng" in d and "webp" in d and "mp4" in d      # the 422 lists the three
+
+def test_reprint_refuses_the_share_formats():
+    # a reprint reproduces the ARCHIVAL artifact; share twins come from a live session.
+    # webp/mp4 never enter FINAL_FORMATS, so the cheap membership gate refuses them.
+    c = _client()
+    for fmt in ("webp", "mp4"):
+        r = c.post("/api/reprint", files={"file": ("f.png", b"not-a-poster", "image/png")},
+                   data={"format": fmt})
+        assert r.status_code == 422, r.text
+
+
 # ---- the forever-contract: a frozen film fixture still re-renders ----
 
 def test_worker_honors_max_frames_not_the_default():

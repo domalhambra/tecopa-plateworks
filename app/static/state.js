@@ -22,6 +22,7 @@ export const state = {
   bundlePicks: [],        // preset ids ticked in the post-proof bundle card
   tlFrames: 40,           // time-lapse frame count
   tlTarget: '',           // '' = accepted sheet; else a wallpaper preset id
+  tlFormat: 'apng',       // film container: 'apng' (archival) | 'webp' | 'mp4' (share)
   hasSpec: false,         // a proof has been stamped this session
   proofStale: false,      // an edit since the last proof (marker/crop change)
   files: [],              // uploaded filenames (accumulating)

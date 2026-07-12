@@ -1,0 +1,2 @@
+# The share extra — MP4 film export only (bundles an ffmpeg binary); never in the core lock.
+imageio-ffmpeg==0.6.0

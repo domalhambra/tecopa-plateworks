@@ -124,24 +124,34 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     return key                                         # job result = the blob key
 
 def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
-                              lineage=None, region_pack=None):
+                              lineage=None, region_pack=None, fmt="apng"):
     """The time-lapse worker: paint the base once and stream the day-ordered journey
-    prefixes into one APNG. The manifest (with the `animation` block) rides the file so
-    it re-renders from itself. Runs on a queue thread, touching only its arguments."""
+    prefixes into one film. `fmt` picks the container: "apng" (archival -- the manifest
+    with the `animation` block rides the file, so it re-renders from itself) or a share
+    twin, "webp" (ICC, no manifest) / "mp4" (neither). The twins carry nothing by
+    construction: their branches never touch build_manifest / manifest_pnginfo at all.
+    Runs on a queue thread, touching only its arguments."""
     # honor the pacing max_frames that the ceiling was CHECKED against (same spec, same
     # max_frames): render_frames' default plan is DEFAULT_MAX_FRAMES, so omitting the
     # plan here would render more frames than the ceiling validated -> a bypass/OOM.
     spec = _embed_photos(spec, dpi)              # photos ride the film, not the uploads dir
     plan = timelapse.frame_plan(spec, pacing["max_frames"])
     frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir, plan=plan)
+    pace = dict(step_ms=pacing["step_ms"], hold_ms=pacing["hold_ms"],
+                leader_ms=pacing["leader_ms"])
+    if fmt == "webp":
+        BLOBS.put(key, timelapse.encode_webp(frames, icc_profile=SRGB_PROFILE, **pace))
+        return key
+    if fmt == "mp4":
+        BLOBS.put(key, timelapse.encode_mp4(frames, **pace))
+        return key
     manifest = None
     if embed_spec:
         anim = timelapse.animation_meta(dpi=dpi, **pacing)
         manifest = provenance.build_manifest(spec, sources, lineage, animation=anim,
                                              region_pack=region_pack)
     BLOBS.put(key, timelapse.encode_apng(
-        frames, manifest=manifest, step_ms=pacing["step_ms"], hold_ms=pacing["hold_ms"],
-        leader_ms=pacing["leader_ms"], icc_profile=SRGB_PROFILE))
+        frames, manifest=manifest, icc_profile=SRGB_PROFILE, **pace))
     return key                                         # job result = the blob key
 
 def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None,
@@ -816,6 +826,23 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
 
 # ---- time-lapse: the poster as a film ----
 
+# The film's containers: the archival APNG (manifest + ICC, the default) and its share
+# twins -- WebP (ICC only) and MP4 (nothing) -- lossy, manifest-less, for posting on
+# the surfaces that flatten an APNG. Values are the blob-key/file extension (the apng
+# IS a PNG, so it keeps .png and the image/png mapping below).
+TIMELAPSE_FORMATS = {"apng": "png", "webp": "webp", "mp4": "mp4"}
+
+def _timelapse_format_or_422(fmt: str) -> str:
+    """Membership + availability, the _require_format posture: an unknown format and a
+    missing optional encoder are both an honest 422 up front, never a worker error."""
+    fmt = (fmt or "apng").lower()
+    if fmt not in TIMELAPSE_FORMATS:
+        raise HTTPException(422, f"format must be one of {sorted(TIMELAPSE_FORMATS)}")
+    if fmt == "mp4" and not timelapse.MP4_AVAILABLE:
+        raise HTTPException(422, "MP4 export needs the share extra — "
+                                 "pip install -r requirements-share.txt")
+    return fmt
+
 def _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms):
     """Bounds-check the pacing knobs (honest 422, like every other control). Pacing is
     not a picture decision -- it rides the manifest's animation block, not the spec."""
@@ -904,24 +931,31 @@ async def timelapse_submit(session_id: str = Form(...),
                            leader_ms: int = Form(timelapse.DEFAULT_LEADER_MS),
                            wallpaper_preset: str = Form(""),
                            dpi: float = Form(0.0),
-                           embed_spec: bool = Form(True)):
-    """Render an accepted composition as a time-lapse APNG: the day-ordered journeys
+                           embed_spec: bool = Form(True),
+                           format: str = Form("apng")):
+    """Render an accepted composition as a time-lapse film: the day-ordered journeys
     accumulate over a static terrain base to the complete poster (the last frame IS the
-    still final -- invariant 1). Same stamped-spec gate as a final. Enqueues ONE job ->
-    the existing /api/jobs/{id} -> /result flow (.png already maps correctly). The target
-    is the accepted sheet (bounded, screen-default dpi) or a wallpaper preset (exact
-    device pixels)."""
+    still final -- invariant 1). `format` picks the container: `apng` (default) is the
+    archival film, self-describing and reprintable; `webp` and `mp4` are share twins --
+    lossy, for posting -- which carry NO manifest by construction, so `embed_spec` is
+    IGNORED for them (there is nothing they could embed; the privacy posture is that of
+    an embed_spec=false share copy, always). MP4 needs the optional share extra (an
+    honest 422 when absent). Same stamped-spec gate as a final. Enqueues ONE job ->
+    the existing /api/jobs/{id} -> /result flow (the key's extension maps the media
+    type). The target is the accepted sheet (bounded, screen-default dpi) or a
+    wallpaper preset (exact device pixels)."""
+    fmt = _timelapse_format_or_422(format)   # cheap membership first, like the finals
     spec, region, sources, lineage = _require_stamped(session_id)
     pacing = _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms)
     tspec, target_dpi = _timelapse_target(spec, region, wallpaper_preset, dpi)
     frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
     jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
-                       f"{session_id}/timelapse.png", target_dpi, pacing, sources,
-                       embed_spec, lineage,
+                       f"{session_id}/timelapse.{TIMELAPSE_FORMATS[fmt]}", target_dpi,
+                       pacing, sources, embed_spec, lineage,
                        provenance.region_pack_block(region.dir, labels=tspec.labels,
-                                                    biome=tspec.biome))
-    log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f",
-             session_id, region.id, frames, target_dpi)
+                                                    biome=tspec.biome), fmt)
+    log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f fmt=%s",
+             session_id, region.id, frames, target_dpi, fmt)
     return {"job": jid, "frames": frames}
 
 @app.get("/api/jobs/{jid}")
@@ -946,11 +980,14 @@ async def job_result(jid: str):
     key = s["result"]
     if not BLOBS.exists(key):
         raise HTTPException(404, "result expired")
-    # the blob key carries the format: final.png / final.pdf / wallpapers.zip.
-    # FINAL_FORMATS stays the single source of truth for the formats it owns.
+    # the blob key carries the format: final.png / final.pdf / wallpapers.zip /
+    # timelapse.webp / timelapse.mp4 (the film's share twins). FINAL_FORMATS stays the
+    # single source of truth for the formats it owns.
     ext = key.rsplit(".", 1)[-1] if "." in key else "png"
     media = (FINAL_FORMATS[ext][1] if ext in FINAL_FORMATS
-             else "application/zip" if ext == "zip" else "application/octet-stream")
+             else "application/zip" if ext == "zip"
+             else "image/webp" if ext == "webp"
+             else "video/mp4" if ext == "mp4" else "application/octet-stream")
     return FileResponse(BLOBS.path(key), media_type=media,
                         filename=f"trailprint.{ext}")
 
@@ -1094,6 +1131,10 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     # synchronous contract below.
     anim = manifest.get("animation")
     if isinstance(anim, dict):
+        # a reprint reproduces the ARCHIVAL artifact, so a film reprints as APNG only:
+        # webp/mp4 share twins come from a live session (/api/timelapse/submit) and
+        # already 422 at _require_format above (they are not FINAL_FORMATS); pdf is
+        # refused here.
         if fmt != "png":
             raise HTTPException(422, "a time-lapse is PNG-only")
         pacing, tl_dpi = _animation_from_manifest_or_422(anim, spec)

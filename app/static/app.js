@@ -593,16 +593,24 @@ async function renderTimelapse() {
   tlInFlight = true; $('tlBtn').disabled = true;
   setStatus('Queuing time-lapse…', 'tlStatus');
   try {
+    const fmt = state.tlFormat;
     const sub = await api.submitTimelapse(state.session, {
-      maxFrames: state.tlFrames, wpPreset: state.tlTarget, embedSpec: state.embedSpec });
+      maxFrames: state.tlFrames, wpPreset: state.tlTarget, embedSpec: state.embedSpec,
+      format: fmt });
     const result = await pollJob(sub.job, 'tlStatus', `Painting ${sub.frames} frames…`);
     if (result) {
       const blob = await api.fetchBlob(result);
       if (tlUrl) URL.revokeObjectURL(tlUrl);
       tlUrl = URL.createObjectURL(blob);
-      const img = $('tlPreview'); img.src = tlUrl; img.hidden = false;   // APNG autoplays
+      const img = $('tlPreview');
+      if (fmt === 'mp4') {                 // an <img> can't play video — download only
+        img.hidden = true; img.removeAttribute('src');
+      } else {
+        img.src = tlUrl; img.hidden = false;               // APNG/WebP autoplay
+      }
+      const ext = fmt === 'apng' ? 'png' : fmt;            // the apng IS a PNG
       const a = document.createElement('a');
-      a.href = tlUrl; a.download = 'trailprint-timelapse.png'; a.click();
+      a.href = tlUrl; a.download = `trailprint-timelapse.${ext}`; a.click();
       setStatus(`Time-lapse ready — ${sub.frames} frames, downloaded.`, 'tlStatus');
     }
   } catch (e) { setStatus('Time-lapse failed: ' + e.message, 'tlStatus'); }
@@ -797,6 +805,7 @@ function wire() {
     state.tlFrames = Number(e.target.value); $('tlFramesVal').textContent = e.target.value;
   };
   $('tlTarget').onchange = (e) => { state.tlTarget = e.target.value; };
+  $('tlFormat').onchange = (e) => { state.tlFormat = e.target.value; };
 
   const prefs = loadPrefs();
   if (prefs.printSize && /^\d+,\d+$/.test(prefs.printSize) &&
