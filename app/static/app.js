@@ -241,10 +241,23 @@ function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>$
 // --- living editions: continue a poster ---
 function updateEditionBadge() {
   const b = $('editionBadge');
-  if (!b) return;
-  const show = state.edition >= 2;
-  b.textContent = show ? `Edition ${state.edition}` : '';
-  b.hidden = !show;
+  if (b) {
+    const show = state.edition >= 2;
+    b.textContent = show ? `Edition ${state.edition}` : '';
+    b.hidden = !show;
+  }
+  updateSaveFileNote();   // the note names the NEXT edition, so it moves with this one
+}
+
+// The save-file sentence must tell the truth for THIS download: with "Reprintable
+// file" off the PNG carries no manifest — it can never reprint or continue, so it is
+// NOT a save file. And a continued poster's next edition is edition+1, not always 2.
+function updateSaveFileNote() {
+  const el = $('saveFileNote');
+  if (!el) return;
+  el.textContent = state.embedSpec
+    ? `This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition ${state.edition + 1}.`
+    : 'Reprintable file is off: this download is a share copy — no recipe inside, so it can never reprint or continue. Keep a reprintable copy as your save file.';
 }
 
 // Reflect a continued poster's saved recipe into the Frame-step controls, so the
@@ -329,8 +342,10 @@ async function continueFromPoster(file) {
     $('toFrame').disabled = state.tracks.length === 0;
     if (!state.steps.includes('tracks')) state.steps = ['tracks', 'frame', 'proof'];
     go('tracks');
-    showHint(`Edition ${state.edition}: last year's poster is restored — drop this year's GPX to add it, then reframe and render.`);
-    setStatus(`Continuing as edition ${state.edition} — ${state.tracks.length} track(s) restored. Add this year's files, or continue to reframe.`);
+    // echo what the file holds — edition, plate, years — so the ritual reads back
+    const echo = [`Edition ${state.edition}`, j.name, j.year_span].filter(Boolean).join(' · ');
+    showHint(`${echo} — ready to add this year. Drop this year's GPX, then reframe and render.`);
+    setStatus(`${echo} — ${state.tracks.length} track(s) restored, ready to add this year.`);
     announce(`Continuing poster as edition ${state.edition}`);
   } catch (e) {
     setStatus('Could not open that poster: ' + e.message);
@@ -485,9 +500,11 @@ async function pollJob(jid, statusTarget, runningMsg) {
 }
 
 async function downloadFinal(url, fmt) {
-  const blob = await api.fetchBlob(url);
+  // the server names the file (Content-Disposition, self-documenting:
+  // trailprint_<region>[_edition-N][_years]…); the old generic name is the fallback
+  const { blob, filename } = await api.fetchDownload(url, `trailprint.${fmt}`);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = `trailprint.${fmt}`; a.click();
+  a.href = URL.createObjectURL(blob); a.download = filename; a.click();
   // the click has queued the download; release the blob (a 300-dpi PNG is ~50 MB)
   setTimeout(() => URL.revokeObjectURL(a.href), 60000);
 }
@@ -599,7 +616,9 @@ async function renderTimelapse() {
       format: fmt });
     const result = await pollJob(sub.job, 'tlStatus', `Painting ${sub.frames} frames…`);
     if (result) {
-      const blob = await api.fetchBlob(result);
+      const ext = fmt === 'apng' ? 'png' : fmt;            // the apng IS a PNG
+      // server-named download (…_film.<ext>); the old generic name is the fallback
+      const { blob, filename } = await api.fetchDownload(result, `trailprint-timelapse.${ext}`);
       if (tlUrl) URL.revokeObjectURL(tlUrl);
       tlUrl = URL.createObjectURL(blob);
       const img = $('tlPreview');
@@ -608,9 +627,8 @@ async function renderTimelapse() {
       } else {
         img.src = tlUrl; img.hidden = false;               // APNG/WebP autoplay
       }
-      const ext = fmt === 'apng' ? 'png' : fmt;            // the apng IS a PNG
       const a = document.createElement('a');
-      a.href = tlUrl; a.download = `trailprint-timelapse.${ext}`; a.click();
+      a.href = tlUrl; a.download = filename; a.click();
       setStatus(`Time-lapse ready — ${sub.frames} frames, downloaded.`, 'tlStatus');
     }
   } catch (e) { setStatus('Time-lapse failed: ' + e.message, 'tlStatus'); }
@@ -793,7 +811,9 @@ function wire() {
   $('embedSpecChk').onchange = (e) => {
     state.embedSpec = e.target.checked;
     // PDF can't carry the manifest anyway; the toggle only affects PNG.
+    updateSaveFileNote();   // a share copy is NOT a save file — say so, don't imply it
   };
+  updateSaveFileNote();
   const fmtPref = loadPrefs().finalFormat;
   if (fmtPref === 'pdf' || fmtPref === 'png') {
     state.finalFormat = fmtPref; $('finalFormat').value = fmtPref;

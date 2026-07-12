@@ -43,6 +43,28 @@ TOP_CLEAR_MAX = 0.35
 # well under this. Bounds the cartouche label and a crafted-manifest edition value.
 EDITION_MAX = 999
 
+# Data-credit ceiling: four dataset credits joined is ~70 chars, so 200 leaves room
+# for a plate built on more (or wordier) sources while still bounding what a crafted
+# manifest can ride into the cartouche painter.
+CREDIT_MAX_CHARS = 200
+
+
+def year_span(track_days) -> str:
+    """The min-max year across the dated days as 'YYYY' or 'YYYY–YYYY' (en dash),
+    or '' when no entry carries a date. Pure function of track_days (invariant 3).
+    Lives here so the cartouche caption (render._stats_line) and the download-name
+    builder (main.download_name) share ONE implementation and can't drift.
+    A year is [0-9] only, not merely isdigit(): track_days is attacker-controlled
+    (/api/reprint), and a Unicode digit like U+0662 sails through isdigit() into
+    download_name's latin-1 Content-Disposition header -- a 500 after the whole
+    render was spent. Not ASCII digits -> not a date; the day still renders."""
+    years = sorted({d[:4] for d in (track_days or [])
+                    if isinstance(d, str) and len(d) >= 4
+                    and d[:4].isascii() and d[:4].isdigit()})
+    if not years:
+        return ""
+    return years[0] if years[0] == years[-1] else f"{years[0]}–{years[-1]}"
+
 PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
@@ -122,6 +144,12 @@ class CompositionSpec:
     # the edition number the cartouche draws, so it's a picture decision -> the spec.
     # Default 1 -> every pre-feature poster and manifest is an unlabeled first edition.
     edition: int = 1
+    # data credit (v1.7): the cartouche's attribution line ("Terrain USGS 3DEP - ..."),
+    # DERIVED from the region's sources.json at proof time (main.credit_line) -- never a
+    # client style knob. It's a picture decision, so it rides the spec and is stamped at
+    # /api/proof; the painter never reads region data (reprint byte-identity). Default ""
+    # -> every pre-feature manifest deserializes to a no-op and renders unchanged.
+    credit_text: str = ""
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
@@ -182,6 +210,17 @@ class CompositionSpec:
         if (isinstance(self.edition, bool) or not isinstance(self.edition, int)
                 or not (1 <= self.edition <= EDITION_MAX)):
             raise SpecError(f"edition must be an integer between 1 and {EDITION_MAX}")
+        # data credit: an untrusted manifest rides this straight into the cartouche
+        # painter (/api/reprint), so bound it -- printable ASCII only (the painter and
+        # this gate decide the charset ONCE; credit_line joins with an ASCII " - ")
+        # and a hard length cap. Reject, never truncate silently (honest 422).
+        if not isinstance(self.credit_text, str):
+            raise SpecError("credit_text must be a string")
+        if len(self.credit_text) > CREDIT_MAX_CHARS:
+            raise SpecError(
+                f"credit_text must be at most {CREDIT_MAX_CHARS} characters")
+        if not all(" " <= c <= "~" for c in self.credit_text):
+            raise SpecError("credit_text must be printable ASCII")
         if (len(tuple(self.track_rgb)) != 3
                 or not all(isinstance(c, int) and 0 <= c <= 255 for c in self.track_rgb)):
             raise SpecError("track_rgb must be three 0-255 integers")

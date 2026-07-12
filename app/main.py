@@ -11,7 +11,8 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, Track
 from app.density import hotspots
-from app.spec import CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX
+from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
+                      CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse
 
 logconfig.setup_logging()
@@ -626,6 +627,62 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
     return {"ok": True, "px": cpx, "py": cpy}
 
+# The cartouche's data-credit line, mapped from the dataset strings region_prep
+# records in sources.json. Substring match, so a wording tweak ("USGS 3DEP 10 m DEM"
+# vs "3DEP 1/3 arc-second") still lands on the canonical short credit.
+CREDIT_DATASETS = (("3DEP", "Terrain USGS 3DEP"),
+                   ("NHD", "Water USGS NHD"),
+                   ("NLCD", "Land cover NLCD 2021"),
+                   ("GNIS", "Names USGS GNIS"))
+
+def credit_line(region) -> str:
+    """The attribution sentence for spec.credit_text, derived from the region's
+    sources.json at proof time -- derived truth, not a client style knob. Known USGS
+    datasets map to short credits; an UNRECOGNIZED dataset passes through verbatim,
+    so a future non-public-domain plate automatically carries its *required* credit
+    instead of relying on memory (courtesy today, load-bearing later). Joined with an
+    ASCII " - " -- validate() gates credit_text to printable ASCII, and the gate and
+    this builder decide the charset once. Clamped to that same gate by construction
+    (drop non-ASCII, cap the length) so a plate's own metadata can never 422 a proof.
+    No sources.json, or none that name datasets -> "" (no credit row painted)."""
+    try:
+        with open(os.path.join(region.dir, "sources.json")) as f:
+            sources = json.load(f).get("sources", [])
+    except Exception:
+        return ""
+    parts = []
+    for s in sources if isinstance(sources, list) else []:
+        ds = s.get("dataset") if isinstance(s, dict) else None
+        if not (isinstance(ds, str) and ds.strip()):
+            continue
+        for token, credit in CREDIT_DATASETS:
+            if token in ds:
+                parts.append(credit)
+                break
+        else:
+            parts.append(ds.strip())
+    line = "".join(c for c in " - ".join(parts) if " " <= c <= "~")
+    return line[:CREDIT_MAX_CHARS]
+
+
+def download_name(spec, kind: str = "", fmt: str = "png") -> str:
+    """A self-documenting filename for a deliverable, a pure function of the spec:
+    trailprint_<region_id>[_edition-<n>][_<yearspan>]<kind>.<fmt>. The edition suffix
+    appears from the second edition on (matching the cartouche); the year span comes
+    from the spec's track_days (the same year_span the cartouche prints, en dash
+    flattened to a filename-safe hyphen). `kind` is "" for prints, "_film" for
+    time-lapses, "_wallpapers" for the bundle zip. Charset stays [a-z0-9._-] by
+    construction: region ids are ^[a-z0-9_]+$ and years are digits. A reprint names
+    the file from the REPRINTED spec (its edition, its years -- there is no clock)."""
+    name = f"trailprint_{spec.region_id}"
+    if getattr(spec, "edition", 1) >= 2:
+        name += f"_edition-{spec.edition}"
+    span = year_span(spec.track_days).replace("–", "-")
+    if span:
+        name += f"_{span}"
+    return f"{name}{kind}.{fmt}"
+
+
 def _parse_hex_rgb(s: str):
     """'#rrggbb' -> (r, g, b), or a clean 422 -- the track-color swatch value."""
     s = (s or "").strip().lstrip("#")
@@ -660,6 +717,7 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         track_days=[t.day for t in st["tracks"]],   # journey grouping (worn/termini)
         hotspots=st["hotspots"], seed=7,
         edition=st.get("edition", 1),               # living editions: draws in the cartouche
+        credit_text=credit_line(region),            # data credit: derived, never a form field
         contours=contours, biome=biome, labels=labels, **kw, **(style or {}))
     spec.validate(spec.final_dpi())   # gate on the resolution the FINAL uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
@@ -741,7 +799,9 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
         raise HTTPException(422, str(e))
     # Route the final through the blob seam (V1-8): stop littering region.dir with
     # final_*.png. Same key + encoding as the async path, so both serve identically.
-    key = f"{session_id}/final.{fmt}"
+    # The KEY carries the self-documenting name, so every serving path (this
+    # FileResponse, /api/jobs/{jid}/result) says what the file is for free.
+    key = f"{session_id}/{download_name(spec, fmt=fmt)}"
     # the file names its plate: hashed from the assets once per final, never cached.
     # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
@@ -751,7 +811,7 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
-                        filename=f"trailprint.{fmt}")
+                        filename=download_name(spec, fmt=fmt))
 
 @app.post("/api/final/submit")
 async def final_submit(session_id: str = Form(...), format: str = Form("png"),
@@ -766,7 +826,8 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     # paint the identical bytes -- the async final and its reprint stay pixel-identical.
     spec = _embed_photos(spec, spec.final_dpi())
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
-    jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
+    jid = QUEUE.submit(_render_to_blob, spec, region.dir,
+                       f"{session_id}/{download_name(spec, fmt=fmt)}", fmt,
                        _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
     return {"job": jid}
 
@@ -817,7 +878,8 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         raise HTTPException(422, "No requested device fits this region: "
                             + "; ".join(s["reason"] for s in skipped))
     jid = QUEUE.submit(_render_bundle_to_blob, items, region.dir,
-                       f"{session_id}/wallpapers.zip", region.cfg, sources, embed_spec,
+                       f"{session_id}/{download_name(spec, '_wallpapers', 'zip')}",
+                       region.cfg, sources, embed_spec,
                        lineage, provenance.region_pack_block(
                            region.dir, labels=spec.labels, biome=spec.biome))
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
@@ -950,7 +1012,8 @@ async def timelapse_submit(session_id: str = Form(...),
     tspec, target_dpi = _timelapse_target(spec, region, wallpaper_preset, dpi)
     frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
     jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
-                       f"{session_id}/timelapse.{TIMELAPSE_FORMATS[fmt]}", target_dpi,
+                       f"{session_id}/{download_name(tspec, '_film', TIMELAPSE_FORMATS[fmt])}",
+                       target_dpi,
                        pacing, sources, embed_spec, lineage,
                        provenance.region_pack_block(region.dir, labels=tspec.labels,
                                                     biome=tspec.biome), fmt)
@@ -980,16 +1043,17 @@ async def job_result(jid: str):
     key = s["result"]
     if not BLOBS.exists(key):
         raise HTTPException(404, "result expired")
-    # the blob key carries the format: final.png / final.pdf / wallpapers.zip /
-    # timelapse.webp / timelapse.mp4 (the film's share twins). FINAL_FORMATS stays the
-    # single source of truth for the formats it owns.
+    # the blob key carries both the format (its extension maps the media type;
+    # FINAL_FORMATS stays the single source of truth for the formats it owns) and the
+    # self-documenting download name (download_name built the key's basename at
+    # submit time, from the spec that rendered these bytes).
     ext = key.rsplit(".", 1)[-1] if "." in key else "png"
     media = (FINAL_FORMATS[ext][1] if ext in FINAL_FORMATS
              else "application/zip" if ext == "zip"
              else "image/webp" if ext == "webp"
              else "video/mp4" if ext == "mp4" else "application/octet-stream")
     return FileResponse(BLOBS.path(key), media_type=media,
-                        filename=f"trailprint.{ext}")
+                        filename=os.path.basename(key))
 
 # ---- self-describing posters: reprint from the file alone (no session, no DB) ----
 # A TrailPrint PNG carries its own spec (see provenance.py). These two endpoints read
@@ -1139,7 +1203,9 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
             raise HTTPException(422, "a time-lapse is PNG-only")
         pacing, tl_dpi = _animation_from_manifest_or_422(anim, spec)
         frames = _animation_ceiling_or_422(spec, tl_dpi, pacing["max_frames"])
-        key = f"reprint/{hashlib.sha256(data).hexdigest()[:16]}/timelapse.png"
+        # the name comes from the REPRINTED spec -- its edition, its years (no clock)
+        key = (f"reprint/{hashlib.sha256(data).hexdigest()[:16]}/"
+               f"{download_name(spec, '_film', 'png')}")
         jid = QUEUE.submit(_render_timelapse_to_blob, spec, region.dir, key, tl_dpi,
                            pacing, manifest.get("sources", []), embed_spec,
                            manifest.get("lineage", []),
@@ -1174,8 +1240,11 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                         dpi=spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
+    # named from the REPRINTED spec: its edition and years, not the server's clock
+    # (there is no clock) -- the copy self-documents exactly like the original did.
     return StreamingResponse(io.BytesIO(out), media_type=FINAL_FORMATS[fmt][1],
-                             headers={"Content-Disposition": f'attachment; filename="trailprint.{fmt}"'})
+                             headers={"Content-Disposition":
+                                      f'attachment; filename="{download_name(spec, fmt=fmt)}"'})
 
 
 # ---- living editions: the poster is the save file (POST /api/continue) ----
@@ -1295,6 +1364,10 @@ async def continue_poster(file: UploadFile = File(...)):
             "hotspots": hpx, "starter_crop": _crop_to_overview_px(region.geo, spec.crop),
             "recovered": False, "skipped_duplicates": [],
             "edition": edition, "files": [s.get("filename", "track.gpx") for s in sources],
+            # the echo: what the resurrected file holds, so the wizard can say
+            # "Edition 2 · Lassen · 2023–2024" back to the user. Same year_span the
+            # cartouche prints and the download name carries; "" when no track is dated.
+            "year_span": year_span(spec.track_days),
             "prefill": prefill}
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")

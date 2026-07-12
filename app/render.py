@@ -7,7 +7,7 @@ from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
 from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
-from app.spec import CompositionSpec, OffDemError
+from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
 from app import provenance
 
@@ -503,13 +503,10 @@ def _furniture_scale(spec):
     return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX) * spec.furniture_scale
 
 def _year_span(spec):
-    """The min-max year across the dated tracks as 'YYYY' or 'YYYY–YYYY' (en dash),
-    or '' when no track carries a date. Pure function of track_days (invariant 3)."""
-    years = sorted({d[:4] for d in (spec.track_days or [])
-                    if isinstance(d, str) and len(d) >= 4 and d[:4].isdigit()})
-    if not years:
-        return ""
-    return years[0] if years[0] == years[-1] else f"{years[0]}–{years[-1]}"
+    """The poster's year span for the cartouche caption. The one implementation lives
+    on app.spec (year_span) so the download-name builder in main.py can't drift from
+    what the cartouche prints; this thin delegate keeps the render-local call sites."""
+    return spec_year_span(spec.track_days)
 
 def _stats_line(spec, dpi):
     """A deterministic cartographic caption from the spec alone: the edition line (from
@@ -606,14 +603,20 @@ def _title_block_metrics(spec, d, dpi):
     fdpi = dpi * fs
     title = spec.title_text.strip().upper()
     stats = _stats_line(spec, dpi)
+    # the data credit (stamped on the spec at proof time -- never read from region
+    # data here): a third row of tracked caps under the stats, smaller and quieter.
+    credit = spec.credit_text.strip().upper()
     t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi)))
     s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, fdpi)))
+    c_size = max(7, round(_pt_to_px(spec.label_pt * 0.62, fdpi)))
     title_font = _font(t_size)
     stats_font = _font(s_size)
+    credit_font = _font(c_size)
     bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, fdpi))))
     # track off the requested size, not font.size (the bitmap fallback has none)
     t_track = round(t_size * TITLE_TRACKING_EM)
     s_track = round(s_size * STATS_TRACKING_EM)
+    c_track = round(c_size * STATS_TRACKING_EM)
     _, tt, _, tb = d.textbbox((0, 0), title, font=title_font)
     th = tb - tt
     tw = _tracked_width(d, title, title_font, t_track)
@@ -623,6 +626,12 @@ def _title_block_metrics(spec, d, dpi):
         sw = _tracked_width(d, stats, stats_font, s_track)
     else:
         st_ = sh = sw = 0
+    if credit:
+        _, ct, _, cb = d.textbbox((0, 0), credit, font=credit_font)
+        ch = cb - ct
+        cw = _tracked_width(d, credit, credit_font, c_track)
+    else:
+        ct = ch = cw = 0
     miles, bar_px = _scale_bar_miles(spec, dpi, fs)
     bar_h = max(3, round(SCALE_BAR_H_IN * fdpi))
     _, lt, _, lb = d.textbbox((0, 0), f"{miles:g} MI", font=bar_font)
@@ -630,12 +639,15 @@ def _title_block_metrics(spec, d, dpi):
     gap = max(3, round(0.35 * (sh or th)))
     rule_h = gap * 2                          # rule row: hairline + air on both sides
     pad = max(6, round(0.16 * fdpi))
-    content_w = max(tw, sw, round(bar_px))
-    bh = pad + th + rule_h + (sh + gap if stats else 0) + bar_h + 2 + lbl_h + pad
-    return {"title": title, "stats": stats, "title_font": title_font,
-            "stats_font": stats_font, "bar_font": bar_font,
-            "t_track": t_track, "s_track": s_track,
+    content_w = max(tw, sw, cw, round(bar_px))
+    bh = (pad + th + rule_h + (sh + gap if stats else 0)
+          + (ch + gap if credit else 0) + bar_h + 2 + lbl_h + pad)
+    return {"title": title, "stats": stats, "credit": credit,
+            "title_font": title_font, "stats_font": stats_font,
+            "credit_font": credit_font, "bar_font": bar_font,
+            "t_track": t_track, "s_track": s_track, "c_track": c_track,
             "tt": tt, "th": th, "tw": tw, "st": st_, "sh": sh, "sw": sw,
+            "ct": ct, "ch": ch, "cw": cw,
             "miles": miles, "bar_px": round(bar_px), "bar_h": bar_h, "lbl_h": lbl_h,
             "gap": gap, "rule_h": rule_h, "pad": pad, "fdpi": fdpi,
             "bw": content_w + 2 * pad, "bh": bh}
@@ -669,6 +681,11 @@ def _draw_title_block(img, spec, out_w, out_h, dpi):
         _tracked_text(d, (cx - m["sw"] / 2, cy - m["st"]), m["stats"],
                       m["stats_font"], LABEL_INK + (205,), m["s_track"])
         cy += m["sh"] + m["gap"]
+    if m["credit"]:
+        # the data credit: quieter ink than the stats -- attribution, not headline
+        _tracked_text(d, (cx - m["cw"] / 2, cy - m["ct"]), m["credit"],
+                      m["credit_font"], LABEL_INK + (170,), m["c_track"])
+        cy += m["ch"] + m["gap"]
     # graphic scale bar: four alternating segments, keyline-edged, end labels
     bx = cx - m["bar_px"] / 2
     seg = m["bar_px"] / 4

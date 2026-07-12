@@ -459,8 +459,11 @@ def test_final_blob_seam_srgb_and_dpi():
     r = c.post("/api/final", data={"session_id": j["session"]})
     assert r.status_code == 200
     assert not os.path.exists(os.path.join(REGION_DIR, f"final_{j['session']}.png"))
-    from app.main import BLOBS
-    assert BLOBS.exists(f"{j['session']}/final.png")
+    from app.main import BLOBS, download_name
+    from app import session as sess_mod
+    # the key's basename is the self-documenting download name (pure spec function)
+    assert BLOBS.exists(
+        f"{j['session']}/{download_name(sess_mod.get(j['session'])['spec'])}")
     im = Image.open(io.BytesIO(r.content))
     assert im.info.get("icc_profile"), "no sRGB profile embedded"
     assert round(im.info["dpi"][0]) == 300

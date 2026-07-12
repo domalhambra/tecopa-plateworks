@@ -141,3 +141,19 @@ export async function fetchBlob(url) {
   if (!res.ok) throw new ApiError(res.status, 'result fetch failed');
   return res.blob();
 }
+
+// The server names every deliverable (trailprint_<region>[_edition-N][_years]….ext,
+// a pure function of the spec) via Content-Disposition — same-origin fetch exposes
+// the header. Returns { blob, filename }; `fallback` covers a missing/odd header so
+// the download never loses its old generic name.
+function dispositionFilename(header) {
+  const m = /filename="([^"]+)"/.exec(header || '');
+  return m ? m[1] : '';
+}
+
+export async function fetchDownload(url, fallback) {
+  const res = await fetch(url);
+  if (!res.ok) throw new ApiError(res.status, 'result fetch failed');
+  const filename = dispositionFilename(res.headers.get('Content-Disposition')) || fallback;
+  return { blob: await res.blob(), filename };
+}

@@ -72,6 +72,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `keyline` — the thin sheet frame (wallpapers go clean)
 - `top_clear_frac` — keep auto-placed labels out of the top fraction of the sheet (lock-screen clock), 0-0.35
 - `edition` — the edition number the cartouche draws, 1-999 (default 1)
+- `credit_text` — the cartouche's data-credit row (e.g. `"Terrain USGS 3DEP - Names USGS GNIS"`); printable ASCII, at most 200 characters; default `""` = no credit row, and the key is omitted at the default (writers must not emit `""` — a pre-credit manifest re-stamps byte-identically)
 
 ## `sources` — GPX provenance
 

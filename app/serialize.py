@@ -23,6 +23,12 @@ def spec_to_json(s: CompositionSpec) -> dict:
     d = {f.name: getattr(s, f.name) for f in fields(s)}
     d["crop"] = list(s.crop)
     d["tracks"] = [np.asarray(a, float).tolist() for a in s.tracks]
+    # the additive contract (docs/MANIFEST.md): a key added AFTER a poster was
+    # printed is omitted at its default, so /api/reprint re-stamps a pre-credit
+    # manifest byte-identically -- emitting "credit_text": "" would break the
+    # forever-contract's sha256 check. spec_from_json refills the default.
+    if not d["credit_text"]:
+        del d["credit_text"]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:
