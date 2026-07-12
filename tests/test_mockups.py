@@ -169,20 +169,18 @@ def test_caption_drops_on_malformed_manifest(tmp_path):
     render_mockup(frames[0], m, "plate", (1080, 1080))
 
 
-def test_caption_font_never_comes_from_host(tmp_path, monkeypatch):
-    # the determinism contract ("no machine state") covers caption glyphs: the
-    # placard face must be Pillow's own bundled font, never a host-installed TTF
-    from PIL import ImageFont
-    real_truetype = ImageFont.truetype
-
-    def _no_host_fonts(font=None, *a, **k):
-        if isinstance(font, (str, os.PathLike)):    # load_default passes a BytesIO
-            raise AssertionError("caption font must not come from host TTFs")
-        return real_truetype(font, *a, **k)
-
-    monkeypatch.setattr(ImageFont, "truetype", _no_host_fonts)
+def test_caption_is_drawn_in_its_band(tmp_path):
+    # the placard actually inks below the object (and the edition line's em-dash
+    # renders in the engine's font chain, not as tofu -- the reason we don't force
+    # Pillow's glyph-poor bundled face)
     frames, _, m = load_final(_final_png(tmp_path, manifest=MANIFEST))
-    render_mockup(frames[0], m, "plate", (1080, 1080))
+    on = np.asarray(render_mockup(frames[0], m, "plate", (1080, 1080),
+                                  caption=True).convert("L"), dtype=int)
+    off = np.asarray(render_mockup(frames[0], m, "plate", (1080, 1080),
+                                   caption=False).convert("L"), dtype=int)
+    band = slice(860, 940)                               # the caption strip under the plate
+    assert np.abs(on[band] - off[band]).sum() > 500      # ink appears there
+    assert np.array_equal(on[:860], off[:860])           # the plate + wall above unchanged
 
 
 def test_portrait_and_landscape_fit(tmp_path):

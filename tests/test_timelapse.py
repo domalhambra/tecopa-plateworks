@@ -134,6 +134,49 @@ def test_frame_plan_degenerate_cases():
     p = timelapse.frame_plan(_spec(n_journeys=8), max_frames=2)
     assert len(p) == 2 and p[0] == [] and len(p[1]) == 8
 
+def _multipt_spec(n_journeys=4, pts=20):
+    spec = _spec(n_journeys)
+    spec.tracks = [np.column_stack([np.linspace(680000 + j * 500, 700000 + j * 500, pts),
+                                    np.linspace(4470000 + j * 300, 4500000 + j * 300, pts)])
+                   for j in range(n_journeys)]
+    spec.track_days = [f"2024-06-{j + 1:02d}" for j in range(n_journeys)]
+    return spec
+
+
+def test_progressive_reveal_grows_by_points_and_ends_canonical():
+    # the smooth mockup reveal: a growing cumulative POINT budget, not whole journeys
+    spec = _multipt_spec(4, 20)                          # 80 points across 4 days
+    sched = timelapse.progressive_reveal(spec, n_frames=12)
+    assert sched[0].tracks == []                         # leader: bare terrain first
+    counts = [sum(len(np.asarray(t)) for t in s.tracks) for s in sched]
+    assert counts == sorted(counts) and counts[-1] == 80  # monotonic up to the full trip
+    assert len(counts) > 6                               # actually subdivides (not 4 chunks)
+    for s in sched:                                      # every polyline is renderable
+        for t in s.tracks:
+            assert len(np.asarray(t)) >= 2
+    # the final frame is the WHOLE trip in the spec's own order (pixel-equal to poster)
+    last = sched[-1]
+    assert [np.asarray(t).tobytes() for t in last.tracks] == \
+           [np.asarray(t).tobytes() for t in spec.tracks]
+
+
+def test_progressive_reveal_is_pure():
+    spec = _multipt_spec(3, 15)
+    key = lambda sch: [[np.asarray(t).tobytes() for t in s.tracks] for s in sch]
+    assert key(timelapse.progressive_reveal(spec, 10)) == \
+           key(timelapse.progressive_reveal(spec, 10))
+
+
+def test_progressive_frames_last_is_pixel_equal_to_poster():
+    # the loop closes clean: the last drawn frame IS the still poster
+    spec = _multipt_spec(3, 14)
+    frames = list(timelapse.progressive_frames(spec, 96, REGION_DIR, n_frames=10))
+    assert len(frames) > 6
+    last = np.asarray(frames[-1])
+    poster = np.asarray(render.rasterize(spec, dpi=96, region_dir=REGION_DIR))
+    assert last.shape == poster.shape and np.array_equal(last, poster)
+
+
 def test_frame_plan_is_pure():
     spec = _spec(n_journeys=5)
     assert timelapse.frame_plan(spec, 40) == timelapse.frame_plan(spec, 40)

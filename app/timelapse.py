@@ -23,11 +23,13 @@ manifest-less BY CONSTRUCTION (the encoders take none), exactly the posture of a
 embed_spec=false share poster. The archival film stays the APNG above.
 """
 from __future__ import annotations
+import dataclasses
 import io
 import json
 import os
 import shutil
 
+import numpy as np
 from PIL import Image
 
 from app import provenance, render
@@ -149,6 +151,76 @@ def render_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=None,
     for groups in plan:
         img = render._paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=groups)
         yield render._paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False)
+
+
+# ---- progressive reveal: the smooth "drawing pen" for the social-preview mockups ----
+# frame_plan reveals whole journeys (day milestones) -- right for the archival film,
+# but on a multi-day trip it snaps a whole day's track in at once ("shooting lines").
+# progressive_reveal instead exposes the trip to a growing cumulative POINT budget, so
+# the line grows point by point like a real time-lapse. It is NOT the archival film
+# (whose byte-identical-last-frame contract is frame_plan's) -- it is the object
+# mockups' motion, which is why it lives here beside render but is used only there.
+
+def progressive_reveal(spec: CompositionSpec, n_frames: int,
+                       include_leader: bool = True) -> list:
+    """A schedule of PARTIAL specs revealing the trip like a drawing pen: every track,
+    ordered by day then canonical index, exposed to a growing cumulative point budget
+    over ~n_frames frames. Each item is a CompositionSpec whose tracks are the whole
+    earlier journeys plus the current journey truncated to the budget (>= 2 points, the
+    minimum a polyline needs). The last item is the full spec, so its frame equals the
+    poster and the loop closes clean. Pure function of (spec, n_frames)."""
+    tracks = [np.asarray(t) for t in (spec.tracks or [])]
+    days = list(spec.track_days or [])
+    days += [None] * (len(tracks) - len(days))
+    order = sorted(range(len(tracks)),
+                   key=lambda i: (days[i] is None, days[i] or "", i))
+    lens = [len(tracks[i]) for i in order]
+    total = int(sum(lens))
+    schedule = []
+    if include_leader:
+        schedule.append(dataclasses.replace(spec, tracks=[], track_days=[]))
+    if total < 2:
+        return schedule or [dataclasses.replace(spec, tracks=[], track_days=[])]
+    n_frames = max(1, int(n_frames))
+    budgets = sorted({max(2, round(total * k / n_frames)) for k in range(1, n_frames + 1)
+                      if round(total * k / n_frames) < total})
+    for b in budgets:
+        rev_t, rev_d, used = [], [], 0
+        for pos, i in enumerate(order):
+            if used + lens[pos] <= b:
+                rev_t.append(tracks[i]); rev_d.append(days[i]); used += lens[pos]
+            else:
+                take = b - used                 # the straddling track's grown prefix
+                if take >= 2:
+                    rev_t.append(tracks[i][:take]); rev_d.append(days[i])
+                break
+        if rev_t:
+            schedule.append(dataclasses.replace(spec, tracks=rev_t, track_days=rev_d))
+    # the final frame is the WHOLE trip in the spec's OWN (canonical) order, so it is
+    # pixel-equal to render.rasterize(spec) -- track order is ULP-load-bearing in the
+    # worn-width sum, exactly as frame_plan's canonical last frame guards.
+    schedule.append(dataclasses.replace(
+        spec, tracks=list(spec.tracks),
+        track_days=list(spec.track_days) if spec.track_days else spec.track_days))
+    return schedule
+
+
+def progressive_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=None,
+                       n_frames: int = 48, hydro=None, labels=None):
+    """Render the progressive_reveal schedule: the terrain base is painted ONCE (as for
+    the film), then each partial spec's route is inked onto it -- so the pen draws the
+    whole trip smoothly. The last frame is pixel-equal to `render.rasterize(spec)`.
+    Yields RGB frames; memory holds the base plus one frame at a time."""
+    spec.validate(dpi)
+    if cfg is None:
+        with open(os.path.join(region_dir, "region.json")) as f:
+            cfg = json.load(f)
+    out_w, out_h = spec.pixel_size(dpi)
+    base_rgb, lum = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
+                                       labels=labels)
+    for partial in progressive_reveal(spec, n_frames):
+        img = render._paint_journey(base_rgb, partial, out_w, out_h, dpi)
+        yield render._paint_overlays(img, partial, lum, out_w, out_h, dpi, watermark=False)
 
 
 def _durations(n: int, step_ms: int, hold_ms: int, leader_ms: int) -> list:

@@ -70,45 +70,62 @@ HOTSPOT_ICONS = ["camp", "peak", "water", "flag", "camera", "star", "dot", "wate
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
 
-def _synth_tracks(region: Region, n_days: int = 5, seed: int = 7) -> list:
-    """A season of day-trips inside one region: a shared meandering corridor every day
-    retraces (so density reads a worn path), each day branching off to its own spot, with
-    light GPS jitter and a distinct date. Generated directly in the region's projected
-    metres -- no lon/lat round-trip -- so it works for any region from its bounds alone."""
+def _synth_tracks(region: Region, n_days: int = 7, seed: int = 7) -> list:
+    """A detailed multi-day trip inside one region, generated in projected metres so it
+    works for any region from its bounds alone. A shared approach corridor is retraced
+    every day (so density reads a worn path); each day pushes a densely-sampled,
+    switchbacked leg to its own destination, and the legs reach FARTHER and wander MORE
+    as the trip accumulates -- so a progressive reveal grows like a real many-hour,
+    multi-day journey rather than a few straight lines snapping in. Each day carries
+    hundreds of points; the whole trip is thousands."""
     w, s, e, n = region.cfg["bounds"]
     cx, cy = (w + e) / 2.0, (s + n) / 2.0
     span = min(e - w, n - s)
-    R = span * 0.28                              # keep well inside the frame (off-DEM safe)
+    R = span * 0.24                              # keep destinations well inside the frame
     rng = np.random.default_rng(seed)
     ang0 = rng.uniform(0, 2 * np.pi)
 
-    def _meander(x0, y0, x1, y1, npts, amp, harmonics, rng):
+    def _leg(x0, y0, x1, y1, npts, amp, harmonics, switch, rng):
+        """A densely-sampled path A->B: a low-frequency meander, plus optional
+        high-frequency switchbacks that tighten toward the destination (a climb to a
+        pass or summit). Tapered to its anchored endpoints."""
         t = np.linspace(0, 1, npts)
         xs, ys = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
         off = np.zeros_like(t)
         for k in range(1, harmonics + 1):
             off += (amp / k) * np.sin(2 * np.pi * k * t + rng.uniform(0, 2 * np.pi))
-        off *= np.sin(np.pi * t) ** 0.5           # taper to the anchored endpoints
+        if switch:
+            off += amp * 0.55 * np.sin(2 * np.pi * switch * t) * np.clip((t - 0.4) / 0.6, 0, 1)
+        off *= np.sin(np.pi * t) ** 0.5
         perp = np.arctan2(y1 - y0, x1 - x0) + np.pi / 2
         return np.column_stack([xs + np.cos(perp) * off, ys + np.sin(perp) * off])
 
-    x0, y0 = cx - R * 0.6 * np.cos(ang0), cy - R * 0.6 * np.sin(ang0)
-    x1, y1 = cx + R * 0.3 * np.cos(ang0), cy + R * 0.3 * np.sin(ang0)
-    corridor = _meander(x0, y0, x1, y1, 130, R * 0.12, 5, np.random.default_rng(seed + 1))
+    # the shared approach: trailhead -> base camp, retraced every day
+    thx, thy = cx - R * 0.75 * np.cos(ang0), cy - R * 0.75 * np.sin(ang0)
+    bcx, bcy = cx + R * 0.12 * np.cos(ang0), cy + R * 0.12 * np.sin(ang0)
+    approach = _leg(thx, thy, bcx, bcy, 170, R * 0.10, 5, 0, np.random.default_rng(seed + 1))
 
     tracks = []
     d0 = date(2024, 6, 1)
     for i in range(n_days):
-        ang = ang0 + rng.uniform(-0.9, 0.9)
-        r = R * rng.uniform(0.4, 0.85)
-        sx, sy = x1 + r * np.cos(ang), y1 + r * np.sin(ang)
-        branch = _meander(x1, y1, sx, sy, 60, R * 0.05, 3, rng)
-        route = np.vstack([corridor, branch[1:]])
-        out_back = np.vstack([route, route[::-1][1:]])                  # out-and-back retrace
-        out_back = out_back + rng.normal(0, 6.0, out_back.shape)        # GPS jitter
-        out_back += np.array([(i - n_days // 2) * 14.0, 0.0])           # per-day lateral offset
-        day = (d0 + timedelta(days=i * 9)).isoformat()
-        tracks.append(Track(track_id=f"day-{i}", coords=out_back, day=day))
+        frac = (i + 1) / n_days                  # later days push farther and wander more
+        ang = ang0 + rng.uniform(-1.2, 1.2)
+        reach = R * (0.45 + 0.75 * frac) * rng.uniform(0.9, 1.1)
+        dx, dy = bcx + reach * np.cos(ang), bcy + reach * np.sin(ang)
+        leg = _leg(bcx, bcy, dx, dy, int(200 + 240 * frac), R * 0.07 * (0.6 + frac),
+                   4, switch=int(3 + 5 * frac), rng=rng)
+        path = leg
+        if rng.random() < 0.65:                  # many days add a summit spur from the end
+            sang = ang + rng.uniform(-1.5, 1.5)
+            sr = reach * rng.uniform(0.18, 0.34)
+            spur = _leg(dx, dy, dx + sr * np.cos(sang), dy + sr * np.sin(sang),
+                        int(70 + 90 * frac), R * 0.04, 3, 0, rng)
+            path = np.vstack([leg, spur[1:], spur[::-1][1:]])          # out-and-back spur
+        # the full day: approach in, explore, and retrace approach back to the trailhead
+        day_path = np.vstack([approach, path[1:], path[::-1][1:], approach[::-1][1:]])
+        day_path = day_path + rng.normal(0, 5.0, day_path.shape)       # GPS jitter
+        day = (d0 + timedelta(days=i * 6)).isoformat()
+        tracks.append(Track(track_id=f"day-{i + 1}", coords=day_path, day=day))
     return tracks
 
 
@@ -232,15 +249,20 @@ def _editions(region, tracks, spots, out_dir, dpi):
     return made
 
 
-def _mockups(out_dir):
-    """Instagram-ready object mockups of the finals' OWN pixels (share-class: no
-    manifest, like the film twins): poster.png -> plate/frame JPEGs, film.png ->
-    the yawing ink-itself MP4s. Consumes what the farm already rendered -- never
-    silently re-renders (a mockup must show real engine output, nothing else)."""
-    from scripts.render_mockups import (SIZES, VARIANTS, load_final, render_mockup,
-                                        render_mockup_video, write_jpeg)
+def _mockups(region, tracks, spots, out_dir):
+    """Instagram-ready object mockups of the composition (share-class: no manifest,
+    like the film twins). The STILLS (plate/frame JPEGs) restage the already-rendered
+    poster.png -- the engine's own pixels -- and need no terrain. The MOTION MP4s
+    render a SMOOTH progressive reveal (timelapse.progressive_frames): the trip draws
+    itself point by point while the object gently yaws, so they need the DEM and are
+    skipped, with a message, when it isn't present (e.g. --only mockups on a machine
+    holding only yesterday's poster.png)."""
+    from scripts.render_mockups import (MOCKUP_FRAMES, MOCKUP_HOLD_MS, MOCKUP_MOTION_PX,
+                                        MOCKUP_STEP_MS, SIZES, VARIANTS, load_final,
+                                        render_mockup, render_mockup_video, write_jpeg)
     made = []
     poster = os.path.join(out_dir, "poster.png")
+    manifest = None
     if os.path.exists(poster):
         img_frames, _durs, manifest = load_final(poster)
         for variant in VARIANTS:
@@ -250,21 +272,23 @@ def _mockups(out_dir):
                 made.append((out, (w, h)))
     else:
         print(f"  ! no poster.png in {out_dir} — render the poster first (mockup JPEGs skipped)")
-    film = os.path.join(out_dir, "film.png")
-    if os.path.exists(film):
-        if timelapse.MP4_AVAILABLE:
-            frames, durs, manifest = load_final(film)
-            for variant in VARIANTS:
-                for w, h in SIZES:
-                    out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.mp4")
-                    data = render_mockup_video(frames, durs, manifest, variant, (w, h))
-                    with open(out, "wb") as f:
-                        f.write(data)
-                    made.append((out, (w, h)))
-        else:
-            print("  ! mockup MP4s need the share extra (pip install -r requirements-share.txt) — skipped")
-    else:
-        print(f"  ! no film.png in {out_dir} — render the film first (mockup MP4s skipped)")
+    if not tracks:
+        print("  ! mockup MP4s render the reveal from the terrain — skipped (no DEM/tracks here)")
+        return made
+    if not timelapse.MP4_AVAILABLE:
+        print("  ! mockup MP4s need the share extra (pip install -r requirements-share.txt) — skipped")
+        return made
+    spec = _base_spec(region, tracks, spots)
+    mdpi = MOCKUP_MOTION_PX / min(spec.print_w_in, spec.print_h_in)
+    frames = list(timelapse.progressive_frames(spec, mdpi, region.dir, region.cfg,
+                                               n_frames=MOCKUP_FRAMES))
+    durations = [MOCKUP_STEP_MS] * (len(frames) - 1) + [MOCKUP_HOLD_MS]
+    for variant in VARIANTS:
+        for w, h in SIZES:
+            out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.mp4")
+            with open(out, "wb") as f:
+                f.write(render_mockup_video(frames, durations, manifest, variant, (w, h)))
+            made.append((out, (w, h)))
     return made
 
 
@@ -380,7 +404,7 @@ def main():
                 for p in ps:
                     print(f"  film        {nf} frames  {p}"); made.append(p)
             if "mockups" in want:
-                for p, sz in _mockups(out_dir):
+                for p, sz in _mockups(region, tracks, spots, out_dir):
                     print(f"  mockup      {sz[0]}x{sz[1]}  {p}"); made.append(p)
             if "model" in want:
                 for p in _model(out_dir):

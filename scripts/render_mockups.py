@@ -12,11 +12,13 @@ HONESTY (the branding plan's rule, reconciled): the artwork pixels in every outp
 are the engine's OWN final, untouched except crop/resize -- this script only stages
 them. If the product didn't render it, a mockup can't show it.
 
-DETERMINISM (the pack_region posture): no wall clock, no RNG, no machine state --
-the same input file yields byte-identical outputs. JPEGs pin quality/subsampling
-(the provenance._encode_photo precedent); MP4s ride timelapse._mp4_stream's bitexact
-invocation; caption glyphs come from Pillow's own bundled font, never a host TTF.
-These are share-class assets: no manifest aboard, by construction.
+DETERMINISM (the pack_region posture): no wall clock, no RNG -- the same input file
+yields byte-identical outputs on a given host. JPEGs pin quality/subsampling (the
+provenance._encode_photo precedent); MP4s ride timelapse._mp4_stream's bitexact
+invocation. The caption placard uses the engine's own font chain (render._font), so
+it reads in the poster's face and shares the poster's one cross-host caveat -- the
+installed display face -- and nothing more. These are share-class assets: no manifest
+aboard, by construction.
 
 Stills need only Pillow+numpy (works on any customer PNG, no region data). Video
 additionally needs the share extra (imageio-ffmpeg, requirements-share.txt) and the
@@ -89,8 +91,14 @@ CAPTION_GAP_FRAC, CAPTION_SIZE_FRAC, CAPTION_TRACK_EM = 0.042, 0.013, 0.14
 YAW_MAX_DEG   = 2.5             # the subtle horizontal oscillation
 YAW_PERIOD_S  = 4.0
 LOOP_SECONDS  = 4.0             # still + --video: one full period = a seamless loop
-PERSP_K       = 0.04            # trapezoid strength: edge heights scale 1 -/+ k*sin(yaw)
+PERSP_K       = 0.04           # trapezoid strength: edge heights scale 1 -/+ k*sin(yaw)
 VIDEO_FPS     = 25              # matches timelapse.MP4_BASE_FPS (asserted in tests)
+
+# ---- the smooth "trip draws itself" motion (farm-driven, needs the terrain) ----
+MOCKUP_MOTION_PX = 1100         # long-edge px to render the progressive reveal at
+MOCKUP_FRAMES    = 48           # reveal steps -- enough that the pen draws, never snaps
+MOCKUP_STEP_MS   = 200          # each reveal step's dwell: slow, deliberate, time-lapse
+MOCKUP_HOLD_MS   = 2200         # the hold on the finished map before the loop
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -298,11 +306,24 @@ def _shadow_layer(canvas, alpha: Image.Image, pos, offset, sigma, strength,
 
 
 def _caption_font(px: int):
-    # Pillow's own bundled face, never a host TTF: the determinism contract ("no
-    # machine state") covers caption glyphs too, so the same input file yields the
-    # same placard whatever fonts the host has installed. requirements.txt pins
-    # Pillow >= 10.2, where load_default(size) is a scalable font.
-    return ImageFont.load_default(px)
+    # The engine's OWN font chain (render._font), replicated here so the placard reads
+    # in the same face as the poster's cartouche beside it -- and carries the glyphs the
+    # cartouche does (the edition line's em-dash; Pillow's bundled face renders it as
+    # tofu). Same cross-host caveat the engine itself accepts and documents: the face
+    # follows TRAILPRINT_FONT / the installed serif, byte-identical within a host (the
+    # farm's own machine), and no worse cross-host than the poster it stages. Kept a
+    # local copy of the chain so still-mode stays a bare Pillow+numpy dependency.
+    names = [os.environ["TRAILPRINT_FONT"]] if os.environ.get("TRAILPRINT_FONT") else []
+    names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
+    for name in names:
+        try:
+            return ImageFont.truetype(name, px)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(px)
+    except TypeError:                               # Pillow < 10.1: no sized default
+        return ImageFont.load_default()
 
 
 def _draw_caption(scene: Image.Image, text: str, top_y: int) -> None:
