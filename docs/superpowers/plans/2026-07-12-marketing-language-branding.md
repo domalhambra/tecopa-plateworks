@@ -92,6 +92,26 @@ The attorney brief, should Dom want the masthead anyway: their enumerated classe
 contact with AdventureCORPS; the target goods (art prints) and channels (endurance
 communities). One-hour consult, not a research project.
 
+**Round 3 — evocative candidates (searched 2026-07-12; Hillshade Press declined as too
+clinical).** Mined from the product's own worlds — glaciology, surveying, fire lookouts,
+printmaking. Domains RDAP-checked; exact compounds web-searched; five of ten cleared
+(cartouche/watershed/switchback/solstice/quadrangle press .coms all registered —
+dropped without a fight):
+
+| Candidate | .com | Collisions found | The story |
+|---|---|---|---|
+| **Firn Press** | available | none anywhere | *Firn*: snow that survives its first year and compacts, annual layer by annual layer, into glacier ice. The product's thesis in four letters — years, layered, made permanent. Glaciologists read years as layers in firn cores; the poster is an ice core of a life outdoors. |
+| **Alidade Press** | available | Alidade Inc. (naval-analysis consultancy — distant field) | The sighting instrument on a fire lookout's Osborne Fire Finder and the surveyor's plane table: the tool that turns *looking at terrain* into *lines on paper*. Exactly what the engine does; personal resonance with the operator's fire heritage. |
+| **Moraine Press** | available | none found | What the glacier leaves behind — the deposited record of where it traveled. The record-of-passage metaphor, with the prettiest association in the mountains. |
+| **Worn Path Press** | available | none found | The engine's own worn-width pass (repeat travel literally thickens the line), and Welty's "A Worn Path." Warm and human; three words. |
+| **Gazetteer Press** | available | "Gazetteer" (gazetteer.co) is a live local-news publisher — adjacency in publishing | The dictionary of place names; GNIS — the labels layer — *is* the national gazetteer. Bookish-lovely, but conditional given the news brand. |
+
+Recommendation order: **Firn Press** (clean everywhere, shortest, deepest metaphor),
+**Alidade Press** (the personal one; AL-ih-dayd needs a beat of teaching, which is also
+a story hook), then Moraine / Worn Path. Same mechanics as before: register the keeper
+domains immediately (available is perishable), USPTO search on the chosen compound at
+filing, handles verified manually (IG status checks are non-diagnostic).
+
 ## Step 2 — The identity comes from the engine (one weekend)
 
 The design system already exists — it's the poster. Codify, don't invent:
