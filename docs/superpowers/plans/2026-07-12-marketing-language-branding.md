@@ -33,6 +33,35 @@ manifest's `ENGINE = "trailprint"` is a frozen schema constant — provenance vo
 under the forever-contract, never branding — and must not change. No marketing spend
 before the rename executes.
 
+**Badwater-integrated candidates (searched 2026-07-12, at Dom's request).** The exact
+compounds below are clear — no business operates under any of them, and every `.com`
+was unregistered at search time — but the dominant word is not neutral ground:
+**BADWATER® is AdventureCORPS's federally registered mark**, marketed as "The World's
+Toughest Brand, Gear, and Races" with new products explicitly "in development," a
+**BADWATER Magazine** (they are already in publishing), and a `Badwater <X>` naming
+family (135, Salton Sea, Cape Fear) — all aimed at this playbook's own #1 audience. A
+separate BADWATER registration exists for spirits (Hewn Spirits LLC). Domain-clear ≠
+mark-clear here.
+
+| Candidate | .com | Operates today? | Distance from the BADWATER® zone |
+|---|---|---|---|
+| Badwater Printworks | available | none found | strongest craft signal |
+| Badwater Press | available | none found | strong — but they publish a magazine |
+| Badwater Editions | available | none found | strong; matches the product's core concept |
+| Badwater Atlas | available | none found | strong; cartographic |
+| Badwater Chronicle / Plates / Mapworks / Carto / Studio | all available | none found | fine; weaker craft signal |
+| Badwater Trails | available | none found | **avoid** — reads like one of their events |
+
+Posture: register the keepers now (cheap and perishable — badwatertrails.com is also
+free and worth holding as the repo's name). If Badwater is the *house* identity
+(Badwater HD already exists), the low-exposure use is as the **imprint behind a clean
+product brand** — "Hillshade Press · a Badwater Printworks studio" — small type,
+maker's mark, not the name carried into r/ultrarunning. Leading the *product* under a
+Badwater name in endurance channels needs a trademark attorney's read on AdventureCORPS
+first: the magazine + merch + "brand, gear" expansion make the overlap non-frivolous.
+Instagram handle checks were non-diagnostic (logged-out IG answers 200 for
+everything); verify handles manually at registration.
+
 ## Step 2 — The identity comes from the engine (one weekend)
 
 The design system already exists — it's the poster. Codify, don't invent:
