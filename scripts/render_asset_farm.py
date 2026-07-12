@@ -17,10 +17,23 @@ produces, per region:
                         the share extra is installed) -- lossy, no manifest aboard
   edition_1/2/3.png     the same composition as three growing editions -- the "magic
                         trick": one frame, more ink, the cartouche climbing Edition 1->3
+  mockup_<v>_<size>.jpg the poster staged as a physical object (the embossed Plate, the
+                        matted Frame) on the gallery wall -- Instagram-ready stills
+  mockup_<v>_<size>.mp4 the same objects with the film inking itself inside them while
+                        the object subtly yaws (share-class like the film twins: lossy,
+                        no manifest; needs the share extra)
+  mockup_plate.glb      the orbitable plate for the landing page's <model-viewer> --
+                        the poster's pixels on a relief-displaced disc
+  lightsweep.mp4        (--only lightsweep; slow) the turntable: the sun walks the
+                        azimuth circle and only the land relights -- the terrain itself
+                        reads as 3D
 
-Every deliverable goes through the real final path (`provenance.build_final_spec` ->
-`render.rasterize` -> embedded manifest), so this doubles as an end-to-end smoke test of
-every output the product ships.
+The rendered deliverables (poster, wallpapers, film, editions) go through the real final
+path (`provenance.build_final_spec` -> `render.rasterize` -> embedded manifest), so a
+full run doubles as an end-to-end smoke test of the engine's own outputs. The mockup,
+model, and lightsweep tiers are share-class and exercise none of that path: the mockups
+and the GLB restage an already-rendered final's pixels, and the lightsweep re-renders
+but carries no manifest.
 
 Usage:
     ./.venv/bin/python scripts/render_asset_farm.py                    # all regions, real DEMs
@@ -219,6 +232,76 @@ def _editions(region, tracks, spots, out_dir, dpi):
     return made
 
 
+def _mockups(out_dir):
+    """Instagram-ready object mockups of the finals' OWN pixels (share-class: no
+    manifest, like the film twins): poster.png -> plate/frame JPEGs, film.png ->
+    the yawing ink-itself MP4s. Consumes what the farm already rendered -- never
+    silently re-renders (a mockup must show real engine output, nothing else)."""
+    from scripts.render_mockups import (SIZES, VARIANTS, load_final, render_mockup,
+                                        render_mockup_video, write_jpeg)
+    made = []
+    poster = os.path.join(out_dir, "poster.png")
+    if os.path.exists(poster):
+        img_frames, _durs, manifest = load_final(poster)
+        for variant in VARIANTS:
+            for w, h in SIZES:
+                out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.jpg")
+                write_jpeg(render_mockup(img_frames[0], manifest, variant, (w, h)), out)
+                made.append((out, (w, h)))
+    else:
+        print(f"  ! no poster.png in {out_dir} — render the poster first (mockup JPEGs skipped)")
+    film = os.path.join(out_dir, "film.png")
+    if os.path.exists(film):
+        if timelapse.MP4_AVAILABLE:
+            frames, durs, manifest = load_final(film)
+            for variant in VARIANTS:
+                for w, h in SIZES:
+                    out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.mp4")
+                    data = render_mockup_video(frames, durs, manifest, variant, (w, h))
+                    with open(out, "wb") as f:
+                        f.write(data)
+                    made.append((out, (w, h)))
+        else:
+            print("  ! mockup MP4s need the share extra (pip install -r requirements-share.txt) — skipped")
+    else:
+        print(f"  ! no film.png in {out_dir} — render the film first (mockup MP4s skipped)")
+    return made
+
+
+def _model(out_dir):
+    """The orbitable plate: a GLB of the poster's pixels on a displaced disc, for the
+    landing page's <model-viewer> (share-class, no manifest)."""
+    from scripts.render_mockups import load_final
+    from scripts.render_model import build_plate_glb
+    poster = os.path.join(out_dir, "poster.png")
+    if not os.path.exists(poster):
+        print(f"  ! no poster.png in {out_dir} — render the poster first (model skipped)")
+        return []
+    frames, _durs, _m = load_final(poster)
+    out = os.path.join(out_dir, "mockup_plate.glb")
+    data = build_plate_glb(frames[0])   # build fully before touching disk: a failure
+    with open(out, "wb") as f:          # must not leave a truncated GLB the landing
+        f.write(data)                   # page would fetch by exact name
+    return [out]
+
+
+def _lightsweep(region, tracks, spots, out_dir):
+    """The turntable: the composition re-rendered around the azimuth circle (the
+    terrain itself reads as 3D -- only the light moves). Needs the DEM; minutes on
+    real terrain, which is why --quick skips it unless explicitly asked for."""
+    if not timelapse.MP4_AVAILABLE:
+        print("  ! lightsweep needs the share extra (pip install -r requirements-share.txt) — skipped")
+        return []
+    from scripts.render_lightsweep import TARGET_PX, sweep_mp4
+    spec = _base_spec(region, tracks, spots)
+    dpi = TARGET_PX / max(spec.print_w_in, spec.print_h_in)
+    out = os.path.join(out_dir, "lightsweep.mp4")
+    data = sweep_mp4(spec, dpi, region.dir, region.cfg)  # encode fully first: the
+    with open(out, "wb") as f:                           # farm's slowest job must not
+        f.write(data)                                    # die into a 0-byte "asset"
+    return [out]
+
+
 # ---- driver ----
 
 def _ensure_dem(region: Region, allow_synthetic: bool) -> bool:
@@ -242,8 +325,10 @@ def main():
     ap.add_argument("--film-frames", type=int, default=24, help="max time-lapse frames")
     ap.add_argument("--wallpapers", nargs="*", default=["iphone", "desktop_4k"],
                     help="wallpaper preset ids")
-    ap.add_argument("--only", nargs="*", choices=["poster", "wallpapers", "film", "editions"],
-                    help="render only these deliverables (default: all)")
+    ap.add_argument("--only", nargs="*",
+                    choices=["poster", "wallpapers", "film", "editions",
+                             "mockups", "lightsweep", "model"],
+                    help="render only these deliverables (default: all but lightsweep)")
     ap.add_argument("--quick", action="store_true",
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
     ap.add_argument("--synthetic-dem", action="store_true",
@@ -255,9 +340,15 @@ def main():
 
     regions = discover()
     ids = args.regions or list(regions)
-    want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions"}
+    # lightsweep re-renders ~60 frames per region (minutes on real DEMs), so it is
+    # opt-in via --only; everything else ships by default
+    want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions",
+                                             "mockups", "model"}
     if args.quick:
-        want.discard("film")
+        # quick drops the slow renders -- unless they were EXPLICITLY asked for
+        for slow in ("film", "lightsweep"):
+            if not (args.only and slow in args.only):
+                want.discard(slow)
 
     index = {}
     for rid in ids:
@@ -265,12 +356,17 @@ def main():
         if region is None:
             print(f"! unknown region {rid!r} (built: {', '.join(regions)})"); continue
         print(f"\n=== {rid} — {region.name} ===")
-        if not _ensure_dem(region, args.synthetic_dem):
+        # mockups + model stage already-rendered finals: they need no DEM and no
+        # tracks, so --only mockups works on any machine with yesterday's assets
+        needs_render = bool(want - {"mockups", "model"})
+        if needs_render and not _ensure_dem(region, args.synthetic_dem):
             continue
         out_dir = os.path.join(args.out, rid); os.makedirs(out_dir, exist_ok=True)
-        tracks = _synth_tracks(region)
-        spots = _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir)
-        print(f"  tracks={len(tracks)}  hotspots={len(spots)}")
+        tracks = _synth_tracks(region) if needs_render else []
+        spots = _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir) \
+            if needs_render else []
+        if needs_render:
+            print(f"  tracks={len(tracks)}  hotspots={len(spots)}")
         made = []
         try:
             if "poster" in want:
@@ -283,20 +379,49 @@ def main():
                 ps, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
                 for p in ps:
                     print(f"  film        {nf} frames  {p}"); made.append(p)
+            if "mockups" in want:
+                for p, sz in _mockups(out_dir):
+                    print(f"  mockup      {sz[0]}x{sz[1]}  {p}"); made.append(p)
+            if "model" in want:
+                for p in _model(out_dir):
+                    print(f"  model       plate glb  {p}"); made.append(p)
+            if "lightsweep" in want:
+                for p in _lightsweep(region, tracks, spots, out_dir):
+                    print(f"  lightsweep  {p}"); made.append(p)
             if "editions" in want:
                 for p, sz in _editions(region, tracks, spots, out_dir, args.dpi):
                     print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)
         except Exception as ex:
             print(f"  ! {rid} failed: {type(ex).__name__}: {ex}")
             continue
-        index[rid] = {"name": region.name, "assets": [os.path.relpath(p) for p in made]}
+        if made:
+            # a region whose every wanted deliverable was skipped gets no entry:
+            # an empty "assets": [] would read as a rendered region
+            index[rid] = {"name": region.name,
+                          "assets": [os.path.relpath(p) for p in made]}
 
     if index:
         idx_path = os.path.join(args.out, "index.json")
         os.makedirs(args.out, exist_ok=True)
-        with open(idx_path, "w") as f:
-            json.dump(index, f, indent=2)
         total = sum(len(v["assets"]) for v in index.values())
+        # merge into yesterday's index, never overwrite it: --only mockups on a dir
+        # from an earlier full run must keep the poster/wallpaper/film records whose
+        # files still sit on disk (and every other region's entry, untouched)
+        prior = {}
+        if os.path.exists(idx_path):
+            try:
+                with open(idx_path) as f:
+                    prior = json.load(f)
+            except (OSError, ValueError):
+                prior = {}
+        for rid, entry in index.items():
+            old = prior.get(rid)
+            if isinstance(old, dict):
+                kept = [p for p in old.get("assets", [])
+                        if p not in entry["assets"] and os.path.exists(p)]
+                entry["assets"] = kept + entry["assets"]
+        with open(idx_path, "w") as f:
+            json.dump({**prior, **index}, f, indent=2)
         print(f"\nwrote {total} assets across {len(index)} region(s) -> {idx_path}")
     else:
         print("\nno assets rendered")

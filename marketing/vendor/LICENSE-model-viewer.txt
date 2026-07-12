@@ -1,0 +1,12 @@
+model-viewer.min.js — <model-viewer> web component, v4.1.0
+Source: https://github.com/google/model-viewer (npm @google/model-viewer)
+License: Apache-2.0 (model-viewer itself — its Google LLC Apache-2.0 license
+headers are preserved as full text blocks inside the minified file). The bundle
+also vendors two dependencies, whose headers survive as SPDX identifiers:
+  three.js — Copyright 2010-2025 Three.js Authors, MIT (SPDX: MIT)
+  lit      — Copyright Google LLC, BSD-3-Clause (SPDX: BSD-3-Clause)
+Third-party attributions for the landing page must carry all three notices.
+
+Vendored (not CDN-loaded) so the landing page stays self-contained. To upgrade:
+curl -o model-viewer.min.js https://cdn.jsdelivr.net/npm/@google/model-viewer@<ver>/dist/model-viewer.min.js
+and update the version in this note.

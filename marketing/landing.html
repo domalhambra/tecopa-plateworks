@@ -298,6 +298,13 @@
           <div class="coord">40.42° N · 120.65° W · Susanville ↔ Eagle Lake</div>
           <p style="color:var(--ink-2);font-size:14.5px;margin:12px 0 0">The first plate:
             high desert, volcanic relief, and the lake corridor rendered from 10-metre DEM.</p>
+          <model-viewer src="../assets/lassen_ca/mockup_plate.glb"
+            alt="The Lassen plate as a physical disc — drag to spin"
+            camera-controls auto-rotate auto-rotate-delay="1200" rotation-per-second="12deg"
+            disable-zoom interaction-prompt="none" loading="lazy"
+            style="width:100%;max-width:340px;height:260px;margin-top:16px;background:transparent">
+          </model-viewer>
+          <p class="caption" style="margin:6px 0 0">The plate, as an object — drag to spin it.</p>
           <div class="avail">● Available now</div>
         </div>
       </div>
@@ -374,6 +381,7 @@
   </div>
 </footer>
 
+<script type="module" src="vendor/model-viewer.min.js"></script>
 <script>
   // theme toggle: stamp data-theme, mirroring the host viewer's own control
   (function(){

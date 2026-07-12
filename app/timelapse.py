@@ -243,29 +243,50 @@ def encode_mp4(frames, step_ms: int = DEFAULT_STEP_MS, hold_ms: int = DEFAULT_HO
     # resolve the binary BEFORE materializing frames: `frames` is usually the live
     # render generator, and a whole film render must never be spent discovering that
     # the exe vanished between import and now (a stale IMAGEIO_FFMPEG_EXE, say).
+    exe = require_ffmpeg()
+    frames = list(frames)
+    if not frames:
+        raise ValueError("no frames to encode")
+    tick_ms = 1000 // MP4_BASE_FPS
+    durations = _durations(len(frames), step_ms, hold_ms, leader_ms)
+    return _mp4_stream(exe, frames[0].size,
+                       ((img, max(1, round(dur / tick_ms)))
+                        for img, dur in zip(frames, durations)))
+
+
+def require_ffmpeg() -> str:
+    """The one honest gate for MP4 encoding: the resolved ffmpeg binary, or the same
+    sentence the API's 422 speaks. Shared by the film twin and the mockup videos so
+    the refusal never drifts between surfaces."""
     exe = _ffmpeg_exe() if MP4_AVAILABLE else None
     if exe is None:
         raise RuntimeError("MP4 export needs the share extra — "
                            "pip install -r requirements-share.txt")
+    return exe
+
+
+def _pad_even(img):
+    """H.264 yuv420p needs even dimensions; replicate the last row/col (never crop --
+    a composed sheet sits flush against its edges, and one replicated line is
+    invisible)."""
+    import numpy as np
+    a = np.asarray(img)
+    if a.shape[0] % 2:
+        a = np.concatenate([a, a[-1:, :, :]], axis=0)       # replicate the bottom row
+    if a.shape[1] % 2:
+        a = np.concatenate([a, a[:, -1:, :]], axis=1)       # replicate the right col
+    return a
+
+
+def _mp4_stream(exe, size, ticks) -> bytes:
+    """The MP4 twin's exact encoder invocation, extracted so every MP4 this repo emits
+    (the film twin, the mockup videos) shares ONE bitexact/BT.709 posture. `ticks` is
+    an iterable of (RGB frame, repeat_count) pairs consumed lazily -- one raw frame in
+    flight at a time, so a 300-tick mockup video never holds a gigabyte of frames."""
     import subprocess
     import tempfile
-    import numpy as np
-    frames = list(frames)
-    if not frames:
-        raise ValueError("no frames to encode")
-
-    def _pad_even(img):
-        a = np.asarray(img)
-        if a.shape[0] % 2:
-            a = np.concatenate([a, a[-1:, :, :]], axis=0)   # replicate the bottom row
-        if a.shape[1] % 2:
-            a = np.concatenate([a, a[:, -1:, :]], axis=1)   # replicate the right col
-        return a
-
-    w, h = frames[0].size
+    w, h = size
     even_w, even_h = w + (w % 2), h + (h % 2)
-    tick_ms = 1000 // MP4_BASE_FPS
-    durations = _durations(len(frames), step_ms, hold_ms, leader_ms)
     fd, out_path = tempfile.mkstemp(suffix=".mp4")
     os.close(fd)
     try:
@@ -298,9 +319,9 @@ def encode_mp4(frames, step_ms: int = DEFAULT_STEP_MS, hold_ms: int = DEFAULT_HO
             try:
                 # stream frame-by-frame (one raw frame in flight, repeats reuse its
                 # bytes) -- a 40-frame film becomes ~200 piped frames, never one blob
-                for img, dur in zip(frames, durations):
+                for img, repeats in ticks:
                     raw = _pad_even(img).tobytes()
-                    for _ in range(max(1, round(dur / tick_ms))):
+                    for _ in range(repeats):
                         proc.stdin.write(raw)
                 proc.stdin.close()
             except BrokenPipeError:
