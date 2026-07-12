@@ -112,6 +112,32 @@ a story hook), then Moraine / Worn Path. Same mechanics as before: register the 
 domains immediately (available is perishable), USPTO search on the chosen compound at
 filing, handles verified manually (IG status checks are non-diagnostic).
 
+**Round 4 — Tecopa (searched 2026-07-12; Dom wants Tecopa in the name).** The cleanest
+territory of the entire search: **all ten candidate .coms unregistered**, no trademarks
+surfaced, and the only Tecopa-named business anywhere is Tecopa Brewing Company — a
+small restaurant in the town itself (local place-name use, different goods, no
+conflict). Tecopa is Death Valley country — Dom's home geography — with none of
+BADWATER®'s enforcement shadow. Two story assets ride along: **ancient Lake Tecopa**, a
+vanished Pleistocene lake whose layered lakebeds are a world-class geological archive
+(geologists read hundreds of thousands of years in its beds), and **hot-pressed paper**,
+the fine-art paper term, sitting next to a town famous for hot springs. One note to
+carry respectfully: the town is named for **Chief Tecopa**, a Paiute leader remembered
+as a peacemaker — the About page should tell that story rather than ignore it.
+
+| Candidate | .com | The story |
+|---|---|---|
+| **Lake Tecopa Press** | available | a press named for a vanished lake whose *record remains* — layered beds read like editions; the product's thesis in a place-name |
+| **Tecopa Hot Press** | available | hot-pressed paper (real fine-art vocabulary) × the hot-springs town — a print-shop pun that is technically correct |
+| **Tecopa Plateworks** | available | "plate" is the product's own noun; industrial-craft, distinctive against every "printworks" |
+| **The Tecopa Printery** | available | the antique word for a print shop; hand-painted-shop-sign energy |
+| **Tecopa Sun Press** | available | sun printing (cyanotype — how maps were once copied) × desert sun |
+| **Tecopa Editions** | available | gallery-grade; the editions concept on the masthead |
+| Tecopa Press / Printworks / Atlas / Ledger | all available | solid, plainer fallbacks |
+
+Recommendation order: **Lake Tecopa Press** (deepest story), **Tecopa Hot Press** (the
+charming one), **Tecopa Plateworks** (most on-lexicon). Register the keepers
+immediately; USPTO on the chosen compound at filing; handles verified manually.
+
 ## Step 2 — The identity comes from the engine (one weekend)
 
 The design system already exists — it's the poster. Codify, don't invent:
