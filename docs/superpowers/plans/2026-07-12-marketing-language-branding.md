@@ -62,6 +62,36 @@ first: the magazine + merch + "brand, gear" expansion make the overlap non-frivo
 Instagram handle checks were non-diagnostic (logged-out IG answers 200 for
 everything); verify handles manually at registration.
 
+**Badwater Guidance LLC (Dom's existing entity) — implications, recorded 2026-07-12.**
+Their own terms-of-use enumerates BADWATER® registrations "including but not limited
+to": sports event production, entertainment/broadcast, adventure travel, charitable
+fundraising, clothing & footwear, sunglasses, skin care, buckles & patches, medals,
+backpacks, **publications**, decals & stickers. Four consequences:
+
+1. **An LLC filing is not a trademark.** It blocks identical entity names in one
+   state's registry; it grants no mark rights and no defense. Rights come from public
+   use in commerce — and "Badwater Guidance" shows essentially no public web footprint,
+   so its common-law rights are thin and scoped to guidance services wherever it has
+   actually traded.
+2. **The LLC does not license the name onto posters.** Whatever rights it has cover
+   guidance services, not printed goods — and printed goods (`publications`, decals,
+   merch) is territory AdventureCORPS claims by registration, plus BADWATER Magazine
+   in practice.
+3. **Expansion is the trigger, and it points backward.** A quiet LLC coexists; a
+   Badwater-branded poster line in ultrarunning channels raises the visibility of
+   every Badwater use in the house, including the LLC. Disputes sparked by an
+   expansion routinely sweep in the pre-existing uses.
+4. **The capture-the-upside structure:** Badwater Guidance LLC as the legal operator
+   ("© Badwater Guidance LLC" on footer/invoices/terms — entity-name use in legal fine
+   print is the weakest form of trademark use and essentially never the enforcement
+   trigger); the product masthead stays clean (Hillshade Press). "A Badwater Guidance
+   studio" as visible marketing copy is a middle exposure — ask the attorney.
+
+The attorney brief, should Dom want the masthead anyway: their enumerated classes
+(incl. publications); the LLC's first-use date, services, geography; any history of
+contact with AdventureCORPS; the target goods (art prints) and channels (endurance
+communities). One-hour consult, not a research project.
+
 ## Step 2 — The identity comes from the engine (one weekend)
 
 The design system already exists — it's the poster. Codify, don't invent:
