@@ -338,6 +338,7 @@ def test_farm_integration(tmp_path, monkeypatch):
     pytest.importorskip("imageio_ffmpeg")
     import sys
     import scripts.render_asset_farm as farm
+    monkeypatch.setenv("TRAILPRINT_MOCKUP_FRAMES", "6")   # keep the reveal render tiny
     monkeypatch.setattr(sys, "argv",
                         ["render_asset_farm.py", "--regions", "lassen_ca",
                          "--only", "poster", "film", "mockups", "model",

@@ -95,9 +95,14 @@ PERSP_K       = 0.04           # trapezoid strength: edge heights scale 1 -/+ k*
 VIDEO_FPS     = 25              # matches timelapse.MP4_BASE_FPS (asserted in tests)
 
 # ---- the smooth "trip draws itself" motion (farm-driven, needs the terrain) ----
+# Smoothness is one tick PER reveal step (no hold-then-jump), so the line grows a little
+# every frame instead of snapping a chunk and freezing. Slowness then comes from MANY
+# steps, never from longer holds (holds are what read as chunky). ~180 steps at 25 fps
+# is a ~7 s continuous draw. TRAILPRINT_MOCKUP_FRAMES overrides the count (tests use a
+# handful; an operator can trade smoothness for render time).
 MOCKUP_MOTION_PX = 1100         # long-edge px to render the progressive reveal at
-MOCKUP_FRAMES    = 48           # reveal steps -- enough that the pen draws, never snaps
-MOCKUP_STEP_MS   = 200          # each reveal step's dwell: slow, deliberate, time-lapse
+MOCKUP_FRAMES    = 180          # reveal steps -- fine enough that the pen never snaps
+MOCKUP_STEP_MS   = 40           # one 25 fps tick per step: continuous, not stop-motion
 MOCKUP_HOLD_MS   = 2200         # the hold on the finished map before the loop
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
@@ -290,18 +295,30 @@ def _wall(size) -> Image.Image:
     return Image.fromarray((grad + 0.5).astype(np.uint8), "RGB")
 
 
+def _shadow_reach(sigma, spread_px, offset) -> int:
+    """How far a shadow spreads past its silhouette: 3 sigma of blur, the spread
+    erosion undone, plus the drop offset. Callers size their canvas by this so the
+    shadow never hard-crops (a disc fills its own box edge to edge)."""
+    return int(3 * sigma + spread_px + max(abs(offset[0]), abs(offset[1])) + 8)
+
+
 def _shadow_layer(canvas, alpha: Image.Image, pos, offset, sigma, strength,
                   spread_px: int = 0) -> Image.Image:
     """One shadow pass: the object's own alpha, optionally eroded (the CSS negative
-    spread), blurred, tinted SHADOW_RGB, placed at pos+offset on a transparent canvas."""
-    sil = alpha
+    spread), blurred, tinted SHADOW_RGB, placed at pos+offset on a transparent canvas.
+    The alpha is PADDED before the blur so the shadow can bleed past the silhouette --
+    a disc fills its diam x diam box edge to edge, so an unpadded blur hard-crops the
+    shadow along the tangents (the visible 'flat cut' on the circular preview)."""
+    m = _shadow_reach(sigma, spread_px, (0, 0))         # room for the blur to spread
+    sil = Image.new("L", (alpha.width + 2 * m, alpha.height + 2 * m), 0)
+    sil.paste(alpha, (m, m))
     if spread_px > 0:
         sil = sil.filter(ImageFilter.MinFilter(2 * spread_px + 1))
     sil = sil.filter(ImageFilter.GaussianBlur(sigma))
     layer = Image.new("RGBA", canvas, (0, 0, 0, 0))
     tint = Image.new("RGBA", sil.size, SHADOW_RGB + (0,))
     tint.putalpha(sil.point(lambda v: v * strength // 255))
-    layer.alpha_composite(tint, (pos[0] + offset[0], pos[1] + offset[1]))
+    layer.alpha_composite(tint, (pos[0] + offset[0] - m, pos[1] + offset[1] - m))
     return layer
 
 
@@ -447,7 +464,10 @@ def render_mockup_video(frames, durations_ms, manifest, variant: str, size, *,
     text = caption_text(manifest) if caption else None
     staged = [_staged_art(f, variant, size, sheen) for f in frames]
     pos = _object_pos(size, staged[0])
-    pad = max(24, round(0.06 * staged[0].size[1]))  # headroom so the warp never clips
+    drop_off = (round(DROP_OFFSET_FRAC[0] * size[1]), round(DROP_OFFSET_FRAC[1] * size[1]))
+    # the canvas must hold the object AND its full drop shadow, or the warp clips the
+    # shadow at the canvas edge (the 'hard crop' below the disc)
+    pad = max(24, _shadow_reach(DROP_SIGMA_FRAC * size[1], DROP_SPREAD_PX, drop_off) + 12)
     canvas_sz = (staged[0].size[0] + 2 * pad, staged[0].size[1] + 2 * pad)
     opos = (pos[0] - pad, pos[1] - pad)
 
@@ -458,7 +478,6 @@ def render_mockup_video(frames, durations_ms, manifest, variant: str, size, *,
 
     arts = [_padded(a) for a in staged]
     alpha = arts[0].getchannel("A")                 # silhouette is journey-invariant
-    drop_off = (round(DROP_OFFSET_FRAC[0] * size[1]), round(DROP_OFFSET_FRAC[1] * size[1]))
     drop = _shadow_layer(canvas_sz, alpha, (0, 0), drop_off,
                          DROP_SIGMA_FRAC * size[1], DROP_ALPHA, DROP_SPREAD_PX)
     contact = _shadow_layer(canvas_sz, alpha, (0, 0), CONTACT_OFFSET,

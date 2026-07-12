@@ -280,8 +280,9 @@ def _mockups(region, tracks, spots, out_dir):
         return made
     spec = _base_spec(region, tracks, spots)
     mdpi = MOCKUP_MOTION_PX / min(spec.print_w_in, spec.print_h_in)
+    n_frames = int(os.environ.get("TRAILPRINT_MOCKUP_FRAMES", MOCKUP_FRAMES))
     frames = list(timelapse.progressive_frames(spec, mdpi, region.dir, region.cfg,
-                                               n_frames=MOCKUP_FRAMES))
+                                               n_frames=n_frames))
     durations = [MOCKUP_STEP_MS] * (len(frames) - 1) + [MOCKUP_HOLD_MS]
     for variant in VARIANTS:
         for w, h in SIZES:
