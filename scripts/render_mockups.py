@@ -84,8 +84,13 @@ DROP_SPREAD_PX   = 12           # CSS negative spread: erode silhouette before b
 CONTACT_OFFSET   = (2, 6)
 CONTACT_SIGMA, CONTACT_ALPHA = 6.0, 70
 
-ANCHOR_Y = {(1080, 1080): 0.47, (1080, 1350): 0.44}
-CAPTION_GAP_FRAC, CAPTION_SIZE_FRAC, CAPTION_TRACK_EM = 0.042, 0.013, 0.14
+ANCHOR_Y = {(1080, 1080): 0.46, (1080, 1350): 0.43}
+# Caption size sits at the subtitle tier of the broadcast "safe text" rule -- readable
+# text runs ~1/25-1/33 of frame height, and Instagram downscales a 1080 asset to ~430 px
+# in-feed (x0.4), so anything smaller vanishes. 0.030 -> ~32 px font (~22 px cap height,
+# ~1/49 of frame), which survives that downscale and reads comfortably in Stories/Reels.
+# _draw_caption shrinks it to fit a long region name rather than overflow.
+CAPTION_GAP_FRAC, CAPTION_SIZE_FRAC, CAPTION_TRACK_EM = 0.046, 0.030, 0.12
 
 # ---- video: 25 fps ticks; yaw is a pure function of the tick index ----
 YAW_MAX_DEG   = 2.5             # the subtle horizontal oscillation
@@ -344,15 +349,22 @@ def _caption_font(px: int):
 
 
 def _draw_caption(scene: Image.Image, text: str, top_y: int) -> None:
-    """Tracked small caps under the object, gallery-placard style. PIL has no
-    letter-spacing, so glyphs are placed by hand; no test asserts glyph pixels
+    """Tracked small caps under the object, gallery-placard style, sized for social
+    legibility (see CAPTION_SIZE_FRAC). PIL has no letter-spacing, so glyphs are placed
+    by hand; the line auto-shrinks to fit ~88% of the frame width, so a long region name
+    stays on one readable line instead of overflowing. No test asserts glyph pixels
     (that would pin a Pillow release, not a behavior)."""
-    px = max(11, round(CAPTION_SIZE_FRAC * scene.size[1]))
-    font = _caption_font(px)
-    track = CAPTION_TRACK_EM * px
     d = ImageDraw.Draw(scene)
-    widths = [d.textlength(ch, font=font) for ch in text]
-    total = sum(widths) + track * (len(text) - 1)
+    max_w = 0.88 * scene.size[0]
+    px = max(20, round(CAPTION_SIZE_FRAC * scene.size[1]))
+    for _ in range(6):                                   # shrink to fit a long title
+        font = _caption_font(px)
+        track = CAPTION_TRACK_EM * px
+        widths = [d.textlength(ch, font=font) for ch in text]
+        total = sum(widths) + track * (len(text) - 1)
+        if total <= max_w or px <= 16:
+            break
+        px = max(16, int(px * max_w / total))            # scale to fit, then re-measure
     x = (scene.size[0] - total) / 2.0
     for ch, cw in zip(text, widths):
         d.text((x, top_y), ch, fill=CAPTION_INK, font=font)
