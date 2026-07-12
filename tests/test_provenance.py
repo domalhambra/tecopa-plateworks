@@ -252,6 +252,55 @@ def test_default_manifest_omits_region_pack():
     assert "region_pack" not in provenance.build_manifest(spec, m.get("sources", []))
 
 
+# ---- the resurrection note: a strings(1)-readable tEXt twin of the zTXt manifest ----
+
+def test_resurrection_note_is_pure_ascii_and_names_the_essentials():
+    # a 2035 finder running strings(1) must learn: what the file is (its own save
+    # file), where the recipe lives (the zTXt chunk + the CC0 schema doc), where the
+    # AGPL engine lives, what plate painted it, that the data is public domain, and
+    # how to bring it back. Pure function of the manifest -- no clock, no env.
+    _, manifest = _spec_from_fixture()
+    note = provenance.resurrection_note(manifest)
+    assert note == provenance.resurrection_note(json.loads(json.dumps(manifest)))
+    note.encode("ascii")                       # tEXt is latin-1; we stay plain ASCII
+    assert "save file" in note
+    assert '"trailprint"' in note and "docs/MANIFEST.md" in note
+    assert "AGPL-3.0-or-later" in note
+    assert "https://github.com/domalhambra/badwatertrails" in note
+    # pre-pack manifest (no region_pack): the plate line names the region, no version
+    assert "plate lassen_ca" in note
+    assert "USGS" in note and "/api/reprint" in note
+    assert len(note.splitlines()) <= 8         # short enough to read in a hex dump
+
+def test_resurrection_note_names_the_pack_version_when_present():
+    _, manifest = _spec_from_fixture("manifest_region_pack_v1.json")
+    note = provenance.resurrection_note(manifest)
+    assert "plate lassen_ca 000000000000" in note
+
+def test_final_carries_the_note_and_it_is_stable_across_renders():
+    c = _client()
+    sid = _stamped_session(c)
+    png = c.post("/api/final", data={"session_id": sid}).content
+    note = Image.open(io.BytesIO(png)).text["trailprint-note"]
+    assert "save file" in note
+    m = provenance.extract(png)
+    assert m["region_pack"]["pack_version"] in note    # the plate version, when present
+    # plain tEXt (NOT zip=True): the raw file bytes carry the readable sentence, which
+    # is the whole point -- strings(1) finds it without any PNG tooling.
+    assert b"save file" in png
+    # same spec -> same note (the note is a pure function of the manifest)
+    png2 = c.post("/api/final", data={"session_id": sid}).content
+    assert Image.open(io.BytesIO(png2)).text["trailprint-note"] == note
+
+def test_share_copy_carries_no_text_chunks_at_all():
+    # embed_spec=false is the privacy path: no manifest AND no note -- pnginfo is
+    # skipped entirely, so nothing textual rides the share copy.
+    c = _client()
+    sid = _stamped_session(c)
+    png = c.post("/api/final", data={"session_id": sid, "embed_spec": "false"}).content
+    assert Image.open(io.BytesIO(png)).text == {}
+
+
 # ---- endpoint: embedding + privacy ----
 
 def test_final_embeds_a_reprintable_manifest_by_default():
@@ -355,6 +404,10 @@ def test_reprint_restamps_the_region_pack_byte_identically():
     b = provenance.extract(r.content)
     assert "region_pack" in b
     assert provenance._manifest_str(a) == provenance._manifest_str(b)
+    # the resurrection note is a pure function of the manifest, so it must round-trip
+    # byte-equal too -- a reprint that re-worded the note would break byte identity.
+    assert Image.open(io.BytesIO(final_png)).text["trailprint-note"] \
+        == Image.open(io.BytesIO(r.content)).text["trailprint-note"]
 
 
 # ---- plate verification: the server checks the plate the file names ----

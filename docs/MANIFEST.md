@@ -13,6 +13,14 @@ byte-identically, after any future engine upgrade. Everything below is normative
 the frozen fixtures in `tests/fixtures/manifest_*.json` are the reference examples
 and never change.
 
+Beside the manifest rides one **plain tEXt chunk**, keyword `trailprint-note` — a
+human-readable resurrection note (ASCII, uncompressed, so `strings poster.png` finds
+it): what the file is, that the PNG is the save file, where the engine lives and its
+license, the plate id + `pack_version` it was painted on, and how to reproduce it.
+It is a pure function of the manifest (byte-stable, reprint-identical) and is
+informative, not normative — readers must parse the zTXt manifest, never the note.
+Share copies (`embed_spec=false`) carry neither chunk.
+
 ## Top-level keys
 
 | key                | always? | meaning |

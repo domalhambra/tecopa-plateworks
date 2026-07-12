@@ -10,6 +10,10 @@ __pycache__/
 # landcover.tif is small (<1 MB) and IS committed -- no broad *.tif rule.
 regions/*/dem.tif
 
+# packed terrain plates are release assets, not repo content (plates/index.json
+# stays tracked -- the hashes belong in history even if the zips move hosts)
+plates/*.trailplate.zip
+
 # requests-cache from the NHD/3DEP fetches
 cache/
 
