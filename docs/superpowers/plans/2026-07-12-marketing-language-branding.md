@@ -138,6 +138,28 @@ Recommendation order: **Lake Tecopa Press** (deepest story), **Tecopa Hot Press*
 charming one), **Tecopa Plateworks** (most on-lexicon). Register the keepers
 immediately; USPTO on the chosen compound at filing; handles verified manually.
 
+**SELECTED (2026-07-12): Tecopa Plateworks.** Landing-page branding flipped the same
+day (title, brand marks, hero, CTA subject, FAQ, footer). One diligence note from the
+final check: "Plateworks" solo has a B2B user — Plateworks Plus, a Minnesota
+flexographic-plate manufacturer (industrial prepress; different goods and customers) —
+so the standing rule is **always the full compound, never bare "Plateworks."**
+Dom's same-day actions: register tecopaplateworks.com (available at selection; RDAP
+2026-07-12), verify handles manually, USPTO on the compound at filing. Internal
+identifiers (repo name, wizard title, `trailprint_*` download prefix, `ENGINE`
+constant) lag by design — the `ENGINE` string never changes; the rest sweeps in a
+follow-up rename commit once the domain is registered.
+
+**Product idea logged at selection — "the Plate" (round format).** The brand names its
+own signature product: a circular composition — a terrain *plate* like a struck
+medallion, edition line curving along the bottom arc. Digitally cheap to prototype
+(1:1 crop + post-hoc circular mask); as a real product it is a `sheet_shape` spec field
+(additive, defaults rect — the forever-contract discipline already covers it) with a
+circular keyline, arc cartouche, circle-bounded label collision, and an
+inside-the-circle off-DEM probe. Social preview asset to build first: the
+**light-sweep turntable** — N renders with the sun azimuth rotating, encoded through
+the existing MP4 twin pipeline; real DEM relief pops as the shadows wheel. Honest 3D
+from the product's own data, no mockup.
+
 ## Step 2 — The identity comes from the engine (one weekend)
 
 The design system already exists — it's the poster. Codify, don't invent:

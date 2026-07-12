@@ -131,6 +131,12 @@ identifiers can lag — and the manifest's `ENGINE = "trailprint"` string is a *
 schema constant** (provenance vocabulary under the forever-contract, not branding) and
 must never change regardless of the brand.
 
+**Superseded by selection — the name is "Tecopa Plateworks" (2026-07-12).** Dom
+declined Hillshade Press and steered rounds 3–4 (evocative, then Tecopa) — full
+clearance record and the always-full-compound rule live in the playbook. Landing
+surfaces flipped the same day; tecopaplateworks.com registration is Dom's same-day
+action; internal identifiers sweep in a follow-up commit; `ENGINE` never changes.
+
 ## Decision 3 — the data resale verdict (asked directly: "can I sell this?")
 
 **Yes, for all four current plates.** Verified across every `regions/*/sources.json` and
