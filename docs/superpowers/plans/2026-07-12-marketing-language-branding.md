@@ -15,15 +15,23 @@ outdoors: plates, proofs, editions, reprints — vocabulary the engine already e
 code. Every decision below derives from one rule: **say it like a printmaker, prove it
 like an engineer.**
 
-## Step 1 — Clear the name (this week, before any spend)
+## Step 1 — Clear the name — **searched 2026-07-12: encumbered; rename recommended**
 
-1. Search "TrailPrint": USPTO TESS, the .com/.co domains, both app stores, Instagram /
-   Reddit handles, plain Google for anyone selling under the name.
-2. Gate: clean → register the domain and handles the same day. Encumbered → shortlist
-   alternates privately (same press-vocabulary energy), re-run the search, commit once.
-3. Output: a one-paragraph go/no-go note appended to the strategy doc (Decision 2
-   flagged this; this step closes it). Nothing else in this playbook spends money
-   before this gate.
+The search ran (RDAP on the domains, USPTO best-effort, app stores, handles, open web)
+and the gate answered: **"TrailPrint" is a no-go.** trailprint.com is an active MTB
+apparel shop ("Trail Print," since 2017, selling trail-map merch; @trailprint taken);
+**TrailPrint3D** owns the GPX-to-terrain-keepsake niche adjacency with an active site
+and a popular free Blender add-on; trailprint.net was registered by someone else three
+months before the search. Full evidence + the recommendation live in the strategy doc
+(Decision 2): **rename to "Hillshade Press"** — hillshadepress.com available, no brand
+collisions found, the compound is the product's own core technique, and the press
+lexicon survives intact.
+
+Remaining, on Dom's word: register hillshadepress.com + the handles the same day, run
+the USPTO search on the compound at filing, then flip the marketing surfaces. The
+manifest's `ENGINE = "trailprint"` is a frozen schema constant — provenance vocabulary
+under the forever-contract, never branding — and must not change. No marketing spend
+before the rename executes.
 
 ## Step 2 — The identity comes from the engine (one weekend)
 
@@ -84,18 +92,30 @@ Plus the standing rule from `docs/marketing.md`: plates are **free, always** —
 - "The engine is AGPL; the file format is public domain. You are never locked in, even
   to us." — `LICENSE`, `docs/MANIFEST.md` (CC0).
 
-## Step 4 — Price architecture (decide the numbers in one sitting)
+## Step 4 — Price architecture — **founding prices set 2026-07-12; published on the landing page**
 
-| Product | What it is | Pricing homework |
+| Product | Founding price | Basis |
 |---|---|---|
-| **The Poster** | digital final: print-res PNG + wallpapers + the Year-Film — one composition, every performance | comp Mapiful/Grafomap digital tiers; render cost is negligible, so price the craft, not the compute |
-| **The Print** | lab-fulfilled paper, shipped; 18×24 flagship | lab cost × 2.5–3 |
-| **Edition N+1** | continue last year's poster | ~60% of the first poster — loyalty by design; "your poster is due" |
-| **Plate commission** | the making of an uncovered region: bbox curation, DEM/hydro/labels bakes, look validation on real terrain, priority, first print included | price the labor honestly (hours × rate + first print); the plate publishes free; commissioner credited |
-| **Plates** | the terrain packs | **$0 forever** — the trust layer; say so on the pricing page |
+| **The Poster** (digital: print-res PNG + wallpapers + the Year-Film) | **$79** | sits above the self-serve digital tools because concierge craft, the film, and editions ride along; render cost is negligible — this prices the making |
+| **The Print** (18×24 archival; digital Poster included) | **$149** | lab COGS ballpark $20–35 landed; ×3-plus margin absorbs proof loops and shipping |
+| **Edition N+1** | **$49 digital / $99 printed** | ~60–65% of the first purchase — loyalty by design; "your poster is due" |
+| **Plate commission** | **$299** (first 18×24 print included) | prices the labor honestly — curation, the bakes, real-terrain look validation ≈ a working day — plus the print; the plate publishes free, commissioner credited |
+| **Plates** | **$0, forever** | the trust layer; stated verbatim on the pricing band |
 
-Steps: (1) pull the comps, (2) set the four numbers, (3) publish them on the landing
-page. A concierge with public prices reads as craft; hidden prices read as agency.
+Founding-run lever (Phase 2): the first ten prints per plate at **$99**, buyers
+credited on the plate page.
+
+Comps noted 2026-07-12: Mapiful sells printed posters "from $45" (mapiful.com); the
+self-serve GPX poster tools (makemap, Outdoor Art Print, Track To Print, Cairn) cluster
+in the tens-of-dollars band; PathPosters sells a lifetime *software* license — a
+different model that validates the local-first angle rather than anchoring a price;
+custom GPX map commissions on Etsy span roughly $30–120, none carrying provenance,
+plates, or editions. Remaining homework before the first paid order: pull the exact
+Prodigi 18×24 SKU cost (account-gated — `GLOBAL-FAP-18x24`), confirm Muir Way's
+per-size band as the perceived-value ceiling for semi-custom terrain prints, and
+sanity-check shipping inside the $149.
+
+A concierge with public prices reads as craft; hidden prices read as agency.
 
 ## Step 5 — The concierge funnel (build the templates this week)
 

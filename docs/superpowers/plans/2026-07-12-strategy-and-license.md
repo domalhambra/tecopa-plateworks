@@ -100,12 +100,36 @@ domain. Rationale: the packs are ~all PD federal data with thin-to-nil compilati
 manifest reader/renderer without touching AGPL code** — the deepest layer of the
 never-orphaned promise: even if the engine rots, the file format is free to reimplement.
 
-### Name & branding: **reserved**
+### Name & branding: **reserved — and "TrailPrint" is a no-go (searched 2026-07-12)**
 
-Neither grant covers "TrailPrint." Fork the engine, yes; sell it *as TrailPrint*, no —
-the standard open-code/protected-brand split. **To-verify before launch:** a trademark /
-collision search on the name (it is a plausibly-taken compound), and rename now rather
-than after posters carry it if it's encumbered.
+Neither grant covers the product name — fork the engine, yes; sell under our name, no.
+The clearance search came back encumbered on every axis:
+
+- **trailprint.com** — registered since 2017 to **"Trail Print,"** an active US
+  mountain-biking apparel shop that even sells *microfiber trail maps*: a senior
+  common-law user of the exact name, in the same outdoor market, with Facebook /
+  Instagram presence (@trailprint answers 200).
+- **TrailPrint3D** (trailprint3d.com + a popular free Blender add-on on MakerWorld /
+  Printables) — converts **GPX files into 3D-printable terrain maps**. The same
+  GPX-to-terrain-keepsake niche; confusion is guaranteed, in both directions.
+- **trailprint.net** — registered 2026-04-27 (three months before this search),
+  currently a blocked deployment: someone else is building on the name right now.
+- USPTO surfaced no federal registration for the compound (best-effort — confirm at
+  filing time), but a filing would face both the senior user and a crowded descriptive
+  field ("trail print" floods Etsy as a generic phrase).
+
+**Recommendation: rename to "Hillshade Press."** Clearance snapshot (2026-07-12):
+hillshadepress.com **available**; no brand of that name found (nearest hits are
+phonetically distant local printers — Hillside Press, Hill Print Solutions);
+"hillshade" is the product's own core technique, and the compound keeps the entire
+press lexicon — plates, proofs, editions — intact. Suggestive rather than descriptive
+for a poster press: a materially stronger trademark position than TrailPrint ever had.
+
+At adoption (on Dom's word): register the domain + handles the same day, run the USPTO
+search on the compound at filing, then flip the marketing surfaces. Repo and internal
+identifiers can lag — and the manifest's `ENGINE = "trailprint"` string is a **frozen
+schema constant** (provenance vocabulary under the forever-contract, not branding) and
+must never change regardless of the brand.
 
 ## Decision 3 — the data resale verdict (asked directly: "can I sell this?")
 
