@@ -124,7 +124,7 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     return key                                         # job result = the blob key
 
 def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
-                              lineage=None):
+                              lineage=None, region_pack=None):
     """The time-lapse worker: paint the base once and stream the day-ordered journey
     prefixes into one APNG. The manifest (with the `animation` block) rides the file so
     it re-renders from itself. Runs on a queue thread, touching only its arguments."""
@@ -137,13 +137,15 @@ def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed
     manifest = None
     if embed_spec:
         anim = timelapse.animation_meta(dpi=dpi, **pacing)
-        manifest = provenance.build_manifest(spec, sources, lineage, animation=anim)
+        manifest = provenance.build_manifest(spec, sources, lineage, animation=anim,
+                                             region_pack=region_pack)
     BLOBS.put(key, timelapse.encode_apng(
         frames, manifest=manifest, step_ms=pacing["step_ms"], hold_ms=pacing["hold_ms"],
         leader_ms=pacing["leader_ms"], icc_profile=SRGB_PROFILE))
     return key                                         # job result = the blob key
 
-def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None):
+def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None,
+                           region_pack=None):
     """The wallpaper-bundle worker: rasterize each per-device spec at its own ppi and
     store one zip. PNGs are already compressed, so the zip only containers them.
     Region assets (cfg/hydro/labels) are loaded ONCE and shared across the loop --
@@ -171,7 +173,8 @@ def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lin
                 continue
             z.writestr(arcname,
                        _encode_final(img, "png",
-                                     _final_manifest(spec, sources, embed_spec, lineage),
+                                     _final_manifest(spec, sources, embed_spec, lineage,
+                                                     region_pack),
                                      dpi=dpi))
         if skipped:
             z.writestr("SKIPPED.txt",
@@ -188,15 +191,21 @@ def _region_or_404(rid):
         raise HTTPException(404, f"Unknown region {rid!r}")
     return REGIONS[rid]
 
-def _load_all(payloads, region):
+def _load_all(payloads, region, stats=None):
     """Parse every uploaded file into tracks for one region; skip unparseable ones
-    rather than 500 the batch (matches the per-file tolerance the UI relies on)."""
+    rather than 500 the batch (matches the per-file tolerance the UI relies on).
+    `stats` (optional) accumulates ingest counters (dropped_points) -- per file, so a
+    file that fails to parse mid-way contributes nothing (it isn't on the poster)."""
     out = []
     for data, fn in payloads:
+        s = {} if stats is not None else None
         try:
-            out += load_tracks(data, region.geo, filename=fn)   # GPX / KML / KMZ
+            out += load_tracks(data, region.geo, filename=fn, stats=s)  # GPX/KML/KMZ
         except Exception:
             continue
+        if stats is not None:
+            for k, v in s.items():
+                stats[k] = stats.get(k, 0) + v
     return out
 
 def _count_in_bounds(tracks, region):
@@ -208,52 +217,79 @@ def _count_in_bounds(tracks, region):
                   (c[:, 1] >= b[1]) & (c[:, 1] <= b[3])).sum())
     return n
 
-def _best_region(payloads):
-    """The region holding the most track points (None if the tracks land nowhere)."""
-    best, best_tracks, best_n = None, [], 0
+def _journeys_outside_plate(tracks, region):
+    """How many tracks have ANY vertex outside the plate's bounds rect -- those
+    journeys render truncated at the plate edge, and the wizard says so instead of
+    letting the poster silently disagree with "everywhere you've been". Same
+    vectorized 4-way compare as _count_in_bounds, inverted per track."""
+    b = region.cfg["bounds"]
+    n = 0
+    for t in tracks:
+        c = t.coords
+        n += int(((c[:, 0] < b[0]) | (c[:, 0] > b[2]) |
+                  (c[:, 1] < b[1]) | (c[:, 1] > b[3])).any())
+    return n
+
+def _best_region(payloads, stats=None):
+    """The region holding the most track points (None if the tracks land nowhere).
+    Only the WINNER's parse feeds `stats` -- the losing detection parses are probes
+    against the wrong projection and would inflate the counters with drops the
+    session never sees."""
+    best, best_tracks, best_n, best_stats = None, [], 0, None
     for r in REGIONS.values():
-        tracks = _load_all(payloads, r)
+        s = {} if stats is not None else None
+        tracks = _load_all(payloads, r, stats=s)
         n = _count_in_bounds(tracks, r)
         if n > best_n:
-            best, best_tracks, best_n = r, tracks, n
+            best, best_tracks, best_n, best_stats = r, tracks, n, s
+    if stats is not None and best_stats:
+        for k, v in best_stats.items():
+            stats[k] = stats.get(k, 0) + v
     return best, best_tracks
 
 
-def _resolve_region(payloads, session_id, region_id):
+def _resolve_region(payloads, session_id, region_id, stats=None):
     """Decide which region an upload belongs to and return (region, parsed_tracks).
     Order: an existing session is already bound; else an explicit region_id (with
     cross-region auto-recovery if the tracks don't fall in it); else the sole region;
     else auto-detect the region holding the most track points. EVERY branch enforces
     the in-bounds check -- the session and single-region paths used to skip it, so
-    out-of-region tracks accumulated silently instead of a clean 422."""
+    out-of-region tracks accumulated silently instead of a clean 422. `stats` only
+    ever receives the parse whose tracks are RETURNED (the one the session keeps)."""
     if session_id and session.has(session_id):
         region = _region_or_404(session.get(session_id)["region_id"])
-        tracks = _load_all(payloads, region)
+        tracks = _load_all(payloads, region, stats=stats)
         if tracks and _count_in_bounds(tracks, region) == 0:
             raise HTTPException(
                 422, f"Tracks don't fall within this session's region ({region.name})")
         return region, tracks
     if region_id:
         region = _region_or_404(region_id)
-        tracks = _load_all(payloads, region)
+        # parse into a LOCAL stats dict: if auto-recovery switches regions below,
+        # this parse's drops belong to the wrong projection and must not leak.
+        own = {} if stats is not None else None
+        tracks = _load_all(payloads, region, stats=own)
         # Auto-recovery: the operator pre-picked a region, but if the tracks land
         # nowhere inside it and another built region actually holds them, switch --
         # a forgiving "you dropped the wrong region's tracks" fix (v1.2).
         if _count_in_bounds(tracks, region) == 0:
-            alt, alt_tracks = _best_region(payloads)
+            alt, alt_tracks = _best_region(payloads, stats=stats)
             if alt is not None:
                 return alt, alt_tracks
             # tracks land in NO built region -> clean 422 (same as auto-detect),
             # rather than rendering a garbage poster for out-of-bounds tracks.
             raise HTTPException(422, "Tracks don't fall within any available region")
+        if stats is not None:                        # kept this parse -> merge
+            for k, v in own.items():
+                stats[k] = stats.get(k, 0) + v
         return region, tracks
     if len(REGIONS) == 1:
         region = next(iter(REGIONS.values()))
-        tracks = _load_all(payloads, region)
+        tracks = _load_all(payloads, region, stats=stats)
         if tracks and _count_in_bounds(tracks, region) == 0:
             raise HTTPException(422, "Tracks don't fall within any available region")
         return region, tracks
-    best, best_tracks = _best_region(payloads)
+    best, best_tracks = _best_region(payloads, stats=stats)
     if best is None:
         raise HTTPException(422, "Tracks don't fall within any available region")
     return best, best_tracks
@@ -370,7 +406,10 @@ async def upload(files: List[UploadFile] = File(...),
         seen_sha.add(h)
         kept.append((data, fn))
     payloads = kept
-    region, parsed = _resolve_region(payloads, session_id, region_id)
+    # loud boundaries: count what ingest drops (non-finite reprojection) for THIS
+    # request's kept files, so the wizard can say it instead of the void swallowing it.
+    stats = {}
+    region, parsed = _resolve_region(payloads, session_id, region_id, stats=stats)
     # recovery = the operator's explicit region was overridden because the tracks
     # actually belong to a different built region (not a plain auto-detect).
     recovered = bool(region_id and region.id != region_id
@@ -426,7 +465,12 @@ async def upload(files: List[UploadFile] = File(...),
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
             "hotspots": hpx, "starter_crop": list(start), "recovered": recovered,
             "skipped_duplicates": skipped_dupes,
-            "skipped_duplicate_tracks": skipped_track_dupes}
+            "skipped_duplicate_tracks": skipped_track_dupes,
+            # loud boundaries: this request's non-finite reprojection drops, and how
+            # many of the SESSION's journeys (the poster shows all of them) extend
+            # past the plate's bounds -- named and counted, never silent.
+            "dropped_points": int(stats.get("dropped_points", 0)),
+            "journeys_outside_plate": _journeys_outside_plate(tracks, region)}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 # env-overridable so the test harness never writes into the operator's live dir
@@ -480,11 +524,14 @@ def _require_stamped(session_id):
     return (spec, _region_or_404(st["region_id"]),
             st.get("sources", []), st.get("lineage", []))
 
-def _final_manifest(spec, sources, embed_spec, lineage=None):
+def _final_manifest(spec, sources, embed_spec, lineage=None, region_pack=None):
     """Build the provenance manifest for a final, or None when the client opted out of
     embedding (a share copy: the manifest carries the exact track coordinates). The
-    lineage (living editions) rides along; it is emitted only from the 2nd edition on."""
-    return provenance.build_manifest(spec, sources, lineage) if embed_spec else None
+    lineage (living editions) rides along; it is emitted only from the 2nd edition on.
+    The region_pack block (the plate's hash identity) rides the same way -- omitted
+    when the region has no sources.json to name it from."""
+    return (provenance.build_manifest(spec, sources, lineage, region_pack=region_pack)
+            if embed_spec else None)
 
 @app.post("/api/markers")
 async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
@@ -685,8 +732,12 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # Route the final through the blob seam (V1-8): stop littering region.dir with
     # final_*.png. Same key + encoding as the async path, so both serve identically.
     key = f"{session_id}/final.{fmt}"
+    # the file names its plate: hashed from the assets once per final, never cached.
+    # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
     BLOBS.put(key, _encode_final(img, fmt,
-                                 _final_manifest(spec, sources, embed_spec, lineage), dpi=dpi))
+                                 _final_manifest(spec, sources, embed_spec, lineage,
+                                                 region_pack=rp), dpi=dpi))
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
@@ -704,8 +755,9 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     # embed photos NOW (sync), so the manifest built here and the worker's render below
     # paint the identical bytes -- the async final and its reprint stay pixel-identical.
     spec = _embed_photos(spec, spec.final_dpi())
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir, f"{session_id}/final.{fmt}", fmt,
-                       _final_manifest(spec, sources, embed_spec, lineage))
+                       _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
     return {"job": jid}
 
 
@@ -756,7 +808,8 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
                             + "; ".join(s["reason"] for s in skipped))
     jid = QUEUE.submit(_render_bundle_to_blob, items, region.dir,
                        f"{session_id}/wallpapers.zip", region.cfg, sources, embed_spec,
-                       lineage)
+                       lineage, provenance.region_pack_block(
+                           region.dir, labels=spec.labels, biome=spec.biome))
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
              session_id, region.id, len(items), len(skipped))
     return {"job": jid, "count": len(items), "skipped": skipped}
@@ -864,7 +917,9 @@ async def timelapse_submit(session_id: str = Form(...),
     frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
     jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
                        f"{session_id}/timelapse.png", target_dpi, pacing, sources,
-                       embed_spec, lineage)
+                       embed_spec, lineage,
+                       provenance.region_pack_block(region.dir, labels=tspec.labels,
+                                                    biome=tspec.biome))
     log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f",
              session_id, region.id, frames, target_dpi)
     return {"job": jid, "frames": frames}
@@ -917,15 +972,49 @@ def _manifest_or_422(data: bytes) -> dict:
                                  "Only PNG finals exported with reprint data embedded are self-describing.")
     return m
 
-def _manifest_region_or_422(spec, verb: str):
+def _file_pack_version(manifest) -> str | None:
+    """The manifest's region_pack.pack_version, but only when it can NAME a real plate:
+    a 12-lowercase-hex string, the one shape the documented derivation ever produces.
+    Anything else -- a non-string, an empty string, a crafted megabyte blob -- is
+    treated as no pack at all: it can never match a plate, echoing it would reflect
+    unbounded untrusted bytes into error bodies and the inspect report, and a falsy
+    value would otherwise split the truthy verify gate from inspect's verdict."""
+    rp = (manifest or {}).get("region_pack")
+    pv = rp.get("pack_version") if isinstance(rp, dict) else None
+    if isinstance(pv, str) and len(pv) == 12 and all(c in "0123456789abcdef" for c in pv):
+        return pv
+    return None
+
+def _manifest_region_or_422(spec, verb: str, manifest=None):
     """The built region a manifest names, or a 422: a poster whose region isn't built on
     THIS server can't be reprinted/continued here. `verb` ("reprinted"/"continued") fills
-    the message. Availability is a per-server capability check, so it lives here rather
-    than in provenance.spec_from_manifest (which only hardens the untrusted spec itself)."""
+    the message. When the manifest carries a region_pack block AND this server's plate
+    is hash-manifested, the plate is VERIFIED against this server's own
+    (region_pack_block, with the FILE's labels toggle so both sides hash the same asset
+    set): a rebuilt plate would reprint the poster *differently*, silently -- honest
+    refusal over silent wrongness. A manifest without the block (pre-pack poster, or
+    manifest=None) skips verification, and so does a server plate without sources.json
+    (MANIFEST.md's `absent` semantics: a hand-built plate stays printable) -- soft
+    forever-compat, same stance as every other additive manifest key. Availability and
+    plate identity are per-server capability checks, so they live here rather than in
+    provenance.spec_from_manifest (which only hardens the untrusted spec itself)."""
+    file_pv = _file_pack_version(manifest)
     region = REGIONS.get(spec.region_id)
     if region is None:
+        painted = f" It was painted on plate {file_pv}." if file_pv else ""
         raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
-                                 f"so this poster can't be {verb} here.")
+                                 f"so this poster can't be {verb} here.{painted}")
+    if file_pv:
+        server = provenance.region_pack_block(region.dir, labels=spec.labels,
+                                              biome=spec.biome)
+        if server is not None and server["pack_version"] != file_pv:
+            # "reprinted" -> "reprint", "continued" -> "continue" (rstrip would eat
+            # continue's own trailing e); an unknown future verb reads as-is.
+            base = {"reprinted": "reprint", "continued": "continue"}.get(verb, verb)
+            raise HTTPException(
+                422, f"this poster was painted on the {spec.region_id} plate {file_pv}; "
+                     f"this server has {server['pack_version']} — "
+                     f"install the original plate to {base} it exactly.")
     return region
 
 @app.post("/api/reprint/inspect")
@@ -935,7 +1024,28 @@ async def reprint_inspect(file: UploadFile = File(...)):
     image, so it's cheap and safe on any uploaded PNG."""
     manifest = _manifest_or_422(await _read_capped(file))
     spec_d = manifest.get("spec", {})
-    region_id = manifest.get("region_id") or spec_d.get("region_id")
+    # resolve the region the way /api/reprint does: spec.region_id is what
+    # spec_from_manifest renders against; the top-level duplicate is a cheap-inspection
+    # convenience a crafted file can diverge -- the verdict must follow the verb.
+    region_id = spec_d.get("region_id") or manifest.get("region_id")
+    # plate verdict, straight off the manifest + the server's own block -- no spec is
+    # built (inspect stays a pure, cheap read). Mirrors _manifest_region_or_422's
+    # decision, as a report instead of a refusal: same pack_version predicate
+    # (_file_pack_version), same region resolution, same labels toggle on both sides.
+    file_pv = _file_pack_version(manifest)
+    region = REGIONS.get(region_id)
+    server_pv = None
+    if region is None:
+        plate = "region_missing"
+    else:
+        server = provenance.region_pack_block(
+            region.dir, labels=bool(spec_d.get("labels", False)),
+            biome=bool(spec_d.get("biome", False)))
+        server_pv = server["pack_version"] if server else None
+        if file_pv is None or server_pv is None:
+            plate = "unverifiable"                # pre-pack file, or a hand-built plate
+        else:
+            plate = "verified" if file_pv == server_pv else "mismatch"
     return {
         "manifest_version": manifest.get("manifest_version"),
         "engine": manifest.get("engine"),
@@ -951,6 +1061,10 @@ async def reprint_inspect(file: UploadFile = File(...)):
         "lineage": manifest.get("lineage", []),
         # time-lapse: the pacing block if this file is a film (None for a still).
         "animation": manifest.get("animation"),
+        # plate identity: can THIS server reproduce these exact pixels?
+        "plate": plate,
+        "plate_file": file_pv,
+        "plate_server": server_pv,
     }
 
 @app.post("/api/reprint")
@@ -971,7 +1085,9 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     except SpecError as e:
         raise HTTPException(422, str(e))
     _require_format(fmt, spec)                       # a wallpaper reprints as PNG only
-    region = _manifest_region_or_422(spec, "reprinted")
+    # plate verification runs HERE, before the animated/still branch: a mismatched
+    # film must refuse up front, never enqueue a render against the wrong terrain.
+    region = _manifest_region_or_422(spec, "reprinted", manifest)
     # an animated file re-renders the FILM (the file promises "the file is the artwork",
     # so honor it for films too). A film render is slow -> through the queue, returning a
     # job like the other async paths, not a synchronous stream. Stills keep today's
@@ -985,7 +1101,9 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         key = f"reprint/{hashlib.sha256(data).hexdigest()[:16]}/timelapse.png"
         jid = QUEUE.submit(_render_timelapse_to_blob, spec, region.dir, key, tl_dpi,
                            pacing, manifest.get("sources", []), embed_spec,
-                           manifest.get("lineage", []))
+                           manifest.get("lineage", []),
+                           provenance.region_pack_block(region.dir, labels=spec.labels,
+                                                        biome=spec.biome))
         log.info("event=reprint.timelapse region=%s frames=%d dpi=%.0f",
                  spec.region_id, frames, tl_dpi)
         return JSONResponse({"job": jid, "frames": frames})
@@ -1003,10 +1121,15 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         raise HTTPException(422, "This poster's embedded recipe couldn't be rendered.")
     # the reprint is itself self-describing (re-embed), unless the client opts out. A
     # reprint is a re-render, NOT a new edition: the spec's own edition and the
-    # manifest's own lineage are re-embedded verbatim (never incremented here).
+    # manifest's own lineage are re-embedded verbatim (never incremented here). The
+    # region_pack is re-stamped from the CURRENT server's plate -- these pixels came
+    # from THIS plate, and a pre-pack poster is truthfully upgraded on reprint.
     out = _encode_final(img, fmt,
                         _final_manifest(spec, manifest.get("sources", []), embed_spec,
-                                        manifest.get("lineage", [])),
+                                        manifest.get("lineage", []),
+                                        region_pack=provenance.region_pack_block(
+                                            region.dir, labels=spec.labels,
+                                            biome=spec.biome)),
                         dpi=spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
@@ -1064,7 +1187,7 @@ async def continue_poster(file: UploadFile = File(...)):
         spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
     except SpecError as e:
         raise HTTPException(422, str(e))
-    region = _manifest_region_or_422(spec, "continued")
+    region = _manifest_region_or_422(spec, "continued", manifest)
 
     # rebuild live Track objects from the spec (tracks ride the spec, exactly the
     # property reprint relies on). track_days is parallel to tracks; normalize its

@@ -192,6 +192,61 @@ def test_accumulate_out_of_region_tracks_422():
     from app import session as sess_mod
     assert len(sess_mod.get(j["session"])["tracks"]) == 5     # session unchanged
 
+def _gpx_lonlat(points, name="t"):
+    """A minimal GPX from (lon, lat) pairs -- for boundary fixtures the committed
+    sample can't express (out-of-projection points, vertices past the plate edge)."""
+    rows = "".join(f'<trkpt lat="{lat}" lon="{lon}"></trkpt>' for lon, lat in points)
+    return (f'<?xml version="1.0"?>'
+            f'<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">'
+            f'<trk><name>{name}</name><trkseg>{rows}</trkseg></trk></gpx>').encode()
+
+def test_upload_counts_dropped_out_of_projection_points():
+    # loud boundaries: a point outside UTM 10N validity reprojects to (inf, inf) and is
+    # dropped -- the response must COUNT it, never swallow it silently.
+    c = _client()
+    data = _gpx_lonlat([(-120.65, 40.42), (-120.64, 40.43), (200.0, 95.0)])
+    r = c.post("/api/upload", files=[("files", ("d.gpx", data, "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["dropped_points"] >= 1
+    assert j["journeys_outside_plate"] == 0        # both surviving vertices are in-bounds
+
+def test_upload_counts_journeys_outside_the_plate():
+    # a mostly-inside track with one vertex past the plate's west edge (still finite in
+    # UTM 10N) passes the in-bounds gate but renders truncated -- the response names it.
+    c = _client()
+    data = _gpx_lonlat([(-120.65, 40.42), (-120.64, 40.43), (-121.6, 40.5)])
+    r = c.post("/api/upload", files=[("files", ("e.gpx", data, "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["dropped_points"] == 0                # every vertex reprojected finitely
+    assert j["journeys_outside_plate"] == 1
+
+def test_upload_counts_a_collapsed_journeys_full_loss():
+    # one file whose only track collapses (2 of 3 points out-of-projection leave a
+    # single finite vertex), alongside an in-plate file that keeps the request past
+    # the in-bounds gate: the response must count all 3 lost points, not just the 2
+    # non-finite ones -- a whole journey must never vanish half-counted.
+    c = _client()
+    good = _gpx_lonlat([(-120.65, 40.42), (-120.64, 40.43)])
+    collapsed = _gpx_lonlat([(-120.65, 40.42), (200.0, 95.0), (201.0, 96.0)], name="b")
+    r = c.post("/api/upload",
+               files=[("files", ("g.gpx", good, "application/gpx+xml")),
+                      ("files", ("b.gpx", collapsed, "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    assert r.json()["dropped_points"] == 3
+
+def test_upload_boundary_fields_default_to_zero():
+    # the fields are ALWAYS present (the wizard reads them unconditionally): a clean
+    # in-plate upload reports zero for both.
+    c = _client()
+    j = _upload(c)
+    assert j["dropped_points"] == 0
+    assert j["journeys_outside_plate"] == 0
+
 def test_upload_oversize_rejected(monkeypatch):
     monkeypatch.setattr("app.main.TRACK_FILE_MAX_BYTES", 64)
     c = _client()

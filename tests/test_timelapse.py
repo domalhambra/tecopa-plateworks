@@ -197,6 +197,8 @@ def test_submit_renders_an_apng_with_the_animation_block():
     m = provenance.extract(data)
     assert m["animation"]["max_frames"] == 15              # pacing recorded on the file
     assert m["animation"]["dpi"] == 96                     # screen-fidelity default (PROOF_DPI)
+    # the film names its plate too (same block as a still final)
+    assert m["region_pack"] == provenance.region_pack_block(REGION_DIR)
 
 def test_submit_requires_a_stamped_proof():
     c = _client()

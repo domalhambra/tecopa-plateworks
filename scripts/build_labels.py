@@ -13,6 +13,7 @@ region without a rebuild.
     python scripts/build_labels.py rifle_aspen     # one region
 """
 import gzip
+import hashlib
 import json
 import os
 import sys
@@ -98,6 +99,30 @@ def bake_labels(features, dst_crs):
     return sorted(best.values(), key=lambda f: (-f["rank"], f["name"]))
 
 
+def update_sources_manifest(region_dir):
+    """Fold the baked labels.json back into the region's sources.json: the assets dict
+    gains its sha256+bytes (so the plate manifest accounts for EVERY asset a reprint
+    depends on -- the manifest's region_pack block is built from exactly these hashes)
+    and the source list gains the GNIS dataset. Idempotent (re-baking just refreshes
+    the hash; the GNIS entry is matched, never duplicated) and every other field is
+    preserved verbatim -- this function edits two keys and touches nothing else."""
+    src_path = os.path.join(region_dir, "sources.json")
+    labels_path = os.path.join(region_dir, "labels.json")
+    if not (os.path.exists(src_path) and os.path.exists(labels_path)):
+        return                       # nothing to sync into / nothing to record
+    raw = open(labels_path, "rb").read()
+    src = json.load(open(src_path))
+    src.setdefault("assets", {})["labels.json"] = {
+        "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    if not any("GNIS" in s.get("dataset", "") for s in src.setdefault("sources", [])):
+        src["sources"].append({
+            "dataset": "USGS GNIS Landforms",
+            "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+            "license": "Public domain (USGS)"})
+    with open(src_path, "w") as f:
+        json.dump(src, f, indent=2)  # region_prep's style: indent=2, no trailing newline
+
+
 def build_region(region_dir):
     rid = os.path.basename(region_dir.rstrip("/"))
     cfg = json.load(open(os.path.join(region_dir, "region.json")))
@@ -111,6 +136,7 @@ def build_region(region_dir):
     out = {"crs": cfg["crs"], "features": baked}
     with open(os.path.join(region_dir, "labels.json"), "w") as f:
         json.dump(out, f)
+    update_sources_manifest(region_dir)      # sources.json accounts for the new bake
     print(f"[{rid}] wrote {len(baked)} labels {dict(counts)}")
 
 

@@ -4,6 +4,7 @@ the final (photos included -- they ride the file as embedded bytes), untrusted p
 are kept only as size-bounded embedded JPEGs, the privacy toggle omits the manifest,
 and a frozen v1 manifest stays loadable forever (the user's printed-file contract)."""
 import base64
+import hashlib
 import io
 import json
 import os
@@ -166,6 +167,91 @@ def test_manifest_error_is_a_spec_error():
     assert issubclass(provenance.ManifestError, SpecError)
 
 
+# ---- unit: region_pack (the manifest names its plate) ----
+
+def test_region_pack_block_hashes_the_plate_bytes_on_disk():
+    # the block names the plate the PIXELS come from: each asset the render reads,
+    # hashed from its bytes on disk -- never trusted from sources.json (whose recorded
+    # hashes can drift from the assets; see the sidecar-drift test below)
+    rp = provenance.region_pack_block(REGION_DIR)
+    assert set(rp) == {"pack_version", "assets"}
+    assert len(rp["pack_version"]) == 12
+    int(rp["pack_version"], 16)                            # 12 hex chars
+    for name, digest in rp["assets"].items():
+        with open(os.path.join(REGION_DIR, name), "rb") as f:
+            assert digest == hashlib.sha256(f.read()).hexdigest(), name
+    assert rp == provenance.region_pack_block(REGION_DIR)  # deterministic
+
+def test_pack_identity_covers_only_the_assets_the_render_reads():
+    # overview.png feeds the browser aim canvas (never rasterize); labels.json is only
+    # read when the spec draws labels; landcover.tif only when the biome tint is on --
+    # none may enter the identity of a poster whose pixels never touched it, or a
+    # routine GNIS labels rebake / NLCD refresh would refuse exact-identical reprints
+    # of every poster that never drew them.
+    off = provenance.region_pack_block(REGION_DIR)
+    assert "overview.png" not in off["assets"]
+    assert "labels.json" not in off["assets"]
+    assert "landcover.tif" not in off["assets"]
+    on = provenance.region_pack_block(REGION_DIR, labels=True)
+    assert "labels.json" in on["assets"]
+    assert on["pack_version"] != off["pack_version"]
+    tinted = provenance.region_pack_block(REGION_DIR, biome=True)
+    assert "landcover.tif" in tinted["assets"]
+    assert tinted["pack_version"] != off["pack_version"]
+    assert tinted["pack_version"] != on["pack_version"]
+
+def test_labels_rebake_keeps_the_labels_off_identity(tmp_path):
+    # the README-documented maintenance step (scripts/build_labels.py re-bake) must not
+    # break reprints of posters whose pixels never touched labels.json
+    rdir = str(tmp_path / "lassen_ca")
+    shutil.copytree(REGION_DIR, rdir)
+    off = provenance.region_pack_block(rdir)
+    on = provenance.region_pack_block(rdir, labels=True)
+    with open(os.path.join(rdir, "labels.json"), "w") as f:    # the rebake: new GNIS bytes
+        f.write('{"crs": "EPSG:32610", "features": []}')
+    assert provenance.region_pack_block(rdir) == off           # labels-off reprints keep working
+    assert provenance.region_pack_block(rdir, labels=True)["pack_version"] \
+        != on["pack_version"]                                  # labels-on honestly changes
+
+def test_pack_identity_comes_from_asset_bytes_not_the_sidecar(tmp_path):
+    # sources.json can drift from the assets (a re-prep that crashed before the sidecar
+    # write, a fresh clone with a synthetic test DEM): identity must follow the BYTES
+    # the render reads, or a final stamps -- and a reprint verifies as 'verified' -- a
+    # plate the pixels were never painted with.
+    rdir = str(tmp_path / "lassen_ca")
+    shutil.copytree(REGION_DIR, rdir)
+    before = provenance.region_pack_block(rdir)
+    src_path = os.path.join(rdir, "sources.json")
+    src = json.load(open(src_path))
+    src["assets"]["dem.tif"]["sha256"] = "0" * 64              # sidecar drift only
+    json.dump(src, open(src_path, "w"))
+    assert provenance.region_pack_block(rdir) == before        # bytes unchanged -> same plate
+    with open(os.path.join(rdir, "dem.tif"), "ab") as f:       # asset drift only
+        f.write(b"drift")
+    assert provenance.region_pack_block(rdir)["pack_version"] \
+        != before["pack_version"]                              # bytes changed -> new plate
+
+def test_manifest_doc_derivation_worked_example():
+    # docs/MANIFEST.md's worked example must satisfy its own documented formula, and
+    # the frozen fixture stays the deliberate-MISMATCH example (it violates the
+    # derivation on purpose so it can never match a real plate) -- a third-party
+    # reimplementer unit-testing against the doc must never get a false failure.
+    assert hashlib.sha256(("dem.tif:" + "0" * 64).encode()).hexdigest()[:12] \
+        == "a15c11e69898"
+    m = json.load(open("tests/fixtures/manifest_region_pack_v1.json"))
+    assert m["region_pack"]["pack_version"] == "000000000000"  # never a real derivation
+
+def test_region_pack_block_is_none_without_sources(tmp_path):
+    # a region dir with no sources.json (a hand-built plate) -> None, callers omit
+    assert provenance.region_pack_block(str(tmp_path)) is None
+
+def test_default_manifest_omits_region_pack():
+    # additive key: a build_manifest call that doesn't pass the block never emits it,
+    # so every pre-pack manifest (incl. the frozen fixtures) is byte-for-byte unchanged
+    spec, m = _spec_from_fixture()
+    assert "region_pack" not in provenance.build_manifest(spec, m.get("sources", []))
+
+
 # ---- endpoint: embedding + privacy ----
 
 def test_final_embeds_a_reprintable_manifest_by_default():
@@ -242,6 +328,204 @@ def test_reprint_drops_a_crafted_photo_path():
     a = np.asarray(Image.open(io.BytesIO(clean_png)).convert("RGB"))
     b = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB"))
     assert np.array_equal(a, b)
+
+
+# ---- endpoint: region_pack rides the final and survives a reprint ----
+
+def test_final_manifest_carries_the_region_pack():
+    # the final names the plate it was painted on -- the server's live block, verbatim
+    c = _client()
+    sid = _stamped_session(c)
+    png = c.post("/api/final", data={"session_id": sid}).content
+    m = provenance.extract(png)
+    rp = provenance.region_pack_block(REGION_DIR)
+    assert m["region_pack"]["pack_version"] == rp["pack_version"]
+    assert m["region_pack"]["assets"] == rp["assets"]
+
+def test_reprint_restamps_the_region_pack_byte_identically():
+    # the animation-block regression, generalized: a reprint REBUILDS the manifest, so
+    # any block that isn't re-stamped silently vanishes from the reprint. The whole
+    # manifest must round-trip byte-equal, region_pack included.
+    c = _client()
+    sid = _stamped_session(c)
+    final_png = c.post("/api/final", data={"session_id": sid}).content
+    r = c.post("/api/reprint", files={"file": ("poster.png", final_png, "image/png")})
+    assert r.status_code == 200, r.text
+    a = provenance.extract(final_png)
+    b = provenance.extract(r.content)
+    assert "region_pack" in b
+    assert provenance._manifest_str(a) == provenance._manifest_str(b)
+
+
+# ---- plate verification: the server checks the plate the file names ----
+# The frozen mismatch fixture carries pack_version "000000000000" -- a real plate can
+# never hash to that, so the MISMATCH path stays testable forever. The VERIFIED path
+# rides runtime-built manifests, which stay true across future region rebuilds.
+
+MISMATCH_FIXTURE = "manifest_region_pack_v1.json"
+
+def _png_with_manifest(manifest):
+    img = Image.new("RGB", (16, 16), (20, 20, 20))
+    buf = io.BytesIO(); img.save(buf, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
+    return buf.getvalue()
+
+def test_inspect_reports_verified_for_a_runtime_final():
+    c = _client()
+    sid = _stamped_session(c)
+    png = c.post("/api/final", data={"session_id": sid}).content
+    body = c.post("/api/reprint/inspect", files={"file": ("p.png", png, "image/png")}).json()
+    server_pv = provenance.region_pack_block(REGION_DIR)["pack_version"]
+    assert body["plate"] == "verified"
+    assert body["plate_file"] == server_pv and body["plate_server"] == server_pv
+
+def test_inspect_reports_unverifiable_for_a_pre_pack_poster():
+    # the frozen v1 fixture has no region_pack block -- soft forever-compat, never a fail
+    _, manifest = _spec_from_fixture()
+    c = _client()
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("v1.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate"] == "unverifiable"
+    assert body["plate_file"] is None
+    assert body["plate_server"] == provenance.region_pack_block(REGION_DIR)["pack_version"]
+
+def test_inspect_reports_region_missing():
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["region_id"] = "atlantis"
+    manifest["spec"]["region_id"] = "atlantis"
+    c = _client()
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("a.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate"] == "region_missing"
+    assert body["plate_file"] == "000000000000"
+    assert body["plate_server"] is None
+
+def test_reprint_refuses_a_plate_mismatch_naming_both_versions():
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    c = _client()
+    r = c.post("/api/reprint", files={"file": ("m.png", _png_with_manifest(manifest), "image/png")})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    server_pv = provenance.region_pack_block(REGION_DIR)["pack_version"]
+    assert "000000000000" in detail and server_pv in detail    # both plates named
+    assert "reprint it exactly" in detail                      # readable verb, pinned
+
+def test_reprint_of_a_mismatched_film_is_refused_before_queueing():
+    # verification runs BEFORE the animated/still branch: a mismatched film must 422,
+    # never enqueue a render against the wrong terrain.
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["animation"] = {"max_frames": 12, "step_ms": 120,
+                             "hold_ms": 1200, "leader_ms": 600, "dpi": 60}
+    c = _client()
+    r = c.post("/api/reprint", files={"file": ("f.png", _png_with_manifest(manifest), "image/png")})
+    assert r.status_code == 422
+    assert "000000000000" in r.json()["detail"]
+
+def test_reprint_region_missing_names_the_plate_the_file_wants():
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["region_id"] = "atlantis"
+    manifest["spec"]["region_id"] = "atlantis"
+    c = _client()
+    r = c.post("/api/reprint", files={"file": ("a.png", _png_with_manifest(manifest), "image/png")})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert "isn't built on this server" in detail
+    assert "It was painted on plate 000000000000." in detail
+
+def test_continue_refuses_a_plate_mismatch():
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    c = _client()
+    r = c.post("/api/continue", files={"file": ("m.png", _png_with_manifest(manifest), "image/png")})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    server_pv = provenance.region_pack_block(REGION_DIR)["pack_version"]
+    assert "000000000000" in detail and server_pv in detail
+    assert "continue it exactly" in detail                     # readable verb, pinned
+
+def test_frozen_region_pack_fixture_verifies_and_refuses():
+    # the forever-contract for the mismatch path: the fixture must load + validate
+    # (the file itself is well-formed), inspect must answer mismatch, and reprint must
+    # refuse it naming both plate versions.
+    spec, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    spec.validate(300)
+    assert manifest["region_pack"]["pack_version"] == "000000000000"
+    png = _png_with_manifest(manifest)
+    c = _client()
+    body = c.post("/api/reprint/inspect", files={"file": ("f.png", png, "image/png")}).json()
+    assert body["plate"] == "mismatch"
+    assert body["plate_file"] == "000000000000"
+    r = c.post("/api/reprint", files={"file": ("f.png", png, "image/png")})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    server_pv = provenance.region_pack_block(REGION_DIR)["pack_version"]
+    assert "000000000000" in detail and server_pv in detail
+
+
+# ---- plate verification: the report and the verbs must never disagree ----
+
+def test_inspect_plate_verdict_follows_the_spec_region_like_reprint():
+    # a crafted file can diverge the top-level region_id from spec.region_id; reprint
+    # renders against spec.region_id, so the report's verdict must resolve the same
+    # way -- never a 'verified' for a file the verb would refuse (or vice versa).
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["region_id"] = "atlantis"                    # spec still says lassen_ca
+    c = _client()
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("d.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate"] == "mismatch"                    # judged like reprint: lassen_ca
+    assert body["region_available"] is True
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["spec"]["region_id"] = "atlantis"            # top-level still says lassen_ca
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("e.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate"] == "region_missing"              # reprint would 422 region-missing
+    assert body["region_available"] is False
+
+def test_unmanifested_server_plate_skips_verification(monkeypatch):
+    # MANIFEST.md: a hand-built plate (no sources.json) SKIPS verification and the file
+    # prints. The verbs and the report must agree on that: continue proceeds, inspect
+    # answers the same soft 'unverifiable' a pre-pack poster gets.
+    monkeypatch.setattr(provenance, "region_pack_block", lambda *a, **k: None)
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    png = _png_with_manifest(manifest)
+    c = _client()
+    body = c.post("/api/reprint/inspect", files={"file": ("h.png", png, "image/png")}).json()
+    assert body["plate"] == "unverifiable"
+    assert body["plate_server"] is None
+    r = c.post("/api/continue", files={"file": ("h.png", png, "image/png")})
+    assert r.status_code == 200, r.text
+
+def test_falsy_pack_version_is_treated_as_absent_by_verdict_and_gate():
+    # "" (or any falsy value) can never name a real plate; the verify gate skips it,
+    # so inspect must not cry 'mismatch' for a file the verbs happily print.
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["region_pack"]["pack_version"] = ""
+    png = _png_with_manifest(manifest)
+    c = _client()
+    body = c.post("/api/reprint/inspect", files={"file": ("f.png", png, "image/png")}).json()
+    assert body["plate"] == "unverifiable"
+    assert body["plate_file"] is None
+    r = c.post("/api/continue", files={"file": ("f.png", png, "image/png")})
+    assert r.status_code == 200, r.text
+
+def test_crafted_pack_version_is_never_echoed():
+    # a pack_version is 12 hex chars or it is nothing: a crafted megabyte string (or a
+    # non-string) must never ride back out in an error detail or the inspect report.
+    _, manifest = _spec_from_fixture(MISMATCH_FIXTURE)
+    manifest["region_pack"]["pack_version"] = "A" * 200_000
+    c = _client()
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("g.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate"] == "unverifiable" and body["plate_file"] is None
+    manifest["region_id"] = "atlantis"                    # the region-missing echo path
+    manifest["spec"]["region_id"] = "atlantis"
+    r = c.post("/api/reprint",
+               files={"file": ("g.png", _png_with_manifest(manifest), "image/png")})
+    assert r.status_code == 422
+    assert len(r.json()["detail"]) < 500                  # honest 422, bounded body
+    manifest["region_pack"]["pack_version"] = {"nested": ["json"]}   # non-string type
+    body = c.post("/api/reprint/inspect",
+                  files={"file": ("i.png", _png_with_manifest(manifest), "image/png")}).json()
+    assert body["plate_file"] is None
 
 
 # ---- embedded photos: the file carries its own pictures ----

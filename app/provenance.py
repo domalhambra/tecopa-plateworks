@@ -26,6 +26,7 @@ import dataclasses
 import hashlib
 import io
 import json
+import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
@@ -75,7 +76,8 @@ def source_entry(data: bytes, filename: str | None) -> dict:
 
 
 def build_manifest(spec: CompositionSpec, sources: list | None = None,
-                   lineage: list | None = None, animation: dict | None = None) -> dict:
+                   lineage: list | None = None, animation: dict | None = None,
+                   region_pack: dict | None = None) -> dict:
     """The provenance record for one poster: schema version, engine, region, the full
     spec, and the source-file hashes. A pure function of its inputs (no timestamp), so
     the same spec yields the same manifest bytes.
@@ -83,9 +85,12 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
     Living editions: from the SECOND edition on, the manifest also carries `edition`
     and `lineage` (the ancestor chain, newest-capped at LINEAGE_MAX). Time-lapse: an
     animated file also carries an `animation` block (the pacing + render dpi) so the
-    film re-renders from the file alone. All three keys are OMITTED when absent, so
-    every pre-feature manifest -- including the frozen v1 / wallpaper / edition fixtures
-    -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1 (purely additive)."""
+    film re-renders from the file alone. Plate identity: a file rendered against a
+    hash-manifested region also carries a `region_pack` block (region_pack_block) so a
+    reprint can verify it runs against the SAME terrain. All four keys are OMITTED when
+    absent, so every pre-feature manifest -- including the frozen v1 / wallpaper /
+    edition fixtures -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1
+    (purely additive)."""
     m = {
         "manifest_version": MANIFEST_VERSION,
         "engine": ENGINE,
@@ -99,7 +104,55 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
         m["lineage"] = list(lineage or [])[-LINEAGE_MAX:]   # keep newest, drop oldest
     if animation is not None:
         m["animation"] = dict(animation)
+    if region_pack is not None:
+        m["region_pack"] = dict(region_pack)
     return m
+
+
+def region_pack_block(region_dir, labels: bool = False, biome: bool = False) -> dict | None:
+    """The plate's identity, for the manifest's `region_pack` block: the sha256 of each
+    plate asset the RENDER reads, hashed from the bytes on disk -- never trusted from
+    sources.json, whose recorded hashes can drift from the assets (a re-prep that
+    crashed before the sidecar write, a fresh clone whose DEM is a synthetic stand-in)
+    and would then stamp -- and verify -- a plate the pixels were never painted with.
+    sources.json still gates the feature: its asset LIST names the plate's files, and a
+    hand-built plate without one gets None (callers then OMIT the block; the file stays
+    printable, just unverifiable). USGS re-flies 3DEP; a silently rebuilt plate would
+    reprint an old poster *differently* -- this block is what lets a reprint detect
+    that. Pixel-honesty bounds the hash: overview.png only feeds the browser aim canvas
+    (rasterize never reads it), labels.json is read only when the spec draws labels
+    (`labels`), and landcover.tif only when the biome tint is on (`biome`) -- none of
+    them enters the identity of a poster whose pixels never touched it, otherwise a
+    routine GNIS labels rebake (or an NLCD refresh) would refuse exact-identical
+    reprints of every poster that never drew them. `pack_version` is a short digest
+    of the sorted asset hashes (one id to name the whole plate); `assets` is the
+    per-file detail. No caching: read at final/submit/verify time, never per frame."""
+    try:
+        with open(os.path.join(region_dir, "sources.json")) as f:
+            names = sorted(json.load(f)["assets"])
+    except Exception:
+        return None
+    assets = {}
+    for name in names:
+        if name == "overview.png":                   # aim canvas only, never a pixel
+            continue
+        if name == "labels.json" and not labels:     # read only when labels are drawn
+            continue
+        if name == "landcover.tif" and not biome:    # read only when the tint is on
+            continue
+        try:
+            h = hashlib.sha256()
+            with open(os.path.join(region_dir, name), "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            continue    # listed but absent paints nothing; it can't be plate identity
+        assets[name] = h.hexdigest()
+    if not assets:
+        return None
+    joined = "\n".join(f"{name}:{assets[name]}" for name in sorted(assets))
+    return {"pack_version": hashlib.sha256(joined.encode()).hexdigest()[:12],
+            "assets": assets}
 
 
 def bound_geometry(spec: CompositionSpec) -> CompositionSpec:

@@ -208,9 +208,16 @@ async function doUpload(fileList) {
     // sync even when files were dropped while on the Frame step (adding tracks is a
     // Tracks-step action; it invalidated the crop, so returning to Tracks is correct).
     go('tracks');
+    // loud boundaries: name what the plate can't hold instead of dropping it silently —
+    // on BOTH branches below (a recovered upload can still drop out-of-projection
+    // points or hold journeys that spill past the recovered plate's edge).
+    const boundary = [];
+    if (j.dropped_points) boundary.push(`${j.dropped_points} point${j.dropped_points === 1 ? '' : 's'} outside the plate's map projection — dropped`);
+    if (j.journeys_outside_plate) boundary.push(`${j.journeys_outside_plate} of ${j.tracks.length} journeys extend beyond the plate and won't fully appear`);
     if (j.recovered) {                                 // dropped tracks belonged elsewhere
+      const boundaryNote = boundary.length ? ` (${boundary.join('; ')})` : '';
       showHint(`These tracks are in ${j.name} — switched to that region`);
-      setStatus(`Switched to ${j.name} — the dropped tracks belong to that region.`);
+      setStatus(`Switched to ${j.name} — the dropped tracks belong to that region.${boundaryNote}`);
       announce(`Switched region to ${j.name}`);
     } else {
       showHint('Your tracks are on the map — gold dots mark places you returned to most');
@@ -220,7 +227,10 @@ async function doUpload(fileList) {
       const parts = [];
       if (skipped.length) parts.push(`${skipped.length} file(s) already added`);
       if (dupTracks) parts.push(`${dupTracks} track(s) already on the poster`);
-      const dupNote = parts.length ? ` (${parts.join(', ')} — skipped)` : '';
+      const notes = [];
+      if (parts.length) notes.push(`${parts.join(', ')} — skipped`);
+      notes.push(...boundary);
+      const dupNote = notes.length ? ` (${notes.join('; ')})` : '';
       setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — name places or continue`);
     }
   } catch (e) { setStatus('Upload failed: ' + e.message); }

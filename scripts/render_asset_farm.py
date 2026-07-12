@@ -142,7 +142,9 @@ def _write_final(spec: CompositionSpec, region: Region, dpi: float, out_path: st
     box = max(24, round(spec.photo_box_in * dpi))
     espec = provenance.build_final_spec(spec, box)
     img = render.rasterize(espec, dpi=dpi, region_dir=region.dir, watermark=False, cfg=region.cfg)
-    manifest = provenance.build_manifest(espec, sources or [], lineage)
+    manifest = provenance.build_manifest(espec, sources or [], lineage,
+                                         region_pack=provenance.region_pack_block(
+                                             region.dir, labels=espec.labels, biome=espec.biome))
     img.save(out_path, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
     return out_path, img.size
 
@@ -178,7 +180,9 @@ def _film(region, tracks, spots, out_dir, dpi, max_frames):
     anim = timelapse.animation_meta(max_frames=max_frames, step_ms=timelapse.DEFAULT_STEP_MS,
                                     hold_ms=timelapse.DEFAULT_HOLD_MS,
                                     leader_ms=timelapse.DEFAULT_LEADER_MS, dpi=dpi)
-    manifest = provenance.build_manifest(spec, [], animation=anim)
+    manifest = provenance.build_manifest(spec, [], animation=anim,
+                                         region_pack=provenance.region_pack_block(
+                                             region.dir, labels=spec.labels, biome=spec.biome))
     data = timelapse.encode_apng(frames, manifest=manifest, step_ms=anim["step_ms"],
                                  hold_ms=anim["hold_ms"], leader_ms=anim["leader_ms"])
     out = os.path.join(out_dir, "film.png")

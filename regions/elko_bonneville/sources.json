@@ -29,6 +29,10 @@
     "landcover.tif": {
       "sha256": "db491d1d502215b1e36f915fa6d11352fd60ffb73cc2126677eb866ca944e0f5",
       "bytes": 4166636
+    },
+    "labels.json": {
+      "sha256": "bc5510eb106f7a3941822393bb14bb10a8d47cd9555d030c5f14dac95be9c3ff",
+      "bytes": 448810
     }
   },
   "sources": [
@@ -46,6 +50,11 @@
       "dataset": "NLCD 2021 land cover (30 m)",
       "via": "pygeohydro.nlcd_bygeom",
       "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
     }
   ]
 }

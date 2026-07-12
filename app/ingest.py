@@ -16,18 +16,32 @@ class Track:
     coords: np.ndarray   # (N, 2) float64, region CRS meters
     day: str | None      # ISO date if timestamps exist, else None
 
-def _make_track(pts, region: RegionGeo, name, idx, simplify_tolerance_m):
+def _make_track(pts, region: RegionGeo, name, idx, simplify_tolerance_m,
+                stats: dict | None = None):
     """Build one Track from points. pts: list of (lon, lat, time) where time is
-    a datetime, an ISO string, or None. Reproject -> drop non-finite -> simplify."""
+    a datetime, an ISO string, or None. Reproject -> drop non-finite -> simplify.
+    `stats` (when given) accumulates counters across calls -- today just
+    `dropped_points`, the non-finite drops -- so upload can NAME the loss instead
+    of swallowing it (loud boundaries)."""
     pts = [(lo, la, t) for lo, la, t in pts if lo is not None and la is not None]
     if len(pts) < 2:
         return None
     xy = np.array([lonlat_to_crs(region, lo, la) for lo, la, _ in pts])
     # Points outside the region's projection validity reproject to (inf, inf).
     # Drop them so a single off-region upload can't poison the track (and later
-    # crash density's int() cast with OverflowError).
+    # crash density's int() cast with OverflowError). Counted, never silent.
+    before = xy.shape[0]
     xy = xy[np.isfinite(xy).all(axis=1)]
+    dropped = int(before - xy.shape[0])
+    if stats is not None:
+        stats["dropped_points"] = stats.get("dropped_points", 0) + dropped
     if xy.shape[0] < 2:
+        # the non-finite drops orphaned this journey: a lone finite survivor can't
+        # draw a line, so it is lost too -- count it, or dropped_points under-reports
+        # the loss and a whole journey vanishes half-counted (the exact silent
+        # swallow the counter exists to eliminate).
+        if stats is not None and dropped:
+            stats["dropped_points"] += int(xy.shape[0])
         return None
     line = LineString(xy).simplify(simplify_tolerance_m, preserve_topology=False)
     coords = np.asarray(line.coords)
@@ -40,14 +54,15 @@ def _make_track(pts, region: RegionGeo, name, idx, simplify_tolerance_m):
     return Track(track_id=f"{name or 'track'}-{idx}", coords=coords, day=day)
 
 def load_gpx_tracks(data: bytes, region: RegionGeo,
-                    simplify_tolerance_m: float = 15.0) -> list[Track]:
+                    simplify_tolerance_m: float = 15.0,
+                    stats: dict | None = None) -> list[Track]:
     gpx = gpxpy.parse(io.BytesIO(data))
     out: list[Track] = []
     idx = 0
     for trk in gpx.tracks:
         for seg in trk.segments:
             pts = [(p.longitude, p.latitude, p.time) for p in seg.points]
-            t = _make_track(pts, region, trk.name, idx, simplify_tolerance_m)
+            t = _make_track(pts, region, trk.name, idx, simplify_tolerance_m, stats)
             if t is not None:
                 out.append(t)
                 idx += 1
@@ -56,7 +71,8 @@ def load_gpx_tracks(data: bytes, region: RegionGeo,
     # upload with a generic 400 (red-team). A planned route has no timestamps.
     for rte in gpx.routes:
         pts = [(p.longitude, p.latitude, p.time) for p in rte.points]
-        t = _make_track(pts, region, rte.name or "route", idx, simplify_tolerance_m)
+        t = _make_track(pts, region, rte.name or "route", idx, simplify_tolerance_m,
+                        stats)
         if t is not None:
             out.append(t)
             idx += 1
@@ -125,12 +141,13 @@ def _parse_kml_bytes(data: bytes):
     return root
 
 def load_kml_tracks(data: bytes, region: RegionGeo,
-                    simplify_tolerance_m: float = 15.0) -> list[Track]:
+                    simplify_tolerance_m: float = 15.0,
+                    stats: dict | None = None) -> list[Track]:
     root = _parse_kml_bytes(data)
     out: list[Track] = []
     idx = 0
     for pts in _kml_segments(root):
-        t = _make_track(pts, region, "track", idx, simplify_tolerance_m)
+        t = _make_track(pts, region, "track", idx, simplify_tolerance_m, stats)
         if t is not None:
             out.append(t)
             idx += 1
@@ -159,19 +176,22 @@ def _kmz_to_kml(data: bytes) -> bytes:
         return z.read(target)
 
 def load_tracks(data: bytes, region: RegionGeo, filename: str | None = None,
-                simplify_tolerance_m: float = 15.0) -> list[Track]:
-    """Auto-detect GPX / KML / KMZ and return a list[Track]."""
+                simplify_tolerance_m: float = 15.0,
+                stats: dict | None = None) -> list[Track]:
+    """Auto-detect GPX / KML / KMZ and return a list[Track]. `stats` (optional)
+    accumulates ingest counters (see _make_track); the default None keeps every
+    existing caller byte-identical."""
     if data[:4] == b"PK\x03\x04":                      # zip -> KMZ
-        return load_kml_tracks(_kmz_to_kml(data), region, simplify_tolerance_m)
+        return load_kml_tracks(_kmz_to_kml(data), region, simplify_tolerance_m, stats)
     # scan the WHOLE document for the first root marker (a long comment/license block
     # can push <kml past any fixed window), and pick whichever appears first
     low = data.lower()
     gpx_at = low.find(b"<gpx"); kml_at = low.find(b"<kml")
     if gpx_at != -1 and (kml_at == -1 or gpx_at < kml_at):
-        return load_gpx_tracks(data, region, simplify_tolerance_m)
+        return load_gpx_tracks(data, region, simplify_tolerance_m, stats)
     if kml_at != -1:
-        return load_kml_tracks(data, region, simplify_tolerance_m)
+        return load_kml_tracks(data, region, simplify_tolerance_m, stats)
     fn = (filename or "").lower()                       # no marker -> extension
     if fn.endswith((".kml", ".kmz")):
-        return load_kml_tracks(data, region, simplify_tolerance_m)
-    return load_gpx_tracks(data, region, simplify_tolerance_m)
+        return load_kml_tracks(data, region, simplify_tolerance_m, stats)
+    return load_gpx_tracks(data, region, simplify_tolerance_m, stats)
