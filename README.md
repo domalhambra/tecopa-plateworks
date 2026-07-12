@@ -129,3 +129,14 @@ per region on first run — the endpoint / render / registration suites run on a
 clone and in CI (GitHub Actions, `.github/workflows/ci.yml`) rather than skipping. A
 machine with real DEMs runs them against real terrain instead. `/readyz` reports whether
 every region has a present DEM whose bounds match its `region.json`.
+
+## License
+
+- **Code:** GNU AGPL-3.0-or-later (see `LICENSE`) — anyone may run, study, fix, and
+  re-host the engine, which is what makes "your file reprints itself" a promise the
+  artifact can keep rather than a slogan.
+- **Region plates + manifest schema:** CC0-1.0 public-domain dedication — the packs are
+  derived from U.S. federal public-domain data (USGS 3DEP / NHD / NLCD 2021 / GNIS).
+- **Name & branding:** "TrailPrint" is covered by neither grant.
+
+Rationale and the full decision record: `docs/superpowers/plans/2026-07-12-strategy-and-license.md`.
