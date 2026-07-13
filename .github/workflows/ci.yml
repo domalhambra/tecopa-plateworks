@@ -16,7 +16,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # the suite renders real posters, films, and social-preview mockups end to end,
+    # so it runs ~25-30 min; keep headroom over that (a hang still can't run forever)
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
