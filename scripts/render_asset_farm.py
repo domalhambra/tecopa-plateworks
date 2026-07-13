@@ -13,12 +13,27 @@ produces, per region:
   film.png              a time-lapse APNG: the journeys ink themselves in day order,
                         ending on the finished poster (the "watch the year draw itself"
                         beat)
+  film.webp / film.mp4  the film's share twins for the social columns (mp4 only when
+                        the share extra is installed) -- lossy, no manifest aboard
   edition_1/2/3.png     the same composition as three growing editions -- the "magic
                         trick": one frame, more ink, the cartouche climbing Edition 1->3
+  mockup_<v>_<size>.jpg the poster staged as a physical object (the embossed Plate, the
+                        matted Frame) on the gallery wall -- Instagram-ready stills
+  mockup_<v>_<size>.mp4 the same objects with the film inking itself inside them while
+                        the object subtly yaws (share-class like the film twins: lossy,
+                        no manifest; needs the share extra)
+  mockup_plate.glb      the orbitable plate for the landing page's <model-viewer> --
+                        the poster's pixels on a relief-displaced disc
+  lightsweep.mp4        (--only lightsweep; slow) the turntable: the sun walks the
+                        azimuth circle and only the land relights -- the terrain itself
+                        reads as 3D
 
-Every deliverable goes through the real final path (`provenance.build_final_spec` ->
-`render.rasterize` -> embedded manifest), so this doubles as an end-to-end smoke test of
-every output the product ships.
+The rendered deliverables (poster, wallpapers, film, editions) go through the real final
+path (`provenance.build_final_spec` -> `render.rasterize` -> embedded manifest), so a
+full run doubles as an end-to-end smoke test of the engine's own outputs. The mockup,
+model, and lightsweep tiers are share-class and exercise none of that path: the mockups
+and the GLB restage an already-rendered final's pixels, and the lightsweep re-renders
+but carries no manifest.
 
 Usage:
     ./.venv/bin/python scripts/render_asset_farm.py                    # all regions, real DEMs
@@ -55,45 +70,62 @@ HOTSPOT_ICONS = ["camp", "peak", "water", "flag", "camera", "star", "dot", "wate
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
 
-def _synth_tracks(region: Region, n_days: int = 5, seed: int = 7) -> list:
-    """A season of day-trips inside one region: a shared meandering corridor every day
-    retraces (so density reads a worn path), each day branching off to its own spot, with
-    light GPS jitter and a distinct date. Generated directly in the region's projected
-    metres -- no lon/lat round-trip -- so it works for any region from its bounds alone."""
+def _synth_tracks(region: Region, n_days: int = 7, seed: int = 7) -> list:
+    """A detailed multi-day trip inside one region, generated in projected metres so it
+    works for any region from its bounds alone. A shared approach corridor is retraced
+    every day (so density reads a worn path); each day pushes a densely-sampled,
+    switchbacked leg to its own destination, and the legs reach FARTHER and wander MORE
+    as the trip accumulates -- so a progressive reveal grows like a real many-hour,
+    multi-day journey rather than a few straight lines snapping in. Each day carries
+    hundreds of points; the whole trip is thousands."""
     w, s, e, n = region.cfg["bounds"]
     cx, cy = (w + e) / 2.0, (s + n) / 2.0
     span = min(e - w, n - s)
-    R = span * 0.28                              # keep well inside the frame (off-DEM safe)
+    R = span * 0.24                              # keep destinations well inside the frame
     rng = np.random.default_rng(seed)
     ang0 = rng.uniform(0, 2 * np.pi)
 
-    def _meander(x0, y0, x1, y1, npts, amp, harmonics, rng):
+    def _leg(x0, y0, x1, y1, npts, amp, harmonics, switch, rng):
+        """A densely-sampled path A->B: a low-frequency meander, plus optional
+        high-frequency switchbacks that tighten toward the destination (a climb to a
+        pass or summit). Tapered to its anchored endpoints."""
         t = np.linspace(0, 1, npts)
         xs, ys = x0 + (x1 - x0) * t, y0 + (y1 - y0) * t
         off = np.zeros_like(t)
         for k in range(1, harmonics + 1):
             off += (amp / k) * np.sin(2 * np.pi * k * t + rng.uniform(0, 2 * np.pi))
-        off *= np.sin(np.pi * t) ** 0.5           # taper to the anchored endpoints
+        if switch:
+            off += amp * 0.55 * np.sin(2 * np.pi * switch * t) * np.clip((t - 0.4) / 0.6, 0, 1)
+        off *= np.sin(np.pi * t) ** 0.5
         perp = np.arctan2(y1 - y0, x1 - x0) + np.pi / 2
         return np.column_stack([xs + np.cos(perp) * off, ys + np.sin(perp) * off])
 
-    x0, y0 = cx - R * 0.6 * np.cos(ang0), cy - R * 0.6 * np.sin(ang0)
-    x1, y1 = cx + R * 0.3 * np.cos(ang0), cy + R * 0.3 * np.sin(ang0)
-    corridor = _meander(x0, y0, x1, y1, 130, R * 0.12, 5, np.random.default_rng(seed + 1))
+    # the shared approach: trailhead -> base camp, retraced every day
+    thx, thy = cx - R * 0.75 * np.cos(ang0), cy - R * 0.75 * np.sin(ang0)
+    bcx, bcy = cx + R * 0.12 * np.cos(ang0), cy + R * 0.12 * np.sin(ang0)
+    approach = _leg(thx, thy, bcx, bcy, 170, R * 0.10, 5, 0, np.random.default_rng(seed + 1))
 
     tracks = []
     d0 = date(2024, 6, 1)
     for i in range(n_days):
-        ang = ang0 + rng.uniform(-0.9, 0.9)
-        r = R * rng.uniform(0.4, 0.85)
-        sx, sy = x1 + r * np.cos(ang), y1 + r * np.sin(ang)
-        branch = _meander(x1, y1, sx, sy, 60, R * 0.05, 3, rng)
-        route = np.vstack([corridor, branch[1:]])
-        out_back = np.vstack([route, route[::-1][1:]])                  # out-and-back retrace
-        out_back = out_back + rng.normal(0, 6.0, out_back.shape)        # GPS jitter
-        out_back += np.array([(i - n_days // 2) * 14.0, 0.0])           # per-day lateral offset
-        day = (d0 + timedelta(days=i * 9)).isoformat()
-        tracks.append(Track(track_id=f"day-{i}", coords=out_back, day=day))
+        frac = (i + 1) / n_days                  # later days push farther and wander more
+        ang = ang0 + rng.uniform(-1.2, 1.2)
+        reach = R * (0.45 + 0.75 * frac) * rng.uniform(0.9, 1.1)
+        dx, dy = bcx + reach * np.cos(ang), bcy + reach * np.sin(ang)
+        leg = _leg(bcx, bcy, dx, dy, int(200 + 240 * frac), R * 0.07 * (0.6 + frac),
+                   4, switch=int(3 + 5 * frac), rng=rng)
+        path = leg
+        if rng.random() < 0.65:                  # many days add a summit spur from the end
+            sang = ang + rng.uniform(-1.5, 1.5)
+            sr = reach * rng.uniform(0.18, 0.34)
+            spur = _leg(dx, dy, dx + sr * np.cos(sang), dy + sr * np.sin(sang),
+                        int(70 + 90 * frac), R * 0.04, 3, 0, rng)
+            path = np.vstack([leg, spur[1:], spur[::-1][1:]])          # out-and-back spur
+        # the full day: approach in, explore, and retrace approach back to the trailhead
+        day_path = np.vstack([approach, path[1:], path[::-1][1:], approach[::-1][1:]])
+        day_path = day_path + rng.normal(0, 5.0, day_path.shape)       # GPS jitter
+        day = (d0 + timedelta(days=i * 6)).isoformat()
+        tracks.append(Track(track_id=f"day-{i + 1}", coords=day_path, day=day))
     return tracks
 
 
@@ -142,7 +174,9 @@ def _write_final(spec: CompositionSpec, region: Region, dpi: float, out_path: st
     box = max(24, round(spec.photo_box_in * dpi))
     espec = provenance.build_final_spec(spec, box)
     img = render.rasterize(espec, dpi=dpi, region_dir=region.dir, watermark=False, cfg=region.cfg)
-    manifest = provenance.build_manifest(espec, sources or [], lineage)
+    manifest = provenance.build_manifest(espec, sources or [], lineage,
+                                         region_pack=provenance.region_pack_block(
+                                             region.dir, labels=espec.labels, biome=espec.biome))
     img.save(out_path, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
     return out_path, img.size
 
@@ -171,20 +205,32 @@ def _wallpapers(region, tracks, spots, out_dir, preset_ids):
 
 
 def _film(region, tracks, spots, out_dir, dpi, max_frames):
+    """The film + its share twins for the social columns: render the frames ONCE, encode
+    thrice -- film.png (the archival APNG, manifest aboard), film.webp (always), and
+    film.mp4 (when the share extra is installed). The twins carry no manifest, by
+    construction (their encoders take none)."""
     spec = _base_spec(region, tracks, spots)
     spec = provenance.build_final_spec(spec, max(24, round(spec.photo_box_in * dpi)))  # embed photo, as the real worker does
     plan = timelapse.frame_plan(spec, max_frames)
-    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region.dir, plan=plan)
+    frames = list(timelapse.render_frames(spec, dpi=dpi, region_dir=region.dir, plan=plan))
     anim = timelapse.animation_meta(max_frames=max_frames, step_ms=timelapse.DEFAULT_STEP_MS,
                                     hold_ms=timelapse.DEFAULT_HOLD_MS,
                                     leader_ms=timelapse.DEFAULT_LEADER_MS, dpi=dpi)
-    manifest = provenance.build_manifest(spec, [], animation=anim)
-    data = timelapse.encode_apng(frames, manifest=manifest, step_ms=anim["step_ms"],
-                                 hold_ms=anim["hold_ms"], leader_ms=anim["leader_ms"])
-    out = os.path.join(out_dir, "film.png")
-    with open(out, "wb") as f:
-        f.write(data)
-    return out, len(plan)
+    manifest = provenance.build_manifest(spec, [], animation=anim,
+                                         region_pack=provenance.region_pack_block(
+                                             region.dir, labels=spec.labels, biome=spec.biome))
+    pace = dict(step_ms=anim["step_ms"], hold_ms=anim["hold_ms"],
+                leader_ms=anim["leader_ms"])
+    outs = [(os.path.join(out_dir, "film.png"),
+             timelapse.encode_apng(frames, manifest=manifest, **pace)),
+            (os.path.join(out_dir, "film.webp"), timelapse.encode_webp(frames, **pace))]
+    if timelapse.MP4_AVAILABLE:
+        outs.append((os.path.join(out_dir, "film.mp4"),
+                     timelapse.encode_mp4(frames, **pace)))
+    for out, data in outs:
+        with open(out, "wb") as f:
+            f.write(data)
+    return [out for out, _ in outs], len(plan)
 
 
 def _editions(region, tracks, spots, out_dir, dpi):
@@ -201,6 +247,84 @@ def _editions(region, tracks, spots, out_dir, dpi):
         # next edition's lineage points at this one (a plausible ancestor hash)
         lineage.append({"sha256": f"{'0'*63}{ed}", "edition": ed})
     return made
+
+
+def _mockups(region, tracks, spots, out_dir):
+    """Instagram-ready object mockups of the composition (share-class: no manifest,
+    like the film twins). The STILLS (plate/frame JPEGs) restage the already-rendered
+    poster.png -- the engine's own pixels -- and need no terrain. The MOTION MP4s
+    render a SMOOTH progressive reveal (timelapse.progressive_frames): the trip draws
+    itself point by point while the object gently yaws, so they need the DEM and are
+    skipped, with a message, when it isn't present (e.g. --only mockups on a machine
+    holding only yesterday's poster.png)."""
+    from scripts.render_mockups import (MOCKUP_FRAMES, MOCKUP_HOLD_MS, MOCKUP_MOTION_PX,
+                                        MOCKUP_STEP_MS, SIZES, VARIANTS, load_final,
+                                        render_mockup, render_mockup_video, write_jpeg)
+    made = []
+    poster = os.path.join(out_dir, "poster.png")
+    manifest = None
+    if os.path.exists(poster):
+        img_frames, _durs, manifest = load_final(poster)
+        for variant in VARIANTS:
+            for w, h in SIZES:
+                out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.jpg")
+                write_jpeg(render_mockup(img_frames[0], manifest, variant, (w, h)), out)
+                made.append((out, (w, h)))
+    else:
+        print(f"  ! no poster.png in {out_dir} — render the poster first (mockup JPEGs skipped)")
+    if not tracks:
+        print("  ! mockup MP4s render the reveal from the terrain — skipped (no DEM/tracks here)")
+        return made
+    if not timelapse.MP4_AVAILABLE:
+        print("  ! mockup MP4s need the share extra (pip install -r requirements-share.txt) — skipped")
+        return made
+    spec = _base_spec(region, tracks, spots)
+    mdpi = MOCKUP_MOTION_PX / min(spec.print_w_in, spec.print_h_in)
+    n_frames = int(os.environ.get("TRAILPRINT_MOCKUP_FRAMES", MOCKUP_FRAMES))
+    frames = list(timelapse.progressive_frames(spec, mdpi, region.dir, region.cfg,
+                                               n_frames=n_frames))
+    durations = [MOCKUP_STEP_MS] * (len(frames) - 1) + [MOCKUP_HOLD_MS]
+    for variant in VARIANTS:
+        for w, h in SIZES:
+            out = os.path.join(out_dir, f"mockup_{variant}_{w}x{h}.mp4")
+            with open(out, "wb") as f:
+                f.write(render_mockup_video(frames, durations, manifest, variant, (w, h)))
+            made.append((out, (w, h)))
+    return made
+
+
+def _model(out_dir):
+    """The orbitable plate: a GLB of the poster's pixels on a displaced disc, for the
+    landing page's <model-viewer> (share-class, no manifest)."""
+    from scripts.render_mockups import load_final
+    from scripts.render_model import build_plate_glb
+    poster = os.path.join(out_dir, "poster.png")
+    if not os.path.exists(poster):
+        print(f"  ! no poster.png in {out_dir} — render the poster first (model skipped)")
+        return []
+    frames, _durs, _m = load_final(poster)
+    out = os.path.join(out_dir, "mockup_plate.glb")
+    data = build_plate_glb(frames[0])   # build fully before touching disk: a failure
+    with open(out, "wb") as f:          # must not leave a truncated GLB the landing
+        f.write(data)                   # page would fetch by exact name
+    return [out]
+
+
+def _lightsweep(region, tracks, spots, out_dir):
+    """The turntable: the composition re-rendered around the azimuth circle (the
+    terrain itself reads as 3D -- only the light moves). Needs the DEM; minutes on
+    real terrain, which is why --quick skips it unless explicitly asked for."""
+    if not timelapse.MP4_AVAILABLE:
+        print("  ! lightsweep needs the share extra (pip install -r requirements-share.txt) — skipped")
+        return []
+    from scripts.render_lightsweep import TARGET_PX, sweep_mp4
+    spec = _base_spec(region, tracks, spots)
+    dpi = TARGET_PX / max(spec.print_w_in, spec.print_h_in)
+    out = os.path.join(out_dir, "lightsweep.mp4")
+    data = sweep_mp4(spec, dpi, region.dir, region.cfg)  # encode fully first: the
+    with open(out, "wb") as f:                           # farm's slowest job must not
+        f.write(data)                                    # die into a 0-byte "asset"
+    return [out]
 
 
 # ---- driver ----
@@ -226,8 +350,10 @@ def main():
     ap.add_argument("--film-frames", type=int, default=24, help="max time-lapse frames")
     ap.add_argument("--wallpapers", nargs="*", default=["iphone", "desktop_4k"],
                     help="wallpaper preset ids")
-    ap.add_argument("--only", nargs="*", choices=["poster", "wallpapers", "film", "editions"],
-                    help="render only these deliverables (default: all)")
+    ap.add_argument("--only", nargs="*",
+                    choices=["poster", "wallpapers", "film", "editions",
+                             "mockups", "lightsweep", "model"],
+                    help="render only these deliverables (default: all but lightsweep)")
     ap.add_argument("--quick", action="store_true",
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
     ap.add_argument("--synthetic-dem", action="store_true",
@@ -239,9 +365,15 @@ def main():
 
     regions = discover()
     ids = args.regions or list(regions)
-    want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions"}
+    # lightsweep re-renders ~60 frames per region (minutes on real DEMs), so it is
+    # opt-in via --only; everything else ships by default
+    want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions",
+                                             "mockups", "model"}
     if args.quick:
-        want.discard("film")
+        # quick drops the slow renders -- unless they were EXPLICITLY asked for
+        for slow in ("film", "lightsweep"):
+            if not (args.only and slow in args.only):
+                want.discard(slow)
 
     index = {}
     for rid in ids:
@@ -249,12 +381,17 @@ def main():
         if region is None:
             print(f"! unknown region {rid!r} (built: {', '.join(regions)})"); continue
         print(f"\n=== {rid} — {region.name} ===")
-        if not _ensure_dem(region, args.synthetic_dem):
+        # mockups + model stage already-rendered finals: they need no DEM and no
+        # tracks, so --only mockups works on any machine with yesterday's assets
+        needs_render = bool(want - {"mockups", "model"})
+        if needs_render and not _ensure_dem(region, args.synthetic_dem):
             continue
         out_dir = os.path.join(args.out, rid); os.makedirs(out_dir, exist_ok=True)
-        tracks = _synth_tracks(region)
-        spots = _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir)
-        print(f"  tracks={len(tracks)}  hotspots={len(spots)}")
+        tracks = _synth_tracks(region) if needs_render else []
+        spots = _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir) \
+            if needs_render else []
+        if needs_render:
+            print(f"  tracks={len(tracks)}  hotspots={len(spots)}")
         made = []
         try:
             if "poster" in want:
@@ -264,22 +401,52 @@ def main():
                 for p, sz in _wallpapers(region, tracks, spots, out_dir, args.wallpapers):
                     print(f"  wallpaper   {sz[0]}x{sz[1]}  {p}"); made.append(p)
             if "film" in want:
-                p, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
-                print(f"  film        {nf} frames  {p}"); made.append(p)
+                ps, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
+                for p in ps:
+                    print(f"  film        {nf} frames  {p}"); made.append(p)
+            if "mockups" in want:
+                for p, sz in _mockups(region, tracks, spots, out_dir):
+                    print(f"  mockup      {sz[0]}x{sz[1]}  {p}"); made.append(p)
+            if "model" in want:
+                for p in _model(out_dir):
+                    print(f"  model       plate glb  {p}"); made.append(p)
+            if "lightsweep" in want:
+                for p in _lightsweep(region, tracks, spots, out_dir):
+                    print(f"  lightsweep  {p}"); made.append(p)
             if "editions" in want:
                 for p, sz in _editions(region, tracks, spots, out_dir, args.dpi):
                     print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)
         except Exception as ex:
             print(f"  ! {rid} failed: {type(ex).__name__}: {ex}")
             continue
-        index[rid] = {"name": region.name, "assets": [os.path.relpath(p) for p in made]}
+        if made:
+            # a region whose every wanted deliverable was skipped gets no entry:
+            # an empty "assets": [] would read as a rendered region
+            index[rid] = {"name": region.name,
+                          "assets": [os.path.relpath(p) for p in made]}
 
     if index:
         idx_path = os.path.join(args.out, "index.json")
         os.makedirs(args.out, exist_ok=True)
-        with open(idx_path, "w") as f:
-            json.dump(index, f, indent=2)
         total = sum(len(v["assets"]) for v in index.values())
+        # merge into yesterday's index, never overwrite it: --only mockups on a dir
+        # from an earlier full run must keep the poster/wallpaper/film records whose
+        # files still sit on disk (and every other region's entry, untouched)
+        prior = {}
+        if os.path.exists(idx_path):
+            try:
+                with open(idx_path) as f:
+                    prior = json.load(f)
+            except (OSError, ValueError):
+                prior = {}
+        for rid, entry in index.items():
+            old = prior.get(rid)
+            if isinstance(old, dict):
+                kept = [p for p in old.get("assets", [])
+                        if p not in entry["assets"] and os.path.exists(p)]
+                entry["assets"] = kept + entry["assets"]
+        with open(idx_path, "w") as f:
+            json.dump({**prior, **index}, f, indent=2)
         print(f"\nwrote {total} assets across {len(index)} region(s) -> {idx_path}")
     else:
         print("\nno assets rendered")

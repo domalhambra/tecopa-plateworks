@@ -53,7 +53,29 @@ Never say the left column in public. Always say the right column.
 
 The last row matters: four regions (Lassen County CA, Susanville–Reno, Elko–Bonneville,
 Rifle–Aspen) is not a weakness to hide. Market them like vintages or map plates —
-"now serving: the Lassen plate" — and make each new region a launch event.
+"now serving: the Lassen plate" — and make each new region a launch event. And when
+someone's valley isn't covered, sell the *making*, not the map: **"Commission a plate"**
+— a one-time fee for building plate #N (the finished plate publishes free, the
+commissioner is credited, the fee includes their first print). Coverage expansion
+becomes a product instead of a cost center.
+
+## What is sold (and what is free)
+
+The plate is the paper stock and the vintage label: talked about constantly, never sold
+by the ream. Money attaches to the poster, the paper, the ritual, and the making:
+
+| Product | What it is |
+|---|---|
+| **The Poster** | the digital final — print-res PNG + wallpapers + the Year-Film, one composition |
+| **The Print** | lab-fulfilled paper on the wall — the durable margin |
+| **Edition N+1** | continue last year's poster — the repeat ritual, priced below the first |
+| **Plate commission** | the making of an uncovered region; the plate itself still publishes free |
+| **Plates** | **$0, forever** — the trust layer behind "Reprint Forever"; say so on the pricing page |
+
+Plates stay free because the promise requires it (the file must always be able to name —
+and fetch — its terrain) and because CC0 public-domain packs make a paywall legal
+fiction anyway. Full price architecture and funnel:
+`docs/superpowers/plans/2026-07-12-marketing-language-branding.md`.
 
 ## Audiences, in priority order
 
@@ -105,12 +127,13 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; TrailPrint se
    lineage cartouche zoomed. Headline: "The poster is the save file."
 5. **Trust block:** "The proof is the print" (determinism) · "Reprint forever"
    (frozen contract) · "Private by default" (local, share-copy toggle, no account).
-6. **Region gallery:** the four plates with real sample posters, plus "Request the
-   next region" email capture — the cheapest demand signal for where to build plate
-   #5.
+6. **Region gallery:** the four plates with real sample posters, plus "Request — or
+   commission — the next plate": requests are the demand signal, commissions are the
+   demand signal *with a credit card*.
 7. **FAQ that converts honesty into trust:** *Why only these regions?* (we refuse to
    print terrain we don't have real elevation data for) · *What if you disappear?*
-   (your file reprints itself) · *Strava?* (export GPX; direct import if people ask).
+   (the file names its plate — hash-published, AGPL engine, byte-identical reprint
+   proven in CI) · *Strava?* (export GPX; direct import if people ask).
 
 ## Channels & launch sequence
 
@@ -128,7 +151,8 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; TrailPrint se
 - **Phase 3 — the ritual engine.** Editions write the calendar: year-end ("turn 2026
   into Edition 1"), race seasons, region drops. The repeat purchase isn't "buy another
   product" — it's "your poster is due for its next edition," and it requires no data
-  retention because *their file* holds everything.
+  retention because *their file* holds everything. Every commissioned plate ships with
+  its own drop announcement — the commissioner's story is the launch content.
 - **Ongoing:** every customer film shared on social is a looping ad. Consider a
   subtle opt-in cartouche mark on share copies.
 
@@ -141,6 +165,9 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; TrailPrint se
 - The reprint promise: **"Reprint Forever."**
 - The share toggle: **"Share copy (routes removed)."**
 - Regions: **plates** ("the Lassen plate") — evokes printmaking, matches the craft.
+- The PNG itself: **the save file** (the wall print is the performance; the PNG is the score).
+- Coverage expansion: **"Commission a plate"** — never "request coverage."
+- Plates are **free, always** — the word "buy" never appears within three sentences of "plate."
 
 ## What success looks like, in order
 
@@ -148,7 +175,9 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; TrailPrint se
    before anything else).
 2. Film completion rate on the landing page — do people watch to the Edition-2 beat?
 3. Region-request emails — the expansion roadmap, crowdsourced.
-4. **Edition-2 rate a year out** — the single number that proves the chronicle
+4. **Commission inquiries** — demand with a credit card; plate #5's location is
+   decided by whoever pays for it.
+5. **Edition-2 rate a year out** — the single number that proves the chronicle
    thesis. One customer returning a poster for Edition 2 is the testimonial that
    anchors all future copy.
 

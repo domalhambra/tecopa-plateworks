@@ -136,6 +136,8 @@ def test_bundle_renders_each_device_at_native_pixels():
         assert Image.open(io.BytesIO(data)).size == px
         m = provenance.extract(data)                       # each file self-describing
         assert m and m["spec"]["output_kind"] == "wallpaper"
+        # every device file in the bundle names its plate (same block as a final)
+        assert m["region_pack"] == provenance.region_pack_block(REGION_DIR)
 
 
 def test_bundle_requires_a_stamped_proof_and_at_least_one_preset():

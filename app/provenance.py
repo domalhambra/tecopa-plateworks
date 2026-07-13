@@ -26,14 +26,17 @@ import dataclasses
 import hashlib
 import io
 import json
+import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
 from app.spec import CompositionSpec, SpecError
 
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword
+NOTE_KEY = "trailprint-note"       # the plain-tEXt resurrection note beside it
 MANIFEST_VERSION = 1
 ENGINE = "trailprint"
+ENGINE_URL = "https://github.com/domalhambra/badwatertrails"
 
 
 class ManifestError(SpecError):
@@ -75,7 +78,8 @@ def source_entry(data: bytes, filename: str | None) -> dict:
 
 
 def build_manifest(spec: CompositionSpec, sources: list | None = None,
-                   lineage: list | None = None, animation: dict | None = None) -> dict:
+                   lineage: list | None = None, animation: dict | None = None,
+                   region_pack: dict | None = None) -> dict:
     """The provenance record for one poster: schema version, engine, region, the full
     spec, and the source-file hashes. A pure function of its inputs (no timestamp), so
     the same spec yields the same manifest bytes.
@@ -83,9 +87,12 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
     Living editions: from the SECOND edition on, the manifest also carries `edition`
     and `lineage` (the ancestor chain, newest-capped at LINEAGE_MAX). Time-lapse: an
     animated file also carries an `animation` block (the pacing + render dpi) so the
-    film re-renders from the file alone. All three keys are OMITTED when absent, so
-    every pre-feature manifest -- including the frozen v1 / wallpaper / edition fixtures
-    -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1 (purely additive)."""
+    film re-renders from the file alone. Plate identity: a file rendered against a
+    hash-manifested region also carries a `region_pack` block (region_pack_block) so a
+    reprint can verify it runs against the SAME terrain. All four keys are OMITTED when
+    absent, so every pre-feature manifest -- including the frozen v1 / wallpaper /
+    edition fixtures -- is byte-for-byte unchanged and MANIFEST_VERSION stays 1
+    (purely additive)."""
     m = {
         "manifest_version": MANIFEST_VERSION,
         "engine": ENGINE,
@@ -99,7 +106,55 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
         m["lineage"] = list(lineage or [])[-LINEAGE_MAX:]   # keep newest, drop oldest
     if animation is not None:
         m["animation"] = dict(animation)
+    if region_pack is not None:
+        m["region_pack"] = dict(region_pack)
     return m
+
+
+def region_pack_block(region_dir, labels: bool = False, biome: bool = False) -> dict | None:
+    """The plate's identity, for the manifest's `region_pack` block: the sha256 of each
+    plate asset the RENDER reads, hashed from the bytes on disk -- never trusted from
+    sources.json, whose recorded hashes can drift from the assets (a re-prep that
+    crashed before the sidecar write, a fresh clone whose DEM is a synthetic stand-in)
+    and would then stamp -- and verify -- a plate the pixels were never painted with.
+    sources.json still gates the feature: its asset LIST names the plate's files, and a
+    hand-built plate without one gets None (callers then OMIT the block; the file stays
+    printable, just unverifiable). USGS re-flies 3DEP; a silently rebuilt plate would
+    reprint an old poster *differently* -- this block is what lets a reprint detect
+    that. Pixel-honesty bounds the hash: overview.png only feeds the browser aim canvas
+    (rasterize never reads it), labels.json is read only when the spec draws labels
+    (`labels`), and landcover.tif only when the biome tint is on (`biome`) -- none of
+    them enters the identity of a poster whose pixels never touched it, otherwise a
+    routine GNIS labels rebake (or an NLCD refresh) would refuse exact-identical
+    reprints of every poster that never drew them. `pack_version` is a short digest
+    of the sorted asset hashes (one id to name the whole plate); `assets` is the
+    per-file detail. No caching: read at final/submit/verify time, never per frame."""
+    try:
+        with open(os.path.join(region_dir, "sources.json")) as f:
+            names = sorted(json.load(f)["assets"])
+    except Exception:
+        return None
+    assets = {}
+    for name in names:
+        if name == "overview.png":                   # aim canvas only, never a pixel
+            continue
+        if name == "labels.json" and not labels:     # read only when labels are drawn
+            continue
+        if name == "landcover.tif" and not biome:    # read only when the tint is on
+            continue
+        try:
+            h = hashlib.sha256()
+            with open(os.path.join(region_dir, name), "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            continue    # listed but absent paints nothing; it can't be plate identity
+        assets[name] = h.hexdigest()
+    if not assets:
+        return None
+    joined = "\n".join(f"{name}:{assets[name]}" for name in sorted(assets))
+    return {"pack_version": hashlib.sha256(joined.encode()).hexdigest()[:12],
+            "assets": assets}
 
 
 def bound_geometry(spec: CompositionSpec) -> CompositionSpec:
@@ -138,11 +193,48 @@ def _manifest_str(manifest: dict) -> str:
     return json.dumps(manifest, separators=(",", ":"), sort_keys=True)
 
 
+def resurrection_note(manifest: dict) -> str:
+    """The human-readable twin of the zTXt manifest: a few plain sentences a 2035
+    finder running strings(1) can read without any PNG tooling, telling them what the
+    file is and how to bring it back. A PURE function of the manifest (no clock, no
+    env, no machine state) -- finals are byte-compared in the determinism suite, so
+    the note must round-trip identically through a reprint. Plain ASCII on purpose:
+    tEXt is latin-1, and ASCII survives every dump tool. The plate line resolves the
+    region the way /api/reprint does (spec.region_id first) and quotes pack_version
+    only in the one shape a real derivation produces (12 lowercase hex -- the same
+    predicate as main's verify gate), so a crafted manifest can never ride arbitrary
+    bytes, or non-latin-1 ones, into the chunk."""
+    spec_d = manifest.get("spec")
+    spec_d = spec_d if isinstance(spec_d, dict) else {}
+    rid = spec_d.get("region_id") or manifest.get("region_id")
+    if not (isinstance(rid, str) and rid and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_"
+                                                 for c in rid)):
+        rid = "unknown"                       # region ids are [a-z0-9_]+ as minted
+    rp = manifest.get("region_pack")
+    pv = rp.get("pack_version") if isinstance(rp, dict) else None
+    if not (isinstance(pv, str) and len(pv) == 12 and all(c in "0123456789abcdef" for c in pv)):
+        pv = None                             # pre-pack file (or a crafted value): no version
+    plate = f"{rid} {pv}" if pv else rid
+    return "\n".join([
+        "This PNG is a TrailPrint self-describing poster and its own save file.",
+        'Its full render recipe and route data live in this file\'s compressed zTXt chunk "trailprint"',
+        "(JSON; schema: docs/MANIFEST.md in the engine repo, CC0-1.0).",
+        f"Engine: AGPL-3.0-or-later -- {ENGINE_URL}",
+        f"Painted on terrain plate {plate}. Terrain data is US-federal public domain (USGS 3DEP/NHD/NLCD/GNIS).",
+        "To reproduce: install the engine and the named plate, then POST this file to /api/reprint.",
+    ])
+
+
 def manifest_pnginfo(manifest: dict) -> PngInfo:
-    """A PngInfo carrying the manifest as a compressed zTXt chunk, to hand straight to
-    Image.save(pnginfo=...). Embedding at encode time avoids a lossless re-encode."""
+    """A PngInfo carrying the manifest as a compressed zTXt chunk PLUS the plain-tEXt
+    resurrection note, to hand straight to Image.save(pnginfo=...). Embedding at
+    encode time avoids a lossless re-encode. Every manifest-carrying deliverable
+    (finals, reprints, wallpapers, films) flows through here, so the note ships with
+    zero call-site changes; share copies (embed_spec=false) pass manifest=None to the
+    encoders and skip pnginfo entirely -- no manifest, no note."""
     info = PngInfo()
     info.add_text(MANIFEST_KEY, _manifest_str(manifest), zip=True)
+    info.add_text(NOTE_KEY, resurrection_note(manifest))     # plain tEXt: strings(1)-readable
     return info
 
 

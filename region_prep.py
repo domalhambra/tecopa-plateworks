@@ -315,7 +315,10 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
              "license": "Public domain (USGS/MRLC)"},
         ],
     }
-    for name in ("dem.tif", "hydro.json", "region.json", "overview.png", "landcover.tif"):
+    # labels.json is baked later (scripts/build_labels.py) and usually absent here;
+    # hashed only if present, and the labels bake syncs it into this manifest itself.
+    for name in ("dem.tif", "hydro.json", "region.json", "overview.png", "landcover.tif",
+                 "labels.json"):
         p = os.path.join(out_dir, name)
         if os.path.exists(p):
             manifest["assets"][name] = {"sha256": _sha256(p), "bytes": os.path.getsize(p)}

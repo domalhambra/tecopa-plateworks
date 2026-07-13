@@ -116,13 +116,17 @@ export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
 }
 
 // Time-lapse: render the accepted composition as a film (the day-ordered journeys
-// accumulate to the complete poster). Returns { job, frames }; poll like any render.
+// accumulate to the complete poster). format: 'apng' (archival, default) or a share
+// twin ('webp' | 'mp4' — no manifest, embed_spec is moot). Returns { job, frames };
+// poll like any render.
 export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = '',
-                                                   embedSpec = true } = {}) {
+                                                   embedSpec = true,
+                                                   format = 'apng' } = {}) {
   const res = await postForm('/api/timelapse/submit', {
     session_id: sessionId, max_frames: maxFrames,
     wallpaper_preset: wpPreset || undefined,
     embed_spec: embedSpec ? 'true' : 'false',
+    format,
   });
   return asJson(res);   // { job, frames }
 }
@@ -136,4 +140,20 @@ export async function fetchBlob(url) {
   const res = await fetch(url);
   if (!res.ok) throw new ApiError(res.status, 'result fetch failed');
   return res.blob();
+}
+
+// The server names every deliverable (trailprint_<region>[_edition-N][_years]….ext,
+// a pure function of the spec) via Content-Disposition — same-origin fetch exposes
+// the header. Returns { blob, filename }; `fallback` covers a missing/odd header so
+// the download never loses its old generic name.
+function dispositionFilename(header) {
+  const m = /filename="([^"]+)"/.exec(header || '');
+  return m ? m[1] : '';
+}
+
+export async function fetchDownload(url, fallback) {
+  const res = await fetch(url);
+  if (!res.ok) throw new ApiError(res.status, 'result fetch failed');
+  const filename = dispositionFilename(res.headers.get('Content-Disposition')) || fallback;
+  return { blob: await res.blob(), filename };
 }

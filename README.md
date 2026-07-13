@@ -50,8 +50,10 @@ required.
 - `app/provenance.py` — the self-describing-poster manifest (embed / extract / sanitize)
 - `app/wallpaper.py` — device presets + `spec_for_preset` (a screen is a sheet with a known ppi)
 - `app/main.py` — the endpoints over the engine (upload, proof, final, reprint)
+- `app/plates.py` — stdlib plate installer/verifier (`python -m app.plates install|verify`)
 - `region_prep.py` — offline, one-time: fetch 3DEP DEM, build COG + overview + region.json
 - `scripts/build_labels.py` — offline: fetch GNIS terrain names → `regions/<id>/labels.json`
+- `scripts/pack_region.py` — offline: pack a built region into a deterministic `.trailplate.zip`
 
 ## Named geography (GNIS labels)
 
@@ -84,6 +86,36 @@ without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
   pixels are made — a crafted PNG can neither read server files nor request a gigapixel.
 - **Forever-contract:** `tests/fixtures/manifest_v1.json` freezes the v1 schema; a
   poster a user printed today must still reprint after future upgrades.
+
+## Reprint forever, honestly
+
+"Reprint it in 2035" is a mechanism, not a slogan. The chain, link by link:
+
+1. **The file names its terrain.** The manifest's `region_pack` block records the
+   plate's identity by content hash — which assets, which bytes — so a rebuilt plate
+   can never silently repaint an old poster differently.
+2. **Plates are artifacts, not a laptop's state.** `scripts/pack_region.py` packs a
+   built region into a deterministic `<id>-<hash>.trailplate.zip` (pack twice →
+   byte-identical), and `python -m app.plates install` fetches, hash-verifies every
+   asset, and atomically places it under `regions/`; `python -m app.plates verify`
+   checks a poster PNG against the installed plate.
+3. **The right to run is granted, not assumed.** The engine is AGPL-3.0-or-later; the
+   manifest schema is documented in `docs/MANIFEST.md` under CC0-1.0, so anyone may
+   implement a reader or renderer without touching AGPL code.
+4. **The claim is tested, not asserted.** The orphan drill
+   (`tests/test_orphan_drill.py`) packs a plate, installs it into a *fresh, empty*
+   regions root, and reprints a golden poster **byte-identically** — and it runs in CI
+   on every push to `main` and every pull request (against a synthetic-DEM plate
+   packed at test time). No machinery gates a tag on it yet, so the release ritual
+   below runs the drill by hand, against the real plates, before anything ships.
+
+Release ritual, in two lines: pack the real-DEM plates (`scripts/pack_region.py`),
+publish the zips as release assets and commit `plates/index.json`; then run the orphan
+drill against a fresh clone before announcing anything.
+
+**Fonts:** the cartouche tries Georgia from the host system but the repo/package never
+bundles `Georgia.ttf` (proprietary face); `TRAILPRINT_FONT` is the seam for a licensed
+face, and a packaged build ships a redistributable SIL-OFL serif as its default.
 
 ## Wallpapers ("a screen is a sheet with a known ppi")
 
@@ -129,3 +161,14 @@ per region on first run — the endpoint / render / registration suites run on a
 clone and in CI (GitHub Actions, `.github/workflows/ci.yml`) rather than skipping. A
 machine with real DEMs runs them against real terrain instead. `/readyz` reports whether
 every region has a present DEM whose bounds match its `region.json`.
+
+## License
+
+- **Code:** GNU AGPL-3.0-or-later (see `LICENSE`) — anyone may run, study, fix, and
+  re-host the engine, which is what makes "your file reprints itself" a promise the
+  artifact can keep rather than a slogan.
+- **Region plates + manifest schema:** CC0-1.0 public-domain dedication — the packs are
+  derived from U.S. federal public-domain data (USGS 3DEP / NHD / NLCD 2021 / GNIS).
+- **Name & branding:** "TrailPrint" is covered by neither grant.
+
+Rationale and the full decision record: `docs/superpowers/plans/2026-07-12-strategy-and-license.md`.

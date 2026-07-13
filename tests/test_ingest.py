@@ -173,6 +173,31 @@ def test_out_of_zone_point_dropped_not_inf():
     for t in tracks:
         assert np.isfinite(t.coords).all()
 
+def test_out_of_zone_drop_is_counted_when_stats_passed():
+    # Loud boundaries: the (inf, inf) drop above is no longer silent -- a stats dict
+    # threaded through load_tracks counts it, so upload can surface the total to the
+    # wizard instead of swallowing points into the void.
+    from app.ingest import load_tracks
+    data = _gpx([(-111.5, 39.30), (200.0, 95.0), (-111.5, 39.34)])
+    stats = {}
+    tracks = load_tracks(data, REGION, filename="t.gpx", stats=stats)
+    assert stats["dropped_points"] == 1
+    assert len(tracks) == 1
+    # stats=None (the default, every existing caller) still parses identically
+    assert len(load_tracks(data, REGION)) == 1
+
+def test_collapsed_journey_counts_every_lost_point():
+    # when non-finite drops leave < 2 finite points the whole journey vanishes -- the
+    # surviving finite vertex must be counted too, or dropped_points under-reports the
+    # loss and a journey disappears half-counted (exactly the silent swallow the
+    # counter exists to eliminate).
+    from app.ingest import load_tracks
+    data = _gpx([(-111.5, 39.30), (200.0, 95.0), (201.0, 96.0)])
+    stats = {}
+    tracks = load_tracks(data, REGION, filename="t.gpx", stats=stats)
+    assert tracks == []
+    assert stats["dropped_points"] == 3      # 2 non-finite + the orphaned survivor
+
 # End-to-end over the committed Lassen County dummy fixture (UTM zone 10N).
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "sample.gpx")
 LASSEN = RegionGeo(crs="EPSG:32610",

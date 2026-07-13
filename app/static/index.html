@@ -253,7 +253,7 @@
           <div id="timelapseCard" class="bundle-card" hidden>
             <div class="bundle-head">
               <span class="insp-title">Time-lapse</span>
-              <span class="insp-note">watch the journeys build to the poster — an animated PNG</span>
+              <span class="insp-note">watch the journeys build to the poster — APNG keeps the reprint recipe; WebP/MP4 are share copies</span>
             </div>
             <div class="tl-controls">
               <div class="slider-row">
@@ -264,6 +264,19 @@
                 <label for="tlTarget">Target</label>
                 <div class="select-wrap"><select id="tlTarget"></select></div>
               </div>
+              <div class="field inline" id="tlFormatField">
+                <label for="tlFormat">Format</label>
+                <div class="segmented" data-for="tlFormat" role="radiogroup" aria-label="Film format">
+                  <button type="button" role="radio" data-val="apng">APNG</button>
+                  <button type="button" role="radio" data-val="webp">WebP</button>
+                  <button type="button" role="radio" data-val="mp4">MP4</button>
+                </div>
+                <select id="tlFormat" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="apng">APNG (archival)</option>
+                  <option value="webp">WebP (share)</option>
+                  <option value="mp4">MP4 (share)</option>
+                </select>
+              </div>
             </div>
             <div class="tl-preview"><img id="tlPreview" alt="" hidden></div>
             <div class="bundle-foot">
@@ -271,6 +284,7 @@
               <button id="tlBtn" class="ghost" type="button">Render time-lapse</button>
             </div>
           </div>
+          <p class="insp-note save-file-note" id="saveFileNote">This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition 2.</p>
           <div class="pane-foot">
             <span id="proofStatus" class="status"></span>
             <label class="reprint-toggle" title="Embed the poster's recipe (region, tracks, style) in the PNG so it can be reprinted from the file alone. Turn off for a share copy — it keeps your exact track coordinates out of the file.">
@@ -288,7 +302,7 @@
                 <option value="pdf">PDF (print shop)</option>
               </select>
             </div>
-            <button id="downloadAgain" class="ghost" type="button" hidden>Download again</button>
+            <button id="downloadAgain" class="ghost" type="button" hidden>Save another copy</button>
             <button id="reframe" class="ghost" type="button">Reframe</button>
             <button id="accept" class="primary" type="button">Accept &amp; render final</button>
           </div>

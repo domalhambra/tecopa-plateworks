@@ -199,6 +199,7 @@ def test_continue_ritual_round_trip():
     assert cont["prefill"]["style"]["color"] == "#4a6936"
     assert len(cont["tracks"]) == len(up1["tracks"])          # tracks restored
     assert cont["files"] == ["2024.gpx"]
+    assert cont["year_span"] == "2024"                        # the echo: what the file holds
     assert len(cont["starter_crop"]) == 4                     # old crop projected
 
     # add year two, re-proof, final

@@ -1,4 +1,4 @@
-<title>TrailPrint — your years outdoors, as one artifact</title>
+<title>Tecopa Plateworks — your years outdoors, as one artifact</title>
 <style>
   :root{
     --ground:#13160e; --ground-2:#1b1f15; --rule:#333829;
@@ -131,6 +131,7 @@
   .trust h3{font-size:19px;margin:0 0 6px;display:flex;gap:10px;align-items:center}
   .trust h3 .dot{width:8px;height:8px;border-radius:50%;background:var(--gold);flex:none}
   .trust p{color:var(--ink-2);font-size:14.5px;margin:0}
+  .pricing{grid-template-columns:repeat(2,1fr)}
 
   /* faq */
   .faq{display:flex;flex-direction:column;gap:2px}
@@ -169,10 +170,11 @@
 
 <div class="wrap">
   <div class="bar">
-    <div class="brand"><span class="mark"></span>TrailPrint <b>Studio</b></div>
+    <div class="brand"><span class="mark"></span>Tecopa <b>Plateworks</b></div>
     <div style="display:flex;gap:12px;align-items:center">
       <a class="navlink" href="#how">How it works</a>
       <a class="navlink" href="#plates">Regions</a>
+      <a class="navlink" href="#pricing">Pricing</a>
       <button class="theme" id="themeBtn" aria-label="Switch light or dark">◐</button>
     </div>
   </div>
@@ -181,11 +183,12 @@
     <div>
       <p class="eyebrow">GPX in · archival print out</p>
       <h1>Your years outdoors, as one artifact that <span class="gild">keeps growing</span>.</h1>
-      <p class="lede">Drop in your GPX tracks and TrailPrint renders a museum-quality
-        shaded-relief poster of everywhere you've been — one you can perform as a print,
-        a phone wallpaper, or a film, and add to every single year.</p>
+      <p class="lede">Ten years of Lassen weekends. One map. Drop in your GPX tracks and
+        Tecopa Plateworks renders a museum-quality shaded-relief poster of your years within one
+        hand-built plate — performed as a print, a phone wallpaper, or a film, and grown
+        edition by edition.</p>
       <div class="heroactions">
-        <a class="btn btn-solid" href="#how">Make yours</a>
+        <a class="btn btn-solid" href="mailto:domalhambra@hey.com?subject=Tecopa%20Plateworks%20print%20order">Order a print</a>
         <a class="btn btn-ghost" href="#plates">See the regions</a>
       </div>
       <p class="caption" style="margin-top:22px">No account · no cloud · the file is the save file.</p>
@@ -204,7 +207,7 @@
     <div class="band-head">
       <p class="eyebrow">One score, three performances</p>
       <h2>Decide the picture once. Perform it many ways.</h2>
-      <p class="lede">TrailPrint fixes your composition in ground coordinates, then paints
+      <p class="lede">Tecopa Plateworks fixes your composition in ground coordinates, then paints
         it at any size or density — so a print, a wallpaper, and a film are the same map,
         never three separate projects.</p>
     </div>
@@ -263,7 +266,7 @@
       <div>
         <p class="eyebrow">A screen is a sheet with a known ppi</p>
         <h2>From the wall to the lock screen.</h2>
-        <p class="lede">Pick a device and TrailPrint re-cuts the exact composition to its
+        <p class="lede">Pick a device and Tecopa Plateworks re-cuts the exact composition to its
           native pixels. A 2.6&nbsp;pt trail is literally 2.6&nbsp;pt on the glass.</p>
         <ul class="fmt-list">
           <li><span class="tag">Print</span><div><b>Archival poster</b><p>300&nbsp;dpi, framed keyline and cartouche, sized to the data's true resolution.</p></div></li>
@@ -284,7 +287,8 @@
       <p class="eyebrow">Handcrafted plates</p>
       <h2>Built on real elevation, one region at a time.</h2>
       <p class="lede">Each region is a curated plate cut from real USGS 3DEP terrain and
-        GNIS place names. We never invent ground — if the data isn't sharp enough, we say so.</p>
+        GNIS place names. Plates are versioned and hash-addressed — a plate is a download
+        your poster can name. We never invent ground — if the data isn't sharp enough, we say so.</p>
     </div>
     <div class="plates">
       <div class="plate-card feat">
@@ -294,6 +298,13 @@
           <div class="coord">40.42° N · 120.65° W · Susanville ↔ Eagle Lake</div>
           <p style="color:var(--ink-2);font-size:14.5px;margin:12px 0 0">The first plate:
             high desert, volcanic relief, and the lake corridor rendered from 10-metre DEM.</p>
+          <model-viewer src="../assets/lassen_ca/mockup_plate.glb"
+            alt="The Lassen plate as a physical disc — drag to spin"
+            camera-controls auto-rotate auto-rotate-delay="1200" rotation-per-second="12deg"
+            disable-zoom interaction-prompt="none" loading="lazy"
+            style="width:100%;max-width:340px;height:260px;margin-top:16px;background:transparent">
+          </model-viewer>
+          <p class="caption" style="margin:6px 0 0">The plate, as an object — drag to spin it.</p>
           <div class="avail">● Available now</div>
         </div>
       </div>
@@ -320,6 +331,25 @@
   </div>
 </section>
 
+<section class="band" id="pricing">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Founding prices</p>
+      <h2>Priced like craft, not compute.</h2>
+      <p class="lede">Honest numbers to start, revisited after the first run of orders.
+        Every price includes the proof loop — you approve the exact pixels before
+        anything renders at full resolution or ships.</p>
+    </div>
+    <div class="trust pricing">
+      <div><h3><span class="dot"></span>The Poster — $79</h3><p>The digital final: a print-resolution PNG that carries its own recipe, wallpapers cut to your exact screens, and the Year-Film. One composition, every performance.</p></div>
+      <div><h3><span class="dot"></span>The Print — $149</h3><p>The 18×24 archival print, lab-fulfilled and shipped, with the digital Poster included. Smaller sheets priced on request.</p></div>
+      <div><h3><span class="dot"></span>Edition N+1 — $49 / $99</h3><p>Next year, drop this year's PNG back in. The digital edition is $49; the reprinted 18×24 is $99. The ritual costs less than the first purchase, by design.</p></div>
+      <div><h3><span class="dot"></span>Commission a plate — $299</h3><p>Your valley isn't covered yet? The fee buys the making — curation, the terrain bakes, validation on real ground — plus your first 18×24 print. The finished plate publishes free, with your name in its record.</p></div>
+    </div>
+    <p class="caption" style="margin-top:28px">Plates are free. Always. They are the trust layer behind "reprint forever" — your file must always be able to fetch the terrain it names.</p>
+  </div>
+</section>
+
 <section class="band">
   <div class="wrap">
     <p class="eyebrow" style="margin-bottom:36px">Why you can trust the file</p>
@@ -336,7 +366,7 @@
     <p class="eyebrow" style="margin-bottom:28px">Questions</p>
     <div class="faq">
       <details open><summary>Why only a few regions?</summary><p>Each plate is built from real 3DEP elevation data, and we refuse to print terrain we can't back with real ground. Adding a region is deliberate craft, not a checkbox — and the request list decides what's cut next.</p></details>
-      <details><summary>What if TrailPrint disappears?</summary><p>Your poster reprints itself. The full recipe — composition, route geometry, source hashes, and embedded photos — lives inside the PNG, so any TrailPrint file re-renders at print resolution from the file alone. No account, no server, no lock-in.</p></details>
+      <details><summary>What if Tecopa Plateworks disappears?</summary><p>Mechanism, not promise. The PNG carries its full recipe — composition, route geometry, source hashes, embedded photos — plus the identity of the exact terrain plate it was painted on, in a manifest whose schema is public domain (CC0), so anyone may write a reader without asking. The engine is open source on GitHub under AGPL-3.0-or-later, so anyone may run it, forever. Plates are versioned, hash-addressed downloads your file names by content. And the resurrection path is a test, not a promise — the orphan drill, run in CI on every change: a fresh machine with the engine, the one plate your file names installed from its pack, and one PNG, reproducing the poster byte-for-byte. No account, no server, no lock-in.</p></details>
       <details><summary>How do I get my tracks in?</summary><p>Export GPX from Gaia, onX, Strava, or your watch — one bulk file can carry many tracks. Re-export your whole folder every year; a recording counts once, and a repeat visit on a new day still earns its worn-path weight.</p></details>
       <details><summary>What makes the time-lapse work?</summary><p>Your tracks already carry dates, and rendering is deterministic, so a film isn't a new kind of output — it's one poster painted many times, each frame a prefix of your journeys in day order. The final frame is byte-identical to the still print.</p></details>
     </div>
@@ -345,12 +375,13 @@
 
 <footer>
   <div class="wrap foot">
-    <div class="brand" style="font-size:16px"><span class="mark"></span>TrailPrint <b>Studio</b></div>
+    <div class="brand" style="font-size:16px"><span class="mark"></span>Tecopa <b>Plateworks</b></div>
     <div>Shaded relief · GPX · living editions</div>
     <div>The poster on your wall is the save file.</div>
   </div>
 </footer>
 
+<script type="module" src="vendor/model-viewer.min.js"></script>
 <script>
   // theme toggle: stamp data-theme, mirroring the host viewer's own control
   (function(){
