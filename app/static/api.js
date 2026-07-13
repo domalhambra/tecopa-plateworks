@@ -91,6 +91,7 @@ export async function proof(sessionId, cropOv, printW, printH,
     marker_size_in: style.marker, marker_ring: style.ring,
     photo_style: style.photoStyle, furniture_scale: style.furniture,
     terrain_depth: style.terrain, shadow_strength: style.shadow,
+    oblique: style.oblique,
   });
   if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();

@@ -37,6 +37,7 @@ export const state = {
     furniture: 1.0,       // multiplier on the automatic sheet-size furniture scale
     terrain: 1.0,         // multiplier on the scale-keyed terrain-depth pass
     shadow: 0.5,          // cast-shadow + sky-occlusion strength ("Blender relief")
+    oblique: 0.0,         // High relief: plan-oblique stand-up terrain; 0 = flat sheet
   },
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   embedSpec: true,        // embed the reprint manifest in the PNG (off = a share copy)

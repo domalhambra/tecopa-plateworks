@@ -67,6 +67,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `furniture_scale` — multiplier on the automatic furniture scale, 0.6-1.6
 - `terrain_depth` — multiplier on the terrain-depth pass, 0-1.5
 - `shadow_strength` — cast-shadow / sky-occlusion strength, 0-1
+- `oblique` — High relief: plan-oblique shear strength, 0-1 (terrain and everything on it displaces up-sheet by elevation, with occlusion; 1 = max stand-up, 12% of sheet height); default `0.0` = the classic top-down sheet, and the key is omitted at the default (writers must not emit `0.0` — a pre-oblique manifest re-stamps byte-identically)
 - `output_kind` — `"print"` (finals at 300 dpi) or `"wallpaper"` (finals at `screen_ppi`)
 - `screen_ppi` — device pixels per inch; meaningful for wallpapers only
 - `keyline` — the thin sheet frame (wallpapers go clean)

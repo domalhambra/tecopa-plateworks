@@ -31,6 +31,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--region", default="lassen_ca")
     ap.add_argument("--gpx", default="tests/fixtures/sample.gpx")
+    ap.add_argument("--oblique", type=float, default=0.0,
+                    help="High relief (plan-oblique) strength 0..1; 0 = classic flat sheet")
     args = ap.parse_args()
 
     region = Region(args.region)
@@ -65,7 +67,7 @@ def main():
         region_id=region.id, crs=region.cfg["crs"], crop=crop,
         print_w_in=pw, print_h_in=ph, native_resolution_m=region.cfg["native_resolution_m"],
         tracks=track_arrays, hotspots=spots, seed=7,
-        title_text=region.name.upper())
+        title_text=region.name.upper(), oblique=args.oblique)
 
     proof = rasterize(spec, dpi=96, region_dir=out_dir, watermark=False)
     proof_path = os.path.join(out_dir, "poster_proof.png"); proof.save(proof_path)
@@ -77,7 +79,8 @@ def main():
     detail = CompositionSpec(
         region_id=region.id, crs=region.cfg["crs"], crop=detail_crop,
         print_w_in=2.0, print_h_in=2.6667, native_resolution_m=region.cfg["native_resolution_m"],
-        tracks=track_arrays, hotspots=spots, seed=7, title_text="")
+        tracks=track_arrays, hotspots=spots, seed=7, title_text="",
+        oblique=args.oblique)
     detail_img = rasterize(detail, dpi=300, region_dir=out_dir, watermark=False)
     detail_path = os.path.join(out_dir, "poster_detail_300dpi.png"); detail_img.save(detail_path)
     print(f"wrote {detail_path}  {detail_img.size}")

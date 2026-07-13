@@ -274,6 +274,7 @@ function applyPrefill(p) {
   Object.assign(state.style, {
     width: s.width, halo: s.halo, color: s.color || '', marker: s.marker, ring: s.ring,
     photoStyle: s.photoStyle, furniture: s.furniture, terrain: s.terrain, shadow: s.shadow,
+    oblique: s.oblique ?? 0,
   });
   const setSlider = (sid, vid, val, fmt) => {
     const el = $(sid); if (el != null && val != null) { el.value = val; $(vid).textContent = fmt(val); }
@@ -282,6 +283,7 @@ function applyPrefill(p) {
   setSlider('sHalo', 'vHalo', s.halo, (v) => Number(v).toFixed(2));
   setSlider('sShadow', 'vShadow', s.shadow, (v) => Number(v).toFixed(1));
   setSlider('sTerrain', 'vTerrain', s.terrain, (v) => `${Number(v).toFixed(1)}×`);
+  setSlider('sOblique', 'vOblique', s.oblique ?? 0, (v) => Number(v).toFixed(2));
   setSlider('sMarker', 'vMarker', s.marker, (v) => `${v} in`);
   setSlider('sRing', 'vRing', s.ring, (v) => Number(v).toFixed(2));
   setSlider('sFurniture', 'vFurniture', s.furniture, (v) => `${Number(v).toFixed(2)}×`);
@@ -785,6 +787,7 @@ function wire() {
     ['sFurniture', 'vFurniture', 'furniture', (v) => `${Number(v).toFixed(2)}×`],
     ['sTerrain', 'vTerrain', 'terrain', (v) => `${Number(v).toFixed(1)}×`],
     ['sShadow', 'vShadow', 'shadow', (v) => Number(v).toFixed(1)],
+    ['sOblique', 'vOblique', 'oblique', (v) => Number(v).toFixed(2)],
   ];
   for (const [sid, vid, key, fmt] of styleSliders) {
     $(sid).oninput = (e) => {
