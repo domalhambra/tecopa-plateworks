@@ -1,0 +1,24 @@
+{
+  "id": "tushar_beaver_ut",
+  "name": "Tushar Mountains, Utah",
+  "crs": "EPSG:32612",
+  "bounds": [
+    347020.0,
+    4215960.0,
+    387760.0,
+    4253360.0
+  ],
+  "overview_size": [
+    1400,
+    1285
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1730.5869140625,
+  "elevation_max": 3476.21142578125,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}

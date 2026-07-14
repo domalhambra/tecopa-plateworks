@@ -1,0 +1,60 @@
+{
+  "id": "tushar_beaver_ut",
+  "built": "2026-07-14",
+  "fetch_bbox_4326": [
+    -112.75,
+    38.08,
+    -112.28,
+    38.42
+  ],
+  "crs": "EPSG:32612",
+  "rebuild": "python region_prep.py --id tushar_beaver_ut --name <name> --bbox -112.75 38.08 -112.28 38.42 --epsg 32612 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "18d721ff46f6b2f7ee0eb07ebd1d64191b65712cce0ca04b6f8f9adc978f507c",
+      "bytes": 64638737
+    },
+    "hydro.json": {
+      "sha256": "c312a48428abd459119925821d78a720b64e3eb5a06518f9f06e5ddcc61cbaff",
+      "bytes": 45190
+    },
+    "region.json": {
+      "sha256": "ac4d0ce0796d4195b53b0fcf64b6d9b64fcb78c97e39fb216ced714c886abcfc",
+      "bytes": 469
+    },
+    "overview.png": {
+      "sha256": "3118ffd3ba5d703bee445430bc32721b2381b7bd8e4e7b6f65038579d94fa9f7",
+      "bytes": 569851
+    },
+    "landcover.tif": {
+      "sha256": "3449d21d7a3a1d84f7a5eaf38191383aadbd3d7c670482d99fa055daf6c04f88",
+      "bytes": 213718
+    },
+    "labels.json": {
+      "sha256": "5380bc1b5c09e68bf86b462bb41f80665a732db179322c4a7e56d2b46304b4e7",
+      "bytes": 16415
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "py3dep.get_dem",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}
