@@ -29,6 +29,11 @@ def spec_to_json(s: CompositionSpec) -> dict:
     # forever-contract's sha256 check. spec_from_json refills the default.
     if not d["credit_text"]:
         del d["credit_text"]
+    # same contract for the High-relief knob: 0.0 (the classic top-down sheet) is the
+    # pre-feature look, so it is omitted and a pre-oblique manifest re-stamps
+    # byte-identically; spec_from_json refills the 0.0 default.
+    if not d["oblique"]:
+        del d["oblique"]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:

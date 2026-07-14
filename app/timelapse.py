@@ -144,13 +144,17 @@ def render_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=None,
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
     out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
-                                       labels=labels)
+    base_rgb, lum, ctx = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
+                                            labels=labels)
     if plan is None:
         plan = frame_plan(spec)
     for groups in plan:
-        img = render._paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=groups)
-        yield render._paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False)
+        # ctx (the plan-oblique warp) is a pure function of the spec + plate, so one
+        # ctx serves every frame and the last frame stays pixel-equal to the still.
+        img = render._paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=groups,
+                                    ctx=ctx)
+        yield render._paint_overlays(img, spec, lum, out_w, out_h, dpi,
+                                     watermark=False, ctx=ctx)
 
 
 # ---- progressive reveal: the smooth "drawing pen" for the social-preview mockups ----
@@ -216,11 +220,14 @@ def progressive_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=Non
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
     out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
-                                       labels=labels)
+    base_rgb, lum, ctx = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
+                                            labels=labels)
     for partial in progressive_reveal(spec, n_frames):
-        img = render._paint_journey(base_rgb, partial, out_w, out_h, dpi)
-        yield render._paint_overlays(img, partial, lum, out_w, out_h, dpi, watermark=False)
+        # partials differ only in tracks/track_days; the warp ctx is geometry-only,
+        # so the base's ctx is exact for every partial (and the closing full frame).
+        img = render._paint_journey(base_rgb, partial, out_w, out_h, dpi, ctx=ctx)
+        yield render._paint_overlays(img, partial, lum, out_w, out_h, dpi,
+                                     watermark=False, ctx=ctx)
 
 
 def _durations(n: int, step_ms: int, hold_ms: int, leader_ms: int) -> list:

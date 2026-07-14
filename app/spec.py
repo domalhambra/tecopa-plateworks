@@ -71,7 +71,7 @@ PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 "marker_diameter_in": (0.1, 0.5), "marker_ring": (0.0, 0.25),
                 "furniture_scale": (0.6, 1.6), "terrain_depth": (0.0, 1.5),
-                "shadow_strength": (0.0, 1.0)}
+                "shadow_strength": (0.0, 1.0), "oblique": (0.0, 1.0)}
 
 @dataclass
 class CompositionSpec:
@@ -129,6 +129,14 @@ class CompositionSpec:
                                              # along the sun with a cool skylight
                                              # fill. Constant across map scale --
                                              # shadows read best zoomed in; 0 = off
+    # High relief (v1.8): plan-oblique terrain (Jenny/Patterson) -- every point shears
+    # up-sheet by its elevation with painter's-algorithm occlusion, and the route/
+    # markers/labels/water displace identically, so the journey drapes over standing
+    # terrain. North stays up (a shear, not a rotation); the cartouche notes the
+    # projection. 1.0 = max stand-up (a fixed fraction of sheet height); 0 = the
+    # classic top-down sheet, byte-identical to pre-feature output (and omitted from
+    # the manifest at 0, per the additive contract).
+    oblique: float = 0.0
     # wallpaper output (v1.5): a screen is a sheet with a known ppi. print_w_in/h_in
     # are DERIVED from the device (px / ppi) at spec-build time (app/wallpaper.py), so
     # pixel_size(screen_ppi) returns the device's exact native pixels and every

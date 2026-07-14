@@ -743,14 +743,15 @@ async def proof(session_id: str = Form(...),
                 track_color: str = Form(""), marker_size_in: float = Form(0.24),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
                 furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0),
-                shadow_strength: float = Form(0.5),
+                shadow_strength: float = Form(0.5), oblique: float = Form(0.0),
                 output: str = Form("print"), wallpaper_preset: str = Form("")):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
              "marker_diameter_in": marker_size_in, "marker_ring": marker_ring,
              "photo_frame_style": photo_style, "furniture_scale": furniture_scale,
-             "terrain_depth": terrain_depth, "shadow_strength": shadow_strength}
+             "terrain_depth": terrain_depth, "shadow_strength": shadow_strength,
+             "oblique": oblique}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
     # an unknown output must 422, not silently build a print (same honest-422 pattern
@@ -867,7 +868,9 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         # proofed, and a render-time OffDemError would only surface inside the zip's
         # SKIPPED.txt -- probing here keeps the response's `skipped` list (which the
         # UI shows) the complete truth. The worker's per-item catch stays as backstop.
-        nan_frac = render._offdem_fraction(region.dir, region.cfg, pspec.crop)
+        nan_frac = render._offdem_fraction(
+            region.dir, region.cfg, pspec.crop,
+            south_extend_m=render.oblique_south_extend_m(region.dir, region.cfg, pspec))
         if nan_frac > render.MAX_OFFDEM_NAN_FRAC:
             skipped.append({"preset": pid, "reason":
                             f"the re-fit frame extends past the region's elevation "
@@ -929,7 +932,9 @@ def _timelapse_target(spec, region, wallpaper_preset, dpi):
         except SpecError as e:
             raise HTTPException(422, str(e))
         # the re-fit crop was never proofed: off-DEM probe now (as wallpapers_submit does)
-        nan_frac = render._offdem_fraction(region.dir, region.cfg, tspec.crop)
+        nan_frac = render._offdem_fraction(
+            region.dir, region.cfg, tspec.crop,
+            south_extend_m=render.oblique_south_extend_m(region.dir, region.cfg, tspec))
         if nan_frac > render.MAX_OFFDEM_NAN_FRAC:
             raise HTTPException(422, f"the {preset.name} frame extends past the region's "
                                 f"elevation data ({nan_frac * 100:.0f}% has no DEM coverage)")
@@ -1354,7 +1359,7 @@ async def continue_poster(file: UploadFile = File(...)):
                   "color": f"#{r:02x}{g:02x}{b:02x}", "marker": spec.marker_diameter_in,
                   "ring": spec.marker_ring, "photoStyle": spec.photo_frame_style,
                   "furniture": spec.furniture_scale, "terrain": spec.terrain_depth,
-                  "shadow": spec.shadow_strength},
+                  "shadow": spec.shadow_strength, "oblique": spec.oblique},
     }
     log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
              sid, region.id, edition, len(tracks), len(spots))

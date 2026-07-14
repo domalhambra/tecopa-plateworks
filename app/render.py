@@ -1,6 +1,7 @@
 # app/render.py
 from __future__ import annotations
 import json, math as _m, os
+from dataclasses import dataclass
 import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
@@ -8,7 +9,7 @@ from rasterio.enums import Resampling
 from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
-from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M
+from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M, _fill_nan
 from app import provenance
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
@@ -22,6 +23,33 @@ MAX_OFFDEM_NAN_FRAC = 0.01
 # coverage verdict (invariant 1). Measuring on the DPI-scaled render window let a crop
 # marginally overhanging the DEM pass the proof yet be rejected at the final.
 OFFDEM_PROBE_PX = 384
+
+# ---- High relief (v1.8, plan-oblique terrain after Jenny/Patterson): every point on
+# the sheet shears up-sheet by its elevation, y' = y - s*(z - z_floor), with true
+# painter's-algorithm occlusion -- mountains stand out of the sheet while north stays
+# up and E-W geometry stays planimetric (a shear, not a rotation). The knob is
+# spec.oblique (0..1); 0 is a strict no-op (the classic top-down sheet). The shear s
+# is sized so the HIGHEST ground in view rises exactly oblique * OBLIQUE_MAX_FRAC of
+# the sheet height -- perceptually consistent from a valley crop to a county sheet,
+# and it bounds the extra southern DEM band that shears into view (a fixed
+# dimensionless shear would be invisible at county scale and sheet-swallowing at
+# corridor scale). z_floor/z_max come from a FIXED probe grid over crop + band (the
+# off-DEM probe pattern), so s is DPI-independent: proof == final (invariant 1).
+OBLIQUE_MAX_FRAC = 0.12         # max stand-up at knob 1 = this fraction of sheet height
+OBLIQUE_MIN_RANGE_M = 1.0       # flatter than this across the probe: shear degenerates to 0
+OBLIQUE_WALL_SHADE = 0.62       # steep south-face ("wall") brightness floor -- south
+                                # faces get no direct sun under the NW light
+OBLIQUE_WALL_SLOPE_LO = 1.0     # terrain grade (dz per ground metre) where walls start shading
+OBLIQUE_WALL_SLOPE_HI = 3.0     # fully shaded wall by this grade
+OBLIQUE_GHOST_ALPHA = 0.25      # hidden-line honesty: route ink occluded by standing
+                                # terrain stays as a faint ghost, never vanishes
+OBLIQUE_SYMBOL_GHOST = 0.4      # ghost factor for occluded point symbols (pins,
+                                # markers). Higher than the route's: symbols composite
+                                # linearly while track coverage still passes through
+                                # the exponential ink curve, so these print similar
+OBLIQUE_OCCL_TOL_FRAC = 0.004   # an occluder must sit more than this fraction of the
+                                # sheet height nearer (souther) to count -- sheet-
+                                # relative so ghost verdicts agree across DPIs
 
 # ---- track cartography (V1-10 hybrid, approved by Dom): a pronounced desert-gold
 # route on a light paper halo. The halo is the mapping-app legibility move: it always
@@ -121,22 +149,34 @@ def _shadow_res_m(spec):
     """Ground metres per shadow-grid sample. A pure function of the spec."""
     return (spec.crop[2] - spec.crop[0]) / (spec.print_w_in * SHADOW_GRID_SPI)
 
-def _read_window(region_dir, cfg, crop, out_w, out_h):
+def _padded_bounds(crop, out_w, out_h, pad_x, pad_top, pad_bot):
+    """CRS bounds of the crop grown by integer-pixel pads (top = north = crop[3] side,
+    bottom = south = crop[1] side). One definition shared by the DEM and landcover
+    reads, so the two windows register by construction at any pad asymmetry."""
+    gx = (crop[2] - crop[0]) / out_w; gy = (crop[3] - crop[1]) / out_h
+    return (crop[0] - pad_x*gx, crop[1] - pad_bot*gy,
+            crop[2] + pad_x*gx, crop[3] + pad_top*gy)
+
+def _read_window(region_dir, cfg, crop, out_w, out_h, extra_south_px=0):
     """Read the DEM for the crop (plus a margin) at the output resolution.
-    rasterio picks the right overview level for us (the image pyramid)."""
+    rasterio picks the right overview level for us (the image pyramid).
+
+    extra_south_px grows the BOTTOM pad only: the plan-oblique shear moves content
+    up-sheet, so ground south of the crop (and nothing north of it) can shear into
+    view. At 0 the window is bit-identical to the symmetric-pad read."""
     # Pad by an INTEGER number of output pixels and derive the big bounds from that
     # pad, so the trimmed central window maps to the crop exactly at every DPI
     # (a continuous margin + round() leaves a sub-pixel terrain/track offset).
     pad_x = round(out_w * MARGIN_FRAC); pad_y = round(out_h * MARGIN_FRAC)
-    gx = (crop[2] - crop[0]) / out_w; gy = (crop[3] - crop[1]) / out_h
-    big = (crop[0]-pad_x*gx, crop[1]-pad_y*gy, crop[2]+pad_x*gx, crop[3]+pad_y*gy)
+    pad_bot = pad_y + int(extra_south_px)
+    big = _padded_bounds(crop, out_w, out_h, pad_x, pad_y, pad_bot)
     with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
         win = from_bounds(*big, transform=ds.transform)
         elev = ds.read(1, window=win,
-                       out_shape=(out_h + 2*pad_y, out_w + 2*pad_x),
+                       out_shape=(out_h + pad_y + pad_bot, out_w + 2*pad_x),
                        resampling=Resampling.bilinear, boundless=True, fill_value=np.nan)
     ground_per_px = (crop[2]-crop[0]) / out_w
-    return elev, pad_x, pad_y, ground_per_px
+    return elev, pad_x, pad_y, pad_bot, ground_per_px
 
 BIOME_EDGE_BLUR_PX96 = 1.6      # soften 30 m NLCD class edges (scaled by dpi)
 
@@ -149,13 +189,13 @@ def _biome_layers(region_dir, cfg, crop, pads, shape, dpi):
     if not os.path.exists(p):
         return None
     from app.relief import BIOME_TINT
-    pad_x, pad_y = pads
-    out_h = shape[0] - 2 * pad_y
+    # pads: (pad_x, pad_y) for the classic symmetric margin, or (pad_x, pad_top,
+    # pad_bot) when the plan-oblique south band grows the bottom read.
+    pad_x, pad_top, *rest = pads
+    pad_bot = rest[0] if rest else pad_top
+    out_h = shape[0] - pad_top - pad_bot
     out_w = shape[1] - 2 * pad_x
-    gx = (crop[2] - crop[0]) / out_w
-    gy = (crop[3] - crop[1]) / out_h
-    big = (crop[0] - pad_x * gx, crop[1] - pad_y * gy,
-           crop[2] + pad_x * gx, crop[3] + pad_y * gy)
+    big = _padded_bounds(crop, out_w, out_h, pad_x, pad_top, pad_bot)
     with rasterio.open(p) as ds:
         win = from_bounds(*big, transform=ds.transform)
         lc = ds.read(1, window=win, out_shape=shape,
@@ -175,27 +215,203 @@ def _biome_layers(region_dir, cfg, crop, pads, shape, dpi):
         tint[..., ch] = gaussian_filter(tint[..., ch] * weight, sigma) / safe
     return tint / 255.0, np.clip(wb, 0, 1)
 
-def _offdem_fraction(region_dir, cfg, crop):
-    """Fraction of the crop (margin excluded) with no DEM coverage, sampled on a fixed
-    probe grid so the value does not depend on the render DPI. Nearest resampling: we
-    only care whether each probe cell hits data, not its interpolated value."""
-    cw, ch = crop[2] - crop[0], crop[3] - crop[1]
+def _probe_dem(region_dir, cfg, rect):
+    """Sample the DEM over `rect` (CRS metres) on a fixed probe grid so the values do
+    not depend on the render DPI (the off-DEM / shear verdicts must be identical at
+    proof and final -- invariant 1). Nearest resampling: presence and coarse level,
+    not interpolated detail. Returns None for an empty rect."""
+    cw, ch = rect[2] - rect[0], rect[3] - rect[1]
     if cw <= 0 or ch <= 0:
-        return 1.0
+        return None
     if cw >= ch:
         pw, ph = OFFDEM_PROBE_PX, max(1, round(OFFDEM_PROBE_PX * ch / cw))
     else:
         ph, pw = OFFDEM_PROBE_PX, max(1, round(OFFDEM_PROBE_PX * cw / ch))
     with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
-        win = from_bounds(*crop, transform=ds.transform)
-        probe = ds.read(1, window=win, out_shape=(ph, pw),
-                        resampling=Resampling.nearest, boundless=True, fill_value=np.nan)
+        win = from_bounds(*rect, transform=ds.transform)
+        return ds.read(1, window=win, out_shape=(ph, pw),
+                       resampling=Resampling.nearest, boundless=True, fill_value=np.nan)
+
+def _offdem_fraction(region_dir, cfg, crop, south_extend_m=0.0):
+    """Fraction of the crop (margin excluded) with no DEM coverage, on the fixed probe
+    grid. south_extend_m grows the probed rect southward: under the plan-oblique shear
+    that band is PAINTED ground (it shears up into the frame), so it must be real data
+    like the crop itself -- never invented terrain (invariant 5)."""
+    rect = (crop[0], crop[1] - max(0.0, south_extend_m), crop[2], crop[3])
+    probe = _probe_dem(region_dir, cfg, rect)
+    if probe is None:
+        return 1.0
     return float(np.isnan(probe).mean())
+
+def oblique_band_m(spec):
+    """Max plan-oblique up-sheet displacement in GROUND metres -- equally, the ground
+    depth of the southern band that can shear into view. A pure function of the spec
+    (no dpi anywhere), like _shadow_res_m: because the shear is sized so the probe's
+    highest ground rises exactly this far, the band is known before any probe."""
+    return spec.oblique * OBLIQUE_MAX_FRAC * (spec.crop[3] - spec.crop[1])
+
+def _oblique_shear(region_dir, cfg, spec):
+    """(s, z_floor) for the plan-oblique warp, or None when the knob is off or the
+    ground in view is too flat to stand up. s is the dimensionless shear (metres of
+    up-sheet shift per metre of elevation above z_floor); both derive from the fixed
+    probe over crop + southern band, so proof and final march the same projection."""
+    if spec.oblique <= 0:
+        return None
+    band = oblique_band_m(spec)
+    probe = _probe_dem(region_dir, cfg,
+                       (spec.crop[0], spec.crop[1] - band, spec.crop[2], spec.crop[3]))
+    if probe is None or np.isnan(probe).all():
+        return None                    # unreachable behind the off-DEM guard; belt+braces
+    z_floor = float(np.nanmin(probe)); z_max = float(np.nanmax(probe))
+    if z_max - z_floor < OBLIQUE_MIN_RANGE_M:
+        return None                    # a dead-flat crop has nothing to raise
+    return band / (z_max - z_floor), z_floor
+
+def oblique_south_extend_m(region_dir, cfg, spec):
+    """The southern DEM depth the shear actually consumes: the band when the crop has
+    real relief to raise, else 0 (a flat crop or the knob off -- no band is read, so
+    none is required). Both the render and the pre-enqueue off-DEM checks read this,
+    so a flat crop with the knob up never 422s in one place and renders in another."""
+    return oblique_band_m(spec) if _oblique_shear(region_dir, cfg, spec) is not None else 0.0
 
 def _crs_to_px(x, y, crop, out_w, out_h):
     px = (x - crop[0]) / (crop[2]-crop[0]) * out_w
     py = (crop[3] - y) / (crop[3]-crop[1]) * out_h
     return px, py
+
+# ---- the plan-oblique warp (High relief). Geometry primer: numpy row 0 is the crop's
+# NORTH edge and rows grow southward, exactly like sheet py -- so "up-sheet" is a
+# SUBTRACTION from the row index, and the plan-oblique viewer (looking from the south)
+# sees far-to-near as ascending row order. The painter's algorithm is therefore one
+# ascending sweep where later (souther, nearer) rows overwrite earlier ones. ----
+
+@dataclass
+class ObliqueCtx:
+    """Everything the vector painters need to displace like the warped raster: the
+    shear itself, the padded elevation field to sample z from, and the winner buffer
+    (which source row each padded output pixel shows) for occlusion tests. Built once
+    per _paint_base, shared by every time-lapse frame (it is frame-invariant)."""
+    s: float              # dimensionless shear: up-sheet metres per metre of elevation
+    z_floor: float        # probe minimum over crop + southern band, metres
+    band_px: float        # max shift at this dpi (= oblique_band_m / gy) -- the clamp
+    gy: float             # ground metres per output pixel, vertical
+    elev: np.ndarray      # PADDED, NaN-repaired float32 elevation (the z sampler)
+    winner: np.ndarray    # PADDED int32: visible source row per output pixel (-1 = none)
+    pad_x: int
+    pad_top: int
+    pad_bot: int
+    out_w: int
+    out_h: int
+
+def _oblique_warp(rgb_pad, elev_fill, s, z_floor, gy, band_px):
+    """Shear the painted padded sheet up-sheet by elevation with painter's-algorithm
+    occlusion (a heightfield column render): sweep source rows north -> south, project
+    each to  d = y - shift(z),  span-fill the inclusive interval between consecutive
+    projections per column, and let later (nearer) rows overwrite. A span that grows
+    down-sheet is a visible south-facing face -- a "wall" -- and is shaded by its
+    terrain grade (south faces get no direct sun under the NW light); a span that
+    folds back is a north-facing back face, painted then overwritten by the nearer
+    surface that follows. Returns (warped uint8 rgb, winner int32), both padded-grid;
+    winner[d, x] is the source row that owns that output pixel (-1 where nothing
+    landed -- only ever below the trimmed sheet). Pure numpy, no RNG (invariant 3)."""
+    Hp, Wp = elev_fill.shape
+    out = np.zeros_like(rgb_pad)
+    winner = np.full((Hp, Wp), -1, dtype=np.int32)   # int32: a 120 MP sheet's rows
+                                                     # overflow int16
+    prev = None
+    prev_z = None
+    for y in range(Hp):
+        z = elev_fill[y]
+        shift = np.minimum(s * np.maximum(z - z_floor, 0.0) / gy, band_px)
+        cur = y - shift
+        if prev is None:
+            prev, prev_z = cur, z
+        # wall shade: keyed to the terrain grade dz/dground (gy * 1 row = the ground
+        # row spacing), so the shading is identical at any DPI. Gentle slopes pass
+        # untouched; only true steeps darken toward the wall floor.
+        grade = np.maximum(prev_z - z, 0.0) / gy
+        t = np.clip((grade - OBLIQUE_WALL_SLOPE_LO)
+                    / (OBLIQUE_WALL_SLOPE_HI - OBLIQUE_WALL_SLOPE_LO), 0.0, 1.0)
+        dark = 1.0 - (1.0 - OBLIQUE_WALL_SHADE) * (t * t * (3.0 - 2.0 * t))
+        color = np.rint(rgb_pad[y].astype(np.float32) * dark[:, None]).astype(np.uint8)
+        # the span this row paints, per column: the current projection d_cur ALWAYS,
+        # plus the connecting rows toward the previous projection but NOT d_prev
+        # itself (row y-1 already painted it with its own color). Chaining these
+        # half-open runs makes the projection of a connected column a connected,
+        # hole-free interval -- so occlusion is exact for a heightfield -- while a
+        # flat column (d_cur == d_prev + 1) paints exactly its own row: identity.
+        d_cur = np.rint(cur).astype(np.int64)
+        d_prev = np.rint(prev).astype(np.int64)
+        down = d_cur >= d_prev
+        lo = np.where(down, d_prev + 1, d_cur)        # down-sheet (wall/flat) vs up (riser)
+        hi = np.where(down, d_cur, d_prev - 1)
+        collapse = lo > hi                            # d_cur == d_prev: just paint d_cur
+        i0 = np.where(collapse, d_cur, lo)
+        length = np.where(collapse, 0, hi - lo)
+        # masked-k fill that shrinks to the still-active columns each step: total work
+        # is proportional to PAINTED pixels, so one tall cliff column never multiplies
+        # full-width work (and flat ground costs a single pass).
+        active = np.arange(Wp, dtype=np.int64)
+        k = 0
+        while active.size:
+            rows = i0[active] + k
+            inb = (rows >= 0) & (rows < Hp)
+            ra, ca = rows[inb], active[inb]
+            out[ra, ca] = color[ca]
+            winner[ra, ca] = y
+            k += 1
+            active = active[length[active] >= k]
+        prev, prev_z = cur, z
+    return out, winner
+
+def _shift_px_at(ctx, px, py):
+    """The warp's up-sheet shift (px, float) at a sheet point: bilinear z from the
+    padded elevation, then the SAME shear + clamp the raster sweep applies -- one z
+    source, one clip, so displaced vectors stay glued to the warped ground to
+    sub-pixel. Coordinates clamp to the padded grid (a far-off-sheet hydro vertex
+    samples the edge harmlessly; the in-frame filters still apply downstream)."""
+    r = min(max(py + ctx.pad_top, 0.0), ctx.elev.shape[0] - 1.0)
+    c = min(max(px + ctx.pad_x, 0.0), ctx.elev.shape[1] - 1.0)
+    r0, c0 = int(r), int(c)
+    r1, c1 = min(r0 + 1, ctx.elev.shape[0] - 1), min(c0 + 1, ctx.elev.shape[1] - 1)
+    fr, fc = r - r0, c - c0
+    z = (ctx.elev[r0, c0] * (1 - fr) * (1 - fc) + ctx.elev[r0, c1] * (1 - fr) * fc
+         + ctx.elev[r1, c0] * fr * (1 - fc) + ctx.elev[r1, c1] * fr * fc)
+    return min(ctx.s * max(float(z) - ctx.z_floor, 0.0) / ctx.gy, ctx.band_px)
+
+def _crs_to_px_oblique(x, y, spec, out_w, out_h, ctx):
+    """_crs_to_px, then the plan-oblique up-sheet displacement. ctx=None IS _crs_to_px
+    (the strict-no-op discipline every gated pass follows)."""
+    px, py = _crs_to_px(x, y, spec.crop, out_w, out_h)
+    if ctx is None:
+        return px, py
+    return px, py - _shift_px_at(ctx, px, py)
+
+def _occlusion_tol(ctx):
+    """How much nearer (souther, in source rows) an occluder must sit to count.
+    Sheet-relative, so the ghost/solid verdict agrees between proof and final."""
+    return max(2, round(OBLIQUE_OCCL_TOL_FRAC * ctx.out_h))
+
+def _occluded(ctx, px, py_disp, py_src):
+    """True when the warped terrain in front hides a point symbol: the winner at the
+    symbol's DISPLACED sheet position comes from a meaningfully souther (nearer)
+    source row than the symbol's own. Callers ghost the symbol, never drop it."""
+    if ctx is None:
+        return False
+    r = min(max(int(round(py_disp)) + ctx.pad_top, 0), ctx.winner.shape[0] - 1)
+    c = min(max(int(round(px)) + ctx.pad_x, 0), ctx.winner.shape[1] - 1)
+    w = int(ctx.winner[r, c])
+    return w >= 0 and w > py_src + ctx.pad_top + _occlusion_tol(ctx)
+
+def _place_pt(x, y, spec, out_w, out_h, ctx):
+    """One placement rule for every anchored symbol (terminus pins, markers, photos):
+    (px, py_displaced, occluded). ctx=None -> the classic planimetric position with
+    occluded=False, so the classic path is untouched."""
+    px, py = _crs_to_px(x, y, spec.crop, out_w, out_h)
+    if ctx is None:
+        return px, py, False
+    pyd = py - _shift_px_at(ctx, px, py)
+    return px, pyd, _occluded(ctx, px, pyd, py)
 
 def _journey_groups(spec):
     """Group spec.tracks indices into journeys. Segments sharing a (non-None) day are
@@ -216,27 +432,78 @@ def _journey_groups(spec):
             groups.append(by_day[day])
     return groups
 
-def _coverage(spec, out_w, out_h, width_px, groups=None):
+def _coverage(spec, out_w, out_h, width_px, groups=None, ctx=None):
     """Anti-aliased per-pixel visit count: how many distinct JOURNEYS cover each
     pixel. All segments of one journey draw onto one layer (self-overlap counts
-    once); summing layers makes overlap across journeys = frequency."""
+    once); summing layers makes overlap across journeys = frequency.
+
+    Under the plan-oblique warp (ctx) the ribbon is rasterized flat on the PADDED,
+    unsheared grid -- so a track just south of the crop honestly shears into view --
+    then warped through the SAME winner buffer as the terrain (see
+    _oblique_warp_coverage), so the ink drapes over ridges and down walls in exact
+    registration, and ink behind standing terrain survives as a faint ghost."""
     if groups is None:
         groups = [[i] for i in range(len(spec.tracks))]
-    cov = np.zeros((out_h, out_w), np.float32)
+    if ctx is None:
+        w, h, dx, dy = out_w, out_h, 0.0, 0.0
+    else:
+        w = out_w + 2 * ctx.pad_x
+        h = out_h + ctx.pad_top + ctx.pad_bot
+        dx, dy = float(ctx.pad_x), float(ctx.pad_top)
+    cov = np.zeros((h, w), np.float32)
     for g in groups:
-        layer = Image.new("L", (out_w, out_h), 0)
+        layer = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(layer)
         drew = False
         for i in g:
-            pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in spec.tracks[i]]
+            pts = [(px + dx, py + dy) for px, py in
+                   (_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in spec.tracks[i])]
             if len(pts) >= 2:
                 d.line(pts, fill=255, width=max(1, width_px), joint="curve")
                 drew = True
         if drew:
             cov += np.asarray(layer, np.float32) / 255.0
-    return cov
+    if ctx is None:
+        return cov
+    return _oblique_warp_coverage(cov, ctx)
 
-def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
+def _oblique_warp_coverage(cov_pad, ctx):
+    """Warp a padded source-space coverage raster through the terrain warp and trim
+    to the sheet. Two passes:
+
+    - visible: a gather through the winner buffer -- the winner IS the warp, so the
+      ribbon lands in exact registration with the warped color raster (it drapes
+      over ridges and down wall faces), and ink that lost the painter's sweep to
+      nearer terrain simply doesn't gather;
+    - ghost: the hidden-line pass -- every source ink pixel whose displaced position
+      is owned by meaningfully nearer terrain re-enters at OBLIQUE_GHOST_ALPHA, so a
+      route behind a standing ridge reads as the honest whisper of a hidden line,
+      never a silent gap. Sparse (touches only inked pixels)."""
+    Hp, Wp = cov_pad.shape
+    win = ctx.winner[ctx.pad_top:ctx.pad_top + ctx.out_h,
+                     ctx.pad_x:ctx.pad_x + ctx.out_w]
+    cols = np.arange(ctx.pad_x, ctx.pad_x + ctx.out_w)[None, :]
+    vis = cov_pad[np.clip(win, 0, Hp - 1), cols]
+    vis = np.where(win >= 0, vis, 0.0).astype(np.float32)
+    ys, xs = np.nonzero(cov_pad > 0)
+    if ys.size:
+        z = ctx.elev[ys, xs]
+        shift = np.minimum(ctx.s * np.maximum(z - ctx.z_floor, 0.0) / ctx.gy,
+                           ctx.band_px)
+        d = np.rint(ys - shift).astype(np.int64)
+        hidden = ctx.winner[np.clip(d, 0, Hp - 1), xs] > ys + _occlusion_tol(ctx)
+        rr = d - ctx.pad_top
+        cc = xs - ctx.pad_x
+        keep = (hidden & (rr >= 0) & (rr < ctx.out_h)
+                & (cc >= 0) & (cc < ctx.out_w))
+        if keep.any():
+            ghost = np.zeros_like(vis)
+            np.maximum.at(ghost, (rr[keep], cc[keep]),
+                          OBLIQUE_GHOST_ALPHA * cov_pad[ys[keep], xs[keep]])
+            vis = np.maximum(vis, ghost)
+    return vis
+
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None):
     """Composite tracks as inked, cased lines that pick up the terrain texture and
     paper grain instead of floating on top. Visitation is expressed as WIDTH: any
     pass draws the base line near-solid; segments covered by 2+ distinct passes
@@ -244,7 +511,12 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
 
     `groups` restricts the ink to a subset of journeys (a time-lapse prefix); None
     means every journey -- the still-poster behavior. Does NOT mutate rgb_u8 (it
-    copies to float first), so a time-lapse can ink many prefixes onto one base."""
+    copies to float first), so a time-lapse can ink many prefixes onto one base.
+
+    ctx (plan-oblique): every coverage raster comes back already warped onto the
+    sheet (see _coverage), so the feather/casing blurs and the paper grain below
+    stay SHEET-space -- the halo keeps its isotropic softness and the grain never
+    shears, exactly as on a flat sheet."""
     img = rgb_u8.astype(np.float32) / 255.0
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
     worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
@@ -257,15 +529,16 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
     worn_possible = len(groups) >= 2
 
     # per-journey coverage at both widths (overlap across journeys = frequency)
-    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups), feather)
+    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups, ctx=ctx),
+                                  feather)
 
     # 1) paper halo under the line (strength = the client's outline slider; 0 skips
     #    the halo work entirely), following the worn width where paths repeat.
     #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
     if spec.track_halo > 0:
-        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups), 0, 1)
+        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups, ctx=ctx), 0, 1)
         if worn_possible:
-            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups)
+            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups, ctx=ctx)
             cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
             del cas_worn
         cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
@@ -279,7 +552,8 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
     op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
     del visits_base
     if worn_possible:
-        visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w, groups), feather)
+        visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w, groups, ctx=ctx),
+                                      feather)
         op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
         op = np.maximum(op, op_worn)
         del visits_worn, op_worn
@@ -294,30 +568,41 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None):
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
-def _draw_termini(img, spec, out_w, out_h, dpi, groups=None):
+def _draw_termini(img, spec, out_w, out_h, dpi, groups=None, ctx=None):
     """A small dark pin with a paper ring at each JOURNEY's first and last point --
     the start and end anchor the story (V1-10). Pause-split segments of one day form
     one journey (see _journey_groups), so mid-route stop/resume points get no pin.
     Sized off the track width (physical units) so proof and final agree.
 
     `groups` restricts the pins to a subset of journeys (a time-lapse prefix); None
-    means every journey -- the still-poster behavior."""
+    means every journey -- the still-poster behavior. Under the plan-oblique warp
+    (ctx) a pin rides its ground up-sheet, and one hidden behind standing terrain
+    draws as a ghost -- hidden-line honesty, never a silent drop."""
     d = ImageDraw.Draw(img, "RGBA")
     # pin size rides the marker scale (physical), not the line width: at the old
     # track-width-derived ~1.7 mm the "story anchors" were invisible at poster
     # viewing distance (red-team). 0.42 x a 0.24 in marker ~ a 2.6 mm pin.
     r = max(2.0, spec.marker_diameter_in * dpi * 0.21)
     ring_w = max(1, round(r * 0.45))
+    # an occluded pin paints OPAQUE on a ghost layer, then composites faint (PIL's
+    # direct RGBA draw doesn't blend a low-alpha fill -- see _ghost_layer_alpha).
+    ghost = None
+    dg = None
     for g in (_journey_groups(spec) if groups is None else groups):
         segs = [spec.tracks[i] for i in g if len(spec.tracks[i]) >= 2]
         if not segs:
             continue
         for x, y in (segs[0][0], segs[-1][-1]):     # journey start, journey end
-            px, py = _crs_to_px(x, y, spec.crop, out_w, out_h)
+            px, py, hidden = _place_pt(x, y, spec, out_w, out_h, ctx)
             if 0 <= px <= out_w and 0 <= py <= out_h:
-                d.ellipse([px - r, py - r, px + r, py + r],
-                          fill=TERMINUS_INK + (255,),
-                          outline=TERMINUS_RING + (235,), width=ring_w)
+                if hidden and dg is None:
+                    ghost = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+                    dg = ImageDraw.Draw(ghost, "RGBA")
+                (dg if hidden else d).ellipse(
+                    [px - r, py - r, px + r, py + r], fill=TERMINUS_INK + (255,),
+                    outline=TERMINUS_RING + (235,), width=ring_w)
+    if ghost is not None:
+        img = _ghost_layer_alpha(img.convert("RGBA"), ghost, OBLIQUE_SYMBOL_GHOST)
     return img
 
 # ---- rich markers (v1.1): labels, vector icons, pinned photos ----
@@ -352,11 +637,12 @@ def _draw_glyph(d, name, cx, cy, r, color):
     primitives only (no font/emoji dependency) so the same spec renders identically
     on any machine (invariant 3)."""
     a = color + (255,)
+    paper = PHOTO_FRAME + (255,)
     if name == "peak":                         # mountain triangle
         d.polygon([(cx, cy-r), (cx+r, cy+r*0.7), (cx-r, cy+r*0.7)], fill=a)
     elif name == "camp":                       # tent
         d.polygon([(cx, cy-r), (cx+r, cy+r*0.7), (cx-r, cy+r*0.7)], fill=a)
-        d.line([(cx, cy-r), (cx, cy+r*0.7)], fill=PHOTO_FRAME + (255,), width=max(1, round(r*0.18)))
+        d.line([(cx, cy-r), (cx, cy+r*0.7)], fill=paper, width=max(1, round(r*0.18)))
     elif name == "water":                      # droplet
         d.ellipse([cx-r*0.8, cy-r*0.2, cx+r*0.8, cy+r*0.9], fill=a)
         d.polygon([(cx, cy-r), (cx+r*0.62, cy+r*0.2), (cx-r*0.62, cy+r*0.2)], fill=a)
@@ -366,7 +652,7 @@ def _draw_glyph(d, name, cx, cy, r, color):
     elif name == "camera":                     # body + lens
         d.rounded_rectangle([cx-r*0.85, cy-r*0.5, cx+r*0.85, cy+r*0.6],
                             radius=max(1, round(r*0.2)), fill=a)
-        d.ellipse([cx-r*0.35, cy-r*0.2, cx+r*0.35, cy+r*0.5], fill=PHOTO_FRAME + (255,))
+        d.ellipse([cx-r*0.35, cy-r*0.2, cx+r*0.35, cy+r*0.5], fill=paper)
     elif name == "star":                       # 5-point star
         import math
         pts = []
@@ -377,7 +663,16 @@ def _draw_glyph(d, name, cx, cy, r, color):
         d.polygon(pts, fill=a)
     # "dot"/unknown -> bare disc (already drawn by the caller)
 
-def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
+def _ghost_layer_alpha(base_img, ghost, factor):
+    """Composite a full-alpha `ghost` overlay onto base_img at `factor` opacity. PIL's
+    direct RGBA drawing writes raw alpha WITHOUT compositing, so a fainter symbol can't
+    be had by drawing at a low fill alpha -- it must be drawn opaque on its own layer
+    and blended here, the same route the drop shadow already takes."""
+    arr = np.asarray(ghost).copy()
+    arr[..., 3] = (arr[..., 3].astype(np.float32) * factor).astype(np.uint8)
+    return Image.alpha_composite(base_img, Image.fromarray(arr, "RGBA"))
+
+def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
     dia = max(5, round(spec.marker_diameter_in * dpi))
     r = dia / 2.0
     drop = max(1, round(dia * 0.07))
@@ -385,37 +680,47 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi):
     def in_frame(cx, cy):
         return 0 <= cx <= out_w and 0 <= cy <= out_h
 
-    # soft drop shadow on its own layer -> markers sit on the paper, not over it
+    placed = [(cx, cy, hidden, hs) for hs in spec.hotspots
+              for (cx, cy, hidden) in [_place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)]
+              if in_frame(cx, cy)]
+
+    # soft drop shadow on its own layer -> markers sit on the paper, not over it. A
+    # marker hidden behind standing terrain casts none: it is a ghost behind the
+    # ridge, not a solid object on the paper.
     shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    for hs in spec.hotspots:
-        cx, cy = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
-        if in_frame(cx, cy):
+    for cx, cy, hidden, hs in placed:
+        if not hidden:
             sd.ellipse([cx-r, cy-r+drop, cx+r, cy+r+drop], fill=(22, 19, 16, 105))
     shadow = shadow.filter(ImageFilter.GaussianBlur(max(1.0, dia * 0.11)))
     img = Image.alpha_composite(img.convert("RGBA"), shadow)
 
     d = ImageDraw.Draw(img, "RGBA")
+    # occluded markers paint OPAQUE on their own layer, then composite faint (a real
+    # blend) -- so a marker behind a ridge reads as a ghost, never a solid object.
+    ghost = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0)) if any(p[2] for p in placed) else None
+    dg = ImageDraw.Draw(ghost, "RGBA") if ghost is not None else None
     label_font = _font(max(8, round(_pt_to_px(spec.label_pt, dpi))))
-    for hs in spec.hotspots:
-        cx, cy = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
-        if not in_frame(cx, cy):
-            continue
-        # contrast ring: light on dark terrain, dark on light
+    for cx, cy, hidden, hs in placed:
+        dd = dg if hidden else d
+        # contrast ring: light on dark terrain, dark on light (the DISPLAYED spot --
+        # elev_lum is computed from the warped sheet, so this keys on what's drawn)
         yy = int(np.clip(cy, 0, out_h-1)); xx = int(np.clip(cx, 0, out_w-1))
         on_dark = elev_lum[yy, xx] < 0.5
         ring = (243, 237, 223, 235) if on_dark else (43, 42, 40, 230)
         # ring width = the client's marker-outline slider (fraction of diameter; 0 = none)
         ring_w = round(dia * spec.marker_ring)
-        d.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
-                  outline=ring if ring_w > 0 else None,
-                  width=max(1, ring_w))
+        dd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
+                   outline=ring if ring_w > 0 else None,
+                   width=max(1, ring_w))
         icon = (hs.get("icon") or "").strip()
         if icon:
-            _draw_glyph(d, icon, cx, cy, r * 0.62, ICON_INK)
+            _draw_glyph(dd, icon, cx, cy, r * 0.62, ICON_INK)
         label = (hs.get("label") or "").strip()
         if label:
-            _draw_label(d, label, cx + r + dia*0.25, cy, label_font, out_w, out_h)
+            _draw_label(dd, label, cx + r + dia*0.25, cy, label_font, out_w, out_h)
+    if ghost is not None:
+        img = _ghost_layer_alpha(img, ghost, OBLIQUE_SYMBOL_GHOST)
     return img
 
 def _draw_label(d, text, x, cy, font, out_w, out_h):
@@ -442,11 +747,13 @@ def _photo_frame_params(style, box, dpi):
         return m, m, max(4, round(box * 0.16)), max(1, m // 3)
     return m, m, m, max(1, m // 2)                     # "mat" (the classic default)
 
-def _draw_photos(img, spec, out_w, out_h, dpi):
+def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None):
     """Pin user photos to their markers in the client's chosen frame style (classic
     mat / thin keyline / borderless / polaroid), each with a drop shadow and a short
     stem back to the anchor point. Tolerant of a missing/unreadable file (skip it)
-    so one bad photo can't fail the render."""
+    so one bad photo can't fail the render. Under the plan-oblique warp the anchor
+    displaces with its ground; the frame itself stays sheet furniture (upright,
+    clamped in-sheet, never ghosted) -- the stem stretches to the moved anchor."""
     if not any(hs.get("photo") for hs in spec.hotspots):
         return img
     box = max(24, round(spec.photo_box_in * dpi))
@@ -465,7 +772,7 @@ def _draw_photos(img, spec, out_w, out_h, dpi):
         photo.thumbnail((box, box))
         pw, ph = photo.size
         fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
-        ax, ay = _crs_to_px(hs["x"], hs["y"], spec.crop, out_w, out_h)
+        ax, ay, _ = _place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)
         # place the framed photo up-and-right of the anchor, clamped to the frame
         fx = int(np.clip(ax + box * 0.35, 0, out_w - fw - 1))
         fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
@@ -527,6 +834,14 @@ def _stats_line(spec, dpi):
     if ratio > 0:
         mag = 10 ** max(0, int(math.floor(math.log10(ratio))) - 1)
         parts.append(f"~1:{round(ratio / mag) * mag:,.0f}")
+    # High relief: under the plan-oblique shear, north-south distances distort with
+    # elevation -- the sheet says so, right beside the scale it qualifies (honest
+    # labeling; the E-W scale bar stays true). A pure function of the spec like every
+    # caption part -- it prints even when a dead-flat crop degenerates the shear to
+    # zero, because the caption may not depend on plate contents (invariant 3 /
+    # reprint). At oblique 0 the caption is byte-identical (the edition-1 posture).
+    if getattr(spec, "oblique", 0) > 0:
+        parts.append("PLAN OBLIQUE")
     days = {d for d in (spec.track_days or []) if d}
     if days:
         parts.append(f"{len(days)} DAY" + ("S" if len(days) != 1 else ""))
@@ -743,12 +1058,15 @@ def _contour_alpha(elev, interval, width_px):
     a = np.clip(1.0 - d_px / max(width_px, 0.5), 0.0, 1.0)
     return a, np.round(t).astype(np.int64)
 
-def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in):
+def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     """Composite elevation contours over the relief (under water/tracks): minor
-    lines at the scale-aware interval, index lines every 5th level slightly firmer."""
-    from app.relief import _fill_nan
+    lines at the scale-aware interval, index lines every 5th level slightly firmer.
+    range_m pins the interval choice to a given relief range: the plan-oblique path
+    marches the PADDED window (so lines drape through the warp) but the interval must
+    still come from the trimmed core, or the southern band could flip the sheet onto
+    a different conventional interval than the same crop drawn flat."""
     elev = _fill_nan(np.array(elev_core, dtype="float32", copy=True))
-    rng = float(elev.max() - elev.min())
+    rng = float(elev.max() - elev.min()) if range_m is None else float(range_m)
     if rng < 1.0:                              # a dead-flat crop has no contours
         return rgb_u8
     iv = _contour_interval(rng, ground_m_per_in)
@@ -825,14 +1143,17 @@ def _load_labels(region_dir):
     p = os.path.join(region_dir, "labels.json")
     return json.load(open(p)) if os.path.exists(p) else None
 
-def _label_candidates(labels, hydro, spec, out_w, out_h):
+def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
     """Build the ranked label candidates in output pixels, from the terrain names
     (labels.json) and the water names already in hydro.json. Each candidate is
     (rank, kind, text, anchor_px). A feature is a candidate only if it actually falls
     in the crop; a multi-point feature (range/valley/river) anchors at the centroid of
-    the part inside the frame, so a range crossing the sheet is named where it lies."""
+    the part inside the frame, so a range crossing the sheet is named where it lies.
+    Under the plan-oblique warp (ctx) every vertex displaces with its ground BEFORE
+    membership/centroids/spines are computed, so names drape onto the standing
+    terrain and the collision/keep-out passes see the drawn positions."""
     def to_px(x, y):
-        return _crs_to_px(x, y, spec.crop, out_w, out_h)
+        return _crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
     def inside(px, py):
         return 0 <= px <= out_w and 0 <= py <= out_h
     cands = []
@@ -972,12 +1293,14 @@ def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo):
     img.alpha_composite(rot, (round(center[0] - rot.width / 2),
                               round(center[1] - rot.height / 2)))
 
-def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
+def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     """Place named geography with priority + greedy collision avoidance: strongest
     names first (range > summit > lake > pass > valley > river), each kept only if its
     haloed text box clears every already-placed box and the bottom-left cartouche/
-    compass keep-out. A density cap keeps a name-dense region from over-inking."""
-    cands = _label_candidates(labels, hydro, spec, out_w, out_h)
+    compass keep-out. A density cap keeps a name-dense region from over-inking.
+    Placement runs on plan-oblique-displaced anchors (ctx), so the top_clear_frac
+    band and every collision verdict hold on the sheet as actually drawn."""
+    cands = _label_candidates(labels, hydro, spec, out_w, out_h, ctx=ctx)
     if not cands:
         return img
     d = ImageDraw.Draw(img, "RGBA")
@@ -1060,16 +1383,19 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi):
             _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
     return img
 
-def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
+def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
     """Composite baked water over the relief: lakes filled flat with a DPI-scaled
-    shoreline, rivers as order-weighted lines. All widths in physical units."""
+    shoreline, rivers as order-weighted lines. All widths in physical units. Under
+    the plan-oblique warp every vertex displaces with its ground, so rivers drape
+    down their valleys and a lake's shoreline rides its (flat) surface as one piece."""
     if not hydro:
         return img
     d = ImageDraw.Draw(img, "RGBA")
     sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
     for lake in hydro.get("lakes", []):
         # tolerate missing key + 3-tuple (z) coords, matching what the baker emits
-        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y, *_ in (lake.get("coords") or [])]
+        pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
+               for x, y, *_ in (lake.get("coords") or [])]
         if len(pts) >= 3:
             # 235 alpha, not opaque: a whisper of the lakebed relief ghosts through, so
             # lakes sit IN the toothy sheet instead of reading as flat vinyl stickers
@@ -1078,7 +1404,8 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi):
     for r in hydro.get("rivers", []):
         wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
         wpx = max(1, round(_pt_to_px(wpt, dpi)))
-        pts = [_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y, *_ in (r.get("coords") or [])]
+        pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
+               for x, y, *_ in (r.get("coords") or [])]
         if len(pts) >= 2:
             d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
     return img
@@ -1093,7 +1420,10 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
                 hydro=None, labels=None):
     """The static layers UNDER the route -- relief, contours, hydro, geography labels --
     plus the luminance plane the markers key on. Identical for every frame of a
-    time-lapse, so it is painted once. Returns (rgb_u8, lum). Raises the off-DEM guard
+    time-lapse, so it is painted once. Returns (rgb_u8, lum, oblique_ctx); the ctx is
+    None on the classic top-down path (spec.oblique == 0 or a dead-flat crop), and
+    every downstream painter treats None as the identity transform, so the classic
+    sheet is byte-identical to the pre-feature engine. Raises the off-DEM guard
     (invariant 5) before any pixels are invented under the tracks."""
     out_w, out_h = spec.pixel_size(dpi)
     # Off-DEM guard: refuse a plausible-but-wrong poster before any painting invents
@@ -1105,12 +1435,30 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
             f"The selected frame extends past the available elevation data "
             f"({nan_frac * 100:.0f}% of it has no DEM coverage). "
             f"Pan or shrink the crop to keep it inside the region.")
+    # High relief: the shear is real only when the crop has relief to raise. When it
+    # is, the band it pulls in from just south of the frame must be real data too
+    # (invariant 5) -- refuse with the real reason. A flat crop degenerates to None
+    # here and needs no southern band, so the knob-up-on-flat-ground case renders.
+    shear = _oblique_shear(region_dir, cfg, spec)
+    band_m = oblique_band_m(spec) if shear is not None else 0.0
+    if band_m > 0:
+        nan_frac = _offdem_fraction(region_dir, cfg, spec.crop, south_extend_m=band_m)
+        if nan_frac > MAX_OFFDEM_NAN_FRAC:
+            raise OffDemError(
+                f"High relief pulls terrain from just south of the frame into view, "
+                f"and that band has no elevation data here ({nan_frac * 100:.0f}% of "
+                f"the sheet's ground is uncovered). Lower the High relief slider or "
+                f"pan the crop north.")
 
-    elev, pad_x, pad_y, gpp = _read_window(region_dir, cfg, spec.crop, out_w, out_h)
+    gy = (spec.crop[3] - spec.crop[1]) / out_h        # ground metres per px, vertical
+    extra_south = _m.ceil(band_m / gy) if shear is not None else 0
+    elev, pad_x, pad_top, pad_bot, gpp = _read_window(
+        region_dir, cfg, spec.crop, out_w, out_h, extra_south_px=extra_south)
     # optional biome tint (Dom, v1.2): hue from the region's baked NLCD land cover,
     # lightness from elevation + shade; None (asset absent or toggle off) falls back
     # to the pure elevation tint.
-    biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_y), elev.shape, dpi)
+    biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_top, pad_bot),
+                           elev.shape, dpi)
              if spec.biome else None)
     rgb = shaded_relief(
         elev, res_m=gpp,
@@ -1124,16 +1472,36 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
         biome=biome, depth=_terrain_depth(spec),
         shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec))
-    # trim the margin back to the exact crop
-    rgb = rgb[pad_y:pad_y+out_h, pad_x:pad_x+out_w, :]
 
-    # optional elevation contours: over the relief, under water/tracks, computed on
-    # the SAME trimmed elevation window the relief was painted from (registration).
-    if spec.contours:
-        # ground metres one printed inch spans -- the DPI-independent zoom the contour
-        # interval tracks (proof and final share it, so they draw the same lines).
-        gmpi = (spec.crop[2] - spec.crop[0]) / spec.print_w_in
-        rgb = _draw_contours(rgb, elev[pad_y:pad_y+out_h, pad_x:pad_x+out_w], dpi, gmpi)
+    # ground metres one printed inch spans -- the DPI-independent zoom the contour
+    # interval tracks (proof and final share it, so they draw the same lines).
+    gmpi = (spec.crop[2] - spec.crop[0]) / spec.print_w_in
+    ctx = None
+    if shear is not None:
+        s, z_floor = shear
+        # contours BEFORE the warp, on the padded grid, so the lines drape over the
+        # standing terrain (they ride the raster). The interval still derives from
+        # the trimmed core's relief -- the padded band must not change which
+        # conventional interval the sheet uses.
+        if spec.contours:
+            core = elev[pad_top:pad_top+out_h, pad_x:pad_x+out_w]
+            rng = float(np.nanmax(core) - np.nanmin(core))
+            rgb = _draw_contours(rgb, elev, dpi, gmpi, range_m=rng)
+        elev_fill = _fill_nan(elev.astype("float32"))
+        band_px = band_m / gy
+        rgb, winner = _oblique_warp(rgb, elev_fill, s, z_floor, gy, band_px)
+        ctx = ObliqueCtx(s=s, z_floor=z_floor, band_px=band_px, gy=gy,
+                         elev=elev_fill, winner=winner, pad_x=pad_x,
+                         pad_top=pad_top, pad_bot=pad_bot, out_w=out_w, out_h=out_h)
+    # trim the margin back to the exact crop
+    rgb = rgb[pad_top:pad_top+out_h, pad_x:pad_x+out_w, :]
+
+    # optional elevation contours (classic path): over the relief, under water/tracks,
+    # computed on the SAME trimmed elevation window the relief was painted from
+    # (registration).
+    if spec.contours and ctx is None:
+        rgb = _draw_contours(rgb, elev[pad_top:pad_top+out_h, pad_x:pad_x+out_w],
+                             dpi, gmpi)
 
     # water sits on the relief, under the tracks (relief -> water -> tracks -> markers)
     if hydro is None:
@@ -1142,31 +1510,34 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         # invariant 4: water must be in the region CRS or it mis-registers silently
         raise ValueError(f"hydro CRS {hydro['crs']} != region CRS {cfg['crs']}")
     himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
-                       hydro, spec, out_w, out_h, dpi)
+                       hydro, spec, out_w, out_h, dpi, ctx=ctx)
     # named geography: on the terrain, under the route/markers (the journey stays the
     # subject). Opt-in (spec.labels); terrain names from labels.json, water from hydro.
     if spec.labels:
         if labels is None:
             labels = _load_labels(region_dir)
-        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi)
+        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx)
     rgb = np.asarray(himg.convert("RGB"))
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
-    return rgb, lum
+    return rgb, lum, ctx
 
-def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None):
+def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None):
     """The route layer for the given journey groups (None = all): inked tracks + those
     journeys' terminus pins, over the base. Does NOT mutate base_rgb (_ink_tracks copies
-    it), so a time-lapse can paint prefix after prefix onto one base. Returns RGBA."""
-    rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups)
+    it), so a time-lapse can paint prefix after prefix onto one base. Returns RGBA.
+    ctx (the plan-oblique warp) displaces the route with the standing terrain."""
+    rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
-    img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups)  # under markers
+    img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False):
+def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None):
     """The layers ABOVE the route, identical across time-lapse frames: markers, photos,
-    keyline, compass, title block, and the optional proof watermark. Returns RGB."""
-    img = _draw_markers(img, spec, lum, out_w, out_h, dpi)
-    img = _draw_photos(img, spec, out_w, out_h, dpi)   # personal photos: the top layer
+    keyline, compass, title block, and the optional proof watermark. Returns RGB.
+    ctx displaces the anchored symbols with the plan-oblique terrain; the sheet
+    furniture (keyline / compass / cartouche) is sheet-space and never displaces."""
+    img = _draw_markers(img, spec, lum, out_w, out_h, dpi, ctx=ctx)
+    img = _draw_photos(img, spec, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
     if spec.keyline:
         img = _draw_keyline(img, out_w, out_h, dpi)
     img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
@@ -1190,6 +1561,6 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
     out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum = _paint_base(spec, dpi, region_dir, cfg, hydro=hydro, labels=labels)
-    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None)  # all journeys
-    return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark)
+    base_rgb, lum, ctx = _paint_base(spec, dpi, region_dir, cfg, hydro=hydro, labels=labels)
+    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=ctx)  # all journeys
+    return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx)
