@@ -68,6 +68,12 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `terrain_depth` — multiplier on the terrain-depth pass, 0-1.5
 - `shadow_strength` — cast-shadow / sky-occlusion strength, 0-1
 - `oblique` — High relief: plan-oblique shear strength, 0-1 (terrain and everything on it displaces up-sheet by elevation, with occlusion; 1 = max stand-up, 12% of sheet height); default `0.0` = the classic top-down sheet, and the key is omitted at the default (writers must not emit `0.0` — a pre-oblique manifest re-stamps byte-identically)
+- `light_mode` — Journey Light: `"archival"` (the region's curated NW light, default) or `"journey"` (the poster lit by the hike's own sun); the four light keys below are omitted at the archival default (a pre-Journey-Light manifest re-stamps byte-identically)
+- `sun_azimuth_deg` — resolved journey-sun azimuth, 0-360 (clockwise from north); present only in journey mode. This is the RESOLVED sun (derived from the GPX timestamps at proof time); the timestamps themselves never enter the manifest
+- `sun_altitude_deg` — resolved journey-sun altitude above the horizon, 8-80 (the 8° floor bounds the cast shadows); journey mode only
+- `golden_strength` — the warm/cool golden-hour grade amount, 0-1 (default 0.7); journey mode only
+- `profile` — draw the DEM-sampled elevation-profile furniture (default `false`, omitted at the default); `profile_height_in` (0-2.5) rides with it when present
+- `track_color_by` — colour the route by a DEM-derived ramp: `"none"` (the flat swatch, default and omitted), `"elevation"`, or `"grade"`
 - `output_kind` — `"print"` (finals at 300 dpi) or `"wallpaper"` (finals at `screen_ppi`)
 - `screen_ppi` — device pixels per inch; meaningful for wallpapers only
 - `keyline` — the thin sheet frame (wallpapers go clean)

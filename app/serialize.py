@@ -12,12 +12,43 @@ import numpy as np
 from app.ingest import Track
 from app.spec import CompositionSpec
 
+def _arr_or_none(a):
+    """Per-vertex float array -> JSON list with null for NaN (JSON has no NaN), or None."""
+    if a is None:
+        return None
+    return [None if not np.isfinite(v) else float(v) for v in a]
+
+def _none_to_nan(lst):
+    if lst is None:
+        return None
+    return np.asarray([np.nan if v is None else float(v) for v in lst], dtype=float)
+
 def track_to_json(t: Track) -> dict:
-    return {"track_id": t.track_id, "coords": t.coords.tolist(), "day": t.day}
+    d = {"track_id": t.track_id, "coords": t.coords.tolist(), "day": t.day}
+    # Journey Light session data (v1.9): omitted when absent so pre-feature rows are
+    # unaffected. Per-vertex arrays store NaN as null (JSON has no NaN token).
+    if t.t0 is not None:
+        d["t0"] = t.t0
+    if t.t1 is not None:
+        d["t1"] = t.t1
+    if t.lonlat is not None:
+        d["lonlat"] = list(t.lonlat)
+    if t.coords_t is not None:
+        d["coords_t"] = _arr_or_none(t.coords_t)
+    if t.summit_t is not None:
+        d["summit_t"] = t.summit_t
+        d["summit_ele"] = t.summit_ele
+    return d
 
 def track_from_json(d: dict) -> Track:
+    # .get(...) drift tolerance: a row written by a pre-Journey-Light build lacks these.
+    ll = d.get("lonlat")
     return Track(track_id=d["track_id"],
-                 coords=np.asarray(d["coords"], dtype=float), day=d["day"])
+                 coords=np.asarray(d["coords"], dtype=float), day=d["day"],
+                 t0=d.get("t0"), t1=d.get("t1"),
+                 lonlat=tuple(ll) if ll is not None else None,
+                 coords_t=_none_to_nan(d.get("coords_t")),
+                 summit_t=d.get("summit_t"), summit_ele=d.get("summit_ele"))
 
 def spec_to_json(s: CompositionSpec) -> dict:
     d = {f.name: getattr(s, f.name) for f in fields(s)}
@@ -34,6 +65,19 @@ def spec_to_json(s: CompositionSpec) -> dict:
     # byte-identically; spec_from_json refills the 0.0 default.
     if not d["oblique"]:
         del d["oblique"]
+    # Journey Light (v1.9): archival is the pre-feature light, so all three light keys are
+    # omitted at that default -- a pre-Journey-Light manifest re-stamps byte-identically,
+    # and spec_from_json refills the defaults. Only a "journey" poster carries the
+    # resolved sun into the manifest (that IS the record; the timestamps never ride).
+    if d["light_mode"] == "archival":
+        for k in ("light_mode", "sun_azimuth_deg", "sun_altitude_deg", "golden_strength"):
+            del d[k]
+    # elevation profile + track coloring: omitted at their off/none defaults, same contract.
+    if not d["profile"]:
+        del d["profile"]
+        del d["profile_height_in"]
+    if d["track_color_by"] == "none":
+        del d["track_color_by"]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:

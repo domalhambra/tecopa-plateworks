@@ -92,6 +92,16 @@ export async function proof(sessionId, cropOv, printW, printH,
     photo_style: style.photoStyle, furniture_scale: style.furniture,
     terrain_depth: style.terrain, shadow_strength: style.shadow,
     oblique: style.oblique,
+    // Journey Light: light_mode + the sun (hour from the scrubber, or explicit az/alt on
+    // the continue-restore path), the golden grade, the elevation profile, and coloring.
+    light_mode: style.lightMode || 'archival',
+    sun_hour: style.lightMode === 'journey' && style.sunHour != null ? style.sunHour : undefined,
+    sun_azimuth_deg: style.sunAzimuth != null ? style.sunAzimuth : undefined,
+    sun_altitude_deg: style.sunAltitude != null ? style.sunAltitude : undefined,
+    golden_strength: style.golden,
+    profile: style.profile ? 'true' : 'false',
+    profile_height_in: style.profileHeight,
+    track_color_by: style.trackColorBy || 'none',
   });
   if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();
@@ -121,13 +131,16 @@ export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
 // twin ('webp' | 'mp4' — no manifest, embed_spec is moot). Returns { job, frames };
 // poll like any render.
 export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = '',
-                                                   embedSpec = true,
-                                                   format = 'apng' } = {}) {
+                                                   embedSpec = true, format = 'apng',
+                                                   lightMotion = 'none' } = {}) {
   const res = await postForm('/api/timelapse/submit', {
     session_id: sessionId, max_frames: maxFrames,
     wallpaper_preset: wpPreset || undefined,
     embed_spec: embedSpec ? 'true' : 'false',
     format,
+    // Journey Light film: 'none' is the archival reveal; 'auto'/'diurnal'/'seasonal'
+    // make the sun travel with the hike (a share twin -- webp/mp4 only).
+    light_motion: lightMotion,
   });
   return asJson(res);   // { job, frames }
 }

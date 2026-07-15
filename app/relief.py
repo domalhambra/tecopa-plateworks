@@ -106,6 +106,16 @@ AO_RADII_M = (200.0, 800.0, 3200.0)   # sky-occlusion neighbourhood scales
 AO_WEIGHTS = (0.5, 0.3, 0.2)
 AO_SLOPE = 0.15                 # horizon slope that counts as fully occluded
 AO_MAX = 0.22                   # light removed in the deepest concavity at knob 1.0
+# Journey Light (v1.9): the golden-hour split-tone. Sunlit faces (a hillshade from the
+# journey sun, minus what the ray-marched cast shadow occludes) warm toward gold in the
+# TRACK_INK family; shadowed / occluded ground cools toward a blue-violet that extends
+# the CAST_TINT skylight. Per-channel multipliers (>1 warms, <1 cools), applied at 0..MAX
+# weight scaled by the golden knob. Strict no-op when golden=0 or no journey sun is set.
+GOLDEN_WARM = (1.14, 1.02, 0.82)   # sunlit -> warm gold
+GOLDEN_COOL = (0.88, 0.94, 1.12)   # shadow -> cool blue-violet
+GOLDEN_WARM_MAX = 0.50             # max warm weight at golden=1
+GOLDEN_COOL_MAX = 0.45             # max cool weight at golden=1
+GOLDEN_LIT_GAMMA = 1.4             # concentrate the warmth on the well-lit faces
 # ---------------------------------------------------------------------
 
 def _fill_nan(elev):
@@ -319,7 +329,8 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                   azimuth=315, altitude=45, z_factor=1.0, seed=7,
                   grain_cell_px=2.0, grain_strength=0.05,
                   texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX,
-                  biome=None, depth=0.0, shadow=0.0, shadow_res_m=None):
+                  biome=None, depth=0.0, shadow=0.0, shadow_res_m=None,
+                  sun_azimuth=None, sun_altitude=None, golden=0.0):
     """biome: optional (tint01, weight01) from render._biome_layers -- an RGB tint
     field (0..1) and per-pixel confidence, aligned to `elev`. Applied to the
     hypsometric base with luminance matching + the alpine fade (see BIOME_MIX).
@@ -334,7 +345,14 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     knob). 0 (the parameter default) is a strict no-op -- the pre-shadow look, every
     direct caller unchanged; render.py supplies the spec's value. shadow_res_m pins
     the shadow working grid to a spec-derived ground resolution so proof == final
-    (see _shadow_terms)."""
+    (see _shadow_terms).
+
+    sun_azimuth/sun_altitude/golden (Journey Light, v1.9): when a journey sun is given
+    it drives the ray-marched CAST shadows (the form shading -- hillshade, multidir,
+    texture, valley -- stays on the archival NW light for legibility, since south-lit
+    slope shading reads inverted). `golden` (0..1) then adds a warm/cool split-tone from
+    that same sun. Both default to the no-op (sun_azimuth=None, golden=0), so an archival
+    render is byte-identical to pre-feature output."""
     elev = _fill_nan(elev.astype("float32"))
     norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
     base = hypsometric(elev, elev_min, elev_max)                  # color
@@ -370,7 +388,12 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     # they stay luminous, then fill with cool skylight rather than going grey-black.
     s = float(np.clip(shadow, 0.0, 1.0))
     if s > 0:
-        cast, ao = _shadow_terms(elev, res_m, azimuth, altitude, z_factor, shadow_res_m)
+        # Journey Light: the cast shadows follow the journey sun when one is set; the
+        # form shading above stays on the archival light (legibility). None -> archival,
+        # so an archival render is byte-identical.
+        cast_az = azimuth if sun_azimuth is None else float(sun_azimuth)
+        cast_alt = altitude if sun_altitude is None else float(sun_altitude)
+        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
         light = light * (1.0 - CAST_DARKEN * s * cast) * (1.0 - AO_MAX * s * ao)
         light = np.maximum(light, CAST_LIGHT_FLOOR)
     light = light[..., None]
@@ -380,6 +403,23 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         w = (CAST_TINT_MAX * s * cast)[..., None]
         cool = np.array(CAST_TINT, np.float32)[None, None, :]
         img = img * (1.0 - w + cool * w)
+    # Journey Light golden grade: warm the sunlit faces, cool the shadowed ground. Strict
+    # no-op unless a journey sun + golden strength are set (archival stays byte-identical).
+    if golden > 0 and sun_azimuth is not None:
+        g = float(np.clip(golden, 0.0, 1.0))
+        hs_sun = np.clip(hillshade(elev, res_m, float(sun_azimuth), float(sun_altitude),
+                                   z_factor), 0.0, 1.0)
+        lit = hs_sun ** GOLDEN_LIT_GAMMA
+        shade = 1.0 - hs_sun
+        if s > 0:                       # a cast-shadowed face isn't really sunlit
+            lit = lit * (1.0 - cast)
+            shade = np.maximum(shade, np.maximum(cast, ao))
+        ww = (GOLDEN_WARM_MAX * g * lit)[..., None]
+        cw = (GOLDEN_COOL_MAX * g * shade)[..., None]
+        warm = np.array(GOLDEN_WARM, np.float32)[None, None, :]
+        cool2 = np.array(GOLDEN_COOL, np.float32)[None, None, :]
+        img = img * (1.0 - ww + warm * ww)
+        img = img * (1.0 - cw + cool2 * cw)
     # blend texture as a soft dodge/burn around mid-gray
     img = img * (1.0 + TEXTURE_STRENGTH * (tex[..., None] - 0.5))
     if depth > 0:

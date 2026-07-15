@@ -26,14 +26,19 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import math
 import os
 import shutil
 
 import numpy as np
 from PIL import Image
 
-from app import provenance, render
+from app import provenance, render, solar
 from app.spec import CompositionSpec
+
+# Idle/overnight gaps longer than this collapse to this length in the reveal clock, so
+# the time-true film doesn't dwell for hours on a lunch stop or an overnight camp.
+GAP_COMPRESS_S = 1800.0
 
 # MP4 is an OPTIONAL extra (requirements-share.txt): imageio-ffmpeg bundles an ffmpeg
 # binary, which would break the core lock's "native wheels, no system deps" property.
@@ -146,15 +151,20 @@ def render_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=None,
     out_w, out_h = spec.pixel_size(dpi)
     base_rgb, lum, ctx = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
                                             labels=labels)
+    # DEM-derived Journey Light layers (None unless the knob is on): pure functions of the
+    # spec + plate, so one computation serves every frame and the last frame stays
+    # pixel-equal to the still (coloring/profile survive into the film byte-for-byte).
+    track_colors = render._track_color_arrays(spec, region_dir, cfg)
+    profile = render._profile_data(spec, region_dir, cfg)
     if plan is None:
         plan = frame_plan(spec)
     for groups in plan:
         # ctx (the plan-oblique warp) is a pure function of the spec + plate, so one
         # ctx serves every frame and the last frame stays pixel-equal to the still.
         img = render._paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=groups,
-                                    ctx=ctx)
+                                    ctx=ctx, track_colors=track_colors)
         yield render._paint_overlays(img, spec, lum, out_w, out_h, dpi,
-                                     watermark=False, ctx=ctx)
+                                     watermark=False, ctx=ctx, profile=profile)
 
 
 # ---- progressive reveal: the smooth "drawing pen" for the social-preview mockups ----
@@ -228,6 +238,96 @@ def progressive_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=Non
         img = render._paint_journey(base_rgb, partial, out_w, out_h, dpi, ctx=ctx)
         yield render._paint_overlays(img, partial, lum, out_w, out_h, dpi,
                                      watermark=False, ctx=ctx)
+
+
+# ---- Journey Light film (v1.9): the sun travels with the hike (share-twins only) ----
+# A moving sun changes the relief every frame, so this recomputes the base per frame (~N x
+# the cost of the archival film's paint-base-once) -- deliberately confined to the WebP/MP4
+# share twins, never the reprintable archival APNG. Frame-invariant elevation means the
+# oblique ctx still holds still, so the picture warps and lights coherently.
+
+def time_reveal(spec: CompositionSpec, track_times, n_frames: int,
+                include_leader: bool = True) -> list:
+    """Partial specs revealing the journey by a growing MOVING-TIME budget: each frame
+    exposes the prefix of every track up to a wall-clock threshold, with idle/overnight
+    gaps compressed (GAP_COMPRESS_S), so the pen breathes with the real hike rather than
+    drawing at constant point-rate. `track_times` is a list parallel to spec.tracks of
+    per-vertex unix seconds (NaN unknown). Falls back to progressive_reveal when the trip
+    carries too few timestamps. Pure function; the last frame is the whole trip (poster-
+    equal, same close as progressive_reveal)."""
+    all_t = []
+    for tt in track_times or []:
+        if tt is not None:
+            all_t.extend(float(v) for v in np.asarray(tt, float) if math.isfinite(v))
+    if len(all_t) < 2:
+        return progressive_reveal(spec, n_frames, include_leader)
+    ts = np.array(sorted(set(all_t)))
+    active = np.concatenate([[0.0], np.cumsum(np.minimum(np.diff(ts), GAP_COMPRESS_S))])
+    total = active[-1] if active[-1] > 0 else 1.0
+    days = list(spec.track_days or [])
+    days += [None] * (len(spec.tracks) - len(days))
+    frames = []
+    if include_leader:
+        frames.append(dataclasses.replace(spec, tracks=[], track_days=[]))
+    slots = max(1, n_frames - (1 if include_leader else 0))
+    for k in range(1, slots + 1):
+        idx = min(int(np.searchsorted(active, (k / slots) * total)), len(ts) - 1)
+        t_k = ts[idx]
+        rev_t, rev_d = [], []
+        for i, track in enumerate(spec.tracks):
+            track = np.asarray(track, float)
+            tt = None if not track_times or i >= len(track_times) else track_times[i]
+            if tt is None or not np.isfinite(np.asarray(tt, float)).any():
+                rev_t.append(track)                       # untimed track: always present
+                rev_d.append(days[i])
+                continue
+            ttv = np.asarray(tt, float)
+            over = np.isfinite(ttv) & (ttv > t_k)
+            cut = int(np.argmax(over)) if over.any() else len(track)
+            if k == slots:
+                cut = len(track)                          # closing frame is the whole trip
+            if cut >= 2:
+                rev_t.append(track[:cut])
+                rev_d.append(days[i])
+        if rev_t:
+            frames.append(dataclasses.replace(spec, tracks=rev_t, track_days=rev_d))
+    # guarantee the closing frame is the full spec in canonical order (poster-equal)
+    frames[-1] = dataclasses.replace(
+        spec, tracks=list(spec.tracks),
+        track_days=list(spec.track_days) if spec.track_days else spec.track_days)
+    return frames
+
+
+def journey_light_frames(spec: CompositionSpec, track_times, anchor, dpi: int,
+                         region_dir: str, cfg=None, motion: str = "auto",
+                         hydro=None, labels=None, n_frames: int = DEFAULT_MAX_FRAMES):
+    """The Journey Light film: the line grows while the sun travels with the hike. Diurnal
+    (single long day) reveals by real time under a sun that walks the journey's own hours;
+    seasonal (multi-day) reveals by point budget under a sun that drifts across the dates.
+    Recomputes the base per frame with that frame's sun (the N x cost); the frame-invariant
+    oblique ctx keeps the warp coherent. Yields RGB frames -- WebP/MP4 encode only."""
+    spec.validate(dpi)
+    if cfg is None:
+        with open(os.path.join(region_dir, "region.json")) as f:
+            cfg = json.load(f)
+    out_w, out_h = spec.pixel_size(dpi)
+    n_frames = max(FRAMES_BOUNDS[0], min(int(n_frames), FRAMES_BOUNDS[1]))
+    span = anchor["tmax_unix"] - anchor["tmin_unix"]
+    mode = motion if motion != "auto" else ("diurnal" if span <= 86400.0 else "seasonal")
+    reveal = (time_reveal(spec, track_times, n_frames) if mode == "diurnal"
+              else progressive_reveal(spec, n_frames))
+    schedule = solar.sun_schedule(anchor, len(reveal), mode)
+    for fspec0, (az, alt) in zip(reveal, schedule):
+        fspec = dataclasses.replace(fspec0, light_mode="journey",
+                                    sun_azimuth_deg=az, sun_altitude_deg=alt)
+        base_rgb, lum, ctx = render._paint_base(fspec, dpi, region_dir, cfg,
+                                                hydro=hydro, labels=labels)
+        tcolors = render._track_color_arrays(fspec, region_dir, cfg)
+        prof = render._profile_data(fspec, region_dir, cfg)
+        img = render._paint_journey(base_rgb, fspec, out_w, out_h, dpi, ctx=ctx,
+                                    track_colors=tcolors)
+        yield render._paint_overlays(img, fspec, lum, out_w, out_h, dpi,
+                                     watermark=False, ctx=ctx, profile=prof)
 
 
 def _durations(n: int, step_ms: int, hold_ms: int, leader_ms: int) -> list:

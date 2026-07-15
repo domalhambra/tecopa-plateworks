@@ -198,6 +198,8 @@ async function doUpload(fileList) {
     const skippedSet = new Set(skipped);
     arr.forEach((f) => { if (!skippedSet.has(f.name)) state.files.push(f.name); });
     renderFiles();
+    state.journeyLight = j.journey_light || null;   // { available, date, sun } | null
+    syncJourneyUI();
     canvas.setOverview(j.overview, j.overview_size);
     $('dropzone').hidden = true; $('continuePoster').hidden = true;
     $('map').hidden = false; $('addFiles').hidden = false;
@@ -262,6 +264,40 @@ function updateSaveFileNote() {
 
 // Reflect a continued poster's saved recipe into the Frame-step controls, so the
 // restored composition renders exactly as it was composed until the operator edits it.
+// Local-solar hour (e.g. 17.25) -> a friendly "5:15 PM".
+function fmtHour(h) {
+  if (h == null) return '—';
+  const hh = Math.floor(h);
+  const mm = Math.round((h - hh) * 60);
+  const ap = hh < 12 ? 'AM' : 'PM';
+  const h12 = ((hh + 11) % 12) + 1;
+  return `${h12}:${String(mm).padStart(2, '0')} ${ap}`;
+}
+
+// Reflect Journey Light availability + state into the Style panel: the toggle is
+// disabled (with a note) when no track is timestamped; the scrubber shows only in
+// journey mode and defaults to the resolved sun's hour.
+function syncJourneyUI() {
+  const meta = state.journeyLight;
+  const chk = $('journeyChk'); const hint = $('journeyHint'); const row = $('sunHourRow');
+  if (!chk) return;
+  const restorable = state.style.sunAzimuth != null;   // continue-restore keeps the light
+  const available = !!(meta && meta.available) || restorable;
+  chk.disabled = !available;
+  if (!available && state.style.lightMode === 'journey') {
+    state.style.lightMode = 'archival'; chk.checked = false;
+  }
+  if (hint) hint.textContent = available
+    ? " · lit by your hike's own sun"
+    : ' · needs a timestamped GPX';
+  const journey = state.style.lightMode === 'journey';
+  if (row) row.hidden = !journey;
+  if (journey && meta && meta.sun && state.style.sunHour == null) {
+    const h = meta.sun.hour_local;
+    if (h != null) { $('sSunHour').value = h; $('vSunHour').textContent = fmtHour(h); }
+  }
+}
+
 function applyPrefill(p) {
   if (!p) return;
   state.title = p.title || '';
@@ -275,7 +311,17 @@ function applyPrefill(p) {
     width: s.width, halo: s.halo, color: s.color || '', marker: s.marker, ring: s.ring,
     photoStyle: s.photoStyle, furniture: s.furniture, terrain: s.terrain, shadow: s.shadow,
     oblique: s.oblique ?? 0,
+    // Journey Light restore: the resurrected file has no timestamps, so the resolved sun
+    // rides back as explicit az/alt (used directly at re-proof); profile + coloring too.
+    lightMode: s.lightMode || 'archival',
+    sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
+    sunHour: null, golden: s.golden ?? 0.7,
+    profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
+    trackColorBy: s.trackColorBy || 'none',
   });
+  if ($('journeyChk')) $('journeyChk').checked = state.style.lightMode === 'journey';
+  if ($('profileChk')) $('profileChk').checked = state.style.profile;
+  if ($('sTrackColorBy')) $('sTrackColorBy').value = state.style.trackColorBy;
   const setSlider = (sid, vid, val, fmt) => {
     const el = $(sid); if (el != null && val != null) { el.value = val; $(vid).textContent = fmt(val); }
   };
@@ -291,6 +337,7 @@ function applyPrefill(p) {
   for (const el of document.querySelectorAll('.swatch')) {
     el.classList.toggle('sel', (el.dataset.hex || '').toLowerCase() === (s.color || '').toLowerCase());
   }
+  syncJourneyUI();   // reflect the restored Journey Light state (toggle, scrubber)
   // output kind + sheet: a continued wallpaper re-enters wallpaper mode on its matched
   // device; otherwise a print, with the exact restored sheet added as a size option.
   if (p.output === 'wallpaper' && p.wallpaper_preset && state.wpPresets.length) {
@@ -615,7 +662,7 @@ async function renderTimelapse() {
     const fmt = state.tlFormat;
     const sub = await api.submitTimelapse(state.session, {
       maxFrames: state.tlFrames, wpPreset: state.tlTarget, embedSpec: state.embedSpec,
-      format: fmt });
+      format: fmt, lightMotion: state.lightMotion || 'none' });
     const result = await pollJob(sub.job, 'tlStatus', `Painting ${sub.frames} frames…`);
     if (result) {
       const ext = fmt === 'apng' ? 'png' : fmt;            // the apng IS a PNG
@@ -808,6 +855,38 @@ function wire() {
       if (state.hasSpec) state.proofStale = true;
     };
   }
+  // Journey Light: the poster lit by the hike's own sun.
+  $('journeyChk').onchange = (e) => {
+    state.style.lightMode = e.target.checked ? 'journey' : 'archival';
+    state.style.sunAzimuth = null; state.style.sunAltitude = null;  // re-derive live
+    syncJourneyUI();
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('sSunHour').oninput = (e) => {
+    state.style.sunHour = Number(e.target.value);
+    $('vSunHour').textContent = fmtHour(state.style.sunHour);
+    state.style.sunAzimuth = null; state.style.sunAltitude = null;  // scrubber overrides
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('profileChk').onchange = (e) => {
+    state.style.profile = e.target.checked;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('sTrackColorBy').onchange = (e) => {
+    state.style.trackColorBy = e.target.value;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  $('tlLight').onchange = (e) => {
+    state.lightMotion = e.target.value;
+    // the moving-sun film is a share twin: force WebP if the archival APNG is selected.
+    const moving = state.lightMotion !== 'none';
+    $('tlLightNote').hidden = !moving;
+    if (moving && state.tlFormat === 'apng') {
+      state.tlFormat = 'webp'; $('tlFormat').value = 'webp';
+      for (const b of document.querySelectorAll('.segmented[data-for="tlFormat"] button'))
+        b.setAttribute('aria-checked', b.dataset.val === 'webp' ? 'true' : 'false');
+    }
+  };
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
   };

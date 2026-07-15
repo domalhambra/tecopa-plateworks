@@ -190,6 +190,28 @@
                   <div class="slider-top"><label for="sOblique">High relief</label><output id="vOblique">0.00</output></div>
                   <input type="range" id="sOblique" min="0" max="1" step="0.05" value="0">
                 </div>
+                <div class="switch-row" id="journeyRow">
+                  <span class="switch-label">Journey light<small class="hint" id="journeyHint"> · lit by your hike's own sun</small></span>
+                  <span class="switch"><input type="checkbox" id="journeyChk"><span class="slider"></span></span>
+                </div>
+                <div class="slider-row" id="sunHourRow" hidden>
+                  <div class="slider-top"><label for="sSunHour">Time of day</label><output id="vSunHour">—</output></div>
+                  <input type="range" id="sSunHour" min="5" max="21" step="0.25" value="17">
+                </div>
+                <div class="switch-row">
+                  <span class="switch-label">Elevation profile</span>
+                  <span class="switch"><input type="checkbox" id="profileChk"><span class="slider"></span></span>
+                </div>
+                <div class="field">
+                  <label for="sTrackColorBy">Track color by</label>
+                  <div class="select-wrap">
+                    <select id="sTrackColorBy">
+                      <option value="none">Solid swatch</option>
+                      <option value="elevation">Elevation</option>
+                      <option value="grade">Grade</option>
+                    </select>
+                  </div>
+                </div>
                 <div class="slider-row">
                   <div class="slider-top"><label for="sMarker">Marker size</label><output id="vMarker">0.24 in</output></div>
                   <input type="range" id="sMarker" min="0.14" max="0.4" step="0.01" value="0.24">
@@ -280,6 +302,16 @@
                   <option value="webp">WebP (share)</option>
                   <option value="mp4">MP4 (share)</option>
                 </select>
+              </div>
+              <div class="field" id="tlLightField">
+                <label for="tlLight">Light</label>
+                <div class="select-wrap">
+                  <select id="tlLight">
+                    <option value="none">Fixed</option>
+                    <option value="auto">Sun travels with the hike</option>
+                  </select>
+                </div>
+                <span class="insp-note" id="tlLightNote" hidden>the sun film is a share copy — WebP or MP4</span>
               </div>
             </div>
             <div class="tl-preview"><img id="tlPreview" alt="" hidden></div>
