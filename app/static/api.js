@@ -102,6 +102,10 @@ export async function proof(sessionId, cropOv, printW, printH,
     profile: style.profile ? 'true' : 'false',
     profile_height_in: style.profileHeight,
     track_color_by: style.trackColorBy || 'none',
+    // smart label placement + chronological weave (v1.10): new posters default to the
+    // enhanced look; the continue-restore path passes the poster's own stored values.
+    label_place: style.labelPlace || 'smart',
+    track_weave: style.trackWeave === false ? 'false' : 'true',
   });
   if (!res.ok) throw new ApiError(res.status, await errText(res));
   return res.blob();

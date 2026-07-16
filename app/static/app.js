@@ -318,10 +318,15 @@ function applyPrefill(p) {
     sunHour: null, golden: s.golden ?? 0.7,
     profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
     trackColorBy: s.trackColorBy || 'none',
+    // restore the poster's own smart-cartography settings (an old poster carries
+    // anchor/false, so its continued edition keeps the original look).
+    labelPlace: s.labelPlace || 'anchor', trackWeave: !!s.trackWeave,
   });
   if ($('journeyChk')) $('journeyChk').checked = state.style.lightMode === 'journey';
   if ($('profileChk')) $('profileChk').checked = state.style.profile;
   if ($('sTrackColorBy')) $('sTrackColorBy').value = state.style.trackColorBy;
+  if ($('labelPlaceChk')) $('labelPlaceChk').checked = state.style.labelPlace === 'smart';
+  if ($('trackWeaveChk')) $('trackWeaveChk').checked = state.style.trackWeave;
   const setSlider = (sid, vid, val, fmt) => {
     const el = $(sid); if (el != null && val != null) { el.value = val; $(vid).textContent = fmt(val); }
   };
@@ -874,6 +879,15 @@ function wire() {
   };
   $('sTrackColorBy').onchange = (e) => {
     state.style.trackColorBy = e.target.value;
+    if (state.hasSpec) state.proofStale = true;
+  };
+  // Smart cartography (v1.10): smart label placement + the chronological track weave.
+  if ($('labelPlaceChk')) $('labelPlaceChk').onchange = (e) => {
+    state.style.labelPlace = e.target.checked ? 'smart' : 'anchor';
+    if (state.hasSpec) state.proofStale = true;
+  };
+  if ($('trackWeaveChk')) $('trackWeaveChk').onchange = (e) => {
+    state.style.trackWeave = e.target.checked;
     if (state.hasSpec) state.proofStale = true;
   };
   $('tlLight').onchange = (e) => {

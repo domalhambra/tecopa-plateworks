@@ -46,6 +46,10 @@ export const state = {
     profile: false,       // DEM-sampled elevation-profile furniture
     profileHeight: 0.9,
     trackColorBy: 'none', // 'none' | 'elevation' | 'grade' -- DEM-derived track ramp
+    // Smart cartography (v1.10): new posters default to the enhanced look; old posters
+    // reprint unchanged because the spec/manifest omit these at their pre-feature default.
+    labelPlace: 'smart',  // 'anchor' (single centered position) | 'smart' (ring + route obstacle + leaders)
+    trackWeave: true,     // chronological over/under weave where journeys cross (newest on top)
   },
   journeyLight: null,     // upload/continue meta: { available, date, sun } or null
   lightMotion: 'none',    // film: 'none' | 'auto' | 'diurnal' | 'seasonal'
