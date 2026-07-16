@@ -85,6 +85,16 @@ def test_single_journey_last_frame_equals_rasterize():
     last = np.asarray(list(timelapse.render_frames(spec, 110, REGION_DIR))[-1])
     assert np.array_equal(last, still)
 
+def test_weave_last_frame_is_pixel_equal_to_rasterize():
+    # the chronological weave lives entirely inside _ink_tracks, so the still and every
+    # film frame inherit it: the full-journey last frame must still equal render.rasterize
+    # (the guardrail that keeps the weave from forking the still and the film).
+    spec = _spec(n_journeys=4, track_weave=True)
+    dpi = 120
+    still = np.asarray(render.rasterize(spec, dpi=dpi, region_dir=REGION_DIR))
+    last = np.asarray(list(timelapse.render_frames(spec, dpi, REGION_DIR))[-1])
+    assert last.shape == still.shape and np.array_equal(last, still)
+
 def test_leader_frame_has_no_route_ink():
     # frame 0 is bare terrain (+ static markers/furniture): the route ink is absent, so
     # it differs from the final and shows less of the track swatch.

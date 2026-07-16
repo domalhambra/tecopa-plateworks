@@ -816,6 +816,7 @@ async def proof(session_id: str = Form(...),
                 sun_altitude_deg: Optional[float] = Form(None),
                 golden_strength: float = Form(0.7), profile: bool = Form(False),
                 profile_height_in: float = Form(0.9), track_color_by: str = Form("none"),
+                label_place: str = Form("smart"), track_weave: bool = Form(True),
                 output: str = Form("print"), wallpaper_preset: str = Form("")):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
@@ -826,7 +827,11 @@ async def proof(session_id: str = Form(...),
              "oblique": oblique,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
-             "profile_height_in": profile_height_in, "track_color_by": track_color_by}
+             "profile_height_in": profile_height_in, "track_color_by": track_color_by,
+             # smart label placement + chronological weave (v1.10): NEW posters default to
+             # the enhanced look (the Form defaults above), while the spec/manifest still
+             # omit these at their pre-feature default so OLD posters reprint byte-identically.
+             "label_place": label_place, "track_weave": track_weave}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
     if light_mode not in ("archival", "journey"):
@@ -1461,7 +1466,9 @@ async def continue_poster(file: UploadFile = File(...)):
                   "lightMode": spec.light_mode, "sunAzimuth": spec.sun_azimuth_deg,
                   "sunAltitude": spec.sun_altitude_deg, "golden": spec.golden_strength,
                   "profile": spec.profile, "profileHeight": spec.profile_height_in,
-                  "trackColorBy": spec.track_color_by},
+                  "trackColorBy": spec.track_color_by,
+                  # smart label placement + chronological weave restore from the spec
+                  "labelPlace": spec.label_place, "trackWeave": spec.track_weave},
     }
     log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
              sid, region.id, edition, len(tracks), len(spots))

@@ -75,6 +75,9 @@ LIGHT_MODES = ("archival", "journey")
 # Track coloring (v1.9): "none" is the flat track_rgb ink (byte-identical); the others
 # color each segment by a DEM-derived scalar ramp (reprint-safe -- no per-point data).
 TRACK_COLOR_MODES = ("none", "elevation", "grade")
+# Smart label placement (v1.10): "anchor" is the pre-feature centered-drop; "smart" tries
+# a ranked ring of offsets, treats the route as an obstacle, and draws leader lines.
+LABEL_PLACE_MODES = ("anchor", "smart")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
@@ -195,6 +198,18 @@ class CompositionSpec:
     # / "grade" color each segment by a DEM-derived scalar ramp -- reprint-safe, no
     # per-point data. Omitted from the manifest at "none".
     track_color_by: str = "none"             # none | elevation | grade
+    # Smart label placement (v1.10): "anchor" (default) is the pre-feature single centered
+    # position that drops a name on any collision -- byte-identical. "smart" tries a ranked
+    # ring of offset positions, treats the drawn route as a placement obstacle, and draws a
+    # hairline leader from a displaced name back to its feature. Omitted from the manifest
+    # at "anchor" (additive contract), so pre-feature manifests re-stamp byte-identically.
+    label_place: str = "anchor"              # anchor | smart
+    # Chronological track weave (v1.10): False (default) sums every journey into one cased
+    # route -- byte-identical. True composites the journeys oldest -> newest as separate
+    # cased strands, so a newer journey's paper halo knocks out the older gold where they
+    # cross (an honest over/under weave, newest on top). A no-op with < 2 journeys. Omitted
+    # from the manifest at False, so pre-feature manifests re-stamp byte-identically.
+    track_weave: bool = False
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
@@ -256,6 +271,8 @@ class CompositionSpec:
             raise SpecError(f"light_mode must be one of {LIGHT_MODES}")
         if self.track_color_by not in TRACK_COLOR_MODES:
             raise SpecError(f"track_color_by must be one of {TRACK_COLOR_MODES}")
+        if self.label_place not in LABEL_PLACE_MODES:
+            raise SpecError(f"label_place must be one of {LABEL_PLACE_MODES}")
         # edition: a bounded int (living editions). A crafted manifest could carry a
         # float, a bool, or a gigantic value; reject anything outside 1..EDITION_MAX
         # with an honest 422 (bool is an int subclass, so exclude it explicitly).

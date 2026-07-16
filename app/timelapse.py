@@ -86,15 +86,11 @@ DURATION_MS_BOUNDS = (40, 10000)
 
 
 def _group_day(spec: CompositionSpec, group) -> str | None:
-    """The ISO day of a journey group (the first dated segment), or None if none of its
-    segments carry a date. _journey_groups already clusters by day, so a group is either
-    all one day or a single day-less segment."""
-    days = list(spec.track_days or [])
-    days += [None] * (len(spec.tracks) - len(days))
-    for i in group:
-        if 0 <= i < len(days) and days[i]:
-            return days[i]
-    return None
+    """The ISO day of a journey group -- delegates to `render._group_day`, the single
+    definition now shared with the weave order (`render._chrono_group_order`). The
+    reveal schedule below sorts by exactly the key that helper uses, so a weave film
+    reveals journeys in the same order it stacks them."""
+    return render._group_day(spec, group)
 
 
 def frame_plan(spec: CompositionSpec, max_frames: int = DEFAULT_MAX_FRAMES) -> list:
