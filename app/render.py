@@ -115,6 +115,15 @@ GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet ed
 GEO_CURVE_KINDS = {"range", "valley"}
 GEO_PATH_SMOOTH_M = 1200.0            # spine-smoothing window in GROUND metres (dpi-stable)
 GEO_MIN_PATH_IN = 1.1                 # min in-frame spine length (inches) to bother curving
+# Smart label placement (v1.10, spec.label_place == "smart"): a ranked ring of candidate
+# offsets (Imhof/Maplex convention) so a colliding name tries alternative slots instead of
+# dropping; the drawn route as a placement obstacle so a name never crosses the journey it
+# describes; and a hairline leader from a far-displaced name back to its feature. Physical /
+# unitless so proof == final. "anchor" (the default) uses none of this.
+GEO_LABEL_GAP_PT = 2.0                # gap between a feature anchor and an offset label, pt
+GEO_LEADER_PT = 0.5                   # leader hairline stroke, points
+GEO_ROUTE_PRESENT = 0.15             # route-mask coverage above which a pixel is "on the route"
+GEO_ROUTE_TOL = 0.06                 # max mean route coverage under a box in the route-avoiding pass
 # ------------------------------------------------------------------------------
 
 def _pt_to_px(pt, dpi):  # points -> pixels
@@ -549,6 +558,29 @@ def _journey_groups(spec):
             groups.append(by_day[day])
     return groups
 
+def _group_day(spec, group):
+    """The ISO day of a journey group (its first dated segment), or None if none of its
+    segments carry a date. `_journey_groups` already clusters by day, so a group is either
+    all one day or a single day-less segment. The one definition of a group's date, shared
+    by the weave order (below) and the time-lapse reveal order (timelapse.frame_plan)."""
+    days = list(spec.track_days or [])
+    days += [None] * (len(spec.tracks) - len(days))
+    for i in group:
+        if 0 <= i < len(days) and days[i]:
+            return days[i]
+    return None
+
+def _chrono_group_order(spec, groups):
+    """`groups` reordered oldest journey first: dated journeys in ISO-day order (date
+    strings sort chronologically as text), day-less journeys last, ties broken by the
+    group's position in `groups` (stable). A pure function of spec + groups, so the still
+    poster and every film frame weave in one agreed order. This is the same key
+    timelapse.frame_plan reveals journeys by -- chronology lives in this (lower) layer."""
+    order = sorted(range(len(groups)),
+                   key=lambda gi: (_group_day(spec, groups[gi]) is None,
+                                   _group_day(spec, groups[gi]) or "", gi))
+    return [groups[gi] for gi in order]
+
 def _coverage(spec, out_w, out_h, width_px, groups=None, ctx=None):
     """Anti-aliased per-pixel visit count: how many distinct JOURNEYS cover each
     pixel. All segments of one journey draw onto one layer (self-overlap counts
@@ -620,29 +652,22 @@ def _oblique_warp_coverage(cov_pad, ctx):
             vis = np.maximum(vis, ghost)
     return vis
 
-def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_colors=None):
-    """Composite tracks as inked, cased lines that pick up the terrain texture and
-    paper grain instead of floating on top. Visitation is expressed as WIDTH: any
-    pass draws the base line near-solid; segments covered by 2+ distinct passes
-    swell toward the worn width, like a desire path (V1-10).
+def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None):
+    """Composite ONE set of journey `groups` onto the float image `img` (0..1) as a
+    cased, inked, grained route, and return the new float image. This is the single
+    definition of the casing -> ink math: `_ink_tracks` calls it once for the whole
+    route (the summed still/film path) or once per journey in date order (the weave),
+    so the two paths can never drift as worn-width / track-coloring / oblique evolve.
 
-    `groups` restricts the ink to a subset of journeys (a time-lapse prefix); None
-    means every journey -- the still-poster behavior. Does NOT mutate rgb_u8 (it
-    copies to float first), so a time-lapse can ink many prefixes onto one base.
-
-    ctx (plan-oblique): every coverage raster comes back already warped onto the
-    sheet (see _coverage), so the feather/casing blurs and the paper grain below
-    stay SHEET-space -- the halo keeps its isotropic softness and the grain never
-    shears, exactly as on a flat sheet."""
-    img = rgb_u8.astype(np.float32) / 255.0
+    `worn_possible = len(groups) >= 2`: a lone journey's coverage never exceeds 1, so
+    the worn (desire-path widening) terms are exactly zero and both worn rasterizations
+    are skipped (a flagship final saves ~4 s and ~300 MB). A per-journey weave layer is
+    therefore always a base-width strand -- repetition reads as stacked cased threads,
+    not one widened line."""
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
     worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
     pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
     feather = max(0.3, _pt_to_px(INK_EDGE_FEATHER_PT, dpi))
-    groups = _journey_groups(spec) if groups is None else groups
-    # a single journey can never be "worn" -- skip both worn rasterizations (a
-    # flagship final saves ~4 s and ~300 MB; output is identical since one journey's
-    # coverage never exceeds 1, so the worn terms are exactly zero).
     worn_possible = len(groups) >= 2
 
     # per-journey coverage at both widths (overlap across journeys = frequency)
@@ -689,7 +714,39 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_co
     else:
         ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
         img = img * (1 - op) + ink[None, None, :] * op
+    return img
 
+
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_colors=None):
+    """Composite tracks as inked, cased lines that pick up the terrain texture and
+    paper grain instead of floating on top. Visitation is expressed as WIDTH: any
+    pass draws the base line near-solid; segments covered by 2+ distinct passes
+    swell toward the worn width, like a desire path (V1-10).
+
+    `groups` restricts the ink to a subset of journeys (a time-lapse prefix); None
+    means every journey -- the still-poster behavior. Does NOT mutate rgb_u8 (it
+    copies to float first), so a time-lapse can ink many prefixes onto one base.
+
+    In weave mode (spec.track_weave, >= 2 journeys) the journeys composite oldest ->
+    newest as SEPARATE cased strands, so each newer journey's paper halo knocks out the
+    older gold where they cross -- an honest over/under weave, newest on top. The weave
+    lives entirely here so BOTH the still and every film frame inherit it and the film's
+    last frame stays pixel-equal to the still. Otherwise (the default, or a single
+    journey) the whole route composites in ONE summed layer -- byte-identical to before.
+
+    ctx (plan-oblique): every coverage raster comes back already warped onto the
+    sheet (see _coverage), so the feather/casing blurs and the paper grain below
+    stay SHEET-space -- the halo keeps its isotropic softness and the grain never
+    shears, exactly as on a flat sheet."""
+    img = rgb_u8.astype(np.float32) / 255.0
+    groups = _journey_groups(spec) if groups is None else groups
+    if spec.track_weave and len(groups) >= 2:
+        for g in _chrono_group_order(spec, groups):
+            img = _composite_ink_layer(img, spec, out_w, out_h, dpi, [g], ctx=ctx,
+                                       track_colors=track_colors)
+    else:
+        img = _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=ctx,
+                                   track_colors=track_colors)
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 def _draw_termini(img, spec, out_w, out_h, dpi, groups=None, ctx=None):
@@ -1417,13 +1474,77 @@ def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo):
     img.alpha_composite(rot, (round(center[0] - rot.width / 2),
                               round(center[1] - rot.height / 2)))
 
+def _draw_leader(d, anchor, label_box, dpi):
+    """A hairline haloed leader from a displaced label back to its feature anchor, ending in
+    a small anchor dot -- the NatGeo/Swiss convention for a decluttered cluster. Drawn UNDER
+    the label text; physical widths (points) so proof == final."""
+    ax, ay = anchor
+    lx0, ly0, lx1, ly1 = label_box
+    tx = min(max(ax, lx0), lx1)                       # nearest point on the box to the anchor
+    ty = min(max(ay, ly0), ly1)
+    w = max(1, round(_pt_to_px(GEO_LEADER_PT, dpi)))
+    hw = w + 2 * max(1, round(_pt_to_px(GEO_HALO_PT, dpi)))
+    d.line([(ax, ay), (tx, ty)], fill=GEO_LABEL_HALO + (235,), width=hw)   # paper halo
+    d.line([(ax, ay), (tx, ty)], fill=GEO_LABEL_INK + (255,), width=w)     # ink
+    r = max(2, hw)
+    d.ellipse([ax - r, ay - r, ax + r, ay + r], fill=GEO_LABEL_INK + (255,),
+              outline=GEO_LABEL_HALO + (235,), width=max(1, w))
+
+def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask,
+                       out_w, out_h):
+    """Smart point-label placement: try a ranked ring of offset positions (Imhof order --
+    centered first so uncrowded sheets read as before, then the four adjacent diagonals,
+    then pushed-out slots) and keep the first whose haloed box is in-frame, clears every
+    placed box, and -- on the first pass -- avoids the drawn route. A second pass tolerates
+    the route but widens the halo, because a name crossing the line still beats a dropped
+    name. Returns (x0, y0, halo, leader_box): leader_box is the ink box when the chosen slot
+    is a pushed-out one (draw a leader) else None; or None to drop the name entirely."""
+    gap = max(2.0, _pt_to_px(GEO_LABEL_GAP_PT, dpi))
+    dx, dy = tw / 2 + gap, th / 2 + gap
+    ring = [(0.0, 0.0, False),                                   # centered on the anchor
+            (dx, -dy, False), (-dx, -dy, False),                 # upper-right, upper-left
+            (dx, dy, False), (-dx, dy, False),                   # lower-right, lower-left
+            (2.2 * dx, -2.0 * dy, True), (-2.2 * dx, -2.0 * dy, True),   # pushed diagonals
+            (2.2 * dx, 2.0 * dy, True), (-2.2 * dx, 2.0 * dy, True),
+            (0.0, -2.6 * dy, True), (0.0, 2.6 * dy, True)]       # pushed above / below
+
+    def route_frac(x0, y0, hl):
+        if route_mask is None:
+            return 0.0
+        bx0, by0 = max(0, x0 - hl), max(0, y0 - hl)
+        bx1, by1 = min(out_w, x0 + tw + hl), min(out_h, y0 + th + hl)
+        if bx1 <= bx0 or by1 <= by0:
+            return 0.0
+        sub = route_mask[by0:by1, bx0:bx1]
+        return float(sub.mean()) if sub.size else 0.0
+
+    for allow_route in (False, True):
+        hl = halo if not allow_route else halo * 2       # a forced crossing gets a wider halo
+        for ox, oy, is_leader in ring:
+            x0 = round(ax - tw / 2 + ox)
+            y0 = round(ay - th / 2 + oy)
+            box = (x0 - hl, y0 - hl, x0 + tw + hl, y0 + th + hl)
+            if not in_frame(box) or overlaps(box):
+                continue
+            if not allow_route and route_frac(x0, y0, hl) > GEO_ROUTE_TOL:
+                continue
+            leader_box = (x0, y0, x0 + tw, y0 + th) if is_leader else None
+            return x0, y0, hl, leader_box
+    return None
+
 def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     """Place named geography with priority + greedy collision avoidance: strongest
     names first (range > summit > lake > pass > valley > river), each kept only if its
     haloed text box clears every already-placed box and the bottom-left cartouche/
     compass keep-out. A density cap keeps a name-dense region from over-inking.
     Placement runs on plan-oblique-displaced anchors (ctx), so the top_clear_frac
-    band and every collision verdict hold on the sheet as actually drawn."""
+    band and every collision verdict hold on the sheet as actually drawn.
+
+    In smart mode (spec.label_place == "smart") each point label tries a ranked ring of
+    offset slots instead of a single centered box, treats the drawn route as an obstacle,
+    and draws a leader from a pushed-out name back to its feature (_place_point_label).
+    "anchor" (the default) is the original single-centered-position, drop-on-overlap
+    placement, byte-identical to before."""
     cands = _label_candidates(labels, hydro, spec, out_w, out_h, ctx=ctx)
     if not cands:
         return img
@@ -1460,6 +1581,16 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     def in_frame(box):
         return not (box[0] < edge or box[1] < edge or box[2] > out_w - edge or box[3] > out_h - edge)
 
+    # smart mode: the drawn route as a placement obstacle. One warp-registered coverage
+    # mask (same ctx the ink drapes through) at the ribbon+halo width, so a name is kept
+    # off the journey it describes. Boolean so _place_point_label averages presence.
+    route_mask = None
+    if spec.label_place == "smart" and spec.tracks:
+        ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
+        cas_pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
+        route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
+                                _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
+
     for rank, kind, name, (ax, ay), path in cands:
         if len(placed) >= cap:
             break
@@ -1482,13 +1613,23 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
         tw = _tracked_width(d, text, font, tracking)
         l, t, r, b = d.textbbox((0, 0), text, font=font)
         th = b - t
-        x0 = round(ax - tw / 2)              # centered on the anchor
-        y0 = round(ay - th / 2)
-        box = (x0 - halo, y0 - halo, x0 + tw + halo, y0 + th + halo)
-        if not in_frame(box) or overlaps(box):
-            continue
-        occupied.append(box)
-        placed.append(("straight", x0, y0 - t, text, font, tracking, halo))
+        if spec.label_place == "smart":
+            place = _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps,
+                                       route_mask, out_w, out_h)
+            if place is None:
+                continue
+            x0, y0, lhalo, leader_box = place
+            occupied.append((x0 - lhalo, y0 - lhalo, x0 + tw + lhalo, y0 + th + lhalo))
+            leader = ((round(ax), round(ay)), leader_box) if leader_box else None
+            placed.append(("straight", x0, y0 - t, text, font, tracking, lhalo, leader))
+        else:
+            x0 = round(ax - tw / 2)              # centered on the anchor
+            y0 = round(ay - th / 2)
+            box = (x0 - halo, y0 - halo, x0 + tw + halo, y0 + th + halo)
+            if not in_frame(box) or overlaps(box):
+                continue
+            occupied.append(box)
+            placed.append(("straight", x0, y0 - t, text, font, tracking, halo, None))
 
     for entry in placed:
         if entry[0] == "curved":
@@ -1496,7 +1637,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
             for ch, cx, cy, ang in glyphs:
                 _draw_glyph_rotated(img, ch, (cx, cy), ang, font, halo)
         else:
-            _, x0, y0, text, font, tracking, halo = entry
+            _, x0, y0, text, font, tracking, halo, leader = entry
+            # a pushed-out smart label draws its leader first, so the text sits on top.
+            if leader is not None:
+                _draw_leader(d, leader[0], leader[1], dpi)
             # knockout paper halo: the tracked string stamped around the ink so the name
             # reads over dark ridges and bright snow alike (classic map label halo).
             for dx in (-halo, 0, halo):

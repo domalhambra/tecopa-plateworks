@@ -78,6 +78,13 @@ def spec_to_json(s: CompositionSpec) -> dict:
         del d["profile_height_in"]
     if d["track_color_by"] == "none":
         del d["track_color_by"]
+    # smart label placement + chronological weave (v1.10): omitted at their pre-feature
+    # defaults ("anchor" / False), so a manifest printed before these features re-stamps
+    # byte-identically; spec_from_json refills the defaults.
+    if d["label_place"] == "anchor":
+        del d["label_place"]
+    if not d["track_weave"]:
+        del d["track_weave"]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:
