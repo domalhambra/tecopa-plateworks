@@ -1,7 +1,9 @@
 # app/ingest.py
 from __future__ import annotations
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import io
+import math
 import re
 import zipfile
 import numpy as np
@@ -10,28 +12,75 @@ from lxml import etree
 from shapely.geometry import LineString
 from app.geo import RegionGeo, lonlat_to_crs
 
+# Waypoints: a hostile KML can carry thousands of <Placemark>s; bound what rides into
+# the marker layer (loud boundaries, like the KMZ caps below).
+MAX_WAYPOINTS = 200
+
 @dataclass
 class Track:
     track_id: str
     coords: np.ndarray   # (N, 2) float64, region CRS meters
     day: str | None      # ISO date if timestamps exist, else None
+    # Journey Light (v1.9): the timing the still-poster path discards but the sun and the
+    # films need. t0/t1 are the first/last known UTC timestamps (ISO-19); lonlat is the
+    # (lon, lat) centroid (geographic, for solar position). coords_t is per-SIMPLIFIED-
+    # VERTEX unix-seconds (NaN where unknown), aligned 1:1 to `coords` for the film's
+    # time-true reveal -- Douglas-Peucker keeps a subset of the original vertices, so each
+    # survivor carries its own real time. summit_t/summit_ele are the timestamp + elevation
+    # of the FULL-resolution highest point (found before simplification, so an interior
+    # peak dropped by DP still lights the poster) -- the "summit light" default moment. All
+    # default None so every existing caller and persisted row keeps working.
+    t0: str | None = None
+    t1: str | None = None
+    lonlat: tuple | None = None
+    coords_t: np.ndarray | None = None
+    summit_t: str | None = None
+    summit_ele: float | None = None
+
+def _to_unix(t) -> float:
+    """A gpxpy datetime or an ISO string (KML <when>) -> unix seconds UTC, or NaN."""
+    if t is None:
+        return float("nan")
+    if isinstance(t, datetime):
+        dt = t if t.tzinfo is not None else t.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    s = str(t).strip()
+    if not s:
+        return float("nan")
+    try:
+        s = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        dt = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return float("nan")
+
+def _iso19(unix: float) -> str:
+    return datetime.fromtimestamp(unix, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
 def _make_track(pts, region: RegionGeo, name, idx, simplify_tolerance_m,
                 stats: dict | None = None):
-    """Build one Track from points. pts: list of (lon, lat, time) where time is
-    a datetime, an ISO string, or None. Reproject -> drop non-finite -> simplify.
+    """Build one Track from points. pts: list of (lon, lat, time, ele) where time is a
+    datetime / ISO string / None and ele is a float / None. Reproject -> drop non-finite
+    -> simplify, then carry each surviving vertex's real time + elevation.
     `stats` (when given) accumulates counters across calls -- today just
     `dropped_points`, the non-finite drops -- so upload can NAME the loss instead
     of swallowing it (loud boundaries)."""
-    pts = [(lo, la, t) for lo, la, t in pts if lo is not None and la is not None]
+    pts = [p for p in pts if p[0] is not None and p[1] is not None]
     if len(pts) < 2:
         return None
-    xy = np.array([lonlat_to_crs(region, lo, la) for lo, la, _ in pts])
+    xy = np.array([lonlat_to_crs(region, p[0], p[1]) for p in pts])
+    lonlat_in = np.array([(p[0], p[1]) for p in pts], dtype=float)
+    tsec = np.array([_to_unix(p[2] if len(p) > 2 else None) for p in pts])
+    ele = np.array([float(p[3]) if len(p) > 3 and p[3] is not None else float("nan")
+                    for p in pts])
     # Points outside the region's projection validity reproject to (inf, inf).
     # Drop them so a single off-region upload can't poison the track (and later
     # crash density's int() cast with OverflowError). Counted, never silent.
     before = xy.shape[0]
-    xy = xy[np.isfinite(xy).all(axis=1)]
+    mask = np.isfinite(xy).all(axis=1)
+    xy = xy[mask]
+    tsec, ele, lonlat_in = tsec[mask], ele[mask], lonlat_in[mask]
     dropped = int(before - xy.shape[0])
     if stats is not None:
         stats["dropped_points"] = stats.get("dropped_points", 0) + dropped
@@ -47,11 +96,32 @@ def _make_track(pts, region: RegionGeo, name, idx, simplify_tolerance_m,
     coords = np.asarray(line.coords)
     if coords.shape[0] < 2:
         return None
-    t0 = next((t for _, _, t in pts if t is not None), None)
-    day = None
-    if t0 is not None:
-        day = t0.date().isoformat() if hasattr(t0, "date") else str(t0)[:10]
-    return Track(track_id=f"{name or 'track'}-{idx}", coords=coords, day=day)
+    # Recover per-vertex time for the SURVIVING (simplified) vertices: DP keeps exact
+    # input coordinates, so match each output vertex back to its input row.
+    idx_of = {}
+    for i in range(xy.shape[0]):
+        idx_of.setdefault((xy[i, 0], xy[i, 1]), i)
+    ct = np.full(coords.shape[0], np.nan)
+    for j in range(coords.shape[0]):
+        i = idx_of.get((coords[j, 0], coords[j, 1]))
+        if i is not None:
+            ct[j] = tsec[i]
+    have_t = np.isfinite(tsec).any()
+    t0 = _iso19(float(np.nanmin(tsec))) if have_t else None
+    t1 = _iso19(float(np.nanmax(tsec))) if have_t else None
+    day = t0[:10] if t0 is not None else None
+    lonlat = (float(lonlat_in[:, 0].mean()), float(lonlat_in[:, 1].mean()))
+    # Summit light: the highest FULL-resolution point that also carries a time (found
+    # pre-simplification, so a sharp interior peak DP would drop still resolves the sun).
+    summit_t = summit_ele = None
+    both = np.isfinite(ele) & np.isfinite(tsec)
+    if both.any():
+        si = int(np.argmax(np.where(both, ele, -np.inf)))
+        summit_t, summit_ele = _iso19(float(tsec[si])), float(ele[si])
+    return Track(track_id=f"{name or 'track'}-{idx}", coords=coords, day=day,
+                 t0=t0, t1=t1, lonlat=lonlat,
+                 coords_t=ct if have_t else None,
+                 summit_t=summit_t, summit_ele=summit_ele)
 
 def load_gpx_tracks(data: bytes, region: RegionGeo,
                     simplify_tolerance_m: float = 15.0,
@@ -61,7 +131,7 @@ def load_gpx_tracks(data: bytes, region: RegionGeo,
     idx = 0
     for trk in gpx.tracks:
         for seg in trk.segments:
-            pts = [(p.longitude, p.latitude, p.time) for p in seg.points]
+            pts = [(p.longitude, p.latitude, p.time, p.elevation) for p in seg.points]
             t = _make_track(pts, region, trk.name, idx, simplify_tolerance_m, stats)
             if t is not None:
                 out.append(t)
@@ -70,7 +140,7 @@ def load_gpx_tracks(data: bytes, region: RegionGeo,
     # exports, planning apps); they used to parse to zero tracks and fail the whole
     # upload with a generic 400 (red-team). A planned route has no timestamps.
     for rte in gpx.routes:
-        pts = [(p.longitude, p.latitude, p.time) for p in rte.points]
+        pts = [(p.longitude, p.latitude, p.time, p.elevation) for p in rte.points]
         t = _make_track(pts, region, rte.name or "route", idx, simplify_tolerance_m,
                         stats)
         if t is not None:
@@ -96,7 +166,8 @@ def _kml_segments(root):
                 p = tok.split(",")
                 if len(p) >= 2:
                     try:
-                        pts.append((float(p[0]), float(p[1]), None))
+                        ele = float(p[2]) if len(p) >= 3 else None
+                        pts.append((float(p[0]), float(p[1]), None, ele))
                     except ValueError:
                         continue
             if len(pts) >= 2:
@@ -120,7 +191,8 @@ def _kml_segments(root):
                     xy = c.text.split()
                     if len(xy) >= 2:
                         try:
-                            coords.append((float(xy[0]), float(xy[1]), when))
+                            ele = float(xy[2]) if len(xy) >= 3 else None
+                            coords.append((float(xy[0]), float(xy[1]), when, ele))
                         except ValueError:
                             continue
             if len(coords) >= 2:
@@ -195,3 +267,77 @@ def load_tracks(data: bytes, region: RegionGeo, filename: str | None = None,
     if fn.endswith((".kml", ".kmz")):
         return load_kml_tracks(data, region, simplify_tolerance_m, stats)
     return load_gpx_tracks(data, region, simplify_tolerance_m, stats)
+
+
+# Map a GPX/KML symbol string to one of the app's vector icons (VALID_ICONS in main.py);
+# default "flag" -- a waypoint is a marked point. Keyword match, case-insensitive.
+_SYM_ICON = (("summit", "peak"), ("peak", "peak"), ("mountain", "peak"),
+             ("camp", "camp"), ("tent", "camp"), ("shelter", "camp"),
+             ("water", "water"), ("spring", "water"), ("river", "water"),
+             ("photo", "camera"), ("camera", "camera"), ("scenic", "camera"),
+             ("view", "camera"), ("star", "star"))
+
+def _sym_to_icon(sym: str | None) -> str:
+    s = (sym or "").lower()
+    for key, icon in _SYM_ICON:
+        if key in s:
+            return icon
+    return "flag"
+
+def _waypoint_hotspot(region, lon, lat, name, sym):
+    x, y = lonlat_to_crs(region, lon, lat)
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return None
+    label = (name or "").strip()[:60]
+    # weight seeds the marker's presence; waypoints are explicit, so give them a solid
+    # (but not dominating) default so they read as pins in the marker layer.
+    return {"x": float(x), "y": float(y), "weight": 3,
+            "label": label, "icon": _sym_to_icon(sym)}
+
+def load_waypoints(data: bytes, region: RegionGeo,
+                   filename: str | None = None) -> list[dict]:
+    """Named user waypoints (GPX <wpt>, KML <Placemark> points) -> hotspot-shaped dicts
+    (the existing marker layer's shape: {x,y,weight,label,icon}). Auto-detects format
+    like load_tracks; bounded by MAX_WAYPOINTS. Off-region points are dropped. Returns []
+    when the file carries none (the common case), so the upload path is unchanged."""
+    out: list[dict] = []
+    is_kmz = data[:4] == b"PK\x03\x04"
+    low = data.lower()
+    fn = (filename or "").lower()
+    is_kml = (is_kmz or fn.endswith((".kml", ".kmz"))
+              or (low.find(b"<kml") != -1
+                  and (low.find(b"<gpx") == -1 or low.find(b"<kml") < low.find(b"<gpx"))))
+    if is_kml:
+        root = _parse_kml_bytes(_kmz_to_kml(data) if is_kmz else data)
+        for el in root.iter():
+            if _localname(el) != "Placemark":
+                continue
+            pt = next((d for d in el.iter() if _localname(d) == "Point"), None)
+            if pt is None:
+                continue
+            coord_el = next((c for c in pt if _localname(c) == "coordinates"), None)
+            name_el = next((n for n in el if _localname(n) == "name"), None)
+            if coord_el is None or not coord_el.text:
+                continue
+            tok = re.sub(r"\s*,\s*", ",", coord_el.text).strip().split()[0].split(",")
+            if len(tok) < 2:
+                continue
+            try:
+                lon, lat = float(tok[0]), float(tok[1])
+            except ValueError:
+                continue
+            hs = _waypoint_hotspot(region, lon, lat,
+                                   name_el.text if name_el is not None else "", None)
+            if hs is not None:
+                out.append(hs)
+            if len(out) >= MAX_WAYPOINTS:
+                break
+        return out
+    gpx = gpxpy.parse(io.BytesIO(data))
+    for w in gpx.waypoints:
+        hs = _waypoint_hotspot(region, w.longitude, w.latitude, w.name, w.symbol)
+        if hs is not None:
+            out.append(hs)
+        if len(out) >= MAX_WAYPOINTS:
+            break
+    return out

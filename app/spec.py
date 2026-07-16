@@ -66,12 +66,28 @@ def year_span(track_days) -> str:
     return years[0] if years[0] == years[-1] else f"{years[0]}–{years[-1]}"
 
 PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
+# Journey Light (v1.9): the poster lit by the journey's OWN sun. "archival" is the
+# region's curated NW light (byte-identical to pre-feature); "journey" swaps the real
+# solar azimuth/altitude (resolved from the GPX timestamps at proof time) into the cast
+# shadows + a warm/cool golden grade. The resolved sun rides the spec (not the
+# timestamps), so reprint reproduces the light with nothing but the manifest.
+LIGHT_MODES = ("archival", "journey")
+# Track coloring (v1.9): "none" is the flat track_rgb ink (byte-identical); the others
+# color each segment by a DEM-derived scalar ramp (reprint-safe -- no per-point data).
+TRACK_COLOR_MODES = ("none", "elevation", "grade")
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 "marker_diameter_in": (0.1, 0.5), "marker_ring": (0.0, 0.25),
                 "furniture_scale": (0.6, 1.6), "terrain_depth": (0.0, 1.5),
-                "shadow_strength": (0.0, 1.0), "oblique": (0.0, 1.0)}
+                "shadow_strength": (0.0, 1.0), "oblique": (0.0, 1.0),
+                # Journey Light: azimuth is a full compass circle; the altitude floor of
+                # 8 deg keeps the ray-marched cast shadows bounded (and the sun above the
+                # horizon); golden is the warm/cool grade amount.
+                "sun_azimuth_deg": (0.0, 360.0), "sun_altitude_deg": (8.0, 80.0),
+                "golden_strength": (0.0, 1.0),
+                # elevation-profile furniture height (inches); 0 with profile=False is the no-op
+                "profile_height_in": (0.0, 2.5)}
 
 @dataclass
 class CompositionSpec:
@@ -158,6 +174,27 @@ class CompositionSpec:
     # /api/proof; the painter never reads region data (reprint byte-identity). Default ""
     # -> every pre-feature manifest deserializes to a no-op and renders unchanged.
     credit_text: str = ""
+    # Journey Light (v1.9): the light the terrain is shaded by. "archival" (default) is
+    # byte-identical to pre-feature. In "journey" mode the resolved solar azimuth/altitude
+    # (stamped at proof time from the GPX; see app/solar.py) drive the cast shadows and a
+    # golden grade -- so the poster is "lit by the same sun that lit the hike". The
+    # resolved angles ride the spec (never the timestamps), so reprint/continue reproduce
+    # the light with nothing but the manifest. All three keys are omitted from the
+    # manifest at their archival defaults (additive contract), so pre-feature manifests
+    # re-stamp byte-identically.
+    light_mode: str = "archival"             # "archival" | "journey"
+    sun_azimuth_deg: float = 315.0           # resolved journey sun; ignored in archival mode
+    sun_altitude_deg: float = 45.0
+    golden_strength: float = 0.7             # warm/cool grade amount; only applied in journey mode
+    # Elevation profile (v1.9): a DEM-sampled distance x elevation strip in the lower
+    # margin. A picture decision -> the spec; DEM-derived so reprint-safe. Default off ->
+    # byte-identical, and both keys omitted from the manifest at the default.
+    profile: bool = False
+    profile_height_in: float = 0.9           # ignored when profile=False
+    # Track coloring (v1.9): "none" -> the flat track_rgb ink (byte-identical). "elevation"
+    # / "grade" color each segment by a DEM-derived scalar ramp -- reprint-safe, no
+    # per-point data. Omitted from the manifest at "none".
+    track_color_by: str = "none"             # none | elevation | grade
 
     def pixel_size(self, dpi: int) -> tuple:
         return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
@@ -212,6 +249,13 @@ class CompositionSpec:
                 raise SpecError(f"{name} must be between {lo} and {hi}")
         if self.photo_frame_style not in PHOTO_FRAME_STYLES:
             raise SpecError(f"photo_frame_style must be one of {PHOTO_FRAME_STYLES}")
+        # Journey Light + track coloring: membership-checked like the other enums (a
+        # crafted manifest can carry anything). The angle/strength floats are already
+        # range-checked by the STYLE_BOUNDS loop above.
+        if self.light_mode not in LIGHT_MODES:
+            raise SpecError(f"light_mode must be one of {LIGHT_MODES}")
+        if self.track_color_by not in TRACK_COLOR_MODES:
+            raise SpecError(f"track_color_by must be one of {TRACK_COLOR_MODES}")
         # edition: a bounded int (living editions). A crafted manifest could carry a
         # float, a bool, or a gigantic value; reject anything outside 1..EDITION_MAX
         # with an honest 422 (bool is an int subclass, so exclude it explicitly).

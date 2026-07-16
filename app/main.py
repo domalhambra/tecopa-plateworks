@@ -9,11 +9,11 @@ from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
-from app.ingest import load_tracks, Track
+from app.ingest import load_tracks, load_waypoints, Track
 from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
-from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse
+from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
 
 logconfig.setup_logging()
 log = logging.getLogger("trailprint.api")
@@ -125,19 +125,29 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     return key                                         # job result = the blob key
 
 def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
-                              lineage=None, region_pack=None, fmt="apng"):
+                              lineage=None, region_pack=None, fmt="apng",
+                              light_motion="none", track_times=None, anchor=None):
     """The time-lapse worker: paint the base once and stream the day-ordered journey
     prefixes into one film. `fmt` picks the container: "apng" (archival -- the manifest
     with the `animation` block rides the file, so it re-renders from itself) or a share
     twin, "webp" (ICC, no manifest) / "mp4" (neither). The twins carry nothing by
     construction: their branches never touch build_manifest / manifest_pnginfo at all.
-    Runs on a queue thread, touching only its arguments."""
+
+    light_motion (Journey Light, v1.9): "none" is the archival journey-reveal film above;
+    "diurnal"/"seasonal"/"auto" render the moving-sun Journey Light film (share twins only,
+    gated at submit), where the base is REPAINTED per frame as the sun travels with the
+    hike. Runs on a queue thread, touching only its arguments."""
     # honor the pacing max_frames that the ceiling was CHECKED against (same spec, same
     # max_frames): render_frames' default plan is DEFAULT_MAX_FRAMES, so omitting the
     # plan here would render more frames than the ceiling validated -> a bypass/OOM.
     spec = _embed_photos(spec, dpi)              # photos ride the film, not the uploads dir
-    plan = timelapse.frame_plan(spec, pacing["max_frames"])
-    frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir, plan=plan)
+    if light_motion != "none":
+        frames = timelapse.journey_light_frames(
+            spec, track_times, anchor, dpi=dpi, region_dir=region_dir,
+            motion=light_motion, n_frames=pacing["max_frames"])
+    else:
+        plan = timelapse.frame_plan(spec, pacing["max_frames"])
+        frames = timelapse.render_frames(spec, dpi=dpi, region_dir=region_dir, plan=plan)
     pace = dict(step_ms=pacing["step_ms"], hold_ms=pacing["hold_ms"],
                 leader_ms=pacing["leader_ms"])
     if fmt == "webp":
@@ -446,6 +456,15 @@ async def upload(files: List[UploadFile] = File(...),
         raise HTTPException(400, "No usable tracks in file(s)")
     spots = _carry_annotations(old_spots,
                                hotspots(tracks, region_bounds=region.cfg["bounds"]))
+    # GPX <wpt> / KML placemark POIs (v1.9): explicit named pins, merged into the marker
+    # layer beside the visit-density hotspots. A parse failure never fails the upload.
+    wpts = []
+    for data, fn in payloads:
+        try:
+            wpts.extend(load_waypoints(data, region.geo, fn))
+        except Exception:
+            pass
+    spots = _merge_waypoints(spots, wpts)
     sources = old_sources + new_sources
     if sid is None:
         sid = session.create({"tracks": tracks, "hotspots": spots,
@@ -481,7 +500,31 @@ async def upload(files: List[UploadFile] = File(...),
             # many of the SESSION's journeys (the poster shows all of them) extend
             # past the plate's bounds -- named and counted, never silent.
             "dropped_points": int(stats.get("dropped_points", 0)),
-            "journeys_outside_plate": _journeys_outside_plate(tracks, region)}
+            "journeys_outside_plate": _journeys_outside_plate(tracks, region),
+            # Journey Light availability (v1.9): the wizard enables the toggle + defaults
+            # the time-of-day scrubber from this. None when no track carries a timestamp.
+            "journey_light": _journey_light_meta(tracks)}
+
+WAYPOINT_DEDUP_M = 400.0
+
+def _merge_waypoints(spots, waypoints):
+    """Append explicit waypoints not already covered by a nearby (density or waypoint)
+    hotspot, so a marked point and the auto visit-density peak on it don't double up."""
+    out = list(spots)
+    for w in waypoints:
+        if all(((w["x"] - s["x"]) ** 2 + (w["y"] - s["y"]) ** 2) ** 0.5 >= WAYPOINT_DEDUP_M
+               for s in out):
+            out.append(w)
+    return out
+
+def _journey_light_meta(tracks):
+    """The upload/continue response's journey_light block, or None when no track is
+    timestamped (Journey Light then stays disabled in the wizard)."""
+    anchor = solar.track_anchor(tracks)
+    if anchor is None:
+        return {"available": False}
+    js = solar.journey_sun(anchor)
+    return {"available": True, "date": anchor["days"][-1], "sun": js}
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 # env-overridable so the test harness never writes into the operator's live dir
@@ -693,11 +736,35 @@ def _parse_hex_rgb(s: str):
     except ValueError:
         raise HTTPException(422, "track_color must be #rrggbb")
 
+def _resolve_journey_sun(st, style, sun_hour, sun_azimuth, sun_altitude):
+    """Journey Light (v1.9): resolve the poster's sun and stamp it into `style`. Explicit
+    az+alt (the /api/continue restore path) win; otherwise the sun is derived from the
+    session's timestamped tracks (summit light, or the UI scrubber's local hour). No
+    timestamps -> an honest 422. The resolved angles ride the spec; the GPX times never do."""
+    style["light_mode"] = "journey"
+    if sun_azimuth is not None and sun_altitude is not None:
+        style["sun_azimuth_deg"], style["sun_altitude_deg"] = sun_azimuth, sun_altitude
+        return
+    anchor = solar.track_anchor(st["tracks"])
+    if anchor is None:
+        raise HTTPException(422, "Journey light needs timestamped tracks "
+                                 "(a GPX with <time>). Upload a recorded track, or "
+                                 "switch the light back to Archival.")
+    js = solar.journey_sun(anchor, sun_hour)
+    style["sun_azimuth_deg"] = js["azimuth_deg"]
+    style["sun_altitude_deg"] = js["altitude_deg"]
+
 def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compass=True,
-                style=None, biome=False, labels=False, preset=None):
+                style=None, biome=False, labels=False, preset=None,
+                light_mode="archival", sun_hour=None, sun_azimuth=None, sun_altitude=None):
     st = _require_session(sid)
     region = _region_or_404(st["region_id"])
     crop = crop_px_to_crs_window(region.geo, *crop_px)
+    # Journey Light: resolve the sun from the session's tracks (or the explicit restore
+    # values) into the style dict before the spec is built; archival leaves style alone.
+    style = dict(style or {})
+    if light_mode == "journey":
+        _resolve_journey_sun(st, style, sun_hour, sun_azimuth, sun_altitude)
     # A finished poster carries a title block; default to the region's name so the
     # deliverable never ships bare (the old bare-caption title was unreachable: the
     # API had no title field). Pass title="-" to render a clean, block-free map.
@@ -744,6 +811,11 @@ async def proof(session_id: str = Form(...),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
                 furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0),
                 shadow_strength: float = Form(0.5), oblique: float = Form(0.0),
+                light_mode: str = Form("archival"), sun_hour: Optional[float] = Form(None),
+                sun_azimuth_deg: Optional[float] = Form(None),
+                sun_altitude_deg: Optional[float] = Form(None),
+                golden_strength: float = Form(0.7), profile: bool = Form(False),
+                profile_height_in: float = Form(0.9), track_color_by: str = Form("none"),
                 output: str = Form("print"), wallpaper_preset: str = Form("")):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
@@ -751,9 +823,14 @@ async def proof(session_id: str = Form(...),
              "marker_diameter_in": marker_size_in, "marker_ring": marker_ring,
              "photo_frame_style": photo_style, "furniture_scale": furniture_scale,
              "terrain_depth": terrain_depth, "shadow_strength": shadow_strength,
-             "oblique": oblique}
+             "oblique": oblique,
+             # Journey Light picture decisions (the resolved sun is injected in _build_spec):
+             "golden_strength": golden_strength, "profile": profile,
+             "profile_height_in": profile_height_in, "track_color_by": track_color_by}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
+    if light_mode not in ("archival", "journey"):
+        raise HTTPException(422, "light_mode must be 'archival' or 'journey'")
     # an unknown output must 422, not silently build a print (same honest-422 pattern
     # as photo_style / track_color / the preset id itself)
     if output not in ("print", "wallpaper"):
@@ -763,7 +840,8 @@ async def proof(session_id: str = Form(...),
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
                                    title, contours, compass, style, biome, labels,
-                                   preset=preset)
+                                   preset=preset, light_mode=light_mode, sun_hour=sun_hour,
+                                   sun_azimuth=sun_azimuth_deg, sun_altitude=sun_altitude_deg)
     except SpecError as e:
         raise HTTPException(422, str(e))
     t0 = time.time()
@@ -999,7 +1077,8 @@ async def timelapse_submit(session_id: str = Form(...),
                            wallpaper_preset: str = Form(""),
                            dpi: float = Form(0.0),
                            embed_spec: bool = Form(True),
-                           format: str = Form("apng")):
+                           format: str = Form("apng"),
+                           light_motion: str = Form("none")):
     """Render an accepted composition as a time-lapse film: the day-ordered journeys
     accumulate over a static terrain base to the complete poster (the last frame IS the
     still final -- invariant 1). `format` picks the container: `apng` (default) is the
@@ -1012,18 +1091,34 @@ async def timelapse_submit(session_id: str = Form(...),
     type). The target is the accepted sheet (bounded, screen-default dpi) or a
     wallpaper preset (exact device pixels)."""
     fmt = _timelapse_format_or_422(format)   # cheap membership first, like the finals
+    if light_motion not in ("none", "diurnal", "seasonal", "auto"):
+        raise HTTPException(422, "light_motion must be none, diurnal, seasonal, or auto")
     spec, region, sources, lineage = _require_stamped(session_id)
     pacing = _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms)
     tspec, target_dpi = _timelapse_target(spec, region, wallpaper_preset, dpi)
     frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
+    # Journey Light film (v1.9): the moving sun repaints the base per frame, so it is a
+    # share twin only (never the reprintable archival APNG) and needs timestamped tracks.
+    track_times = anchor = None
+    if light_motion != "none":
+        if fmt == "apng":
+            raise HTTPException(422, "A Journey Light film (the sun travels with the hike) "
+                                     "is a share twin — choose the WebP or MP4 format.")
+        st = session.get(session_id)
+        anchor = solar.track_anchor(st["tracks"])
+        if anchor is None:
+            raise HTTPException(422, "A Journey Light film needs timestamped tracks "
+                                     "(a GPX with <time>).")
+        track_times = [t.coords_t for t in st["tracks"]]
     jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
                        f"{session_id}/{download_name(tspec, '_film', TIMELAPSE_FORMATS[fmt])}",
                        target_dpi,
                        pacing, sources, embed_spec, lineage,
                        provenance.region_pack_block(region.dir, labels=tspec.labels,
-                                                    biome=tspec.biome), fmt)
-    log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f fmt=%s",
-             session_id, region.id, frames, target_dpi, fmt)
+                                                    biome=tspec.biome), fmt,
+                       light_motion, track_times, anchor)
+    log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f fmt=%s motion=%s",
+             session_id, region.id, frames, target_dpi, fmt, light_motion)
     return {"job": jid, "frames": frames}
 
 @app.get("/api/jobs/{jid}")
@@ -1359,7 +1454,14 @@ async def continue_poster(file: UploadFile = File(...)):
                   "color": f"#{r:02x}{g:02x}{b:02x}", "marker": spec.marker_diameter_in,
                   "ring": spec.marker_ring, "photoStyle": spec.photo_frame_style,
                   "furniture": spec.furniture_scale, "terrain": spec.terrain_depth,
-                  "shadow": spec.shadow_strength, "oblique": spec.oblique},
+                  "shadow": spec.shadow_strength, "oblique": spec.oblique,
+                  # Journey Light restore: the resurrected file carries the RESOLVED sun
+                  # (not the timestamps), so the edition keeps its light via explicit
+                  # az/alt at re-proof; profile + coloring restore straight from the spec.
+                  "lightMode": spec.light_mode, "sunAzimuth": spec.sun_azimuth_deg,
+                  "sunAltitude": spec.sun_altitude_deg, "golden": spec.golden_strength,
+                  "profile": spec.profile, "profileHeight": spec.profile_height_in,
+                  "trackColorBy": spec.track_color_by},
     }
     log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
              sid, region.id, edition, len(tracks), len(spots))
@@ -1373,6 +1475,9 @@ async def continue_poster(file: UploadFile = File(...)):
             # "Edition 2 · Lassen · 2023–2024" back to the user. Same year_span the
             # cartouche prints and the download name carries; "" when no track is dated.
             "year_span": year_span(spec.track_days),
+            # rebuilt tracks carry no timestamps (the manifest never stores them), so live
+            # sun derivation is unavailable -- the prefill's resolved sun restores the light.
+            "journey_light": _journey_light_meta(tracks),
             "prefill": prefill}
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")

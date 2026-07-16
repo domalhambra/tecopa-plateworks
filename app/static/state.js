@@ -38,7 +38,17 @@ export const state = {
     terrain: 1.0,         // multiplier on the scale-keyed terrain-depth pass
     shadow: 0.5,          // cast-shadow + sky-occlusion strength ("Blender relief")
     oblique: 0.0,         // High relief: plan-oblique stand-up terrain; 0 = flat sheet
+    // Journey Light (v1.9): the poster lit by the hike's own sun.
+    lightMode: 'archival', // 'archival' (region light) | 'journey' (the journey's sun)
+    sunHour: null,        // time-of-day scrubber (local solar hour); null = summit light
+    sunAzimuth: null, sunAltitude: null,  // explicit resolved sun (continue-restore path)
+    golden: 0.7,          // warm/cool golden-hour grade amount (journey mode)
+    profile: false,       // DEM-sampled elevation-profile furniture
+    profileHeight: 0.9,
+    trackColorBy: 'none', // 'none' | 'elevation' | 'grade' -- DEM-derived track ramp
   },
+  journeyLight: null,     // upload/continue meta: { available, date, sun } or null
+  lightMotion: 'none',    // film: 'none' | 'auto' | 'diurnal' | 'seasonal'
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   embedSpec: true,        // embed the reprint manifest in the PNG (off = a share copy)
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)

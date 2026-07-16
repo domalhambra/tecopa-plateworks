@@ -141,6 +141,21 @@ determinism, provenance/reprint — carries over unchanged. A 2.6 pt track is li
 - `tests/fixtures/manifest_wallpaper_v1.json` freezes the wallpaper manifest contract,
   as `manifest_v1.json` does for prints.
 
+## Journey Light ("lit by the same sun that lit your hike")
+
+Turn a recorded track's timestamps into the poster's light. In **journey** mode the real
+solar position — computed (NOAA/Meeus, `app/solar.py`, no new dependency) from the GPX
+times and the journey's location — drives the terrain's ray-marched cast shadows and a
+warm/cool golden-hour grade; the archival NW form-shading stays for legibility. The
+default moment is *summit light* (the sun as it stood at your high point); a time-of-day
+scrubber overrides it. The resolved sun rides the spec (never the timestamps), so reprint
+and continue reproduce the light byte-for-byte. Using the whole GPX also unlocks **named
+waypoint pins**, a DEM-sampled **elevation profile**, and **elevation/grade track
+coloring** (all reprint-safe). And the film learns a new motion: `light_motion` on
+`/api/timelapse/submit` renders a **Journey Light film** — a WebP/MP4 share twin where the
+line grows *time-true* (the pen breathing with the real hike) while the sun travels with
+it. Every knob defaults to the archival look, so existing posters render byte-identically.
+
 ## Invariants
 
 1. One spec, painted at many sizes — never compute the picture twice.

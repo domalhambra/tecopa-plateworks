@@ -232,6 +232,123 @@ def _probe_dem(region_dir, cfg, rect):
         return ds.read(1, window=win, out_shape=(ph, pw),
                        resampling=Resampling.nearest, boundless=True, fill_value=np.nan)
 
+# ---- Journey Light (v1.9): DEM-derived track elevation, coloring, and profile ----
+# All reprint-safe: they read the authoritative region DEM at the tracks' CRS coords, so
+# they reproduce from (region, crop, tracks) alone -- no per-point data in the manifest.
+
+def _sample_dem_elev(region_dir, cfg, xy):
+    """DEM elevation (metres, NaN off-coverage) at each (x, y) CRS point. Samples the
+    native DEM, so it is DPI-independent -- proof and final agree by construction."""
+    xy = np.asarray(xy, dtype=float)
+    if xy.shape[0] == 0:
+        return np.zeros(0)
+    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
+        nodata = ds.nodata
+        vals = np.array([v[0] for v in ds.sample(
+            [(float(x), float(y)) for x, y in xy])], dtype=float)
+    if nodata is not None:
+        vals[vals == nodata] = np.nan
+    return vals
+
+# elevation ramp (low -> high): a legible teal -> green -> warm-gold -> pale climb that
+# reads over the paper terrain. grade ramp (diverging): steep DOWN cool -> flat gold ->
+# steep UP warm. Stops are (t in 0..1, (r, g, b)).
+_ELEV_RAMP = ((0.0, (46, 110, 120)), (0.35, (86, 150, 92)), (0.65, (206, 168, 74)),
+              (0.85, (208, 120, 66)), (1.0, (238, 226, 200)))
+_GRADE_RAMP = ((0.0, (70, 120, 176)), (0.5, (214, 158, 58)), (1.0, (188, 74, 60)))
+GRADE_FULL_SCALE = 0.30            # |rise/run| that saturates the grade ramp
+
+def _ramp(stops, t):
+    t = 0.0 if not np.isfinite(t) else float(min(1.0, max(0.0, t)))
+    for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+        if t <= t1:
+            f = 0.0 if t1 == t0 else (t - t0) / (t1 - t0)
+            return tuple(int(round(c0[k] + (c1[k] - c0[k]) * f)) for k in range(3))
+    return stops[-1][1]
+
+def _track_color_arrays(spec, region_dir, cfg):
+    """Per-vertex RGB (uint8, one row per track vertex) under spec.track_color_by, or None
+    for 'none'. 'elevation' colors by DEM height over the region range; 'grade' by the
+    signed DEM slope along the path. An off-DEM vertex falls back to the swatch."""
+    mode = spec.track_color_by
+    if mode == "none" or not spec.tracks:
+        return None
+    lo, hi = cfg["elevation_min"], cfg["elevation_max"]
+    swatch = np.array(spec.track_rgb, np.uint8)
+    out = []
+    for track in spec.tracks:
+        track = np.asarray(track, float)
+        elev = _sample_dem_elev(region_dir, cfg, track)
+        n = track.shape[0]
+        if mode == "elevation":
+            norm = (elev - lo) / (hi - lo + 1e-9)
+            cols = np.array([_ramp(_ELEV_RAMP, v) for v in norm], np.uint8)
+        else:                                            # grade
+            seg = np.hypot(np.diff(track[:, 0]), np.diff(track[:, 1]))
+            with np.errstate(invalid="ignore", divide="ignore"):
+                gseg = np.where(seg > 1e-6, np.diff(elev) / seg, 0.0)
+            g = np.zeros(n)
+            if n > 1:
+                g[1:] = gseg
+                g[0] = gseg[0]
+            norm = 0.5 + 0.5 * np.clip(g / GRADE_FULL_SCALE, -1.0, 1.0)
+            cols = np.array([_ramp(_GRADE_RAMP, v) for v in norm], np.uint8)
+        bad = ~np.isfinite(elev)
+        if bad.any():
+            cols[bad] = swatch
+        out.append(cols)
+    return out
+
+def _track_color_field(spec, track_colors, out_w, out_h, width_px, ctx):
+    """Sheet-space per-pixel ink COLOR for track coloring: each segment drawn in its
+    vertex colour over a swatch background, then (under the plan-oblique warp) gathered
+    through the SAME winner buffer as _coverage, so the colour drapes with the ribbon.
+    Returns (out_h, out_w, 3) float 0..1 -- the per-pixel 'ink' the composite blends."""
+    if ctx is None:
+        w, h, dx, dy = out_w, out_h, 0.0, 0.0
+    else:
+        w = out_w + 2 * ctx.pad_x
+        h = out_h + ctx.pad_top + ctx.pad_bot
+        dx, dy = float(ctx.pad_x), float(ctx.pad_top)
+    base_swatch = tuple(int(c) for c in spec.track_rgb)
+    colimg = Image.new("RGB", (w, h), base_swatch)
+    dd = ImageDraw.Draw(colimg)
+    wpx = max(1, width_px)
+    for i, track in enumerate(spec.tracks):
+        cols = track_colors[i]
+        pts = [(px + dx, py + dy) for px, py in
+               (_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in track)]
+        for k in range(len(pts) - 1):
+            c = tuple(int(v) for v in cols[min(k + 1, len(cols) - 1)])
+            dd.line([pts[k], pts[k + 1]], fill=c, width=wpx, joint="curve")
+    field = np.asarray(colimg, np.float32) / 255.0
+    if ctx is None:
+        return field
+    Hp = field.shape[0]
+    win = ctx.winner[ctx.pad_top:ctx.pad_top + ctx.out_h,
+                     ctx.pad_x:ctx.pad_x + ctx.out_w]
+    cols_ix = np.arange(ctx.pad_x, ctx.pad_x + ctx.out_w)[None, :]
+    gathered = field[np.clip(win, 0, Hp - 1), cols_ix]
+    swatch = np.array(base_swatch, np.float32) / 255.0
+    return np.where((win >= 0)[..., None], gathered, swatch[None, None, :]).astype(np.float32)
+
+def _profile_data(spec, region_dir, cfg):
+    """(distance_m, elev_m) sampled along the whole journey (tracks concatenated in
+    canonical order) for the elevation-profile furniture, or None when off / empty.
+    DEM-sampled -> reprint-safe and registered to the rendered terrain."""
+    if not spec.profile or not spec.tracks:
+        return None
+    dists, d0 = [], 0.0
+    for track in spec.tracks:
+        track = np.asarray(track, float)
+        seg = np.hypot(np.diff(track[:, 0]), np.diff(track[:, 1]))
+        cum = np.concatenate([[0.0], np.cumsum(seg)]) + d0
+        d0 = cum[-1]
+        dists.append(cum)
+    coords = np.concatenate([np.asarray(t, float) for t in spec.tracks], axis=0)
+    elev = _sample_dem_elev(region_dir, cfg, coords)
+    return np.concatenate(dists), elev
+
 def _offdem_fraction(region_dir, cfg, crop, south_extend_m=0.0):
     """Fraction of the crop (margin excluded) with no DEM coverage, on the fixed probe
     grid. south_extend_m grows the probed rect southward: under the plan-oblique shear
@@ -503,7 +620,7 @@ def _oblique_warp_coverage(cov_pad, ctx):
             vis = np.maximum(vis, ghost)
     return vis
 
-def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None):
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_colors=None):
     """Composite tracks as inked, cased lines that pick up the terrain texture and
     paper grain instead of floating on top. Visitation is expressed as WIDTH: any
     pass draws the base line near-solid; segments covered by 2+ distinct passes
@@ -560,11 +677,18 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None):
     op = np.clip(op, 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
     op = (op * gf)[..., None]
-    ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
     # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
     # toward gold would only darken the terrain to a muddy brown); grain in `op`
     # keeps the paper texture so it still sits on the sheet rather than floating.
-    img = img * (1 - op) + ink[None, None, :] * op
+    # Journey Light track coloring: a per-pixel colour field (elevation/grade) replaces
+    # the flat swatch, warped through the same winner buffer as the ink. None -> the
+    # classic single-swatch composite, byte-identical.
+    if track_colors is not None and spec.track_color_by != "none":
+        ink_field = _track_color_field(spec, track_colors, out_w, out_h, ink_w, ctx)
+        img = img * (1 - op) + ink_field * op
+    else:
+        ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
+        img = img * (1 - op) + ink[None, None, :] * op
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
@@ -1460,6 +1584,11 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_top, pad_bot),
                            elev.shape, dpi)
              if spec.biome else None)
+    # Journey Light (v1.9): in journey mode the resolved sun drives the cast shadows +
+    # golden grade INSIDE shaded_relief (i.e. flat, BEFORE the oblique warp below), so the
+    # golden terrain simply drapes into the oblique view. archival -> None/0 -> the call is
+    # byte-identical to pre-feature.
+    journey = spec.light_mode == "journey"
     rgb = shaded_relief(
         elev, res_m=gpp,
         elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
@@ -1471,7 +1600,10 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
         valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
         biome=biome, depth=_terrain_depth(spec),
-        shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec))
+        shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec),
+        sun_azimuth=spec.sun_azimuth_deg if journey else None,
+        sun_altitude=spec.sun_altitude_deg if journey else None,
+        golden=spec.golden_strength if journey else 0.0)
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).
@@ -1521,23 +1653,81 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
     return rgb, lum, ctx
 
-def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None):
+def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
+                   track_colors=None):
     """The route layer for the given journey groups (None = all): inked tracks + those
     journeys' terminus pins, over the base. Does NOT mutate base_rgb (_ink_tracks copies
     it), so a time-lapse can paint prefix after prefix onto one base. Returns RGBA.
-    ctx (the plan-oblique warp) displaces the route with the standing terrain."""
-    rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)
+    ctx (the plan-oblique warp) displaces the route with the standing terrain.
+    track_colors (Journey Light): per-vertex ink colours for elevation/grade coloring."""
+    rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups, ctx=ctx,
+                      track_colors=track_colors)
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None):
+def _draw_profile(img, spec, out_w, out_h, dpi, profile):
+    """The elevation-profile furniture (Journey Light): a DEM-sampled distance x elevation
+    strip inset into the lower-left margin. Sheet-space and projection-independent (a 2-D
+    chart), so it is drawn AFTER any oblique warp and never displaces. `profile` is
+    (distance_m, elev_m); a strict no-op when it is None."""
+    if profile is None:
+        return img
+    dist, elev = profile
+    ok = np.isfinite(elev)
+    if ok.sum() < 2:
+        return img
+    dist, elev = dist[ok], elev[ok]
+    fs = _furniture_scale(spec)
+    ph = max(1, round(spec.profile_height_in * dpi * fs))
+    pw = min(out_w - 2 * round(out_w * MARGIN_FRAC), round(ph * 3.4))
+    inset = round(out_h * MARGIN_FRAC) + round(0.01 * out_h)
+    x0, y1 = inset, out_h - inset
+    x1, y0 = x0 + pw, y1 - ph
+    pad = max(2, round(ph * 0.12))
+    over = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    d.rounded_rectangle([x0, y0, x1, y1], radius=max(2, round(ph * 0.08)),
+                        fill=TRACK_CASING + (232,), outline=GEO_LABEL_INK + (150,),
+                        width=max(1, round(dpi / 300)))
+    ax0, ay1 = x0 + pad, y1 - pad
+    ax1, ay0 = x1 - pad, y0 + pad
+    emin, emax = float(elev.min()), float(elev.max())
+    span = max(1.0, emax - emin)
+    dmax = max(1.0, float(dist[-1]))
+    px = ax0 + (dist / dmax) * (ax1 - ax0)
+    py = ay1 - (elev - emin) / span * (ay1 - ay0)
+    poly = [(ax0, ay1)] + list(zip(px, py)) + [(ax1, ay1)]
+    d.polygon(poly, fill=TRACK_INK + (190,))
+    d.line(list(zip(px, py)), fill=GEO_LABEL_INK + (255,), width=max(1, round(dpi / 200)),
+           joint="curve")
+    si = int(np.argmax(elev))                                   # the summit tick
+    d.line([(px[si], py[si]), (px[si], ay0)], fill=GEO_LABEL_INK + (140,),
+           width=max(1, round(dpi / 300)))
+    fnt = _font(max(8, round(ph * 0.16)))
+    d.text((ax0, ay0 - round(ph * 0.02)), f"{round(emax):,} m", font=fnt,
+           fill=GEO_LABEL_INK + (255,))
+    d.text((ax0, ay1 - round(ph * 0.20)), f"{round(emin):,} m", font=fnt,
+           fill=GEO_LABEL_INK + (200,))
+    if img.mode == "RGBA":
+        img.alpha_composite(over)
+    else:
+        rgba = img.convert("RGBA")
+        rgba.alpha_composite(over)
+        img.paste(rgba.convert(img.mode))
+    return img
+
+def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None,
+                    profile=None):
     """The layers ABOVE the route, identical across time-lapse frames: markers, photos,
     keyline, compass, title block, and the optional proof watermark. Returns RGB.
     ctx displaces the anchored symbols with the plan-oblique terrain; the sheet
-    furniture (keyline / compass / cartouche) is sheet-space and never displaces."""
+    furniture (keyline / compass / cartouche / elevation profile) is sheet-space and
+    never displaces."""
     img = _draw_markers(img, spec, lum, out_w, out_h, dpi, ctx=ctx)
     img = _draw_photos(img, spec, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
+    if spec.profile:
+        img = _draw_profile(img, spec, out_w, out_h, dpi, profile)
     if spec.keyline:
         img = _draw_keyline(img, out_w, out_h, dpi)
     img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
@@ -1562,5 +1752,10 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
             cfg = json.load(f)
     out_w, out_h = spec.pixel_size(dpi)
     base_rgb, lum, ctx = _paint_base(spec, dpi, region_dir, cfg, hydro=hydro, labels=labels)
-    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=ctx)  # all journeys
-    return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx)
+    # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
+    track_colors = _track_color_arrays(spec, region_dir, cfg)
+    profile = _profile_data(spec, region_dir, cfg)
+    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=ctx,
+                         track_colors=track_colors)  # all journeys
+    return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
+                           profile=profile)
