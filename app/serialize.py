@@ -85,6 +85,10 @@ def spec_to_json(s: CompositionSpec) -> dict:
         del d["label_place"]
     if not d["track_weave"]:
         del d["track_weave"]
+    # bottom keep-out band (v1.11): same additive contract -- 0 is the pre-feature
+    # no-op, omitted so every earlier manifest re-stamps byte-identically.
+    if not d["bottom_clear_frac"]:
+        del d["bottom_clear_frac"]
     return d
 
 def spec_from_json(d: dict) -> CompositionSpec:

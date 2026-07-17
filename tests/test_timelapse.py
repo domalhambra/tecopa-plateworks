@@ -246,10 +246,19 @@ def test_submit_renders_an_apng_with_the_animation_block():
     assert s["state"] == "done", s
     data = c.get(s["result"]).content
     im = Image.open(io.BytesIO(data))
-    assert im.is_animated and im.n_frames == body["frames"]
+    # flatten-safe films (v1.11): a submitted APNG carries the complete poster as its
+    # DEFAULT image (what a flattening surface shows), so Pillow counts one image more
+    # than the animation's frames. The flag rides the animation block for the reprint.
+    assert im.is_animated and im.n_frames == body["frames"] + 1
+    assert getattr(im, "default_image", False)
+    im.seek(0)                                             # the flattened view...
+    first = np.asarray(im.convert("RGB"))
+    im.seek(im.n_frames - 1)                               # ...IS the complete poster
+    assert np.array_equal(first, np.asarray(im.convert("RGB")))
     m = provenance.extract(data)
     assert m["animation"]["max_frames"] == 15              # pacing recorded on the file
     assert m["animation"]["dpi"] == 96                     # screen-fidelity default (PROOF_DPI)
+    assert m["animation"]["default_image"] is True         # the encoder branch, recorded
     # the film names its plate too (same block as a still final)
     assert m["region_pack"] == provenance.region_pack_block(REGION_DIR)
 
@@ -489,10 +498,22 @@ def test_reprint_dpi_clamp_rejects_a_crafted_huge_dpi():
     # a crafted animation.dpi beyond the legit film range falls back to the spec's dpi
     from app.main import _animation_from_manifest_or_422
     spec = _spec(n_journeys=2)
-    _, dpi = _animation_from_manifest_or_422({"dpi": 5000}, spec)
+    _, dpi, _ = _animation_from_manifest_or_422({"dpi": 5000}, spec)
     assert dpi == spec.final_dpi()
-    _, dpi2 = _animation_from_manifest_or_422({"dpi": 120}, spec)
+    _, dpi2, _ = _animation_from_manifest_or_422({"dpi": 120}, spec)
     assert dpi2 == 120                                    # an in-range dpi is kept verbatim
+
+def test_reprint_default_image_flag_is_strict_and_absent_means_legacy():
+    # the encoder branch is chosen by the UNTRUSTED animation block: only a literal
+    # `true` selects the new flatten-safe encode; absent (every pre-v1.11 film) and
+    # any crafted value degrade to the legacy branch, so an old film's reprint stays
+    # byte-identical (the additive contract applies to encoders, not just painters).
+    from app.main import _animation_from_manifest_or_422
+    spec = _spec(n_journeys=2)
+    for anim, want in (({}, False), ({"default_image": True}, True),
+                       ({"default_image": "yes"}, False), ({"default_image": 1}, False)):
+        _, _, flag = _animation_from_manifest_or_422(anim, spec)
+        assert flag is want, anim
 
 def test_single_frame_film_degrades_to_a_static_poster():
     # a 0-journey spec yields one bare frame: encode_apng must degrade to a plain static

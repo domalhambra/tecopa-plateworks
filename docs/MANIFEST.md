@@ -80,6 +80,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `screen_ppi` — device pixels per inch; meaningful for wallpapers only
 - `keyline` — the thin sheet frame (wallpapers go clean)
 - `top_clear_frac` — keep auto-placed labels out of the top fraction of the sheet (lock-screen clock), 0-0.35
+- `bottom_clear_frac` — the band's bottom twin: keep auto-placed labels out of the bottom fraction (phone home-indicator / lock-screen controls, a Reel's caption zone), 0-0.35; default 0 and omitted at the default, so a pre-feature manifest re-stamps byte-identically
 - `edition` — the edition number the cartouche draws, 1-999 (default 1)
 - `credit_text` — the cartouche's data-credit row (e.g. `"Terrain USGS 3DEP - Names USGS GNIS"`); printable ASCII, at most 200 characters; default `""` = no credit row, and the key is omitted at the default (writers must not emit `""` — a pre-credit manifest re-stamps byte-identically)
 
@@ -104,7 +105,13 @@ An APNG time-lapse carries
 `{"max_frames", "step_ms", "hold_ms", "leader_ms", "dpi"}` — the frame budget, the
 per-frame / final-hold / leader durations in milliseconds, and the dpi the film was
 rendered at — so the film re-renders from the file alone. Absent on stills.
-Normative example: `tests/fixtures/manifest_animation_v1.json`.
+`default_image` (boolean) is present exactly when `true`: the file was encoded with
+the complete poster as the APNG's *default image* (what a flattening surface shows;
+the animation frames are unchanged), and a reprint must take the same encoder branch.
+Absent means the pre-feature encoding — a writer must not emit `false`, so a
+pre-feature film re-encodes byte-identically (the additive contract binds encoders
+exactly as it binds the painter). Normative example:
+`tests/fixtures/manifest_animation_v1.json` (pre-feature; carries no key).
 
 ## `region_pack` — the plate's identity
 

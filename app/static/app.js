@@ -161,7 +161,8 @@ async function loadWallpaperPresets() {
   } catch { state.wpPresets = []; }
   const sel = $('wpPreset'); sel.innerHTML = '';
   const groups = [['desktop', 'Desktop'], ['laptop', 'Laptop'],
-                  ['phone', 'Phone'], ['tablet', 'Tablet']];
+                  ['phone', 'Phone'], ['tablet', 'Tablet'],
+                  ['social', 'Social share']];
   for (const [cls, label] of groups) {
     const items = state.wpPresets.filter((p) => p.device_class === cls);
     if (!items.length) continue;
@@ -173,6 +174,10 @@ async function loadWallpaperPresets() {
     }
     sel.appendChild(og);
   }
+  // the escape hatch: a device the table doesn't carry (exact px + ppi typed in)
+  const oc = document.createElement('option');
+  oc.value = 'custom'; oc.textContent = 'Custom…';
+  sel.appendChild(oc);
   const pref = loadPrefs().wpPreset;
   if (pref && state.wpPresets.some((p) => p.id === pref)) sel.value = pref;
   state.wpPreset = sel.value || (state.wpPresets[0] ? state.wpPresets[0].id : '');
@@ -191,6 +196,7 @@ async function doUpload(fileList) {
     state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
     state.starterCrop = j.starter_crop; state.crop = null;    // set on Frame entry
     state.hasSpec = false; state.proofStale = true;           // new tracks invalidate any spec
+    if (j.final_dpi) state.finalDpi = j.final_dpi;            // the server's print truth
     savePref('region', j.region);
     // living editions: a file already on the poster (same bytes) is skipped server-side,
     // so don't list it as newly added either.
@@ -253,13 +259,20 @@ function updateEditionBadge() {
 
 // The save-file sentence must tell the truth for THIS download: with "Reprintable
 // file" off the PNG carries no manifest — it can never reprint or continue, so it is
-// NOT a save file. And a continued poster's next edition is edition+1, not always 2.
+// NOT a save file (and, said plainly, that's the privacy move: the recipe carries the
+// exact route coordinates, so a share copy keeps them out of the file — the sentence
+// used to live only in a hover tooltip, red-team 2026-07-17). A PDF never carries the
+// recipe at all, whatever the toggle says. Next edition is edition+1, not always 2.
 function updateSaveFileNote() {
   const el = $('saveFileNote');
   if (!el) return;
-  el.textContent = state.embedSpec
-    ? `This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition ${state.edition + 1}.`
-    : 'Reprintable file is off: this download is a share copy — no recipe inside, so it can never reprint or continue. Keep a reprintable copy as your save file.';
+  if (!state.embedSpec) {
+    el.textContent = 'Reprintable file is off: this download is a share copy — your exact route coordinates stay out of the file, and it can never reprint or continue. Keep a reprintable copy as your save file.';
+  } else if (state.output !== 'wallpaper' && state.finalFormat === 'pdf') {
+    el.textContent = 'A PDF is for the print shop: it can’t carry the reprint recipe. Download a PNG as well — that file is your save file and reprints from itself alone.';
+  } else {
+    el.textContent = `This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition ${state.edition + 1}.`;
+  }
 }
 
 // Reflect a continued poster's saved recipe into the Frame-step controls, so the
@@ -344,10 +357,17 @@ function applyPrefill(p) {
   }
   syncJourneyUI();   // reflect the restored Journey Light state (toggle, scrubber)
   // output kind + sheet: a continued wallpaper re-enters wallpaper mode on its matched
-  // device; otherwise a print, with the exact restored sheet added as a size option.
+  // device (or the Custom fields, for a device the table doesn't carry); otherwise a
+  // print, with the exact restored sheet added as a size option.
   if (p.output === 'wallpaper' && p.wallpaper_preset && state.wpPresets.length) {
     state.output = 'wallpaper'; $('output').value = 'wallpaper';
     state.wpPreset = p.wallpaper_preset; $('wpPreset').value = p.wallpaper_preset;
+    if (p.wallpaper_preset === 'custom' && p.custom_device) {
+      state.customDevice = { px: p.custom_device.px.slice(), ppi: p.custom_device.ppi };
+      $('customPxW').value = state.customDevice.px[0];
+      $('customPxH').value = state.customDevice.px[1];
+      $('customPpi').value = state.customDevice.ppi;
+    }
   } else {
     state.output = 'print'; $('output').value = 'print';
     ensurePrintSize(p.print_w_in, p.print_h_in);
@@ -385,6 +405,7 @@ async function continueFromPoster(file) {
     state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
     state.starterCrop = j.starter_crop; state.crop = null;
     state.hasSpec = false; state.proofStale = true;
+    if (j.final_dpi) state.finalDpi = j.final_dpi;    // the server's print truth
     state.edition = j.edition || 2;
     state.files = (j.files || []).slice();
     applyPrefill(j.prefill);
@@ -434,6 +455,7 @@ function applyOutputVisibility() {
   const wp = state.output === 'wallpaper';
   $('sizeField').hidden = wp;
   $('wpPresetField').hidden = !wp;
+  $('customDeviceField').hidden = !(wp && state.wpPreset === 'custom');
   $('orientField').hidden = wp;
   $('titleField').hidden = wp;
   $('compassRow').hidden = wp;
@@ -467,6 +489,12 @@ let proofUrl = null;   // last object URL, revoked on replace (red-team F2: leak
 
 async function renderProof() {
   if (proofInFlight) return false;
+  // a custom device isn't a device until all three numbers exist — say so instead
+  // of letting the server 422 a half-typed form
+  if (state.output === 'wallpaper' && state.wpPreset === 'custom' && !activePreset()) {
+    setStatus('Enter the custom device’s width, height and ppi first', 'status');
+    return false;
+  }
   // honor the infeasible-size guard from every entry point (button, Enter, express)
   if (canvas.sizeInfeasibleForRegion()) { updateFrameFeasibility(); return false; }
   const ov = cropForProof();
@@ -479,7 +507,8 @@ async function renderProof() {
                                  { title: state.title, contours: state.contours,
                                    compass: state.compass, biome: state.biome,
                                    labels: state.labels, style: state.style,
-                                   output: state.output, wpPreset: state.wpPreset });
+                                   output: state.output, wpPreset: state.wpPreset,
+                                   customDevice: state.customDevice });
     if (proofUrl) URL.revokeObjectURL(proofUrl);
     proofUrl = URL.createObjectURL(blob);
     $('posterImg').src = proofUrl;
@@ -618,12 +647,16 @@ async function downloadBundle() {
   try {
     const sub = await api.submitWallpapers(state.session, state.bundlePicks, state.embedSpec);
     const skipped = (sub.skipped || []).map((s) => s.preset);
+    // loud boundaries: the server re-fits the accepted frame per device and reports
+    // how far each drifted (area ratio); name real growth instead of hiding it.
+    const grown = (sub.fitted || []).filter((f) => f.crop_growth >= 1.15);
     const result = await pollJob(sub.job, 'bundleStatus',
       `Rendering ${sub.count} wallpaper(s) at native pixels…`);
     if (result) {
       await downloadFinal(result, 'zip');
       setStatus('Bundle downloaded.'
-        + (skipped.length ? ` Skipped (region too small): ${skipped.join(', ')}.` : ''),
+        + (skipped.length ? ` Skipped (region too small): ${skipped.join(', ')}.` : '')
+        + (grown.length ? ` Note: the frame grew to fit ${grown.map((f) => `${f.preset} (×${f.crop_growth})`).join(', ')} — more terrain shows than the proof.` : ''),
         'bundleStatus');
     }
   } catch (e) { setStatus('Bundle failed: ' + e.message, 'bundleStatus'); }
@@ -903,6 +936,7 @@ function wire() {
   };
   $('finalFormat').onchange = (e) => {
     state.finalFormat = e.target.value; savePref('finalFormat', e.target.value);
+    updateSaveFileNote();   // a PDF is never a save file — the note says which is
   };
   $('embedSpecChk').onchange = (e) => {
     state.embedSpec = e.target.checked;
@@ -956,8 +990,23 @@ function wire() {
   };
   $('wpPreset').onchange = (e) => {
     state.wpPreset = e.target.value; savePref('wpPreset', e.target.value);
+    applyOutputVisibility();                 // show/hide the Custom px/ppi inputs
     reframeForSheet();
   };
+  // the Custom device inputs: all three numbers make a device (activePreset()
+  // synthesizes a preset-shaped record from them); each edit re-fits the frame
+  // exactly as picking a table preset would.
+  const readCustomDevice = () => {
+    const w = Math.round(Number($('customPxW').value) || 0);
+    const h = Math.round(Number($('customPxH').value) || 0);
+    const ppi = Number($('customPpi').value) || 0;
+    state.customDevice = w > 0 && h > 0 && ppi > 0 ? { px: [w, h], ppi } : null;
+    if (state.wpPreset === 'custom') reframeForSheet();
+  };
+  for (const id of ['customPxW', 'customPxH', 'customPpi']) $(id).oninput = readCustomDevice;
+  // output-mode changes flip which save-file sentence is true (a wallpaper is
+  // always a PNG; a print may be a PDF) — keep the note honest on the switch.
+  $('output').addEventListener('change', updateSaveFileNote);
 
   // segmented faces reflect the (pref-seeded) hidden selects -- wire last so their
   // initial .on state matches the values set from prefs above.

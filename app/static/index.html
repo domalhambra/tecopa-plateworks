@@ -120,6 +120,17 @@
                     <select id="wpPreset"></select>
                   </div>
                 </div>
+                <div class="field" id="customDeviceField" hidden>
+                  <label for="customPxW">Custom device</label>
+                  <div class="custom-device"
+                       title="Exact native pixels and physical pixels-per-inch of your screen — the render is cut to precisely these pixels, with every style value true at this density.">
+                    <input id="customPxW" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="width px" aria-label="Custom device width in pixels">
+                    <span aria-hidden="true">×</span>
+                    <input id="customPxH" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="height px" aria-label="Custom device height in pixels">
+                    <span aria-hidden="true">@</span>
+                    <input id="customPpi" type="number" inputmode="numeric" min="72" max="600" step="1" placeholder="ppi" aria-label="Custom device pixels per inch">
+                  </div>
+                </div>
                 <div class="field" id="orientField">
                   <label>Orientation</label>
                   <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">

@@ -340,22 +340,39 @@ def _durations(n: int, step_ms: int, hold_ms: int, leader_ms: int) -> list:
 
 def encode_apng(frames, manifest: dict | None = None, step_ms: int = DEFAULT_STEP_MS,
                 hold_ms: int = DEFAULT_HOLD_MS, leader_ms: int = DEFAULT_LEADER_MS,
-                icc_profile: bytes | None = None) -> bytes:
+                icc_profile: bytes | None = None, default_image: bool = False) -> bytes:
     """Encode frames as one looping APNG: a beat on the leader, `step_ms` per reveal, a
     long `hold_ms` on the complete poster. The manifest embeds as a compressed zTXt
     chunk (verified: Pillow writes text chunks with save_all=True), so the animated file
-    is self-describing and reprintable exactly like a still."""
+    is self-describing and reprintable exactly like a still.
+
+    default_image (v1.11): the surfaces that flatten an APNG show its FIRST image --
+    which is the bare-terrain leader, so the film read as an EMPTY poster exactly
+    where it was posted (red-team 2026-07-17). True writes the COMPLETE poster (the
+    final frame) as the APNG's default image: animated viewers play the same frames
+    as before; flattening viewers show the finished poster. The flag rides the
+    manifest's `animation` block (absent -> False), because an APNG's bytes are part
+    of the reprint contract -- an old film must re-encode byte-identically, so an
+    ENCODER change needs the same additive gating as a painter change."""
     frames = list(frames)
     if not frames:
         raise ValueError("no frames to encode")
     durations = _durations(len(frames), step_ms, hold_ms, leader_ms)
     buf = io.BytesIO()
-    kw = dict(save_all=True, append_images=frames[1:], duration=durations, loop=0)
+    if default_image and len(frames) > 1:
+        # base image = the complete poster, excluded from the animation; the full
+        # frame list (leader included) becomes the animation via append_images.
+        lead = frames[-1]
+        kw = dict(save_all=True, default_image=True, append_images=frames,
+                  duration=durations, loop=0)
+    else:
+        lead = frames[0]
+        kw = dict(save_all=True, append_images=frames[1:], duration=durations, loop=0)
     if manifest is not None:
         kw["pnginfo"] = provenance.manifest_pnginfo(manifest)
     if icc_profile:
         kw["icc_profile"] = icc_profile
-    frames[0].save(buf, "PNG", **kw)
+    lead.save(buf, "PNG", **kw)
     return buf.getvalue()
 
 
@@ -468,7 +485,12 @@ def _mp4_stream(exe, size, ticks) -> bytes:
         cmd = [exe, "-y",
                "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{even_w}x{even_h}",
                "-r", str(MP4_BASE_FPS), "-i", "pipe:0", "-an",
-               "-c:v", "libx264", "-preset", "medium", "-crf", "23",
+               # crf 18 (was 23): 4:2:0 chroma is compatibility-mandatory for H.264,
+               # and it blurs exactly our worst case -- the saturated gold hairline on
+               # desaturated paper (the same fringe the PDF branch pins subsampling=0
+               # for). A lower crf is the one lever left; the platforms re-encode
+               # anyway, so hand them the cleanest master the codec allows.
+               "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                # color fidelity: swscale's RGB->YUV default is BT.601, but players
                # assume BT.709 for untagged video -- so CONVERT with 709 explicitly
                # (the scale filter, full-range RGB in, limited-range 709 out) and TAG
@@ -512,8 +534,14 @@ def _mp4_stream(exe, size, ticks) -> bytes:
 
 
 def animation_meta(max_frames: int, step_ms: int, hold_ms: int, leader_ms: int,
-                   dpi: float) -> dict:
+                   dpi: float, default_image: bool = False) -> dict:
     """The manifest `animation` block: the pacing + render dpi that, with the spec,
-    fully reproduce the film. Ints where the inputs are ints; dpi may be a device ppi."""
-    return {"max_frames": int(max_frames), "step_ms": int(step_ms),
-            "hold_ms": int(hold_ms), "leader_ms": int(leader_ms), "dpi": dpi}
+    fully reproduce the film. Ints where the inputs are ints; dpi may be a device ppi.
+    default_image is emitted only when True (additive contract): a pre-v1.11 film's
+    block carries no key, its reprint takes the legacy encode branch, and its bytes
+    stay identical -- the encoder is under the same forever-contract as the painter."""
+    m = {"max_frames": int(max_frames), "step_ms": int(step_ms),
+         "hold_ms": int(hold_ms), "leader_ms": int(leader_ms), "dpi": dpi}
+    if default_image:
+        m["default_image"] = True
+    return m

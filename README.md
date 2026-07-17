@@ -70,8 +70,11 @@ proof and final place the same names (invariant 1). Rebuild after adding a regio
 ## Self-describing posters ("the file is the artwork")
 
 Every PNG final embeds a provenance manifest in one compressed `zTXt` chunk (see
-`app/provenance.py`): the full `CompositionSpec`, the sha256 of each source GPX, and
-the engine/schema version. That makes the file **stateless-reprintable** —
+`app/provenance.py`): the full `CompositionSpec`, the sha256 of each source GPX, the
+engine name, and the manifest schema version. (No engine *version* rides the file —
+byte-identical reprints across upgrades rest entirely on the additive-defaults
+discipline: every new spec/animation key is omitted at its pre-feature default, for
+encoders as much as the painter.) That makes the file **stateless-reprintable** —
 `POST /api/reprint` re-renders any TrailPrint PNG at print resolution from the file
 alone (no session, no DB), and `POST /api/reprint/inspect` reads its provenance
 without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
@@ -133,7 +136,15 @@ determinism, provenance/reprint — carries over unchanged. A 2.6 pt track is li
 - **PNG-only** — the sRGB profile and the reprint manifest embed as usual; PDF is
   refused with an honest 422 (it's the print-shop path and can't carry the manifest).
 - The device table lives in `app/wallpaper.py`, served by `GET /api/wallpapers/presets`
-  — the wizard never hardcodes device sizes.
+  — the wizard never hardcodes device sizes. A device the table doesn't carry renders
+  through the **Custom** option (`wallpaper_preset=custom` + exact `custom_px_w` /
+  `custom_px_h` / `custom_ppi`), so the exact-native-pixels promise doesn't decay
+  with the device cycle.
+- **Social share canvases** ride the same machinery as `device_class: "social"`
+  presets — Reel/Story 9:16 (1080×1920), feed 4:5 and 1:1 — so stills *and* films can
+  target the frames platforms actually display, at a deliberate effective ppi
+  (`SOCIAL_PPI`) that sets stroke weight for feed viewing. `bottom_clear_frac` (the
+  clock band's bottom twin) keeps auto labels out of the home-indicator / caption zone.
 - **Bundle:** once a proof is accepted, `POST /api/wallpapers/submit` re-targets the
   composition at each requested device (center-preserving crop re-fit per aspect via
   `geo.refit_crop_aspect`) and renders them all into one zip through the job queue.
