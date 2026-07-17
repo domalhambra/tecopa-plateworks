@@ -177,6 +177,20 @@ input[type="text"] {
 input[type="text"]::placeholder { color: var(--text-3); }
 input[type="text"]:focus { outline: none; border-color: var(--tint); box-shadow: 0 0 0 3px var(--focus-ring); }
 
+/* custom-device row (wallpaper "Custom…"): three number inputs styled like the
+   text input, laid out as width × height @ ppi */
+.custom-device { display: flex; align-items: center; gap: 6px; }
+.custom-device span { color: var(--text-3); font-size: 13px; }
+.custom-device input[type="number"] {
+  width: 100%; min-width: 0; font: inherit; font-size: 13px; color: var(--text);
+  padding: 7px 10px; background: var(--control-inset);
+  border: 1px solid var(--hairline-strong); border-radius: var(--radius-sm);
+}
+.custom-device input[type="number"]::placeholder { color: var(--text-3); }
+.custom-device input[type="number"]:focus {
+  outline: none; border-color: var(--tint); box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
 /* select (styled native) */
 .select-wrap { position: relative; }
 .select-wrap::after {

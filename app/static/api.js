@@ -78,11 +78,17 @@ export async function moveMarker(sessionId, i, px, py) {
 export async function proof(sessionId, cropOv, printW, printH,
                             { title = '', contours = false, compass = true,
                               biome = false, labels = false, style = {},
-                              output = 'print', wpPreset = '' } = {}) {
+                              output = 'print', wpPreset = '',
+                              customDevice = null } = {}) {
   const [x0, y0, x1, y1] = cropOv;
+  const custom = output === 'wallpaper' && wpPreset === 'custom' && customDevice;
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
     output, wallpaper_preset: output === 'wallpaper' ? wpPreset : undefined,
+    // the escape-hatch device (wpPreset 'custom'): exact pixels + physical ppi
+    custom_px_w: custom ? customDevice.px[0] : undefined,
+    custom_px_h: custom ? customDevice.px[1] : undefined,
+    custom_ppi: custom ? customDevice.ppi : undefined,
     title: title || undefined,
     contours: contours ? 'true' : 'false', compass: compass ? 'true' : 'false',
     biome: biome ? 'true' : 'false', labels: labels ? 'true' : 'false',

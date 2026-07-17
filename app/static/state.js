@@ -18,7 +18,10 @@ export const state = {
   orientation: 'auto',    // 'auto' (tracks decide) | 'landscape' | 'portrait'
   output: 'print',        // 'print' | 'wallpaper' (a screen is a sheet with a known ppi)
   wpPresets: [],          // /api/wallpapers/presets metadata (id,name,px,ppi,device_class)
-  wpPreset: '',           // active device preset id (wallpaper mode)
+  wpPreset: '',           // active device preset id (wallpaper mode); 'custom' = bespoke
+  customDevice: null,     // { px:[w,h], ppi } when wpPreset === 'custom' (the escape hatch)
+  finalDpi: 300,          // print final resolution, served by /api/upload|continue --
+                          // the server's truth, never assumed (mirrors spec.FINAL_DPI)
   bundlePicks: [],        // preset ids ticked in the post-proof bundle card
   tlFrames: 40,           // time-lapse frame count
   tlTarget: '',           // '' = accepted sheet; else a wallpaper preset id
@@ -83,21 +86,31 @@ export function metresPerPx() {
   return (maxx - minx) / r.overview_size[0];
 }
 
-// The active wallpaper preset's metadata (null when none / print mode).
+// The active wallpaper preset's metadata (null when none / print mode). A custom
+// device synthesizes the same shape from state.customDevice, so every consumer
+// (applyPrintSize, finalWidthPx, sizeLabel) treats it exactly like a table preset —
+// null until all three fields are filled, which keeps the proof gate honest.
 export function activePreset() {
+  if (state.wpPreset === 'custom') {
+    const c = state.customDevice;
+    return c && c.px && c.px[0] > 0 && c.px[1] > 0 && c.ppi > 0
+      ? { id: 'custom', name: `Custom ${c.px[0]}×${c.px[1]}`, px: c.px, ppi: c.ppi,
+          device_class: 'custom', top_clear_frac: 0, bottom_clear_frac: 0 }
+      : null;
+  }
   return state.wpPresets.find((p) => p.id === state.wpPreset) || null;
 }
 
 // The FINAL's output width in pixels -- what the zoom-cap floor is judged against.
-// Prints render at 300 dpi; a wallpaper renders the device's exact native pixels.
-// Every client-side floor check keys on this, so wallpaper mode never inherits the
-// print path's hardcoded 300.
+// Prints render at the server-served final dpi; a wallpaper renders the device's
+// exact native pixels. Every client-side floor check keys on this, so neither mode
+// assumes a resolution the server didn't state (the old hardcoded 300 could drift).
 export function finalWidthPx() {
   if (state.output === 'wallpaper') {
     const p = activePreset();
     if (p) return p.px[0];
   }
-  return Math.round(state.printW * 300);
+  return Math.round(state.printW * state.finalDpi);
 }
 
 // True when the loaded tracks read wider than tall (overview px are isotropic, so

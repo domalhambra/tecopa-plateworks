@@ -35,8 +35,9 @@ OUTPUT_KINDS = ("print", "wallpaper")
 # Plausible physical screen densities: an FHD desktop sits near 92 ppi, a phone OLED
 # near 500. Outside this range px/ppi stops describing a real piece of glass.
 SCREEN_PPI_BOUNDS = (72.0, 600.0)
-# Ceiling for the phone lock-screen-clock keep-out band (top_clear_frac): past about
-# a third of the sheet the "band" would dominate label placement, not protect a clock.
+# Ceiling for the phone lock-screen-clock keep-out band (top_clear_frac) -- and its
+# bottom twin (bottom_clear_frac: home indicator / Reel caption zone): past about
+# a third of the sheet a "band" would dominate label placement, not protect chrome.
 TOP_CLEAR_MAX = 0.35
 
 # Edition ceiling: a poster carried forward once a year for a millennium is still
@@ -166,6 +167,13 @@ class CompositionSpec:
     top_clear_frac: float = 0.0              # keep AUTO-placed geography labels out of
                                              # the top fraction of the sheet (the phone
                                              # lock-screen clock); 0 = no band
+    bottom_clear_frac: float = 0.0           # the band's bottom twin (v1.11): phone
+                                             # home-indicator / lock-screen controls,
+                                             # a Reel's caption zone. Same contract:
+                                             # auto labels only; 0 (the default) is a
+                                             # strict no-op and is omitted from the
+                                             # manifest, so pre-feature posters
+                                             # reprint byte-identically.
     # living editions (v1.6): the poster is the save file. Continuing a poster
     # (POST /api/continue) resurrects its spec and renders the next edition; this is
     # the edition number the cartouche draws, so it's a picture decision -> the spec.
@@ -245,6 +253,9 @@ class CompositionSpec:
         if not (math.isfinite(self.top_clear_frac)
                 and 0.0 <= self.top_clear_frac <= TOP_CLEAR_MAX):
             raise SpecError(f"top_clear_frac must be between 0 and {TOP_CLEAR_MAX}")
+        if not (math.isfinite(self.bottom_clear_frac)
+                and 0.0 <= self.bottom_clear_frac <= TOP_CLEAR_MAX):
+            raise SpecError(f"bottom_clear_frac must be between 0 and {TOP_CLEAR_MAX}")
         w_px, h_px = self.pixel_size(dpi)
         # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
         if w_px < 1 or h_px < 1:

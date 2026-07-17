@@ -126,7 +126,8 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
 
 def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
                               lineage=None, region_pack=None, fmt="apng",
-                              light_motion="none", track_times=None, anchor=None):
+                              light_motion="none", track_times=None, anchor=None,
+                              default_image=False):
     """The time-lapse worker: paint the base once and stream the day-ordered journey
     prefixes into one film. `fmt` picks the container: "apng" (archival -- the manifest
     with the `animation` block rides the file, so it re-renders from itself) or a share
@@ -158,11 +159,14 @@ def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed
         return key
     manifest = None
     if embed_spec:
-        anim = timelapse.animation_meta(dpi=dpi, **pacing)
+        # default_image rides the block so the file re-encodes ITSELF faithfully:
+        # a reprint reads the flag back and takes the same encoder branch.
+        anim = timelapse.animation_meta(dpi=dpi, default_image=default_image, **pacing)
         manifest = provenance.build_manifest(spec, sources, lineage, animation=anim,
                                              region_pack=region_pack)
     BLOBS.put(key, timelapse.encode_apng(
-        frames, manifest=manifest, icc_profile=SRGB_PROFILE, **pace))
+        frames, manifest=manifest, icc_profile=SRGB_PROFILE,
+        default_image=default_image, **pace))
     return key                                         # job result = the blob key
 
 def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None,
@@ -503,7 +507,11 @@ async def upload(files: List[UploadFile] = File(...),
             "journeys_outside_plate": _journeys_outside_plate(tracks, region),
             # Journey Light availability (v1.9): the wizard enables the toggle + defaults
             # the time-of-day scrubber from this. None when no track carries a timestamp.
-            "journey_light": _journey_light_meta(tracks)}
+            "journey_light": _journey_light_meta(tracks),
+            # the print resolution the FINAL renders at: served so the client's zoom-
+            # floor math keys on the server's truth instead of a hardcoded 300
+            # (red-team 2026-07-17 -- the one dpi the client used to assume).
+            "final_dpi": FINAL_DPI}
 
 WAYPOINT_DEDUP_M = 400.0
 
@@ -791,8 +799,22 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
     return spec, region
 
-def _preset_or_422(preset_id: str):
-    p = wallpaper.PRESETS.get((preset_id or "").strip())
+def _preset_or_422(preset_id: str, custom_px_w: int = 0, custom_px_h: int = 0,
+                   custom_ppi: float = 0.0):
+    pid = (preset_id or "").strip()
+    if pid == "custom":
+        # the escape hatch (red-team 2026-07-17): a device the table doesn't carry.
+        # Only the proof form carries the three custom fields; the bundle/film target
+        # lists stay table-only (their arcnames/keys name table ids), so those call
+        # sites reach this branch with zeros and get the honest sentence below.
+        if not (custom_px_w and custom_px_h and custom_ppi):
+            raise HTTPException(422, "a custom device needs custom_px_w, custom_px_h "
+                                     "and custom_ppi (set them on the Frame step)")
+        try:
+            return wallpaper.custom_preset(custom_px_w, custom_px_h, custom_ppi)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    p = wallpaper.PRESETS.get(pid)
     if p is None:
         raise HTTPException(422, f"unknown wallpaper preset {preset_id!r}; "
                                  f"see GET /api/wallpapers/presets")
@@ -817,7 +839,9 @@ async def proof(session_id: str = Form(...),
                 golden_strength: float = Form(0.7), profile: bool = Form(False),
                 profile_height_in: float = Form(0.9), track_color_by: str = Form("none"),
                 label_place: str = Form("smart"), track_weave: bool = Form(True),
-                output: str = Form("print"), wallpaper_preset: str = Form("")):
+                output: str = Form("print"), wallpaper_preset: str = Form(""),
+                custom_px_w: int = Form(0), custom_px_h: int = Form(0),
+                custom_ppi: float = Form(0.0)):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
@@ -840,8 +864,10 @@ async def proof(session_id: str = Form(...),
     # as photo_style / track_color / the preset id itself)
     if output not in ("print", "wallpaper"):
         raise HTTPException(422, "output must be 'print' or 'wallpaper'")
-    # wallpaper mode: the preset (not the print_w/print_h form fields) sets the sheet
-    preset = _preset_or_422(wallpaper_preset) if output == "wallpaper" else None
+    # wallpaper mode: the preset (not the print_w/print_h form fields) sets the sheet;
+    # "custom" builds a one-off device from the three custom_* fields (the escape hatch)
+    preset = (_preset_or_422(wallpaper_preset, custom_px_w, custom_px_h, custom_ppi)
+              if output == "wallpaper" else None)
     try:
         spec, region = _build_spec(session_id, (x0, y0, x1, y1), print_w, print_h,
                                    title, contours, compass, style, biome, labels,
@@ -939,7 +965,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
     ids = list(dict.fromkeys(p.strip() for p in presets.split(",") if p.strip()))
     if not ids:
         raise HTTPException(422, "presets must name at least one wallpaper preset")
-    items, skipped = [], []
+    items, skipped, fitted = [], [], []
     for pid in ids:
         p = _preset_or_422(pid)
         try:
@@ -959,6 +985,13 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
                             f"the re-fit frame extends past the region's elevation "
                             f"data ({nan_frac * 100:.0f}% has no DEM coverage)"})
             continue
+        # loud boundaries: the re-fit is center-preserving but grows the frame to the
+        # device's aspect + zoom floor, and nobody proofed the result -- report how far
+        # each rendered device drifted from the accepted frame (area ratio; 1.0 = the
+        # proofed picture, 2.0 = twice the ground). The UI names growth, never hides it.
+        pa = (spec.crop[2] - spec.crop[0]) * (spec.crop[3] - spec.crop[1])
+        na = (pspec.crop[2] - pspec.crop[0]) * (pspec.crop[3] - pspec.crop[1])
+        fitted.append({"preset": pid, "crop_growth": round(na / pa, 2)})
         items.append((pspec, f"trailprint_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
     if not items:
         raise HTTPException(422, "No requested device fits this region: "
@@ -970,7 +1003,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
                            region.dir, labels=spec.labels, biome=spec.biome))
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
              session_id, region.id, len(items), len(skipped))
-    return {"job": jid, "count": len(items), "skipped": skipped}
+    return {"job": jid, "count": len(items), "skipped": skipped, "fitted": fitted}
 
 # ---- time-lapse: the poster as a film ----
 
@@ -1059,7 +1092,10 @@ def _animation_from_manifest_or_422(anim, spec):
     # back to the spec's own resolution (consistent with the submit path's caps).
     if dpi is None or not math.isfinite(dpi) or not (0 < dpi <= 600):
         dpi = spec.final_dpi()
-    return pacing, dpi
+    # flatten-safe encoding flag (v1.11): strictly `is True` -- a crafted value
+    # degrades to the legacy encode, and a pre-feature film (no key) re-encodes
+    # byte-identically. The one place the untrusted block chooses an encoder branch.
+    return pacing, dpi, anim.get("default_image") is True
 
 def _animation_ceiling_or_422(spec, dpi, max_frames):
     """Refuse a film past the total-pixel ceiling before any painting; return the frame
@@ -1121,7 +1157,11 @@ async def timelapse_submit(session_id: str = Form(...),
                        pacing, sources, embed_spec, lineage,
                        provenance.region_pack_block(region.dir, labels=tspec.labels,
                                                     biome=tspec.biome), fmt,
-                       light_motion, track_times, anchor)
+                       light_motion, track_times, anchor,
+                       # new films are flatten-safe (the complete poster as the APNG
+                       # default image); the flag rides the manifest so the file
+                       # reprints its own encoding. Pre-feature films keep theirs.
+                       default_image=True)
     log.info("event=timelapse.submit session=%s region=%s frames=%d dpi=%.0f fmt=%s motion=%s",
              session_id, region.id, frames, target_dpi, fmt, light_motion)
     return {"job": jid, "frames": frames}
@@ -1306,7 +1346,7 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
         # refused here.
         if fmt != "png":
             raise HTTPException(422, "a time-lapse is PNG-only")
-        pacing, tl_dpi = _animation_from_manifest_or_422(anim, spec)
+        pacing, tl_dpi, tl_default = _animation_from_manifest_or_422(anim, spec)
         frames = _animation_ceiling_or_422(spec, tl_dpi, pacing["max_frames"])
         # the name comes from the REPRINTED spec -- its edition, its years (no clock)
         key = (f"reprint/{hashlib.sha256(data).hexdigest()[:16]}/"
@@ -1315,7 +1355,10 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                            pacing, manifest.get("sources", []), embed_spec,
                            manifest.get("lineage", []),
                            provenance.region_pack_block(region.dir, labels=spec.labels,
-                                                        biome=spec.biome))
+                                                        biome=spec.biome),
+                           # the film's own encoding flag: a pre-v1.11 file carries
+                           # none -> the legacy branch -> byte-identical reprint.
+                           default_image=tl_default)
         log.info("event=reprint.timelapse region=%s frames=%d dpi=%.0f",
                  spec.region_id, frames, tl_dpi)
         return JSONResponse({"job": jid, "frames": frames})
@@ -1445,14 +1488,23 @@ async def continue_poster(file: UploadFile = File(...)):
     r, g, b = (int(c) for c in spec.track_rgb)
     output = spec.output_kind
     matched = _match_wallpaper_preset(spec)
+    custom_device = None
     if output == "wallpaper" and matched is None:
-        output = "print"                            # custom device -> continue as a print
+        # a device the table doesn't carry continues as the SAME custom device: the
+        # prefill hands back its pixels + ppi so the wizard restores the Frame step's
+        # Custom fields. (This used to silently fall back to a print -- a custom
+        # wallpaper's edition lost its output kind on the way through /api/continue.)
+        matched = "custom"
+        custom_device = {"px": [round(spec.print_w_in * spec.screen_ppi),
+                                round(spec.print_h_in * spec.screen_ppi)],
+                         "ppi": spec.screen_ppi}
     prefill = {
         # a title-less poster carries title_text="" (the "-" choice at proof time). Send
         # it back as "-" so the edition-2 proof stays title-less: an empty title would
         # otherwise re-resolve to the region name in _build_spec and regrow a title block.
         "title": spec.title_text or "-", "print_w_in": spec.print_w_in,
         "print_h_in": spec.print_h_in, "output": output, "wallpaper_preset": matched,
+        "custom_device": custom_device,
         "contours": spec.contours, "compass": spec.compass, "biome": spec.biome,
         "labels": spec.labels, "edition": edition, "lineage": lineage,
         "style": {"width": spec.track_width_pt, "halo": spec.track_halo,
@@ -1485,6 +1537,7 @@ async def continue_poster(file: UploadFile = File(...)):
             # rebuilt tracks carry no timestamps (the manifest never stores them), so live
             # sun derivation is unavailable -- the prefill's resolved sun restores the light.
             "journey_light": _journey_light_meta(tracks),
+            "final_dpi": FINAL_DPI,        # same client-truth contract as /api/upload
             "prefill": prefill}
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")

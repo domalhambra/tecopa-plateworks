@@ -1563,6 +1563,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
         # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
         # so auto-placed geography stays out of that band (user-placed markers don't).
         keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
+    if spec.bottom_clear_frac > 0:
+        # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
+        # controls, a Reel's caption + action zone. Same contract as the clock band.
+        keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
     placed, occupied = [], list(keepout)
 
     def overlaps(box):
