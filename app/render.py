@@ -1,7 +1,7 @@
 # app/render.py
 from __future__ import annotations
 import json, math as _m, os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
@@ -976,6 +976,12 @@ def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None):
 KEYLINE_INSET_IN = 0.25         # thin frame inset from the sheet edge
 KEYLINE_PT = 0.6
 TITLE_INSET_IN = 0.35           # title block inset from the sheet corner
+PROFILE_INSET_IN = 0.35         # rev-2 strip inset from the sheet corner: physical,
+                                # the TITLE_INSET_IN datum so the strip's left edge
+                                # ALIGNS with the cartouche's (invariant 2; rev 1
+                                # kept the shipped MARGIN_FRAC proportion for
+                                # byte-identity)
+PROFILE_GAP_IN = 0.16           # clear air between the cartouche stack and the strip
 FURNITURE_BASE_IN2 = 18.0 * 24.0   # the sheet all furniture sizes were designed on
 FURNITURE_SCALE_MIN = 0.75         # small sheets: shrink a little, stay legible
 FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
@@ -1045,13 +1051,15 @@ def _stats_line(spec, dpi):
         parts.append(f"{dist_m / 1609.344:.0f} MI")
     return " · ".join(parts)
 
-def _draw_keyline(img, out_w, out_h, dpi):
-    """A thin dark frame just inside the sheet edge -- the 'deliberate' finish that
-    reads as a plate mark. Physical inset/width, so proof and final agree."""
+def _draw_keyline(img, out_w, out_h, dpi, trim=None):
+    """A thin dark frame just inside the TRIM edge (the sheet until bleed lands) -- the
+    'deliberate' finish that reads as a plate mark, and the trim-safe zone. Physical
+    inset/width, so proof and final agree and the frame survives the lab's cut."""
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
     inset = round(KEYLINE_INSET_IN * dpi)
     w = max(1, round(_pt_to_px(KEYLINE_PT, dpi)))
-    d.rectangle([inset, inset, out_w - 1 - inset, out_h - 1 - inset],
+    d.rectangle([tx0 + inset, ty0 + inset, tx1 - 1 - inset, ty1 - 1 - inset],
                 outline=TERMINUS_INK + (200,), width=w)
     return img
 
@@ -1148,16 +1156,18 @@ def _title_block_metrics(spec, d, dpi):
             "gap": gap, "rule_h": rule_h, "pad": pad, "fdpi": fdpi,
             "bw": content_w + 2 * pad, "bh": bh}
 
-def _draw_title_block(img, spec, out_w, out_h, dpi):
+def _draw_title_block(img, spec, out_w, out_h, dpi, trim=None):
     """The cartouche, after the reference sheets: centered tracked-caps title over a
     hairline rule, the stats caption, and a true graphic scale bar (USGS-style
-    alternating segments) -- inside a square-cornered plate with a fine keyline."""
+    alternating segments) -- inside a square-cornered plate with a fine keyline.
+    Anchored to the TRIM box (the sheet until bleed lands) so it survives the cut."""
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
     m = _title_block_metrics(spec, d, dpi)
     if m is None:
         return img
     inset = round(TITLE_INSET_IN * m["fdpi"])
-    x, y = inset, out_h - inset - m["bh"]
+    x, y = tx0 + inset, ty1 - inset - m["bh"]
     bw, pad = m["bw"], m["pad"]
     cx = x + bw / 2
     d.rectangle([x, y, x + bw, y + m["bh"]], fill=LABEL_PLATE + (235,))
@@ -1261,22 +1271,24 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     img = img * (1 - alpha) + ink[None, None, :] * alpha
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
-def _draw_compass(img, spec, out_w, out_h, dpi):
+def _draw_compass(img, spec, out_w, out_h, dpi, trim=None):
     """An eight-point split-shaded compass rose above the cartouche, bottom-left,
     after the classic engraved roses: short intercardinal points under the long
     cardinals, a double ring, north point long, each point half umber / half paper,
     a small N above. Vector-only + physical sizes, so the same spec renders
-    identically at any DPI and on any machine."""
+    identically at any DPI and on any machine. Anchored to the TRIM box (the sheet
+    until bleed lands) so it survives the cut."""
     if not spec.compass:
         return img
     import math as _m
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
     fdpi = dpi * _furniture_scale(spec)   # the rose enlarges as one engraving
     R = COMPASS_DIAMETER_IN * fdpi / 2.0
     inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
-    base_y = out_h - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
-    cx, cy = inset + R, base_y - R
+    base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
+    cx, cy = tx0 + inset + R, base_y - R
     # a soft paper ground, keyline-edged so it reads as a set medallion, not a blob
     d.ellipse([cx - R * 1.16, cy - R * 1.16, cx + R * 1.16, cy + R * 1.16],
               fill=LABEL_PLATE + (160,),
@@ -1532,7 +1544,36 @@ def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask
             return x0, y0, hl, leader_box
     return None
 
-def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
+def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
+    """The occupied rects auto label placement must avoid. The furniture-stack
+    estimate and the clear bands are the shipped arithmetic VERBATIM; rev 2 adds the
+    elevation strip's EXACT rect (shared geometry -- _profile_rect -- so painter and
+    keep-out can't drift). Rev 1 keeps only the hand-tuned estimate: adding the strip
+    rect would move a pre-feature poster's labels (not byte-identical). The furniture
+    rects are TRIM-anchored (the sheet until bleed lands) since that is where the
+    cartouche/compass/strip draw; the clear bands stay canvas-relative (they are
+    wallpaper furniture, and bleed is print-only -- the two never coexist)."""
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
+    fs = _furniture_scale(spec)
+    # only reserve the bottom-left corner when the furniture stack actually draws
+    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
+    # title-less print) must not blot labels out of a third of the sheet for nothing.
+    keepout = ([(tx0, ty1 - round(2.5 * fs * dpi), tx0 + round(3.4 * fs * dpi), ty1)]
+               if (spec.title_text or spec.compass) else [])
+    if spec.top_clear_frac > 0:
+        # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
+        # so auto-placed geography stays out of that band (user-placed markers don't).
+        keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
+    if spec.bottom_clear_frac > 0:
+        # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
+        # controls, a Reel's caption + action zone. Same contract as the clock band.
+        keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
+    if spec.profile and getattr(spec, "profile_rev", 1) >= 2:
+        keepout.append(_profile_rect(spec, d, (tx0, ty0, tx1, ty1), dpi))
+    return keepout
+
+
+def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=None):
     """Place named geography with priority + greedy collision avoidance: strongest
     names first (range > summit > lake > pass > valley > river), each kept only if its
     haloed text box clears every already-placed box and the bottom-left cartouche/
@@ -1552,21 +1593,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     edge = round(GEO_EDGE_IN * dpi)
     halo = max(1, round(_pt_to_px(GEO_HALO_PT, dpi)))
     cap = max(6, round(spec.print_w_in * spec.print_h_in / 100.0 * GEO_LABELS_PER_100IN2))
-    # keep-out for the furniture stack (cartouche + compass, bottom-left corner)
-    fs = _furniture_scale(spec)
-    # only reserve the bottom-left corner when the furniture stack actually draws
-    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
-    # title-less print) must not blot labels out of a third of the sheet for nothing.
-    keepout = ([(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
-               if (spec.title_text or spec.compass) else [])
-    if spec.top_clear_frac > 0:
-        # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
-        # so auto-placed geography stays out of that band (user-placed markers don't).
-        keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
-    if spec.bottom_clear_frac > 0:
-        # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
-        # controls, a Reel's caption + action zone. Same contract as the clock band.
-        keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
+    # keep-out for the sheet furniture (cartouche + compass corner, clear bands, and
+    # -- rev 2 -- the exact elevation-strip rect): one shared builder so the drawn
+    # furniture and the placement obstacles can't drift.
+    keepout = _label_keepout(spec, d, out_w, out_h, dpi, trim=trim)
     placed, occupied = [], list(keepout)
 
     def overlaps(box):
@@ -1689,7 +1719,7 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
 # to the still poster.
 
 def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
-                hydro=None, labels=None):
+                hydro=None, labels=None, trim=None):
     """The static layers UNDER the route -- relief, contours, hydro, geography labels --
     plus the luminance plane the markers key on. Identical for every frame of a
     time-lapse, so it is painted once. Returns (rgb_u8, lum, oblique_ctx); the ctx is
@@ -1796,7 +1826,8 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     if spec.labels:
         if labels is None:
             labels = _load_labels(region_dir)
-        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx)
+        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx,
+                            trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
     lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
     return rgb, lum, ctx
@@ -1814,11 +1845,64 @@ def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _draw_profile(img, spec, out_w, out_h, dpi, profile):
+def _furniture_stack_top(spec, d, ty1, dpi):
+    """Sheet y of the topmost painted pixel of the bottom-left furniture stack
+    (cartouche plate + compass disc + the N label above the rose), computed with the
+    painters' OWN arithmetic (_draw_title_block / _draw_compass) so it can't drift
+    from what they draw. ty1 is the bottom of the furniture datum (the trim box's
+    bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
+    no stack (no title, no compass)."""
+    fdpi = dpi * _furniture_scale(spec)
+    inset = round(TITLE_INSET_IN * fdpi)
+    m = _title_block_metrics(spec, d, dpi)
+    top = ty1 - inset - m["bh"] if m else ty1
+    if spec.compass:
+        R = COMPASS_DIAMETER_IN * fdpi / 2.0
+        base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
+        cy = base_y - R
+        f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
+        nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
+        nh = nb - nt
+        pad = max(2, round(nh * 0.22))
+        top = min(top, round(cy - R - nh - round(0.05 * fdpi)) - pad)
+    return top
+
+
+def _profile_rect(spec, d, trim, dpi):
+    """(x0, y0, x1, y1) of the elevation-profile strip -- the ONE geometry that the
+    painter AND the label keep-out read, so they can't drift (the
+    _title_block_metrics pattern). trim is the furniture datum box (the full sheet
+    until bleed lands). Rev 1 reproduces the shipped proportional layout VERBATIM:
+    the manifest names no engine version, so old posters' pixels are the contract.
+    Rev 2 is physical (invariant 2) and measured: inset in inches, stacked clear of
+    the cartouche + compass at any furniture_scale, height clamped so the strip can
+    never climb past the keyline."""
+    tx0, ty0, tx1, ty1 = trim
+    tw, th = tx1 - tx0, ty1 - ty0
+    fs = _furniture_scale(spec)
+    ph = max(1, round(spec.profile_height_in * dpi * fs))
+    if getattr(spec, "profile_rev", 1) < 2:
+        pw = min(tw - 2 * round(tw * MARGIN_FRAC), round(ph * 3.4))
+        inset = round(th * MARGIN_FRAC) + round(0.01 * th)
+        x0, y1 = tx0 + inset, ty1 - inset
+        return x0, y1 - ph, x0 + pw, y1
+    fdpi = dpi * fs
+    inset = round(PROFILE_INSET_IN * fdpi)
+    gap = round(PROFILE_GAP_IN * fdpi)
+    y1 = min(ty1 - inset, _furniture_stack_top(spec, d, ty1, dpi) - gap)
+    y_top_min = ty0 + round(KEYLINE_INSET_IN * dpi) + max(1, round(0.05 * fdpi))
+    ph = max(1, min(ph, y1 - y_top_min))
+    x0 = tx0 + inset
+    pw = min(tw - 2 * inset, round(ph * 3.4))
+    return x0, y1 - ph, x0 + pw, y1
+
+
+def _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=None):
     """The elevation-profile furniture (Journey Light): a DEM-sampled distance x elevation
     strip inset into the lower-left margin. Sheet-space and projection-independent (a 2-D
     chart), so it is drawn AFTER any oblique warp and never displaces. `profile` is
-    (distance_m, elev_m); a strict no-op when it is None."""
+    (distance_m, elev_m); a strict no-op when it is None. trim is the furniture datum
+    box (the trim box under bleed; the full sheet until then)."""
     if profile is None:
         return img
     dist, elev = profile
@@ -1826,12 +1910,9 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile):
     if ok.sum() < 2:
         return img
     dist, elev = dist[ok], elev[ok]
-    fs = _furniture_scale(spec)
-    ph = max(1, round(spec.profile_height_in * dpi * fs))
-    pw = min(out_w - 2 * round(out_w * MARGIN_FRAC), round(ph * 3.4))
-    inset = round(out_h * MARGIN_FRAC) + round(0.01 * out_h)
-    x0, y1 = inset, out_h - inset
-    x1, y0 = x0 + pw, y1 - ph
+    x0, y0, x1, y1 = _profile_rect(spec, ImageDraw.Draw(img),
+                                   trim or (0, 0, out_w, out_h), dpi)
+    ph = y1 - y0
     pad = max(2, round(ph * 0.12))
     over = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(over)
@@ -1853,9 +1934,17 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile):
     d.line([(px[si], py[si]), (px[si], ay0)], fill=GEO_LABEL_INK + (140,),
            width=max(1, round(dpi / 300)))
     fnt = _font(max(8, round(ph * 0.16)))
-    d.text((ax0, ay0 - round(ph * 0.02)), f"{round(emax):,} m", font=fnt,
+    # rev 2 labels feet: the cartouche speaks MI (render.NICE_MILES), and a mixed-
+    # units sheet was the red-team's recorded product gap. Rev 1 keeps metres -- its
+    # pixels are the pre-feature contract.
+    if getattr(spec, "profile_rev", 1) >= 2:
+        top_lbl = f"{round(emax * 3.28084):,} ft"
+        bot_lbl = f"{round(emin * 3.28084):,} ft"
+    else:
+        top_lbl, bot_lbl = f"{round(emax):,} m", f"{round(emin):,} m"
+    d.text((ax0, ay0 - round(ph * 0.02)), top_lbl, font=fnt,
            fill=GEO_LABEL_INK + (255,))
-    d.text((ax0, ay1 - round(ph * 0.20)), f"{round(emin):,} m", font=fnt,
+    d.text((ax0, ay1 - round(ph * 0.20)), bot_lbl, font=fnt,
            fill=GEO_LABEL_INK + (200,))
     if img.mode == "RGBA":
         img.alpha_composite(over)
@@ -1866,31 +1955,62 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile):
     return img
 
 def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None,
-                    profile=None):
+                    profile=None, paint=None, trim=None):
     """The layers ABOVE the route, identical across time-lapse frames: markers, photos,
     keyline, compass, title block, and the optional proof watermark. Returns RGB.
     ctx displaces the anchored symbols with the plan-oblique terrain; the sheet
     furniture (keyline / compass / cartouche / elevation profile) is sheet-space and
-    never displaces."""
-    img = _draw_markers(img, spec, lum, out_w, out_h, dpi, ctx=ctx)
-    img = _draw_photos(img, spec, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
+    never displaces. `paint` is the grown paint-spec whose crop maps to the canvas
+    (ground-anchored markers/photos read it); `trim` is the trim box all furniture
+    measures from. Both default to the no-bleed identity (paint = spec, trim = the
+    full canvas), so a pre-feature poster is byte-identical."""
+    if paint is None:
+        paint = spec
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
+    img = _draw_markers(img, paint, lum, out_w, out_h, dpi, ctx=ctx)
+    img = _draw_photos(img, paint, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
     if spec.profile:
-        img = _draw_profile(img, spec, out_w, out_h, dpi, profile)
+        img = _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=(tx0, ty0, tx1, ty1))
     if spec.keyline:
-        img = _draw_keyline(img, out_w, out_h, dpi)
-    img = _draw_compass(img, spec, out_w, out_h, dpi)   # above the title block
-    img = _draw_title_block(img, spec, out_w, out_h, dpi)
+        img = _draw_keyline(img, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))
+    img = _draw_compass(img, spec, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))  # above title
+    img = _draw_title_block(img, spec, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))
     if watermark:
-        # scale to the sheet (the old fixed 120 px offset + default font was invisible
+        # scale to the TRIM box (the old fixed 120 px offset + default font was invisible
         # at poster sizes) and center properly; translucent so the proof stays readable.
+        tw, th = tx1 - tx0, ty1 - ty0
         d = ImageDraw.Draw(img, "RGBA")
-        wm_font = _font(max(24, round(out_w * 0.09)))
+        wm_font = _font(max(24, round(tw * 0.09)))
         l, t, rt, b = d.textbbox((0, 0), "PROOF", font=wm_font)
         # upper third, not dead center: starter_crop centers the journey mid-sheet,
         # and the mark was parking exactly on the corridor being judged (red-team).
-        d.text(((out_w - (rt - l)) / 2 - l, out_h * 0.24 - t), "PROOF",
+        d.text((tx0 + (tw - (rt - l)) / 2 - l, ty0 + th * 0.24 - t), "PROOF",
                fill=(255, 255, 255, 80), font=wm_font)
     return img.convert("RGB")
+
+def sheet_geometry(spec, dpi):
+    """(paint_spec, trim_px) -- the ONE bleed seam. paint_spec is what the CONTENT
+    painters see: at bleed 0 it IS spec (identity -- the provable no-op); at bleed
+    > 0 the sheet and the crop grow by the bleed on every side (ground-per-inch is
+    invariant, so every content painter registers by construction -- the crop has
+    always mapped to the full canvas). bleed_in is zeroed on paint_spec so nothing
+    can double-apply it. trim_px is the trim box on the canvas: the datum ALL sheet
+    furniture measures from (trim-box-relative furniture, red-team 2026-07-17 §5); at
+    bleed 0 it is exactly the canvas, so every pre-feature poster is untouched."""
+    out_w, out_h = spec.pixel_size(dpi)
+    if not spec.bleed_in:
+        return spec, (0, 0, out_w, out_h)
+    gpi = (spec.crop[2] - spec.crop[0]) / spec.print_w_in     # ground metres per inch
+    b = spec.bleed_in * gpi
+    paint = replace(spec,
+                    crop=(spec.crop[0] - b, spec.crop[1] - b,
+                          spec.crop[2] + b, spec.crop[3] + b),
+                    print_w_in=spec.print_w_in + 2 * spec.bleed_in,
+                    print_h_in=spec.print_h_in + 2 * spec.bleed_in,
+                    bleed_in=0.0)
+    bpx = round(spec.bleed_in * dpi)
+    return paint, (bpx, bpx, out_w - bpx, out_h - bpx)
+
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
               watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
@@ -1898,12 +2018,15 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
-    out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum, ctx = _paint_base(spec, dpi, region_dir, cfg, hydro=hydro, labels=labels)
+    # bleed seam: content paints the grown sheet; furniture measures from the trim box
+    paint, trim = sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
+    base_rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro,
+                                     labels=labels, trim=trim)
     # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
-    track_colors = _track_color_arrays(spec, region_dir, cfg)
-    profile = _profile_data(spec, region_dir, cfg)
-    img = _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=ctx,
+    track_colors = _track_color_arrays(paint, region_dir, cfg)
+    profile = _profile_data(paint, region_dir, cfg)
+    img = _paint_journey(base_rgb, paint, out_w, out_h, dpi, groups=None, ctx=ctx,
                          track_colors=track_colors)  # all journeys
     return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
-                           profile=profile)
+                           profile=profile, paint=paint, trim=trim)

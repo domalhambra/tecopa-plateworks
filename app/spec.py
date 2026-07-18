@@ -39,6 +39,14 @@ SCREEN_PPI_BOUNDS = (72.0, 600.0)
 # bottom twin (bottom_clear_frac: home indicator / Reel caption zone): past about
 # a third of the sheet a "band" would dominate label placement, not protect chrome.
 TOP_CLEAR_MAX = 0.35
+# Bleed (v1.12): extra printed sheet past the trim line on EVERY side so the lab's
+# cut never shows paper. The delivered canvas is trim + 2*bleed; spec.crop stays the
+# TRIM ground window (what the wizard framed) and the painter derives the bleed band
+# from it. US convention is 0.125 in, large format up to 0.25; 0.5 is past any real
+# lab's ask and bounds what a crafted manifest can grow the canvas by. The offered
+# value is pinned by the print-lab conversation
+# (docs/superpowers/quality/2026-07-17-print-lab-questionnaire.md).
+BLEED_MAX_IN = 0.5
 
 # Edition ceiling: a poster carried forward once a year for a millennium is still
 # well under this. Bounds the cartouche label and a crafted-manifest edition value.
@@ -79,6 +87,16 @@ TRACK_COLOR_MODES = ("none", "elevation", "grade")
 # Smart label placement (v1.10): "anchor" is the pre-feature centered-drop; "smart" tries
 # a ranked ring of offsets, treats the route as an obstacle, and draws leader lines.
 LABEL_PLACE_MODES = ("anchor", "smart")
+# Profile revision (v1.12): rev 1 is the strip as shipped -- layout inset borrowed
+# from the DEM-read margin constant (proportional to the sheet, the one furniture
+# not in physical units) with metre labels and an overpaint risk against the
+# cartouche stack at high furniture_scale (red-team 2026-07-17 §5). Rev 2 is the
+# corrected painter: physical inset, stacked clear of the MEASURED cartouche +
+# compass, feet labels (the cartouche speaks MI). The manifest has no engine
+# version, so the rev is the gate: default 1, omitted from the manifest at 1 --
+# every pre-feature manifest re-stamps byte-identically; new proofs stamp 2 (the
+# label_place / track_weave pattern).
+PROFILE_REVS = (1, 2)
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
@@ -174,6 +192,11 @@ class CompositionSpec:
                                              # strict no-op and is omitted from the
                                              # manifest, so pre-feature posters
                                              # reprint byte-identically.
+    # bleed (v1.12): inches of REAL rendered terrain past the trim on every side --
+    # never mirrored pixels (the DEM window has always read past the crop). 0 (the
+    # default, omitted from the manifest) is byte-identical pre-feature output.
+    # Print-class only; validate() refuses it on a wallpaper.
+    bleed_in: float = 0.0
     # living editions (v1.6): the poster is the save file. Continuing a poster
     # (POST /api/continue) resurrects its spec and renders the next edition; this is
     # the edition number the cartouche draws, so it's a picture decision -> the spec.
@@ -202,6 +225,7 @@ class CompositionSpec:
     # byte-identical, and both keys omitted from the manifest at the default.
     profile: bool = False
     profile_height_in: float = 0.9           # ignored when profile=False
+    profile_rev: int = 1                      # strip layout revision; see PROFILE_REVS
     # Track coloring (v1.9): "none" -> the flat track_rgb ink (byte-identical). "elevation"
     # / "grade" color each segment by a DEM-derived scalar ramp -- reprint-safe, no
     # per-point data. Omitted from the manifest at "none".
@@ -220,7 +244,9 @@ class CompositionSpec:
     track_weave: bool = False
 
     def pixel_size(self, dpi: int) -> tuple:
-        return (round(self.print_w_in * dpi), round(self.print_h_in * dpi))
+        # the DELIVERED canvas: trim + 2*bleed per axis (bleed 0 -> the classic sheet)
+        return (round((self.print_w_in + 2 * self.bleed_in) * dpi),
+                round((self.print_h_in + 2 * self.bleed_in) * dpi))
 
     def final_dpi(self) -> float:
         """The dpi the FINAL renders at -- and the resolution the zoom cap is judged
@@ -229,8 +255,9 @@ class CompositionSpec:
         return self.screen_ppi if self.output_kind == "wallpaper" else float(FINAL_DPI)
 
     def ground_per_pixel(self, dpi: int) -> float:
-        w_px, _ = self.pixel_size(dpi)
-        return (self.crop[2] - self.crop[0]) / w_px
+        # judged on the TRIM mapping: bleed grows canvas pixels AND ground by the
+        # same ratio, so this is bleed-invariant by construction
+        return (self.crop[2] - self.crop[0]) / max(1, round(self.print_w_in * dpi))
 
     def validate(self, dpi: int = 300):
         # finiteness first: a NaN/inf print size or crop (a client can POST print_w=nan)
@@ -256,6 +283,13 @@ class CompositionSpec:
         if not (math.isfinite(self.bottom_clear_frac)
                 and 0.0 <= self.bottom_clear_frac <= TOP_CLEAR_MAX):
             raise SpecError(f"bottom_clear_frac must be between 0 and {TOP_CLEAR_MAX}")
+        # bleed: finiteness FIRST (a NaN bleed would OverflowError round() in
+        # pixel_size below -- not a SpecError -> a 500), then the bound, then the
+        # print-only rule (a screen has no trimmer; bleed can't ride a wallpaper).
+        if not (math.isfinite(self.bleed_in) and 0.0 <= self.bleed_in <= BLEED_MAX_IN):
+            raise SpecError(f"bleed_in must be between 0 and {BLEED_MAX_IN}")
+        if self.bleed_in > 0 and self.output_kind != "print":
+            raise SpecError("bleed is a print-trim concept -- this output has no trimmer")
         w_px, h_px = self.pixel_size(dpi)
         # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
         if w_px < 1 or h_px < 1:
@@ -284,6 +318,11 @@ class CompositionSpec:
             raise SpecError(f"track_color_by must be one of {TRACK_COLOR_MODES}")
         if self.label_place not in LABEL_PLACE_MODES:
             raise SpecError(f"label_place must be one of {LABEL_PLACE_MODES}")
+        # profile revision: a strict enum member. bool is an int subclass and
+        # True == 1 is in PROFILE_REVS, so exclude bools explicitly (the edition
+        # precedent) -- a crafted manifest can carry True/1.5/"2".
+        if isinstance(self.profile_rev, bool) or self.profile_rev not in PROFILE_REVS:
+            raise SpecError(f"profile_rev must be one of {PROFILE_REVS}")
         # edition: a bounded int (living editions). A crafted manifest could carry a
         # float, a bool, or a gigantic value; reject anything outside 1..EDITION_MAX
         # with an honest 422 (bool is an int subclass, so exclude it explicitly).
@@ -316,8 +355,13 @@ class CompositionSpec:
                 f"crop aspect {crop_ar:.3f} doesn't match print aspect {print_ar:.3f}; "
                 f"the picture would be stretched -- re-frame the crop")
         # zoom cap (invariant 6): never request finer ground detail than the data
-        # holds, judged on BOTH axes (x-only let a tall thin crop bypass it).
-        gpp = min(cw / w_px, ch / h_px)
+        # holds, judged on BOTH axes (x-only let a tall thin crop bypass it). Judged
+        # on the TRIM px, not the canvas: bleed grows canvas AND ground together, so
+        # the ratio is bleed-invariant -- toggling bleed can't flip a crop across the
+        # cap. The MP ceiling above stays on the canvas (that is what gets allocated).
+        tw_px = max(1, round(self.print_w_in * dpi))
+        th_px = max(1, round(self.print_h_in * dpi))
+        gpp = min(cw / tw_px, ch / th_px)
         if gpp < self.native_resolution_m:
             raise ZoomTooTightError(
                 f"{gpp:.1f} m/px requested, "

@@ -85,6 +85,9 @@ export async function proof(sessionId, cropOv, printW, printH,
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
     output, wallpaper_preset: output === 'wallpaper' ? wpPreset : undefined,
+    // print-shop bleed (v1.12): extra trimmed sheet; print-only, omitted at 0 so the
+    // server default (no bleed) applies and old posters reprint byte-identically.
+    bleed: output === 'print' && style.bleedIn ? style.bleedIn : undefined,
     // the escape-hatch device (wpPreset 'custom'): exact pixels + physical ppi
     custom_px_w: custom ? customDevice.px[0] : undefined,
     custom_px_h: custom ? customDevice.px[1] : undefined,
@@ -107,6 +110,9 @@ export async function proof(sessionId, cropOv, printW, printH,
     golden_strength: style.golden,
     profile: style.profile ? 'true' : 'false',
     profile_height_in: style.profileHeight,
+    // profile_rev (v1.12): a continued poster passes its own stored rev; a NEW proof
+    // omits it and the server default (2, the corrected strip) applies.
+    profile_rev: style.profileRev != null ? style.profileRev : undefined,
     track_color_by: style.trackColorBy || 'none',
     // smart label placement + chronological weave (v1.10): new posters default to the
     // enhanced look; the continue-restore path passes the poster's own stored values.

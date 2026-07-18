@@ -330,6 +330,11 @@ function applyPrefill(p) {
     sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7,
     profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
+    // profile_rev restore: a pre-rev-2 poster continues as rev 1 (its strip layout
+    // is the poster's own); a new session leaves this null so the server default applies.
+    profileRev: s.profileRev ?? 1,
+    // bleed restore: a pre-bleed poster carries 0; a continued print keeps its own.
+    bleedIn: s.bleed ?? 0,
     trackColorBy: s.trackColorBy || 'none',
     // restore the poster's own smart-cartography settings (an old poster carries
     // anchor/false, so its continued edition keeps the original look).
@@ -337,6 +342,7 @@ function applyPrefill(p) {
   });
   if ($('journeyChk')) $('journeyChk').checked = state.style.lightMode === 'journey';
   if ($('profileChk')) $('profileChk').checked = state.style.profile;
+  if ($('bleed')) $('bleed').value = String(state.style.bleedIn || 0);
   if ($('sTrackColorBy')) $('sTrackColorBy').value = state.style.trackColorBy;
   if ($('labelPlaceChk')) $('labelPlaceChk').checked = state.style.labelPlace === 'smart';
   if ($('trackWeaveChk')) $('trackWeaveChk').checked = state.style.trackWeave;
@@ -454,6 +460,7 @@ function applyPrintSize() {
 function applyOutputVisibility() {
   const wp = state.output === 'wallpaper';
   $('sizeField').hidden = wp;
+  if ($('bleedField')) $('bleedField').hidden = wp;   // bleed is a print-trim concept
   $('wpPresetField').hidden = !wp;
   $('customDeviceField').hidden = !(wp && state.wpPreset === 'custom');
   $('orientField').hidden = wp;
@@ -979,6 +986,10 @@ function wire() {
     if (state.hasSpec) state.proofStale = true;    // the sheet prints; re-proof it
   };
   $('size').onchange = (e) => { savePref('printSize', e.target.value); reframeForSheet(); };
+  if ($('bleed')) $('bleed').onchange = (e) => {
+    state.style.bleedIn = parseFloat(e.target.value) || 0;
+    if (state.hasSpec) state.proofStale = true;   // bleed changes the sheet; re-proof
+  };
   $('orient').onchange = (e) => {
     state.orientation = e.target.value; savePref('orient', e.target.value);
     reframeForSheet();

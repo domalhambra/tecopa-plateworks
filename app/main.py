@@ -837,11 +837,12 @@ async def proof(session_id: str = Form(...),
                 sun_azimuth_deg: Optional[float] = Form(None),
                 sun_altitude_deg: Optional[float] = Form(None),
                 golden_strength: float = Form(0.7), profile: bool = Form(False),
-                profile_height_in: float = Form(0.9), track_color_by: str = Form("none"),
+                profile_height_in: float = Form(0.9), profile_rev: int = Form(2),
+                track_color_by: str = Form("none"),
                 label_place: str = Form("smart"), track_weave: bool = Form(True),
                 output: str = Form("print"), wallpaper_preset: str = Form(""),
                 custom_px_w: int = Form(0), custom_px_h: int = Form(0),
-                custom_ppi: float = Form(0.0)):
+                custom_ppi: float = Form(0.0), bleed: float = Form(0.0)):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
@@ -851,10 +852,12 @@ async def proof(session_id: str = Form(...),
              "oblique": oblique,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
-             "profile_height_in": profile_height_in, "track_color_by": track_color_by,
-             # smart label placement + chronological weave (v1.10): NEW posters default to
-             # the enhanced look (the Form defaults above), while the spec/manifest still
-             # omit these at their pre-feature default so OLD posters reprint byte-identically.
+             "profile_height_in": profile_height_in, "profile_rev": profile_rev,
+             "bleed_in": bleed, "track_color_by": track_color_by,
+             # smart label placement + chronological weave (v1.10) + profile_rev (v1.12):
+             # NEW posters default to the enhanced look (the Form defaults above), while the
+             # spec/manifest still omit these at their pre-feature default so OLD posters
+             # reprint byte-identically.
              "label_place": label_place, "track_weave": track_weave}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
@@ -888,6 +891,16 @@ async def proof(session_id: str = Form(...),
     log.info("event=proof session=%s region=%s kind=%s dpi=%.0f ms=%d",
              session_id, region.id, spec.output_kind, _proof_dpi(spec),
              int((time.time() - t0) * 1000))
+    # A proof is the picture you judge AT THE TRIM LINE: crop the bleed band off the
+    # PREVIEW (never the stamped spec -- the FINAL carries the bleed) so the wizard's
+    # crop/marker registration (proof px == spec.crop) keeps holding exactly, with no
+    # client math. The proof stays a faithful scale of the final's trim box -- which
+    # is what the lab's cut produces. (±1 px vs round(trim*dpi) from double rounding:
+    # a fit-to-screen preview, fractional registration -- recorded in the plan.)
+    if spec.bleed_in:
+        b = round(spec.bleed_in * _proof_dpi(spec))
+        w, h = img.size
+        img = img.crop((b, b, w - b, h - b))
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
@@ -1518,6 +1531,12 @@ async def continue_poster(file: UploadFile = File(...)):
                   "lightMode": spec.light_mode, "sunAzimuth": spec.sun_azimuth_deg,
                   "sunAltitude": spec.sun_altitude_deg, "golden": spec.golden_strength,
                   "profile": spec.profile, "profileHeight": spec.profile_height_in,
+                  # profile_rev restore: a pre-rev-2 poster continues as rev 1 -- its
+                  # strip layout is the poster's own, not the current server default.
+                  "profileRev": spec.profile_rev,
+                  # bleed restore: a continued print keeps its trim + bleed exactly
+                  # (print_w_in/print_h_in above are the TRIM size; bleed rides separately).
+                  "bleed": spec.bleed_in,
                   "trackColorBy": spec.track_color_by,
                   # smart label placement + chronological weave restore from the spec
                   "labelPlace": spec.label_place, "trackWeave": spec.track_weave},
