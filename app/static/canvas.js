@@ -3,7 +3,7 @@
 //   frame  mode  -> draw an aspect-locked crop box (fixed to grow in all 4 directions)
 // The side-list (markers.js) stays the unambiguous identity-edit surface, so the map
 // only handles MOVE — no click-vs-drag ambiguity on the dot.
-import { state, activeRegion, metresPerPx, cropOverviewPx, finalWidthPx } from './state.js';
+import { state, activeRegion, metresPerPx, cropOverviewPx, finalWidthPx } from './store.js';
 import * as api from './api.js';
 
 const BASE_W = 680;            // internal canvas width in px; scaled to overview

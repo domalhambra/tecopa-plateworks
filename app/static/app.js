@@ -16,6 +16,7 @@ import * as films from './films.js';
 import * as exportsCenter from './exports.js';
 import * as presets from './presets.js';
 import * as sunDial from './sunDial.js';
+import * as guided from './guided.js';
 import { initPalette, open as openPalette } from './palette.js';
 import { $, toast, wireSegmented, updateSaveFileNote, withTransition } from './ui.js';
 
@@ -203,14 +204,16 @@ function wireShell() {
 
   // rail
   for (const b of document.querySelectorAll('.rail-item')) b.onclick = () => setSection(b.dataset.section);
+  $('shortcutsClose').onclick = () => $('shortcutsDialog').close();
 
-  // keyboard: Cmd/Ctrl+K palette; 1..8 sections
+  // keyboard: Cmd/Ctrl+K palette; ? shortcuts; 1..8 sections
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = document.activeElement;
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
     if ($('paletteDialog').open) return;
+    if (e.key === '?') { e.preventDefault(); const d = $('shortcutsDialog'); if (!d.open) d.showModal(); return; }
     const b = [...document.querySelectorAll('.rail-item')].find((x) => x.dataset.key === e.key);
     if (b) { e.preventDefault(); setSection(b.dataset.section); }
   });
@@ -257,6 +260,8 @@ function initAll() {
       { label: 'Open Films', run: () => setSection('films') },
       { label: 'Start over', run: startOver },
       { label: 'Toggle Day / Night theme', run: toggleTheme },
+      { label: 'Keyboard shortcuts', run: () => $('shortcutsDialog').showModal() },
+      { label: 'Show welcome guide', run: () => guided.open() },
     ],
   });
 
@@ -277,4 +282,5 @@ function initAll() {
   await loadWallpaperPresets();
   initAll();
   await loadRegions(pendingRegions);
+  guided.maybeStart();               // first-run welcome (once per browser)
 })();

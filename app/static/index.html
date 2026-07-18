@@ -291,6 +291,36 @@
     <ul id="paletteList" class="palette-list" role="listbox"></ul>
   </dialog>
 
+  <!-- first-run guide -->
+  <dialog id="welcomeDialog" class="guide" aria-labelledby="welcomeTitle">
+    <h2 id="welcomeTitle" class="guide-title">Welcome to the studio</h2>
+    <p class="guide-lede">Four moves take you from a GPX file to a printed poster and a feed post:</p>
+    <ol class="guide-steps">
+      <li><span class="guide-ico" aria-hidden="true">◳</span><div><b>Compose</b> — pick a region, drop your tracks, frame the poster.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">✦</span><div><b>Style · Layers · Light</b> — render a proof, then tune it live. Every edit re-proofs itself.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">◉</span><div><b>Social</b> — repurpose it for Reels, feed posts and stories, with safe zones and a caption.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">⇩</span><div><b>Exports</b> — accept to render the full-resolution final; every render lands here.</div></li>
+    </ol>
+    <p class="guide-tip">Tip: press <kbd>?</kbd> any time for shortcuts, or <kbd>⌘K</kbd> to search every option (it can reopen this guide too).</p>
+    <div class="guide-actions">
+      <button id="welcomeStart" class="primary" type="button" autofocus>Get started</button>
+    </div>
+  </dialog>
+
+  <!-- keyboard shortcuts -->
+  <dialog id="shortcutsDialog" class="guide" aria-labelledby="shortcutsTitle">
+    <h2 id="shortcutsTitle" class="guide-title">Keyboard shortcuts</h2>
+    <dl class="shortcut-list">
+      <div><dt><kbd>1</kbd>–<kbd>8</kbd></dt><dd>Jump to a section</dd></div>
+      <div><dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd>Command palette — search every option &amp; action</dd></div>
+      <div><dt><kbd>?</kbd></dt><dd>This shortcuts sheet</dd></div>
+      <div><dt><kbd>Enter</kbd></dt><dd>On the map: render a proof</dd></div>
+      <div><dt><kbd>←↑↓→</kbd></dt><dd>On the map: move the frame (<kbd>Shift</kbd> resizes it)</dd></div>
+      <div><dt><kbd>Esc</kbd></dt><dd>Close this / the palette / cancel a frame draw</dd></div>
+    </dl>
+    <div class="guide-actions"><button id="shortcutsClose" class="primary" type="button" autofocus>Close</button></div>
+  </dialog>
+
   <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>
   <input type="file" id="posterInput" accept="image/png,.png" hidden>
   <script type="module" src="app.js"></script>
