@@ -330,6 +330,9 @@ function applyPrefill(p) {
     sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7,
     profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
+    // profile_rev restore: a pre-rev-2 poster continues as rev 1 (its strip layout
+    // is the poster's own); a new session leaves this null so the server default applies.
+    profileRev: s.profileRev ?? 1,
     trackColorBy: s.trackColorBy || 'none',
     // restore the poster's own smart-cartography settings (an old poster carries
     // anchor/false, so its continued edition keeps the original look).

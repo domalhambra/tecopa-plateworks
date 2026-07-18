@@ -76,6 +76,10 @@ def spec_to_json(s: CompositionSpec) -> dict:
     if not d["profile"]:
         del d["profile"]
         del d["profile_height_in"]
+    # profile revision (v1.12): 1 is the pre-feature strip, omitted so every earlier
+    # manifest re-stamps byte-identically; spec_from_json refills the default.
+    if d["profile_rev"] == 1:
+        del d["profile_rev"]
     if d["track_color_by"] == "none":
         del d["track_color_by"]
     # smart label placement + chronological weave (v1.10): omitted at their pre-feature

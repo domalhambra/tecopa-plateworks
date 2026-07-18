@@ -151,7 +151,12 @@ preset is covered by construction.
   corner with the cartouche stack under a different scaling law (overpaint risk at
   `furniture_scale` ≳ 1.3). A painter change → needs its own additive spec gate
   (there is no engine version to hide behind); bundle it with the next profile
-  revision.
+  revision. — **shipped** as `profile_rev` 2 (physical inset, cartouche/compass
+  stack clearance via the shared `_profile_rect` geometry, feet labels): see
+  `docs/superpowers/plans/2026-07-17-profile-rev2-and-bleed.md` Tranche A. Rev 1
+  reproduces the shipped strip verbatim, so every pre-feature poster reprints
+  byte-identically; the `furniture_scale` ≳ 1.3 overpaint is now a geometry-sweep
+  tripwire (`tests/test_profile_rev.py`).
 
 ## 6. Test-coverage delta (after the companion PR)
 

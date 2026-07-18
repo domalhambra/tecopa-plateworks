@@ -107,6 +107,9 @@ export async function proof(sessionId, cropOv, printW, printH,
     golden_strength: style.golden,
     profile: style.profile ? 'true' : 'false',
     profile_height_in: style.profileHeight,
+    // profile_rev (v1.12): a continued poster passes its own stored rev; a NEW proof
+    // omits it and the server default (2, the corrected strip) applies.
+    profile_rev: style.profileRev != null ? style.profileRev : undefined,
     track_color_by: style.trackColorBy || 'none',
     // smart label placement + chronological weave (v1.10): new posters default to the
     // enhanced look; the continue-restore path passes the poster's own stored values.

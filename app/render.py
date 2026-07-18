@@ -976,6 +976,12 @@ def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None):
 KEYLINE_INSET_IN = 0.25         # thin frame inset from the sheet edge
 KEYLINE_PT = 0.6
 TITLE_INSET_IN = 0.35           # title block inset from the sheet corner
+PROFILE_INSET_IN = 0.35         # rev-2 strip inset from the sheet corner: physical,
+                                # the TITLE_INSET_IN datum so the strip's left edge
+                                # ALIGNS with the cartouche's (invariant 2; rev 1
+                                # kept the shipped MARGIN_FRAC proportion for
+                                # byte-identity)
+PROFILE_GAP_IN = 0.16           # clear air between the cartouche stack and the strip
 FURNITURE_BASE_IN2 = 18.0 * 24.0   # the sheet all furniture sizes were designed on
 FURNITURE_SCALE_MIN = 0.75         # small sheets: shrink a little, stay legible
 FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
@@ -1532,6 +1538,31 @@ def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask
             return x0, y0, hl, leader_box
     return None
 
+def _label_keepout(spec, d, out_w, out_h, dpi):
+    """The occupied rects auto label placement must avoid. The furniture-stack
+    estimate and the clear bands are the shipped arithmetic VERBATIM; rev 2 adds the
+    elevation strip's EXACT rect (shared geometry -- _profile_rect -- so painter and
+    keep-out can't drift). Rev 1 keeps only the hand-tuned estimate: adding the strip
+    rect would move a pre-feature poster's labels (not byte-identical)."""
+    fs = _furniture_scale(spec)
+    # only reserve the bottom-left corner when the furniture stack actually draws
+    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
+    # title-less print) must not blot labels out of a third of the sheet for nothing.
+    keepout = ([(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
+               if (spec.title_text or spec.compass) else [])
+    if spec.top_clear_frac > 0:
+        # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
+        # so auto-placed geography stays out of that band (user-placed markers don't).
+        keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
+    if spec.bottom_clear_frac > 0:
+        # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
+        # controls, a Reel's caption + action zone. Same contract as the clock band.
+        keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
+    if spec.profile and getattr(spec, "profile_rev", 1) >= 2:
+        keepout.append(_profile_rect(spec, d, (0, 0, out_w, out_h), dpi))
+    return keepout
+
+
 def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     """Place named geography with priority + greedy collision avoidance: strongest
     names first (range > summit > lake > pass > valley > river), each kept only if its
@@ -1552,21 +1583,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None):
     edge = round(GEO_EDGE_IN * dpi)
     halo = max(1, round(_pt_to_px(GEO_HALO_PT, dpi)))
     cap = max(6, round(spec.print_w_in * spec.print_h_in / 100.0 * GEO_LABELS_PER_100IN2))
-    # keep-out for the furniture stack (cartouche + compass, bottom-left corner)
-    fs = _furniture_scale(spec)
-    # only reserve the bottom-left corner when the furniture stack actually draws
-    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
-    # title-less print) must not blot labels out of a third of the sheet for nothing.
-    keepout = ([(0, out_h - round(2.5 * fs * dpi), round(3.4 * fs * dpi), out_h)]
-               if (spec.title_text or spec.compass) else [])
-    if spec.top_clear_frac > 0:
-        # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
-        # so auto-placed geography stays out of that band (user-placed markers don't).
-        keepout.append((0, 0, out_w, round(spec.top_clear_frac * out_h)))
-    if spec.bottom_clear_frac > 0:
-        # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
-        # controls, a Reel's caption + action zone. Same contract as the clock band.
-        keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
+    # keep-out for the sheet furniture (cartouche + compass corner, clear bands, and
+    # -- rev 2 -- the exact elevation-strip rect): one shared builder so the drawn
+    # furniture and the placement obstacles can't drift.
+    keepout = _label_keepout(spec, d, out_w, out_h, dpi)
     placed, occupied = [], list(keepout)
 
     def overlaps(box):
@@ -1814,11 +1834,64 @@ def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _draw_profile(img, spec, out_w, out_h, dpi, profile):
+def _furniture_stack_top(spec, d, ty1, dpi):
+    """Sheet y of the topmost painted pixel of the bottom-left furniture stack
+    (cartouche plate + compass disc + the N label above the rose), computed with the
+    painters' OWN arithmetic (_draw_title_block / _draw_compass) so it can't drift
+    from what they draw. ty1 is the bottom of the furniture datum (the trim box's
+    bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
+    no stack (no title, no compass)."""
+    fdpi = dpi * _furniture_scale(spec)
+    inset = round(TITLE_INSET_IN * fdpi)
+    m = _title_block_metrics(spec, d, dpi)
+    top = ty1 - inset - m["bh"] if m else ty1
+    if spec.compass:
+        R = COMPASS_DIAMETER_IN * fdpi / 2.0
+        base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
+        cy = base_y - R
+        f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
+        nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
+        nh = nb - nt
+        pad = max(2, round(nh * 0.22))
+        top = min(top, round(cy - R - nh - round(0.05 * fdpi)) - pad)
+    return top
+
+
+def _profile_rect(spec, d, trim, dpi):
+    """(x0, y0, x1, y1) of the elevation-profile strip -- the ONE geometry that the
+    painter AND the label keep-out read, so they can't drift (the
+    _title_block_metrics pattern). trim is the furniture datum box (the full sheet
+    until bleed lands). Rev 1 reproduces the shipped proportional layout VERBATIM:
+    the manifest names no engine version, so old posters' pixels are the contract.
+    Rev 2 is physical (invariant 2) and measured: inset in inches, stacked clear of
+    the cartouche + compass at any furniture_scale, height clamped so the strip can
+    never climb past the keyline."""
+    tx0, ty0, tx1, ty1 = trim
+    tw, th = tx1 - tx0, ty1 - ty0
+    fs = _furniture_scale(spec)
+    ph = max(1, round(spec.profile_height_in * dpi * fs))
+    if getattr(spec, "profile_rev", 1) < 2:
+        pw = min(tw - 2 * round(tw * MARGIN_FRAC), round(ph * 3.4))
+        inset = round(th * MARGIN_FRAC) + round(0.01 * th)
+        x0, y1 = tx0 + inset, ty1 - inset
+        return x0, y1 - ph, x0 + pw, y1
+    fdpi = dpi * fs
+    inset = round(PROFILE_INSET_IN * fdpi)
+    gap = round(PROFILE_GAP_IN * fdpi)
+    y1 = min(ty1 - inset, _furniture_stack_top(spec, d, ty1, dpi) - gap)
+    y_top_min = ty0 + round(KEYLINE_INSET_IN * dpi) + max(1, round(0.05 * fdpi))
+    ph = max(1, min(ph, y1 - y_top_min))
+    x0 = tx0 + inset
+    pw = min(tw - 2 * inset, round(ph * 3.4))
+    return x0, y1 - ph, x0 + pw, y1
+
+
+def _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=None):
     """The elevation-profile furniture (Journey Light): a DEM-sampled distance x elevation
     strip inset into the lower-left margin. Sheet-space and projection-independent (a 2-D
     chart), so it is drawn AFTER any oblique warp and never displaces. `profile` is
-    (distance_m, elev_m); a strict no-op when it is None."""
+    (distance_m, elev_m); a strict no-op when it is None. trim is the furniture datum
+    box (the trim box under bleed; the full sheet until then)."""
     if profile is None:
         return img
     dist, elev = profile
@@ -1826,12 +1899,9 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile):
     if ok.sum() < 2:
         return img
     dist, elev = dist[ok], elev[ok]
-    fs = _furniture_scale(spec)
-    ph = max(1, round(spec.profile_height_in * dpi * fs))
-    pw = min(out_w - 2 * round(out_w * MARGIN_FRAC), round(ph * 3.4))
-    inset = round(out_h * MARGIN_FRAC) + round(0.01 * out_h)
-    x0, y1 = inset, out_h - inset
-    x1, y0 = x0 + pw, y1 - ph
+    x0, y0, x1, y1 = _profile_rect(spec, ImageDraw.Draw(img),
+                                   trim or (0, 0, out_w, out_h), dpi)
+    ph = y1 - y0
     pad = max(2, round(ph * 0.12))
     over = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(over)
@@ -1853,9 +1923,17 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile):
     d.line([(px[si], py[si]), (px[si], ay0)], fill=GEO_LABEL_INK + (140,),
            width=max(1, round(dpi / 300)))
     fnt = _font(max(8, round(ph * 0.16)))
-    d.text((ax0, ay0 - round(ph * 0.02)), f"{round(emax):,} m", font=fnt,
+    # rev 2 labels feet: the cartouche speaks MI (render.NICE_MILES), and a mixed-
+    # units sheet was the red-team's recorded product gap. Rev 1 keeps metres -- its
+    # pixels are the pre-feature contract.
+    if getattr(spec, "profile_rev", 1) >= 2:
+        top_lbl = f"{round(emax * 3.28084):,} ft"
+        bot_lbl = f"{round(emin * 3.28084):,} ft"
+    else:
+        top_lbl, bot_lbl = f"{round(emax):,} m", f"{round(emin):,} m"
+    d.text((ax0, ay0 - round(ph * 0.02)), top_lbl, font=fnt,
            fill=GEO_LABEL_INK + (255,))
-    d.text((ax0, ay1 - round(ph * 0.20)), f"{round(emin):,} m", font=fnt,
+    d.text((ax0, ay1 - round(ph * 0.20)), bot_lbl, font=fnt,
            fill=GEO_LABEL_INK + (200,))
     if img.mode == "RGBA":
         img.alpha_composite(over)
