@@ -144,23 +144,27 @@ def render_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=None,
     if cfg is None:
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
-    out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum, ctx = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
-                                            labels=labels)
+    # bleed seam: content paints the grown sheet, furniture measures from the trim box
+    # (a strict no-op at bleed 0 -> the film stays byte-identical to before).
+    paint, trim = render.sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
+    base_rgb, lum, ctx = render._paint_base(paint, dpi, region_dir, cfg, hydro=hydro,
+                                            labels=labels, trim=trim)
     # DEM-derived Journey Light layers (None unless the knob is on): pure functions of the
     # spec + plate, so one computation serves every frame and the last frame stays
     # pixel-equal to the still (coloring/profile survive into the film byte-for-byte).
-    track_colors = render._track_color_arrays(spec, region_dir, cfg)
-    profile = render._profile_data(spec, region_dir, cfg)
+    track_colors = render._track_color_arrays(paint, region_dir, cfg)
+    profile = render._profile_data(paint, region_dir, cfg)
     if plan is None:
         plan = frame_plan(spec)
     for groups in plan:
         # ctx (the plan-oblique warp) is a pure function of the spec + plate, so one
         # ctx serves every frame and the last frame stays pixel-equal to the still.
-        img = render._paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=groups,
+        img = render._paint_journey(base_rgb, paint, out_w, out_h, dpi, groups=groups,
                                     ctx=ctx, track_colors=track_colors)
         yield render._paint_overlays(img, spec, lum, out_w, out_h, dpi,
-                                     watermark=False, ctx=ctx, profile=profile)
+                                     watermark=False, ctx=ctx, profile=profile,
+                                     paint=paint, trim=trim)
 
 
 # ---- progressive reveal: the smooth "drawing pen" for the social-preview mockups ----
@@ -225,15 +229,18 @@ def progressive_frames(spec: CompositionSpec, dpi: int, region_dir: str, cfg=Non
     if cfg is None:
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
-    out_w, out_h = spec.pixel_size(dpi)
-    base_rgb, lum, ctx = render._paint_base(spec, dpi, region_dir, cfg, hydro=hydro,
-                                            labels=labels)
-    for partial in progressive_reveal(spec, n_frames):
+    # bleed seam: partials derive from the grown paint-spec so their crop maps to the
+    # canvas the base was painted on; furniture measures from the trim box (no-op at 0).
+    paint, trim = render.sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
+    base_rgb, lum, ctx = render._paint_base(paint, dpi, region_dir, cfg, hydro=hydro,
+                                            labels=labels, trim=trim)
+    for partial in progressive_reveal(paint, n_frames):
         # partials differ only in tracks/track_days; the warp ctx is geometry-only,
         # so the base's ctx is exact for every partial (and the closing full frame).
         img = render._paint_journey(base_rgb, partial, out_w, out_h, dpi, ctx=ctx)
         yield render._paint_overlays(img, partial, lum, out_w, out_h, dpi,
-                                     watermark=False, ctx=ctx)
+                                     watermark=False, ctx=ctx, paint=partial, trim=trim)
 
 
 # ---- Journey Light film (v1.9): the sun travels with the hike (share-twins only) ----
@@ -306,24 +313,28 @@ def journey_light_frames(spec: CompositionSpec, track_times, anchor, dpi: int,
     if cfg is None:
         with open(os.path.join(region_dir, "region.json")) as f:
             cfg = json.load(f)
-    out_w, out_h = spec.pixel_size(dpi)
+    # bleed seam: the reveal partials + per-frame base derive from the grown paint-spec;
+    # furniture measures from the trim box (a strict no-op at bleed 0).
+    paint, trim = render.sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
     n_frames = max(FRAMES_BOUNDS[0], min(int(n_frames), FRAMES_BOUNDS[1]))
     span = anchor["tmax_unix"] - anchor["tmin_unix"]
     mode = motion if motion != "auto" else ("diurnal" if span <= 86400.0 else "seasonal")
-    reveal = (time_reveal(spec, track_times, n_frames) if mode == "diurnal"
-              else progressive_reveal(spec, n_frames))
+    reveal = (time_reveal(paint, track_times, n_frames) if mode == "diurnal"
+              else progressive_reveal(paint, n_frames))
     schedule = solar.sun_schedule(anchor, len(reveal), mode)
     for fspec0, (az, alt) in zip(reveal, schedule):
         fspec = dataclasses.replace(fspec0, light_mode="journey",
                                     sun_azimuth_deg=az, sun_altitude_deg=alt)
         base_rgb, lum, ctx = render._paint_base(fspec, dpi, region_dir, cfg,
-                                                hydro=hydro, labels=labels)
+                                                hydro=hydro, labels=labels, trim=trim)
         tcolors = render._track_color_arrays(fspec, region_dir, cfg)
         prof = render._profile_data(fspec, region_dir, cfg)
         img = render._paint_journey(base_rgb, fspec, out_w, out_h, dpi, ctx=ctx,
                                     track_colors=tcolors)
         yield render._paint_overlays(img, fspec, lum, out_w, out_h, dpi,
-                                     watermark=False, ctx=ctx, profile=prof)
+                                     watermark=False, ctx=ctx, profile=prof,
+                                     paint=fspec, trim=trim)
 
 
 def _durations(n: int, step_ms: int, hold_ms: int, leader_ms: int) -> list:

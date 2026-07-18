@@ -49,10 +49,16 @@ print one physical proof for Dom's sign-off (screen ≠ paper).
 - **PDF encoder** at quality 95, 4:4:4 (no chroma fringing on the gold line).
 - **Title block + stats caption** (`~scale · days · miles`, deterministic from the spec)
   and the **keyline frame** at 0.25 in inset — treat the keyline as the trim-safe zone.
-- **Open:** bleed/trim spec (confirm with the actual print lab; typically +0.125 in
-  bleed), physical-proof color check, and a decision on the full margin-frame layout
-  (map inset in a paper border) — that variant changes crop-aspect semantics through the
-  whole wizard, so it is deliberately NOT in v1.1.
+- **Bleed/trim spec — shipped** behind `spec.bleed_in` (a `sheet_geometry` seam grows
+  the crop with real terrain in the bleed band and measures all furniture from the trim
+  box; the proof is served trim-only, the final PNG/PDF carries the full-bleed canvas):
+  see `docs/superpowers/plans/2026-07-17-profile-rev2-and-bleed.md` Tranche B. The
+  *offered* bleed value + format/marks/color are pinned by the print-lab conversation
+  (`docs/superpowers/quality/2026-07-17-print-lab-questionnaire.md`); 0.125 in is the
+  US-convention default. `bleed_in` 0 (every pre-feature poster) reprints byte-identically.
+- **Open:** physical-proof color check (fold into the lab's test-sheet order above), and
+  a decision on the full margin-frame layout (map inset in a paper border) — that variant
+  changes crop-aspect semantics through the whole wizard, so it is deliberately NOT in v1.1.
 
 ## 4. Continuity (V1-12)
 

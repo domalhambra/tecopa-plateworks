@@ -50,6 +50,8 @@ export const state = {
     profileHeight: 0.9,
     profileRev: null,     // strip layout rev; null = omit -> server default (2, corrected
                           // strip). A continued poster sets this to its own stored rev.
+    bleedIn: 0,           // print-shop bleed (inches); 0 = none. Print-only; a continued
+                          // poster restores its own value.
     trackColorBy: 'none', // 'none' | 'elevation' | 'grade' -- DEM-derived track ramp
     // Smart cartography (v1.10): new posters default to the enhanced look; old posters
     // reprint unchanged because the spec/manifest omit these at their pre-feature default.

@@ -85,6 +85,9 @@ export async function proof(sessionId, cropOv, printW, printH,
   const res = await postForm('/api/proof', {
     session_id: sessionId, x0, y0, x1, y1, print_w: printW, print_h: printH,
     output, wallpaper_preset: output === 'wallpaper' ? wpPreset : undefined,
+    // print-shop bleed (v1.12): extra trimmed sheet; print-only, omitted at 0 so the
+    // server default (no bleed) applies and old posters reprint byte-identically.
+    bleed: output === 'print' && style.bleedIn ? style.bleedIn : undefined,
     // the escape-hatch device (wpPreset 'custom'): exact pixels + physical ppi
     custom_px_w: custom ? customDevice.px[0] : undefined,
     custom_px_h: custom ? customDevice.px[1] : undefined,

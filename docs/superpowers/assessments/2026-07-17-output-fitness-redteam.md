@@ -139,6 +139,12 @@ preset is covered by construction.
   already reads 6% past it) — but **all furniture is sheet-edge-anchored**
   (`KEYLINE_INSET_IN`, `TITLE_INSET_IN`, the profile strip, both clear bands), so
   bleed needs trim-box-relative furniture: an L, gated on a print-lab conversation.
+  — **code shipped** as `spec.bleed_in` behind a `sheet_geometry` seam (real terrain
+  in the bleed band, trim-box-relative furniture, trim-only proof / full-bleed final,
+  off-DEM refusal extended to the band): see the 2026-07-17 plan Tranche B. The
+  *offered value + format/marks/color* are still **open on the lab** — the
+  questionnaire (`docs/superpowers/quality/2026-07-17-print-lab-questionnaire.md`) is
+  the blocker, not more coding. `bleed_in` 0 reprints byte-identically.
 - **Custom pixel dimensions** — was on the wallpaper plan's out-of-scope list
   (`2026-07-05-wallpaper-output.md:229-231`); **shipped in §3**.
 - **iOS parallax overscan** — same list (line 233); still deferred (exact-pixel
