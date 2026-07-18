@@ -144,13 +144,18 @@ export async function submitWallpapers(sessionId, presetIds, embedSpec = true) {
 
 // Time-lapse: render the accepted composition as a film (the day-ordered journeys
 // accumulate to the complete poster). format: 'apng' (archival, default) or a share
-// twin ('webp' | 'mp4' — no manifest, embed_spec is moot). Returns { job, frames };
-// poll like any render.
+// twin ('webp' | 'mp4' — no manifest, embed_spec is moot). Pacing (stepMs/holdMs/
+// leaderMs) rides the manifest's animation block, not the spec — it is not a picture
+// decision, so it never stales the proof. Returns { job, frames }; poll like any render.
 export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = '',
                                                    embedSpec = true, format = 'apng',
-                                                   lightMotion = 'none' } = {}) {
+                                                   lightMotion = 'none',
+                                                   stepMs, holdMs, leaderMs } = {}) {
   const res = await postForm('/api/timelapse/submit', {
     session_id: sessionId, max_frames: maxFrames,
+    // pacing knobs (omitted when unset so the server default applies and a reprint of a
+    // pre-feature film stays byte-identical)
+    step_ms: stepMs, hold_ms: holdMs, leader_ms: leaderMs,
     wallpaper_preset: wpPreset || undefined,
     embed_spec: embedSpec ? 'true' : 'false',
     format,
@@ -159,6 +164,48 @@ export async function submitTimelapse(sessionId, { maxFrames = 40, wpPreset = ''
     light_motion: lightMotion,
   });
   return asJson(res);   // { job, frames }
+}
+
+// Living editions / Library: read a poster's provenance without rendering (which region,
+// source hashes, edition, lineage, plate verdict). Pure manifest read; safe on any PNG.
+export async function inspectPoster(file) {
+  const fd = new FormData();
+  fd.append('file', file);
+  const res = await fetch('/api/reprint/inspect', { method: 'POST', body: fd });
+  return asJson(res);   // { region_id, region_available, edition, lineage, plate, ... }
+}
+
+// Reprint a poster from the file alone (stateless — the recipe rides the manifest).
+// A still returns { blob, filename } for immediate download; a film returns { job } (poll
+// it like any render). The caller branches on the shape. embedSpec carries into the copy.
+export async function reprint(file, { format = 'png', embedSpec = true } = {}) {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('format', format);
+  fd.append('embed_spec', embedSpec ? 'true' : 'false');
+  const res = await fetch('/api/reprint', { method: 'POST', body: fd });
+  if (!res.ok) throw new ApiError(res.status, await errText(res));
+  // a film re-render comes back as JSON {job}; a still is a binary stream.
+  const ct = res.headers.get('Content-Type') || '';
+  if (ct.includes('application/json')) return { job: (await res.json()).job };
+  const filename = dispositionFilename(res.headers.get('Content-Disposition')) || `trailprint.${format}`;
+  return { blob: await res.blob(), filename };
+}
+
+// Wall-art mockups: stage a finished poster (or film) as photographed objects (the
+// embossed Plate, the matted Frame) for social. Stateless — send the final's bytes.
+// Returns { job } (poll like any render); the result is one zip of JPEGs/MP4s.
+export async function submitMockups(file, { variants = 'plate,frame',
+                                            sizes = '1080x1080,1080x1350',
+                                            video = false, caption = true } = {}) {
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('variants', variants);
+  fd.append('sizes', sizes);
+  fd.append('video', video ? 'true' : 'false');
+  fd.append('caption', caption ? 'true' : 'false');
+  const res = await fetch('/api/mockups/submit', { method: 'POST', body: fd });
+  return asJson(res);   // { job }
 }
 
 export async function jobStatus(jid) {
