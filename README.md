@@ -39,6 +39,22 @@ python -c "import rasterio, pyproj, numpy, scipy, shapely, gpxpy, PIL; print('ok
 On Apple Silicon, rasterio / pyproj / Pillow ship native wheels — no Homebrew GDAL
 required.
 
+## macOS app (TrailPrint.app)
+
+Build a double-clickable launcher that starts the engine and opens the UI:
+
+```
+scripts/macos/build_app.sh --install     # builds dist/ and copies to /Applications
+```
+
+Double-click **TrailPrint** in `/Applications`: the engine starts from this repo's
+`.venv` on port 8848 and the UI opens in your default browser. Quit the app (Cmd-Q)
+to stop the engine; relaunching while it's already running just reopens the tab. The
+app runs the engine *from this repo*, so `git pull` updates it with no rebuild —
+rebuild only if you move the repo folder or change the launcher itself. Engine output
+logs to `~/Library/Logs/TrailPrint.log`. Verify end-to-end with
+`scripts/macos/smoke_test.sh` (needs port 8848 free).
+
 ## Layout
 
 - `app/geo.py` — every coordinate conversion (overview px ↔ CRS meters ↔ windows)
