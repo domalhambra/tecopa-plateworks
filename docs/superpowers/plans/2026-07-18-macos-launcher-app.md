@@ -222,16 +222,27 @@ let kBaseURL = "http://127.0.0.1:8848/"
 let kReadyURL = "http://127.0.0.1:8848/readyz"
 let kLogPath = NSHomeDirectory() + "/Library/Logs/TrailPrint.log"
 
+// One append-mode log fd, opened once and shared by the launcher AND the child engine.
+// O_APPEND makes every write land atomically at EOF, so the launcher's own log lines and
+// uvicorn's stdout/stderr can never overwrite each other — they write through one open
+// file description (Foundation dups this fd into the child). Without O_APPEND the two
+// would have independent offsets and clobber each other's tail bytes.
+let kLogFD: Int32 = {
+    let dir = NSHomeDirectory() + "/Library/Logs"
+    try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+    return open(kLogPath, O_WRONLY | O_APPEND | O_CREAT, 0o644)
+}()
+let logHandle = FileHandle(
+    fileDescriptor: kLogFD >= 0 ? kLogFD : FileHandle.standardError.fileDescriptor,
+    closeOnDealloc: false)
+
 // ---- Small helpers ----
 
 func onMain(_ block: @escaping () -> Void) { DispatchQueue.main.async(execute: block) }
 
 func logLine(_ msg: String) {
-    let line = "[\(Date())] \(msg)\n"
-    guard let fh = FileHandle(forWritingAtPath: kLogPath) else { return }
-    fh.seekToEndOfFile()
-    fh.write(line.data(using: .utf8)!)
-    try? fh.close()
+    guard kLogFD >= 0 else { return }
+    logHandle.write("[\(Date())] \(msg)\n".data(using: .utf8)!)
 }
 
 func openBrowser() { NSWorkspace.shared.open(URL(string: kBaseURL)!) }
@@ -289,19 +300,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var isQuitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        ensureLogFile()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.boot() }
-    }
-
-    func ensureLogFile() {
-        let fm = FileManager.default
-        let dir = NSHomeDirectory() + "/Library/Logs"
-        if !fm.fileExists(atPath: dir) {
-            try? fm.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        }
-        if !fm.fileExists(atPath: kLogPath) {
-            fm.createFile(atPath: kLogPath, contents: nil)
-        }
     }
 
     func die(_ title: String, _ text: String) {
@@ -350,10 +349,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.executableURL = URL(fileURLWithPath: py)
         p.arguments = ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "\(kPort)"]
         p.currentDirectoryURL = URL(fileURLWithPath: repo)
-        if let fh = FileHandle(forWritingAtPath: kLogPath) {
-            fh.seekToEndOfFile()
-            p.standardOutput = fh
-            p.standardError = fh
+        if kLogFD >= 0 {
+            p.standardOutput = logHandle
+            p.standardError = logHandle
         }
         p.terminationHandler = { [weak self] proc in
             guard let self = self, !self.isQuitting else { return }
@@ -584,8 +582,15 @@ echo "  launch + ready: OK"
 pgrep -f "uvicorn app.main:app" >/dev/null || fail "no uvicorn process found after launch"
 echo "  engine process present: OK"
 
-# 5. Quit the app
-osascript -e 'quit app "TrailPrint"' || true
+# 5. Quit the app. The FIRST run raises a one-time macOS Automation (TCC) prompt —
+#    "<terminal> wants to control TrailPrint.app". Click Allow. If denied (or run
+#    unattended so the dialog times out), the quit event never arrives; catch that
+#    specific case so the failure isn't misread as a launcher bug.
+if ! osascript -e 'quit app "TrailPrint"' 2>/tmp/trailprint-quit.err; then
+  if grep -qiE "1743|not authoriz|not permitted" /tmp/trailprint-quit.err; then
+    fail "macOS Automation permission was denied — allow your terminal to control TrailPrint under System Settings > Privacy & Security > Automation, then rerun (the launcher's own quit path is fine)"
+  fi
+fi
 
 # 6. Engine gone AND port closed within 10s
 gone=0
@@ -607,7 +612,9 @@ Run: `chmod +x scripts/macos/smoke_test.sh`
 Run: `scripts/macos/smoke_test.sh`
 Expected: prints `launch + ready: OK`, `engine process present: OK`, and finally `PASS: launch, ready, and quit-to-stop all verified`.
 
-If it fails: check `~/Library/Logs/TrailPrint.log` for the engine's own output; the most common causes are port 8848 already in use (quit the other instance) or a stale `dist/` (the script rebuilds, so this shouldn't happen).
+**First run only:** step 5 sends a quit Apple event, which triggers a one-time macOS Automation permission dialog ("… wants to control TrailPrint.app"). Click **Allow** (or pre-grant under System Settings → Privacy & Security → Automation). Until it's allowed, the quit event can't be delivered — the script now detects that denial and prints an Automation-permission message rather than a misleading quit-to-stop failure. An unattended agent run can't click Allow, so grant it once interactively before relying on the gate.
+
+If it fails otherwise: check `~/Library/Logs/TrailPrint.log` for the engine's own output; the most common causes are port 8848 already in use (quit the other instance) or a stale `dist/` (the script rebuilds, so this shouldn't happen).
 
 - [ ] **Step 4: Manual checks (once, by hand — GUI behaviors the script can't assert)**
 
