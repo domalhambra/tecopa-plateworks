@@ -219,6 +219,36 @@
   background: var(--color-accent-gold, var(--tint-strong)); border-radius: 999px;
 }
 
+/* ---- guide + shortcuts dialogs ---- */
+.guide { width: min(520px, 92vw); padding: 24px 26px; border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-lg); background: var(--panel); color: var(--text); box-shadow: var(--shadow-pop); }
+.guide::backdrop { background: rgba(0,0,0,.45); }
+.guide-title { font-size: 19px; margin-bottom: 6px; }
+.guide-lede { color: var(--text-2); margin: 0 0 16px; }
+.guide-steps { list-style: none; margin: 0 0 16px; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.guide-steps li { display: flex; gap: 12px; align-items: flex-start; font-size: 13.5px; color: var(--text-2); }
+.guide-steps b { color: var(--text); }
+.guide-ico { flex: none; width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px;
+  background: var(--control-inset); color: var(--tint); font-size: 16px; }
+.guide-tip { font-size: 12.5px; color: var(--text-3); margin: 0 0 18px; }
+.guide-tip kbd { margin: 0 1px; }
+.guide-actions { display: flex; justify-content: flex-end; gap: 12px; align-items: center; }
+.shortcut-list { margin: 8px 0 20px; }
+.shortcut-list > div { display: flex; align-items: baseline; gap: 14px; padding: 4px 0; }
+.shortcut-list dt { flex: none; width: 104px; display: flex; gap: 3px; flex-wrap: wrap; }
+.shortcut-list dd { margin: 0; font-size: 13px; color: var(--text-2); }
+
+/* first-step nudge after the welcome closes */
+.rail-item.pulse { animation: railpulse 1.2s ease-in-out 3; }
+@keyframes railpulse { 0%, 100% { box-shadow: none; } 50% { box-shadow: 0 0 0 2px var(--tint) inset; } }
+@media (prefers-reduced-motion: reduce) { .rail-item.pulse { animation: none; box-shadow: 0 0 0 2px var(--tint) inset; } }
+
+/* container-query polish: stack the inspector foot on a narrow inspector (stacked layout) */
+@container inspector (max-width: 300px) {
+  .foot-actions .primary, .foot-actions .ghost { flex: 1 1 100%; }
+  .foot-export { flex-direction: column; align-items: stretch; }
+}
+
 /* smooth section swaps via the View Transitions API (motion-safe; base.css disables it under reduced-motion) */
 @media (prefers-reduced-motion: no-preference) {
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }

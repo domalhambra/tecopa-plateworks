@@ -2,7 +2,7 @@
 // hotspot) and the "outside frame" cue. This list is the unambiguous, tab-able,
 // screen-reader-friendly path for editing marker identity; the map handles only
 // repositioning. Kept deliberately as DOM controls, never map-only popovers.
-import { state, cropOverviewPx } from './state.js';
+import { state, cropOverviewPx } from './store.js';
 import * as api from './api.js';
 
 const ICONS = ['dot', 'peak', 'camp', 'water', 'flag', 'camera', 'star'];

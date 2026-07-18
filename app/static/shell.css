@@ -61,6 +61,7 @@
 .inspector {
   display: flex; flex-direction: column; min-height: 0;
   background: var(--content); border-left: 1px solid var(--hairline);
+  container-type: inline-size; container-name: inspector;
 }
 .inspector-head {
   flex: none; display: flex; align-items: center; justify-content: space-between;
