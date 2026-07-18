@@ -26,10 +26,13 @@ def _final_png(c):
     cfg = json.load(open(f"{REGION_DIR}/region.json"))
     region_w = cfg["bounds"][2] - cfg["bounds"][0]
     ovw, ovh = j["overview_size"]
-    cw = ovw * (40_000.0 / region_w); ch = cw / 0.75          # 18x24 portrait aspect
+    cw = ovw * (40_000.0 / region_w); ch = cw / 0.75          # 6x8 portrait aspect (0.75)
     x0, y0 = ovw * 0.5 - cw / 2, ovh * 0.5 - ch / 2
+    # a small print (6x8) keeps the 40 km crop above the 300-dpi zoom floor
+    # (10 m native x 6 in x 300 = 18 km) and renders a fast 1800x2400 final to stage.
     pr = c.post("/api/proof", data={"session_id": j["session"],
-               "x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch})
+               "x0": x0, "y0": y0, "x1": x0 + cw, "y1": y0 + ch,
+               "print_w": 6, "print_h": 8})
     assert pr.status_code == 200, pr.text
     fr = c.post("/api/final", data={"session_id": j["session"], "format": "png"})
     assert fr.status_code == 200, fr.text

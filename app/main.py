@@ -1597,7 +1597,11 @@ async def continue_poster(file: UploadFile = File(...)):
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
-            "track_days": list(spec.track_days),   # additive: journey day grouping (caption span)
+            # additive: journey day grouping (caption span). spec.track_days is
+            # attacker-controlled on this path (a crafted manifest can make it a
+            # non-list / None), so guard the iteration the way year_span does above --
+            # a bad shape becomes [], never a 500.
+            "track_days": list(spec.track_days) if isinstance(spec.track_days, (list, tuple)) else [],
             "hotspots": hpx, "starter_crop": _crop_to_overview_px(region.geo, spec.crop),
             "recovered": False, "skipped_duplicates": [],
             "edition": edition, "files": [s.get("filename", "track.gpx") for s in sources],
