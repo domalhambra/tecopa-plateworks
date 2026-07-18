@@ -12,18 +12,27 @@
     } catch (e) { /* private mode */ }
   </script>
   <link rel="stylesheet" href="tokens.css">
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="base.css">
+  <link rel="stylesheet" href="shell.css">
+  <link rel="stylesheet" href="panels.css">
 </head>
 <body>
-  <div class="app">
-    <header class="toolbar">
+  <div id="a11yStatus" class="sr-only" aria-live="polite" role="status"></div>
+
+  <div class="studio">
+    <!-- ===================== top bar ===================== -->
+    <header class="topbar">
       <div class="tb-group">
         <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
         <span id="editionBadge" class="edition-badge" hidden></span>
+        <span id="yearSpan" class="year-span"></span>
       </div>
       <div class="tb-group header-actions">
+        <button id="paletteBtn" class="tb-btn" type="button" aria-label="Command palette (Ctrl or Cmd + K)">
+          <span class="tb-ico">⌘</span><span class="tb-txt">Search</span><kbd class="tb-kbd">⌘K</kbd>
+        </button>
         <a class="tb-btn" href="help.html" aria-label="Help: getting your tracks in">
           <span class="tb-ico">?</span><span class="tb-txt">Help</span>
         </a>
@@ -36,344 +45,251 @@
       </div>
     </header>
 
-    <main class="body">
-      <div id="a11yStatus" class="sr-only" aria-live="polite" role="status"></div>
-      <nav id="stepper" class="rail" aria-label="Progress"></nav>
+    <div class="studio-body">
+      <!-- ===================== section rail ===================== -->
+      <nav id="rail" class="rail" aria-label="Studio sections">
+        <button class="rail-item" type="button" data-section="library" data-key="1">
+          <span class="rail-ico" aria-hidden="true">▤</span><span class="rail-label">Library</span></button>
+        <button class="rail-item" type="button" data-section="compose" data-key="2">
+          <span class="rail-ico" aria-hidden="true">◳</span><span class="rail-label">Compose</span></button>
+        <button class="rail-item" type="button" data-section="style" data-key="3">
+          <span class="rail-ico" aria-hidden="true">✦</span><span class="rail-label">Style</span></button>
+        <button class="rail-item" type="button" data-section="layers" data-key="4">
+          <span class="rail-ico" aria-hidden="true">▦</span><span class="rail-label">Layers</span></button>
+        <button class="rail-item" type="button" data-section="light" data-key="5">
+          <span class="rail-ico" aria-hidden="true">☀</span><span class="rail-label">Light</span></button>
+        <button class="rail-item" type="button" data-section="social" data-key="6">
+          <span class="rail-ico" aria-hidden="true">◉</span><span class="rail-label">Social</span></button>
+        <button class="rail-item" type="button" data-section="films" data-key="7">
+          <span class="rail-ico" aria-hidden="true">▷</span><span class="rail-label">Films</span></button>
+        <button class="rail-item" type="button" data-section="exports" data-key="8">
+          <span class="rail-ico" aria-hidden="true">⇩</span><span class="rail-label">Exports</span></button>
+      </nav>
 
-      <section id="stage" class="stage">
-        <!-- STEP: Region -->
-        <div class="pane pane-region" id="pane-region" hidden>
-          <div class="pane-head">
-            <h2 id="h-region" tabindex="-1">Choose a region</h2>
-            <p class="lede">Turn your GPX tracks into a shaded-relief poster.</p>
+      <!-- ===================== center stage ===================== -->
+      <main class="stage">
+        <!-- surface: LIBRARY / home -->
+        <section id="surface-home" class="surface surface-home" hidden aria-label="Library">
+          <div class="surface-scroll">
+            <div class="home-head">
+              <h1 id="h-home" tabindex="-1">Turn your tracks into a poster</h1>
+              <p class="lede">Choose a region and drop your GPX, or reopen last year's poster to add a new edition.</p>
+            </div>
+            <h2 class="home-sub">Regions</h2>
+            <div id="regionGallery" class="region-gallery"></div>
+            <div class="home-open">
+              <h2 class="home-sub">Reopen a poster</h2>
+              <p class="lede">A TrailPrint PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
+              <div id="posterDrop" class="poster-drop">
+                <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
+                <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
+              </div>
+              <div id="provenanceCard" class="provenance-card" hidden></div>
+            </div>
           </div>
-          <div id="regionGallery" class="region-gallery"></div>
-          <div class="pane-foot">
-            <button id="continuePosterRegion" class="ghost" type="button">Continue a poster…</button>
-            <button id="toTracks" class="primary" type="button" disabled>Continue</button>
-          </div>
-        </div>
+        </section>
 
-        <!-- STEPS: Tracks & Frame (document + inspector) -->
-        <div class="pane workspace" id="workspace" hidden>
-          <div class="doc">
-            <div class="doc-head">
-              <h2 id="h-workspace" tabindex="-1">Add your tracks</h2>
-            </div>
-            <div class="map-pane" id="mapPane">
-              <canvas id="map" tabindex="0"
-                      aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
-                      hidden></canvas>
-              <button id="dropzone" class="dropzone" type="button">
-                <span class="dz-ico" aria-hidden="true">↧</span>
-                <b>Drop GPX, KML or KMZ</b>
-                <span>or click to browse — files accumulate</span>
-              </button>
-              <button id="continuePoster" class="dz-continue" type="button">
-                ↻ Continue a poster — open last year's PNG to add this year
-              </button>
-              <div id="hint" class="hint" hidden></div>
+        <!-- surface: COMPOSE map workspace -->
+        <section id="surface-map" class="surface surface-map" hidden aria-label="Map workspace">
+          <div class="map-pane" id="mapPane">
+            <canvas id="map" tabindex="0"
+                    aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
+                    hidden></canvas>
+            <button id="dropzone" class="dropzone" type="button">
+              <span class="dz-ico" aria-hidden="true">↧</span>
+              <b>Drop GPX, KML or KMZ</b>
+              <span>or click to browse — files accumulate</span>
+            </button>
+            <button id="continuePoster" class="dz-continue" type="button" hidden>
+              ↻ Continue a poster — open last year's PNG to add this year
+            </button>
+            <div id="hint" class="hint" hidden></div>
+            <div id="mapMode" class="map-mode" hidden>
+              <button id="mapModeTracks" class="seg-mini on" type="button">Tracks</button>
+              <button id="mapModeFrame" class="seg-mini" type="button">Frame</button>
             </div>
           </div>
+        </section>
 
-          <aside class="inspector" aria-label="Inspector">
-            <div class="insp-body">
-              <!-- Tracks step -->
-              <section id="filesBlock" class="insp-group">
-                <div class="insp-head">
-                  <span class="insp-title">Files</span>
-                  <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
-                </div>
-                <ul id="fileList" class="file-list"></ul>
-              </section>
-
-              <!-- Frame step: page setup -->
-              <section id="frameControls" class="insp-group" hidden>
-                <div class="insp-head"><span class="insp-title">Page</span>
-                  <button id="resetFrame" class="mini" type="button">Reset frame</button>
-                </div>
-                <div class="field" id="outputField">
-                  <label>Output</label>
-                  <div class="segmented" data-for="output" role="radiogroup" aria-label="Output">
-                    <button type="button" role="radio" data-val="print">Print</button>
-                    <button type="button" role="radio" data-val="wallpaper">Wallpaper</button>
-                  </div>
-                  <select id="output" class="sr-only" tabindex="-1" aria-hidden="true">
-                    <option value="print">Print</option>
-                    <option value="wallpaper">Wallpaper</option>
-                  </select>
-                </div>
-                <div class="field" id="sizeField">
-                  <label for="size">Print size</label>
-                  <div class="select-wrap">
-                    <select id="size">
-                      <option value="18,24">18 × 24 in</option>
-                      <option value="24,36">24 × 36 in</option>
-                      <option value="12,16">12 × 16 in</option>
-                      <option value="9,12">9 × 12 in</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="field" id="bleedField">
-                  <label for="bleed">Print-shop bleed</label>
-                  <div class="select-wrap">
-                    <select id="bleed">
-                      <option value="0">None — framing / wall print</option>
-                      <option value="0.125">⅛ in full bleed (lab trims to size)</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="field" id="wpPresetField" hidden>
-                  <label for="wpPreset">Device</label>
-                  <div class="select-wrap">
-                    <select id="wpPreset"></select>
-                  </div>
-                </div>
-                <div class="field" id="customDeviceField" hidden>
-                  <label for="customPxW">Custom device</label>
-                  <div class="custom-device"
-                       title="Exact native pixels and physical pixels-per-inch of your screen — the render is cut to precisely these pixels, with every style value true at this density.">
-                    <input id="customPxW" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="width px" aria-label="Custom device width in pixels">
-                    <span aria-hidden="true">×</span>
-                    <input id="customPxH" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="height px" aria-label="Custom device height in pixels">
-                    <span aria-hidden="true">@</span>
-                    <input id="customPpi" type="number" inputmode="numeric" min="72" max="600" step="1" placeholder="ppi" aria-label="Custom device pixels per inch">
-                  </div>
-                </div>
-                <div class="field" id="orientField">
-                  <label>Orientation</label>
-                  <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">
-                    <button type="button" role="radio" data-val="auto">Auto</button>
-                    <button type="button" role="radio" data-val="landscape">Landscape</button>
-                    <button type="button" role="radio" data-val="portrait">Portrait</button>
-                  </div>
-                  <select id="orient" class="sr-only" tabindex="-1" aria-hidden="true">
-                    <option value="auto">Auto</option>
-                    <option value="landscape">Landscape</option>
-                    <option value="portrait">Portrait</option>
-                  </select>
-                </div>
-                <div class="field" id="titleField">
-                  <label for="titleInput">Poster title</label>
-                  <input id="titleInput" type="text" maxlength="60"
-                         placeholder="Region name — “-” for none">
-                </div>
-                <div class="switch-row">
-                  <label for="contoursChk">Contour lines</label>
-                  <span class="switch"><input type="checkbox" id="contoursChk"><span class="slider"></span></span>
-                </div>
-                <div class="switch-row" id="compassRow">
-                  <label for="compassChk">Compass rose</label>
-                  <span class="switch"><input type="checkbox" id="compassChk" checked><span class="slider"></span></span>
-                </div>
-                <div class="switch-row">
-                  <label for="biomeChk">Biome color</label>
-                  <span class="switch"><input type="checkbox" id="biomeChk"><span class="slider"></span></span>
-                </div>
-                <div class="switch-row">
-                  <label for="labelsChk">Place names</label>
-                  <span class="switch"><input type="checkbox" id="labelsChk"><span class="slider"></span></span>
-                </div>
-                <div class="switch-row">
-                  <label for="labelPlaceChk">Smart labels<small class="hint"> · dodge the route, leader lines</small></label>
-                  <span class="switch"><input type="checkbox" id="labelPlaceChk" checked><span class="slider"></span></span>
-                </div>
-              </section>
-
-              <!-- Frame step: style -->
-              <section id="stylePanel" class="insp-group" hidden>
-                <div class="insp-head"><span class="insp-title">Style</span></div>
-                <div class="swatch-row" role="radiogroup" aria-label="Track color">
-                  <span class="field-label">Track color</span>
-                  <div class="swatches">
-                    <button type="button" class="swatch sel" data-hex="#d69e3a" style="--sw:#d69e3a" aria-label="Desert gold"></button>
-                    <button type="button" class="swatch" data-hex="#b24c2b" style="--sw:#b24c2b" aria-label="Rust"></button>
-                    <button type="button" class="swatch" data-hex="#4a6936" style="--sw:#4a6936" aria-label="Forest"></button>
-                    <button type="button" class="swatch" data-hex="#7a4a66" style="--sw:#7a4a66" aria-label="Plum"></button>
-                    <button type="button" class="swatch" data-hex="#33415e" style="--sw:#33415e" aria-label="Midnight"></button>
-                    <button type="button" class="swatch" data-hex="#3a3733" style="--sw:#3a3733" aria-label="Charcoal"></button>
-                  </div>
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sWidth">Track width</label><output id="vWidth">2.6 pt</output></div>
-                  <input type="range" id="sWidth" min="1.2" max="5" step="0.1" value="2.6">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sHalo">Track outline</label><output id="vHalo">0.70</output></div>
-                  <input type="range" id="sHalo" min="0" max="0.9" step="0.05" value="0.7">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sShadow">Cast shadows</label><output id="vShadow">0.5</output></div>
-                  <input type="range" id="sShadow" min="0" max="1" step="0.1" value="0.5">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sTerrain">Terrain depth</label><output id="vTerrain">1.0×</output></div>
-                  <input type="range" id="sTerrain" min="0" max="1.5" step="0.1" value="1">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sOblique">High relief</label><output id="vOblique">0.00</output></div>
-                  <input type="range" id="sOblique" min="0" max="1" step="0.05" value="0">
-                </div>
-                <div class="switch-row" id="journeyRow">
-                  <span class="switch-label">Journey light<small class="hint" id="journeyHint"> · lit by your hike's own sun</small></span>
-                  <span class="switch"><input type="checkbox" id="journeyChk"><span class="slider"></span></span>
-                </div>
-                <div class="slider-row" id="sunHourRow" hidden>
-                  <div class="slider-top"><label for="sSunHour">Time of day</label><output id="vSunHour">—</output></div>
-                  <input type="range" id="sSunHour" min="5" max="21" step="0.25" value="17">
-                </div>
-                <div class="switch-row">
-                  <span class="switch-label">Elevation profile</span>
-                  <span class="switch"><input type="checkbox" id="profileChk"><span class="slider"></span></span>
-                </div>
-                <div class="field">
-                  <label for="sTrackColorBy">Track color by</label>
-                  <div class="select-wrap">
-                    <select id="sTrackColorBy">
-                      <option value="none">Solid swatch</option>
-                      <option value="elevation">Elevation</option>
-                      <option value="grade">Grade</option>
-                    </select>
-                  </div>
-                </div>
-                <div class="switch-row">
-                  <span class="switch-label">Weave crossings<small class="hint"> · newer journeys cross over older</small></span>
-                  <span class="switch"><input type="checkbox" id="trackWeaveChk" checked><span class="slider"></span></span>
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sMarker">Marker size</label><output id="vMarker">0.24 in</output></div>
-                  <input type="range" id="sMarker" min="0.14" max="0.4" step="0.01" value="0.24">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sRing">Marker outline</label><output id="vRing">0.09</output></div>
-                  <input type="range" id="sRing" min="0" max="0.2" step="0.01" value="0.09">
-                </div>
-                <div class="slider-row">
-                  <div class="slider-top"><label for="sFurniture">Legend &amp; compass size</label><output id="vFurniture">1.00×</output></div>
-                  <input type="range" id="sFurniture" min="0.6" max="1.6" step="0.05" value="1">
-                </div>
-                <div class="field">
-                  <label for="sPhotoStyle">Photo frame</label>
-                  <div class="select-wrap">
-                    <select id="sPhotoStyle">
-                      <option value="mat">Classic mat</option>
-                      <option value="keyline">Thin keyline</option>
-                      <option value="borderless">Borderless</option>
-                      <option value="polaroid">Polaroid</option>
-                    </select>
-                  </div>
-                </div>
-              </section>
-
-              <!-- Places (both steps, when hotspots exist) -->
-              <section id="markersBox" class="insp-group" hidden>
-                <div class="insp-head"><span class="insp-title">Places</span>
-                  <span class="insp-note">name · icon · photo</span>
-                </div>
-                <div id="markerList"></div>
-              </section>
+        <!-- surface: PROOF (live preview) -->
+        <section id="surface-proof" class="surface surface-proof" hidden aria-label="Poster proof">
+          <div class="proof-toolbar">
+            <label class="auto-proof"><span class="switch"><input type="checkbox" id="autoProofChk"><span class="slider"></span></span>
+              <span>Live proof</span></label>
+            <div class="ab-bar" id="abBar" hidden>
+              <button id="abClearBtn" class="mini" type="button">Clear B</button>
+              <input type="range" id="abScrub" min="0" max="100" value="50" aria-label="Compare A and B">
+              <span class="ab-legend"><b>A</b> live · <b>B</b> pinned</span>
             </div>
-
-            <div class="insp-foot actions">
-              <span id="status" class="status"></span>
-              <button id="backToProof" class="ghost" type="button" hidden>Back to proof</button>
-              <button id="expressBtn" class="ghost" type="button" hidden>Proof + final</button>
-              <button id="toFrame" class="primary" type="button" disabled>Continue</button>
-              <button id="renderProof" class="primary" type="button" hidden>Render proof</button>
-            </div>
-          </aside>
-        </div>
-
-        <!-- STEP: Proof -->
-        <div class="pane pane-proof" id="pane-proof" hidden>
-          <div class="pane-head">
-            <h2 id="h-proof" tabindex="-1">Your poster proof</h2>
-            <p class="lede">A watermarked preview. Accept to render the full-resolution final.</p>
+            <button id="abPinBtn" class="mini" type="button" title="Pin the current proof as B to compare">Pin B</button>
           </div>
           <div class="proof-wrap">
-            <div class="poster-card"><img id="posterImg" alt="Poster proof"></div>
-          </div>
-          <div id="bundleCard" class="bundle-card" hidden>
-            <div class="bundle-head">
-              <span class="insp-title">Wallpaper bundle</span>
-              <span class="insp-note">the same map, rendered for every screen you pick</span>
+            <div id="proofEmpty" class="proof-empty">
+              <p>No proof yet.</p>
+              <p class="lede">Frame your poster in <b>Compose</b>, then render a proof to preview it here.</p>
             </div>
-            <div id="bundleList" class="bundle-list"></div>
-            <div class="bundle-foot">
-              <span id="bundleStatus" class="status"></span>
-              <button id="bundleBtn" class="ghost" type="button" disabled>Download bundle</button>
-            </div>
-          </div>
-          <div id="timelapseCard" class="bundle-card" hidden>
-            <div class="bundle-head">
-              <span class="insp-title">Time-lapse</span>
-              <span class="insp-note">watch the journeys build to the poster — APNG keeps the reprint recipe; WebP/MP4 are share copies</span>
-            </div>
-            <div class="tl-controls">
-              <div class="slider-row">
-                <div class="slider-top"><label for="tlFrames">Frames</label><output id="tlFramesVal">40</output></div>
-                <input type="range" id="tlFrames" min="8" max="80" step="1" value="40">
+            <div class="poster-card" id="posterCard" hidden>
+              <img id="posterImg" alt="Poster proof">
+              <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
+              <div id="proofStale" class="stale-pill" hidden>
+                <span>Changes not proofed</span>
+                <button id="reproofBtn" class="mini-primary" type="button">Re-proof</button>
               </div>
-              <div class="field" id="tlTargetField" hidden>
-                <label for="tlTarget">Target</label>
-                <div class="select-wrap"><select id="tlTarget"></select></div>
+            </div>
+          </div>
+          <div id="proofFilmstrip" class="filmstrip" hidden aria-label="Earlier proofs this session"></div>
+        </section>
+
+        <!-- surface: SOCIAL preview -->
+        <section id="surface-social" class="surface surface-social" hidden aria-label="Social preview">
+          <div class="surface-scroll" id="socialPreview"></div>
+        </section>
+
+        <!-- surface: EXPORTS / jobs -->
+        <section id="surface-queue" class="surface surface-queue" hidden aria-label="Exports">
+          <div class="surface-scroll">
+            <div class="home-head"><h1 id="h-queue" tabindex="-1">Exports</h1>
+              <p class="lede">Every render this session — finals, wallpaper bundles, films, and kits — with live progress and re-download.</p></div>
+            <div id="jobList" class="job-list"></div>
+            <div id="jobEmpty" class="job-empty lede">Nothing rendered yet. Accept a proof or build a social kit to see jobs here.</div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ===================== inspector ===================== -->
+      <aside class="inspector" aria-label="Inspector">
+        <div class="inspector-head">
+          <span id="inspectorTitle" class="insp-section-title">Compose</span>
+          <div id="inspectorAction" class="insp-action"></div>
+        </div>
+        <div id="inspectorBody" class="inspector-body">
+          <!-- COMPOSE panel (static; wired by compose.js) -->
+          <div id="panel-compose" class="panel" hidden>
+            <section class="insp-group">
+              <div class="insp-head"><span class="insp-title">Page</span>
+                <button id="resetFrame" class="mini" type="button">Reset frame</button>
               </div>
-              <div class="field inline" id="tlFormatField">
-                <label for="tlFormat">Format</label>
-                <div class="segmented" data-for="tlFormat" role="radiogroup" aria-label="Film format">
-                  <button type="button" role="radio" data-val="apng">APNG</button>
-                  <button type="button" role="radio" data-val="webp">WebP</button>
-                  <button type="button" role="radio" data-val="mp4">MP4</button>
+              <div class="field" id="outputField">
+                <label>Output</label>
+                <div class="segmented" data-for="output" role="radiogroup" aria-label="Output">
+                  <button type="button" role="radio" data-val="print">Print</button>
+                  <button type="button" role="radio" data-val="wallpaper">Wallpaper</button>
                 </div>
-                <select id="tlFormat" class="sr-only" tabindex="-1" aria-hidden="true">
-                  <option value="apng">APNG (archival)</option>
-                  <option value="webp">WebP (share)</option>
-                  <option value="mp4">MP4 (share)</option>
+                <select id="output" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="print">Print</option><option value="wallpaper">Wallpaper</option>
                 </select>
               </div>
-              <div class="field" id="tlLightField">
-                <label for="tlLight">Light</label>
-                <div class="select-wrap">
-                  <select id="tlLight">
-                    <option value="none">Fixed</option>
-                    <option value="auto">Sun travels with the hike</option>
-                  </select>
-                </div>
-                <span class="insp-note" id="tlLightNote" hidden>the sun film is a share copy — WebP or MP4</span>
+              <div class="field" id="sizeField">
+                <label for="size">Print size</label>
+                <div class="select-wrap"><select id="size">
+                  <option value="18,24">18 × 24 in</option>
+                  <option value="24,36">24 × 36 in</option>
+                  <option value="12,16">12 × 16 in</option>
+                  <option value="9,12">9 × 12 in</option>
+                </select></div>
               </div>
-            </div>
-            <div class="tl-preview"><img id="tlPreview" alt="" hidden></div>
-            <div class="bundle-foot">
-              <span id="tlStatus" class="status"></span>
-              <button id="tlBtn" class="ghost" type="button">Render time-lapse</button>
-            </div>
+              <div class="field" id="bleedField">
+                <div class="slider-top"><label for="bleed">Print-shop bleed</label><output id="bleedVal">None</output></div>
+                <input type="range" id="bleed" min="0" max="0.5" step="0.125" value="0">
+              </div>
+              <div class="field" id="wpPresetField" hidden>
+                <label for="wpPreset">Device</label>
+                <div class="select-wrap"><select id="wpPreset"></select></div>
+              </div>
+              <div class="field" id="customDeviceField" hidden>
+                <label for="customPxW">Custom device</label>
+                <div class="custom-device" title="Exact native pixels and physical ppi of your screen.">
+                  <input id="customPxW" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="width px" aria-label="Custom device width in pixels">
+                  <span aria-hidden="true">×</span>
+                  <input id="customPxH" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="height px" aria-label="Custom device height in pixels">
+                  <span aria-hidden="true">@</span>
+                  <input id="customPpi" type="number" inputmode="numeric" min="72" max="600" step="1" placeholder="ppi" aria-label="Custom device pixels per inch">
+                </div>
+              </div>
+              <div class="field" id="orientField">
+                <label>Orientation</label>
+                <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">
+                  <button type="button" role="radio" data-val="auto">Auto</button>
+                  <button type="button" role="radio" data-val="landscape">Landscape</button>
+                  <button type="button" role="radio" data-val="portrait">Portrait</button>
+                </div>
+                <select id="orient" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option>
+                </select>
+              </div>
+              <div class="field" id="titleField">
+                <label for="titleInput">Poster title</label>
+                <input id="titleInput" type="text" maxlength="60" placeholder="Region name — “-” for none">
+              </div>
+            </section>
+            <section id="filesBlock" class="insp-group">
+              <div class="insp-head"><span class="insp-title">Files</span>
+                <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
+              </div>
+              <ul id="fileList" class="file-list"></ul>
+            </section>
+            <section id="markersBox" class="insp-group" hidden>
+              <div class="insp-head"><span class="insp-title">Places</span>
+                <span class="insp-note">name · icon · photo</span></div>
+              <div id="markerList"></div>
+            </section>
           </div>
-          <p class="insp-note save-file-note" id="saveFileNote">This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition 2.</p>
-          <div class="pane-foot">
-            <span id="proofStatus" class="status"></span>
-            <label class="reprint-toggle" title="Embed the poster's recipe (region, tracks, style) in the PNG so it can be reprinted from the file alone. Turn off for a share copy — it keeps your exact track coordinates out of the file.">
-              <span class="switch"><input type="checkbox" id="embedSpecChk" checked><span class="slider"></span></span>
-              <span>Reprintable file</span>
-            </label>
+
+          <!-- registry-driven panels (populated by inspector.js) -->
+          <div id="panel-style" class="panel" hidden></div>
+          <div id="panel-layers" class="panel" hidden></div>
+          <div id="panel-light" class="panel" hidden></div>
+          <div id="panel-films" class="panel" hidden></div>
+
+          <!-- SOCIAL panel (built by social.js) -->
+          <div id="panel-social" class="panel" hidden></div>
+
+          <!-- LIBRARY / EXPORTS have no inspector controls -->
+          <div id="panel-library" class="panel" hidden>
+            <section class="insp-group"><p class="lede insp-empty">Pick a region or reopen a poster to begin. Presets and options light up once your tracks are loaded.</p></section>
+          </div>
+          <div id="panel-exports" class="panel" hidden>
+            <section class="insp-group"><p class="lede insp-empty">Downloads keep their self-documenting names. Jobs stay listed for the whole session.</p></section>
+          </div>
+        </div>
+
+        <div id="inspectorFoot" class="inspector-foot" hidden>
+          <div class="foot-export" id="footExport">
             <div class="field inline" id="formatField">
               <label for="finalFormat">Format</label>
-              <div class="segmented" data-for="finalFormat" role="radiogroup" aria-label="Format">
+              <div class="segmented" data-for="finalFormat" role="radiogroup" aria-label="Final format">
                 <button type="button" role="radio" data-val="png">PNG</button>
                 <button type="button" role="radio" data-val="pdf">PDF</button>
               </div>
               <select id="finalFormat" class="sr-only" tabindex="-1" aria-hidden="true">
-                <option value="png">PNG</option>
-                <option value="pdf">PDF (print shop)</option>
+                <option value="png">PNG</option><option value="pdf">PDF (print shop)</option>
               </select>
             </div>
+            <label class="reprint-toggle" title="Embed the poster's recipe in the PNG so it reprints from the file alone. Off = a share copy that keeps your exact route coordinates out of the file.">
+              <span class="switch"><input type="checkbox" id="embedSpecChk" checked><span class="slider"></span></span>
+              <span>Reprintable file</span>
+            </label>
+          </div>
+          <p class="insp-note save-file-note" id="saveFileNote"></p>
+          <div class="foot-actions">
+            <button id="reframeBtn" class="ghost" type="button" hidden>Reframe</button>
             <button id="downloadAgain" class="ghost" type="button" hidden>Save another copy</button>
-            <button id="reframe" class="ghost" type="button">Reframe</button>
-            <button id="accept" class="primary" type="button">Accept &amp; render final</button>
+            <button id="expressBtn" class="ghost" type="button">Proof + final</button>
+            <button id="renderProof" class="primary" type="button">Render proof</button>
+            <button id="acceptBtn" class="primary" type="button" hidden>Accept &amp; render final</button>
           </div>
         </div>
-      </section>
-    </main>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" role="status" hidden></div>
   </div>
+
+  <!-- command palette -->
+  <dialog id="paletteDialog" class="palette" aria-label="Command palette">
+    <input id="paletteInput" class="palette-input" type="text" placeholder="Search sections, options, actions…" autocomplete="off">
+    <ul id="paletteList" class="palette-list" role="listbox"></ul>
+  </dialog>
 
   <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>
   <input type="file" id="posterInput" accept="image/png,.png" hidden>

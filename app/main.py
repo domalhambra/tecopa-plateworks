@@ -169,6 +169,15 @@ def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed
         default_image=default_image, **pace))
     return key                                         # job result = the blob key
 
+def _render_mockups_to_blob(data, variants, sizes, video, caption, key):
+    """The wall-art mockup worker: stage a final's own pixels as photographed objects
+    (embossed Plate / matted Frame) and store one zip of the JPEGs (and MP4s). Stateless
+    — the artwork rides the uploaded bytes, no session or region data — so it works on any
+    old final from the Library. Deterministic; touches only its arguments (queue thread)."""
+    from app import mockups                              # lazy: pulls the imaging core
+    BLOBS.put(key, mockups.build_zip(data, variants, sizes, video=video, caption=caption))
+    return key                                           # job result = the blob key
+
 def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lineage=None,
                            region_pack=None):
     """The wallpaper-bundle worker: rasterize each per-device spec at its own ppi and
@@ -497,6 +506,9 @@ async def upload(files: List[UploadFile] = File(...),
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
+            # per-track day index (journey grouping) -- additive; lets the client read
+            # the year/day span for the social caption helper without a spec.
+            "track_days": [t.day for t in tracks],
             "hotspots": hpx, "starter_crop": list(start), "recovered": recovered,
             "skipped_duplicates": skipped_dupes,
             "skipped_duplicate_tracks": skipped_track_dupes,
@@ -1179,6 +1191,45 @@ async def timelapse_submit(session_id: str = Form(...),
              session_id, region.id, frames, target_dpi, fmt, light_motion)
     return {"job": jid, "frames": frames}
 
+@app.post("/api/mockups/submit")
+async def mockups_submit(file: UploadFile = File(...),
+                         variants: str = Form("plate,frame"),
+                         sizes: str = Form("1080x1080,1080x1350"),
+                         video: bool = Form(False),
+                         caption: bool = Form(True)):
+    """Stage a finished poster (or film) as photographed wall art for social — the
+    embossed Plate and the matted Frame, straight from the file's own pixels. Stateless
+    like /api/reprint: the artwork rides the upload, so any old final works, live session
+    or not. Honest 422s up front (not a PNG, a bad variant/size, or the MP4 share extra
+    missing) before enqueueing; the render (slow, and slower for the yaw-loop MP4) runs on
+    the queue and returns a job whose result is one zip of JPEGs/MP4s. Share-class assets:
+    no manifest aboard, by construction."""
+    from app import mockups
+    data = await _read_capped(file)
+    if not data.startswith(mockups.PNG_MAGIC):
+        raise HTTPException(422, "not a PNG — mockups take a TrailPrint final (poster or film)")
+    vs = [v.strip() for v in variants.split(",") if v.strip()]
+    if not vs:
+        raise HTTPException(422, "pick at least one variant (plate, frame)")
+    for v in vs:
+        if v not in mockups.VARIANTS:
+            raise HTTPException(422, f"unknown variant {v!r} — choose from {', '.join(mockups.VARIANTS)}")
+    try:
+        szs = mockups.parse_sizes(sizes)
+    except mockups.MockupError as e:
+        raise HTTPException(422, str(e))
+    if len(vs) * len(szs) > mockups.MAX_COMBOS:
+        raise HTTPException(422, f"too many mockups ({len(vs)}×{len(szs)}) — keep variants×sizes ≤ {mockups.MAX_COMBOS}")
+    # a film input (or an explicit video request) needs the MP4 share extra: 422 now,
+    # never a worker error (the timelapse_format posture).
+    animated = getattr(Image.open(io.BytesIO(data)), "n_frames", 1) > 1
+    if (video or animated) and not timelapse.MP4_AVAILABLE:
+        raise HTTPException(422, "MP4 mockups need the share extra — pip install -r requirements-share.txt")
+    key = f"mockups/{hashlib.sha256(data).hexdigest()[:16]}/mockups.zip"
+    jid = QUEUE.submit(_render_mockups_to_blob, data, vs, szs, video, caption, key)
+    log.info("event=mockups.submit variants=%s sizes=%s video=%s", ",".join(vs), sizes, video)
+    return {"job": jid}
+
 @app.get("/api/jobs/{jid}")
 async def job_status(jid: str):
     try:
@@ -1546,6 +1597,11 @@ async def continue_poster(file: UploadFile = File(...)):
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
+            # additive: journey day grouping (caption span). spec.track_days is
+            # attacker-controlled on this path (a crafted manifest can make it a
+            # non-list / None), so guard the iteration the way year_span does above --
+            # a bad shape becomes [], never a 500.
+            "track_days": list(spec.track_days) if isinstance(spec.track_days, (list, tuple)) else [],
             "hotspots": hpx, "starter_crop": _crop_to_overview_px(region.geo, spec.crop),
             "recovered": False, "skipped_duplicates": [],
             "edition": edition, "files": [s.get("filename", "track.gpx") for s in sources],

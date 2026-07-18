@@ -113,6 +113,20 @@ export function sizeInfeasibleForRegion() {
   return r.native_resolution_m * finalWidthPx() > maxCropW;
 }
 
+// The same zoom-floor test for an ARBITRARY output preset (a social format / device),
+// without touching the active state — the Social gallery badges each format's
+// feasibility with the identical math instead of reimplementing it. `preset` is a
+// wallpaper/social preset record ({ px:[w,h], ppi }).
+export function presetInfeasibleForRegion(preset) {
+  const r = activeRegion();
+  if (!r || !preset || !preset.px) return false;
+  const regW = r.bounds[2] - r.bounds[0];
+  const regH = r.bounds[3] - r.bounds[1];
+  const aspect = preset.px[0] / preset.px[1];
+  const maxCropW = Math.min(regW, regH * aspect);
+  return r.native_resolution_m * preset.px[0] > maxCropW;
+}
+
 function cropAnnouncement() {
   const c = cropOverviewPx(); const mpp = metresPerPx();
   if (!c || !mpp) return 'Frame updated';
