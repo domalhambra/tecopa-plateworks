@@ -23,7 +23,9 @@ mkdir -p "$MACOS_DIR" "$RES_DIR"
 swiftc -O -o "$MACOS_DIR/TrailPrint" "$SCRIPT_DIR/TrailPrintLauncher.swift"
 
 # 2. icon.png -> Resources/TrailPrint.icns
-ICONSET="$(mktemp -d)/TrailPrint.iconset"
+ICONSET_TMP="$(mktemp -d)"
+trap 'rm -rf "$ICONSET_TMP"' EXIT
+ICONSET="$ICONSET_TMP/TrailPrint.iconset"
 mkdir -p "$ICONSET"
 for sz in 16 32 64 128 256 512; do
   sips -z "$sz" "$sz" "$SCRIPT_DIR/icon.png" --out "$ICONSET/icon_${sz}x${sz}.png" >/dev/null
