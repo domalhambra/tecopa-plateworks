@@ -2,18 +2,18 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleName</key><string>TrailPrint</string>
-  <key>CFBundleDisplayName</key><string>TrailPrint</string>
-  <key>CFBundleIdentifier</key><string>guide.badwater.trailprint</string>
-  <key>CFBundleExecutable</key><string>TrailPrint</string>
-  <key>CFBundleIconFile</key><string>TrailPrint</string>
+  <key>CFBundleName</key><string>Tecopa Printworks</string>
+  <key>CFBundleDisplayName</key><string>Tecopa Printworks</string>
+  <key>CFBundleIdentifier</key><string>guide.badwater.tecopa</string>
+  <key>CFBundleExecutable</key><string>TecopaPrintworks</string>
+  <key>CFBundleIconFile</key><string>TecopaPrintworks</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>__VERSION__</string>
   <key>CFBundleVersion</key><string>__VERSION__</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSUIElement</key><false/>
-  <key>NSDocumentsFolderUsageDescription</key><string>TrailPrint reads the project files, Python environment, and map data stored in your Documents folder to render your posters.</string>
-  <key>TrailPrintRepoPath</key><string>__REPO_PATH__</string>
+  <key>NSDocumentsFolderUsageDescription</key><string>Tecopa Printworks reads the project files, Python environment, and map data stored in your Documents folder to render your posters.</string>
+  <key>TecopaRepoPath</key><string>__REPO_PATH__</string>
 </dict>
 </plist>

@@ -5,7 +5,7 @@ import Foundation
 let kPort = 8848
 let kBaseURL = "http://127.0.0.1:8848/"
 let kReadyURL = "http://127.0.0.1:8848/readyz"
-let kLogPath = NSHomeDirectory() + "/Library/Logs/TrailPrint.log"
+let kLogPath = NSHomeDirectory() + "/Library/Logs/TecopaPrintworks.log"
 
 // One append-mode log fd, opened once and shared by the launcher AND the child engine.
 // O_APPEND makes every write land atomically at EOF, so the launcher's own log lines and
@@ -63,16 +63,16 @@ func httpGet(_ urlString: String, timeout: TimeInterval) -> (Data?, Bool) {
     return (data, hadResponse)
 }
 
-enum ServingState { case trailprint, foreign, none }
+enum ServingState { case tecopa, foreign, none }
 
-/// Is something already serving on the port, and is it TrailPrint?
+/// Is something already serving on the port, and is it Tecopa Printworks?
 func probeExisting(timeout: TimeInterval) -> ServingState {
     let (data, hadResponse) = httpGet(kReadyURL, timeout: timeout)
     if !hadResponse { return .none }
     if let d = data,
        let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
        obj["ready"] != nil, obj["regions"] != nil {
-        return .trailprint
+        return .tecopa
     }
     return .foreign
 }
@@ -120,9 +120,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func boot() {
         // 1. Repo path baked at build time
-        guard let repo = Bundle.main.object(forInfoDictionaryKey: "TrailPrintRepoPath") as? String,
+        guard let repo = Bundle.main.object(forInfoDictionaryKey: "TecopaRepoPath") as? String,
               !repo.isEmpty else {
-            die("TrailPrint can’t find its files",
+            die("Tecopa Printworks can’t find its files",
                 "No repository path is baked into this app. Rebuild it with:\n\nscripts/macos/build_app.sh --install")
             return
         }
@@ -131,39 +131,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 2. Preflight
         if !fm.fileExists(atPath: repo) {
-            die("TrailPrint can’t find its files",
+            die("Tecopa Printworks can’t find its files",
                 "The project folder isn’t where it was when this app was built:\n\n\(repo)\n\nRebuild with scripts/macos/build_app.sh --install after moving it back or rebuilding in place.")
             return
         }
         if !fm.fileExists(atPath: py) {
-            die("TrailPrint isn’t set up yet",
+            die("Tecopa Printworks isn’t set up yet",
                 "No Python environment was found at:\n\n\(py)\n\nCreate it first:\n  python3 -m venv .venv && source .venv/bin/activate\n  pip install -r requirements-lock.txt")
             return
         }
 
         // 2b. Ensure this app can read the project (surfaces the one-time macOS
         //     Documents-folder permission prompt; the engine subprocess inherits it).
-        let accessMsg = "TrailPrint couldn’t read the project files in your Documents folder.\n\nGrant access in System Settings → Privacy & Security → Files and Folders (enable TrailPrint’s “Documents Folder”), or add TrailPrint under Full Disk Access, then relaunch."
+        let accessMsg = "Tecopa Printworks couldn’t read the project files in your Documents folder.\n\nGrant access in System Settings → Privacy & Security → Files and Folders (enable Tecopa Printworks’ “Documents Folder”), or add Tecopa Printworks under Full Disk Access, then relaunch."
         switch primeDocumentsAccess(repo, timeout: 90) {
         case .granted:
             logLine("documents access ok")
         case .denied:
-            die("TrailPrint needs permission", accessMsg)
+            die("Tecopa Printworks needs permission", accessMsg)
             return
         case .timedOut:
-            die("TrailPrint needs permission", accessMsg)
+            die("Tecopa Printworks needs permission", accessMsg)
             return
         }
 
         // 3. Already serving?
         switch probeExisting(timeout: 0.7) {
-        case .trailprint:
+        case .tecopa:
             logLine("adopting engine already serving on \(kPort)")
             onMain { openBrowser() }
             return
         case .foreign:
             die("Port \(kPort) is in use",
-                "Another program is already using port \(kPort). Quit it, then relaunch TrailPrint.")
+                "Another program is already using port \(kPort). Quit it, then relaunch Tecopa Printworks.")
             return
         case .none:
             break
@@ -180,14 +180,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         p.terminationHandler = { [weak self] proc in
             guard let self = self, !self.isQuitting else { return }
-            self.die("TrailPrint’s engine stopped",
+            self.die("Tecopa Printworks’ engine stopped",
                      "The rendering engine exited unexpectedly (status \(proc.terminationStatus)).\n\nSee the log:\n\(kLogPath)")
         }
         logLine("starting engine: \(py) -m uvicorn app.main:app --port \(kPort) (cwd=\(repo))")
         do {
             try p.run()
         } catch {
-            die("TrailPrint couldn’t start its engine",
+            die("Tecopa Printworks couldn’t start its engine",
                 "\(error.localizedDescription)\n\nSee the log:\n\(kLogPath)")
             return
         }
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        die("TrailPrint took too long to start",
+        die("Tecopa Printworks took too long to start",
             "The engine didn’t become ready within 60 seconds.\n\nSee the log:\n\(kLogPath)")
     }
 
@@ -245,10 +245,10 @@ let appItem = NSMenuItem()
 mainMenu.addItem(appItem)
 let appMenu = NSMenu()
 appItem.submenu = appMenu
-appMenu.addItem(withTitle: "About TrailPrint",
+appMenu.addItem(withTitle: "About Tecopa Printworks",
                 action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
 appMenu.addItem(NSMenuItem.separator())
-appMenu.addItem(withTitle: "Quit TrailPrint",
+appMenu.addItem(withTitle: "Quit Tecopa Printworks",
                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 app.mainMenu = mainMenu
 
