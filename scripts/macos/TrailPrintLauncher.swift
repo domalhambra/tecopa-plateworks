@@ -77,6 +77,32 @@ func probeExisting(timeout: TimeInterval) -> ServingState {
     return .foreign
 }
 
+enum AccessResult { case granted, denied, timedOut }
+
+/// Read one byte from a file in the repo to surface (and satisfy) the macOS
+/// "allow access to your Documents folder" prompt for THIS app. The repo lives under
+/// ~/Documents, whose *contents* are TCC-gated; stat/existence is not, which is why the
+/// preflight above passes but the engine subprocess would otherwise hang on its first
+/// content read. Doing this read here, from the app itself, is what makes the prompt
+/// appear — and once granted the engine subprocess inherits the access. The blocking
+/// open runs on a side thread with a watchdog, so a prompt that never surfaces becomes
+/// an actionable alert instead of an indefinite hang.
+func primeDocumentsAccess(_ repo: String, timeout: TimeInterval) -> AccessResult {
+    let probe = repo + "/README.md"
+    let sem = DispatchSemaphore(value: 0)
+    var granted = false
+    let worker = Thread {
+        if let fh = FileHandle(forReadingAtPath: probe) {
+            granted = ((try? fh.read(upToCount: 1)) ?? nil) != nil
+            try? fh.close()
+        }
+        sem.signal()
+    }
+    worker.start()
+    if sem.wait(timeout: .now() + timeout) == .timedOut { return .timedOut }
+    return granted ? .granted : .denied
+}
+
 // ---- App delegate ----
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -112,6 +138,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !fm.fileExists(atPath: py) {
             die("TrailPrint isn’t set up yet",
                 "No Python environment was found at:\n\n\(py)\n\nCreate it first:\n  python3 -m venv .venv && source .venv/bin/activate\n  pip install -r requirements-lock.txt")
+            return
+        }
+
+        // 2b. Ensure this app can read the project (surfaces the one-time macOS
+        //     Documents-folder permission prompt; the engine subprocess inherits it).
+        let accessMsg = "TrailPrint couldn’t read the project files in your Documents folder.\n\nGrant access in System Settings → Privacy & Security → Files and Folders (enable TrailPrint’s “Documents Folder”), or add TrailPrint under Full Disk Access, then relaunch."
+        switch primeDocumentsAccess(repo, timeout: 90) {
+        case .granted:
+            logLine("documents access ok")
+        case .denied:
+            die("TrailPrint needs permission", accessMsg)
+            return
+        case .timedOut:
+            die("TrailPrint needs permission", accessMsg)
             return
         }
 

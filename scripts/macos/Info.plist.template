@@ -13,6 +13,7 @@
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>LSUIElement</key><false/>
+  <key>NSDocumentsFolderUsageDescription</key><string>TrailPrint reads the project files, Python environment, and map data stored in your Documents folder to render your posters.</string>
   <key>TrailPrintRepoPath</key><string>__REPO_PATH__</string>
 </dict>
 </plist>

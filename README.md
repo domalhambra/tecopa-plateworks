@@ -52,8 +52,18 @@ Double-click **TrailPrint** in `/Applications`: the engine starts from this repo
 to stop the engine; relaunching while it's already running just reopens the tab. The
 app runs the engine *from this repo*, so `git pull` updates it with no rebuild —
 rebuild only if you move the repo folder or change the launcher itself. Engine output
-logs to `~/Library/Logs/TrailPrint.log`. Verify end-to-end with
-`scripts/macos/smoke_test.sh` (needs port 8848 free).
+logs to `~/Library/Logs/TrailPrint.log`.
+
+**First launch:** because the project lives under `~/Documents`, macOS shows a
+one-time *"TrailPrint would like to access files in your Documents folder"* prompt —
+click **Allow** (the engine can't read the code, `.venv`, or map data without it). The
+grant persists across rebuilds. If you miss the prompt, the app shows a "needs
+permission" alert; grant access under System Settings → Privacy & Security → Files and
+Folders (or Full Disk Access) and relaunch.
+
+Verify end-to-end with `scripts/macos/smoke_test.sh` (needs port 8848 free; the first
+run also raises the one-time Documents prompt and an Automation prompt on quit — allow
+both once).
 
 ## Layout
 
