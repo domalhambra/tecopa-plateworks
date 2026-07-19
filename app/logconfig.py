@@ -3,12 +3,12 @@
 
 Before this, a failed render wrote `traceback.print_exc()` to a stdout nobody
 captures, so the operator had no trace to diagnose a bad poster. Everything now logs
-under the `trailprint` namespace at a configurable level, in human-readable text by
-default or line-delimited JSON (TRAILPRINT_LOG_FORMAT=json) for a log collector.
+under the `tecopa` namespace at a configurable level, in human-readable text by
+default or line-delimited JSON (TECOPA_LOG_FORMAT=json) for a log collector.
 
 Env:
-  TRAILPRINT_LOG_LEVEL   default INFO
-  TRAILPRINT_LOG_FORMAT  text (default) | json
+  TECOPA_LOG_LEVEL   default INFO
+  TECOPA_LOG_FORMAT  text (default) | json
 """
 from __future__ import annotations
 import json
@@ -34,13 +34,13 @@ class _JsonFormatter(logging.Formatter):
 
 
 def setup_logging() -> logging.Logger:
-    """Configure the `trailprint` logger once (idempotent). Safe to call at import."""
+    """Configure the `tecopa` logger once (idempotent). Safe to call at import."""
     global _CONFIGURED
-    root = logging.getLogger("trailprint")
+    root = logging.getLogger("tecopa")
     if _CONFIGURED:
         return root
-    level = os.environ.get("TRAILPRINT_LOG_LEVEL", "INFO").upper()
-    fmt = os.environ.get("TRAILPRINT_LOG_FORMAT", "text").lower()
+    level = os.environ.get("TECOPA_LOG_LEVEL", "INFO").upper()
+    fmt = os.environ.get("TECOPA_LOG_FORMAT", "text").lower()
     handler = logging.StreamHandler(sys.stderr)
     if fmt == "json":
         handler.setFormatter(_JsonFormatter())

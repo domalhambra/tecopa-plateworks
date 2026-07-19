@@ -21,17 +21,17 @@ import tempfile
 # Isolate the app's writable stores BEFORE any test module imports app.main: the
 # endpoint tests used to write finals into the repo's live blobs/ and uploads/
 # (417 MB accumulated) and every put() swept the operator's real store (red-team).
-os.environ.setdefault("TRAILPRINT_BLOBS",
-                      tempfile.mkdtemp(prefix="trailprint-test-blobs-"))
-os.environ.setdefault("TRAILPRINT_UPLOADS",
-                      tempfile.mkdtemp(prefix="trailprint-test-uploads-"))
+os.environ.setdefault("TECOPA_BLOBS",
+                      tempfile.mkdtemp(prefix="tecopa-test-blobs-"))
+os.environ.setdefault("TECOPA_UPLOADS",
+                      tempfile.mkdtemp(prefix="tecopa-test-uploads-"))
 
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 from rasterio.transform import from_bounds
 
-REGIONS_ROOT = os.environ.get("TRAILPRINT_REGIONS", "regions")
+REGIONS_ROOT = os.environ.get("TECOPA_REGIONS", "regions")
 
 # Coarse on purpose: a synthetic DEM only has to cover the region and read cleanly
 # through rasterio's windowed/boundless path. The zoom cap is judged against

@@ -205,7 +205,7 @@ def build_plate_glb(img: Image.Image) -> bytes:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("final", help="a TrailPrint final PNG")
+    ap.add_argument("final", help="a Tecopa Printworks final PNG")
     ap.add_argument("-o", "--out", default=None)
     args = ap.parse_args(argv)
     with open(args.final, "rb") as f:

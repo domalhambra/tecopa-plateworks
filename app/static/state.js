@@ -65,7 +65,7 @@ export const state = {
   lastFinal: null,        // { url, fmt } of the last completed final (re-download)
 };
 
-const LS_KEY = 'trailprint';   // { region, printSize, orient, theme, finalFormat }
+const LS_KEY = 'tecopa';   // { region, printSize, orient, theme, finalFormat }
 
 export function loadPrefs() {
   try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; }

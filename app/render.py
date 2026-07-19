@@ -796,9 +796,9 @@ PHOTO_EDGE = (54, 40, 30)           # thin dark keyline + connector stem
 # -------------------------------------------------------------------
 
 def _font(size):
-    # TRAILPRINT_FONT lets the operator drop in a licensed display face (a real
+    # TECOPA_FONT lets the operator drop in a licensed display face (a real
     # poster face beats the DejaVu screen workhorse); then the serif chain.
-    names = ([os.environ["TRAILPRINT_FONT"]] if os.environ.get("TRAILPRINT_FONT") else [])
+    names = ([os.environ["TECOPA_FONT"]] if os.environ.get("TECOPA_FONT") else [])
     names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
     for name in names:
         try:

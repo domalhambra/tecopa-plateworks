@@ -591,8 +591,8 @@ async function pollJob(jid, statusTarget, runningMsg) {
 
 async function downloadFinal(url, fmt) {
   // the server names the file (Content-Disposition, self-documenting:
-  // trailprint_<region>[_edition-N][_years]…); the old generic name is the fallback
-  const { blob, filename } = await api.fetchDownload(url, `trailprint.${fmt}`);
+  // tecopa_<region>[_edition-N][_years]…); the old generic name is the fallback
+  const { blob, filename } = await api.fetchDownload(url, `tecopa.${fmt}`);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = filename; a.click();
   // the click has queued the download; release the blob (a 300-dpi PNG is ~50 MB)
@@ -712,7 +712,7 @@ async function renderTimelapse() {
     if (result) {
       const ext = fmt === 'apng' ? 'png' : fmt;            // the apng IS a PNG
       // server-named download (…_film.<ext>); the old generic name is the fallback
-      const { blob, filename } = await api.fetchDownload(result, `trailprint-timelapse.${ext}`);
+      const { blob, filename } = await api.fetchDownload(result, `tecopa-timelapse.${ext}`);
       if (tlUrl) URL.revokeObjectURL(tlUrl);
       tlUrl = URL.createObjectURL(blob);
       const img = $('tlPreview');

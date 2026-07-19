@@ -3,11 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TrailPrint Studio</title>
+  <title>Tecopa Printworks</title>
   <!-- apply the saved theme before first paint to avoid a flash -->
   <script>
     try {
-      var p = JSON.parse(localStorage.getItem('trailprint') || '{}');
+      var p = JSON.parse(localStorage.getItem('tecopa') || '{}');
       if (p.theme) document.documentElement.setAttribute('data-color-scheme', p.theme);
     } catch (e) { /* private mode */ }
   </script>
@@ -18,7 +18,7 @@
   <div class="app">
     <header class="toolbar">
       <div class="tb-group">
-        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa <b>Printworks</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
         <span id="editionBadge" class="edition-badge" hidden></span>

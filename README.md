@@ -1,4 +1,4 @@
-# TrailPrint
+# Tecopa Printworks
 
 A single local app that turns your GPX tracks into a **self-archiving chronicle of a
 life outdoors**: a shaded-relief poster of where you've been within one curated
@@ -101,7 +101,7 @@ engine name, and the manifest schema version. (No engine *version* rides the fil
 byte-identical reprints across upgrades rest entirely on the additive-defaults
 discipline: every new spec/animation key is omitted at its pre-feature default, for
 encoders as much as the painter.) That makes the file **stateless-reprintable** —
-`POST /api/reprint` re-renders any TrailPrint PNG at print resolution from the file
+`POST /api/reprint` re-renders any Tecopa Printworks PNG at print resolution from the file
 alone (no session, no DB), and `POST /api/reprint/inspect` reads its provenance
 without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
 
@@ -143,7 +143,7 @@ publish the zips as release assets and commit `plates/index.json`; then run the 
 drill against a fresh clone before announcing anything.
 
 **Fonts:** the cartouche tries Georgia from the host system but the repo/package never
-bundles `Georgia.ttf` (proprietary face); `TRAILPRINT_FONT` is the seam for a licensed
+bundles `Georgia.ttf` (proprietary face); `TECOPA_FONT` is the seam for a licensed
 face, and a packaged build ships a redistributable SIL-OFL serif as its default.
 
 ## Wallpapers ("a screen is a sheet with a known ppi")
@@ -221,6 +221,6 @@ every region has a present DEM whose bounds match its `region.json`.
   artifact can keep rather than a slogan.
 - **Region plates + manifest schema:** CC0-1.0 public-domain dedication — the packs are
   derived from U.S. federal public-domain data (USGS 3DEP / NHD / NLCD 2021 / GNIS).
-- **Name & branding:** "TrailPrint" is covered by neither grant.
+- **Name & branding:** "Tecopa Printworks" is covered by neither grant.
 
 Rationale and the full decision record: `docs/superpowers/plans/2026-07-12-strategy-and-license.md`.

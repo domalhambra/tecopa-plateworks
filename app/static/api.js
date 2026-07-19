@@ -44,7 +44,7 @@ export async function upload(files, { sessionId, regionId } = {}) {
   return asJson(res);
 }
 
-// Living editions: open a TrailPrint PNG for its next edition. Resurrects a session
+// Living editions: open a Tecopa Printworks PNG for its next edition. Resurrects a session
 // from the file's embedded manifest and returns the /api/upload response shape plus a
 // `prefill` block (style, title, size, output, edition, lineage) and `edition`.
 export async function continuePoster(file) {
@@ -172,7 +172,7 @@ export async function fetchBlob(url) {
   return res.blob();
 }
 
-// The server names every deliverable (trailprint_<region>[_edition-N][_years]….ext,
+// The server names every deliverable (tecopa_<region>[_edition-N][_years]….ext,
 // a pure function of the spec) via Content-Disposition — same-origin fetch exposes
 // the header. Returns { blob, filename }; `fallback` covers a missing/odd header so
 // the download never loses its old generic name.

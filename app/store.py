@@ -5,7 +5,7 @@ v1 kept sessions in a process-local dict (lost on every restart). This is the on
 file the handoff flagged as "the only file that becomes a DB": MemoryStore keeps
 the old behavior, SqliteStore persists serialized sessions so work survives a
 restart, and the interface leaves a clean seam for a networked store (Postgres)
-later. Default stays in-memory, so nothing changes unless TRAILPRINT_STORE asks.
+later. Default stays in-memory, so nothing changes unless TECOPA_STORE asks.
 
 Stores return a *copy* of the session on get(); callers mutate it and write back
 via update() (the read-modify-write pattern main.py already uses), so the same
@@ -44,7 +44,7 @@ class MemoryStore:
 class SqliteStore:
     """Persists each session as one JSON row. Serialization (tracks/spec) is shared
     with the render queue via serialize.py."""
-    def __init__(self, path: str = "trailprint.db"):
+    def __init__(self, path: str = "tecopa.db"):
         self.path = path
         self._lock = threading.Lock()
         with self._conn() as c:
@@ -85,5 +85,5 @@ class SqliteStore:
 def make_store(kind: str = "memory", **kw):
     kind = (kind or "memory").lower()
     if kind == "sqlite":
-        return SqliteStore(kw.get("path", os.environ.get("TRAILPRINT_DB", "trailprint.db")))
+        return SqliteStore(kw.get("path", os.environ.get("TECOPA_DB", "tecopa.db")))
     return MemoryStore()

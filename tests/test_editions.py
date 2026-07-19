@@ -436,7 +436,7 @@ def test_continue_drops_a_bare_photo_path():
     # ride into the resurrected session or 500 a later final. Only embedded bytes survive.
     c = _client()
     m = _base_manifest(c)
-    uploads = os.environ["TRAILPRINT_UPLOADS"]
+    uploads = os.environ["TECOPA_UPLOADS"]
     m["spec"]["hotspots"] = [{"x": 690000.0, "y": 4485000.0, "weight": 1,
                               "photo": os.path.join(uploads, "ghost", "9_gone.jpg")}]
     cont = c.post("/api/continue", files={"file": ("x.png", _embed(m), "image/png")})
