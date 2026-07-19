@@ -10,6 +10,19 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`
 
+**Execution addendum (2026-07-19) — Documents-permission fix.** During Task 6 the
+acceptance run surfaced a blocker the plan didn't anticipate: the repo lives under
+`~/Documents`, whose contents are TCC-gated, so a double-clicked `.app` (own identity,
+no Documents access) hung when the engine subprocess first read `.venv/pyvenv.cfg`.
+Fix (committed, now the source of truth over the Task 4 code block below): the launcher
+gained a **step 2b** — `primeDocumentsAccess(_:timeout:)` reads one byte from
+`<repo>/README.md` on a side thread with a 90 s watchdog, which surfaces the standard
+macOS "access your Documents folder" prompt; on Allow the engine subprocess inherits
+the grant (verified to persist across rebuilds). Task 3's `Info.plist.template` gained
+`NSDocumentsFolderUsageDescription`. See the spec's "macOS Documents permission (TCC)"
+section. Everything else in the plan held; `smoke_test.sh` PASSes once the one-time
+Documents (and Automation-on-quit) prompts are allowed.
+
 **Verification note (read before starting):** This is a GUI launcher plus shell tooling, not a library — classic unit-TDD doesn't fit. The executable acceptance test is `scripts/macos/smoke_test.sh`, which launches the built app, asserts `/readyz` responds, quits via AppleScript, and asserts the engine process and port are gone. That script is the "test" this plan is written against; Task 6 runs it as the gate. Two facts already de-risked in the scratchpad during planning: (a) `swiftc -O` compiles a single-file top-level AppKit program to an arm64 binary with no extra flags, and (b) the Pillow→`sips`→`iconutil` icon pipeline produces a valid `.icns`.
 
 **Ground truth confirmed during planning:**

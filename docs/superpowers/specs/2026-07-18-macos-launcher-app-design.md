@@ -75,6 +75,30 @@ All new files live under `scripts/macos/`:
 **Port 8848** is TrailPrint's dedicated port (Everest in meters) — deliberately not
 8000, so a hand-started dev server never collides with the app.
 
+## macOS Documents permission (TCC) — added during execution
+
+The repo lives under `~/Documents`, whose **contents** are TCC-protected. A
+double-clicked `.app` runs under its own identity (`guide.badwater.trailprint`) with no
+access to Documents, so the engine subprocess's first *content* read there
+(`.venv/pyvenv.cfg` during interpreter startup, then the app code and DEMs) **hangs
+with no prompt** — the subprocess isn't a promptable foreground app. (`stat`/existence
+is not gated, which is why the launcher's preflight passes but the child then hangs.)
+Diagnosis: an identical venv in `/tmp` starts instantly under the same launch; the one
+under `~/Documents` hangs — the folder is the only variable. Run from a terminal it
+always works because the terminal already holds the grant and subprocesses inherit it.
+
+**Solution (step 2b in the launch flow):** before spawning the engine, the launcher —
+which *is* a promptable foreground app — reads one byte from a repo file
+(`README.md`). That content read surfaces the standard *"TrailPrint would like to
+access files in your Documents folder"* prompt; once the user clicks **Allow**, the
+engine subprocess inherits the grant. The read runs on a side thread with a **90 s
+watchdog**: denial or a never-surfacing prompt becomes an actionable alert (points to
+System Settings → Privacy & Security → Files and Folders / Full Disk Access) instead of
+an indefinite hang. `NSDocumentsFolderUsageDescription` supplies the prompt copy.
+**Verified:** the grant persists across ad-hoc rebuilds (keyed on bundle id), so it's a
+genuine one-time click. This is unavoidable given the repo's location — the app must
+read `~/Documents`; there is no relocation that keeps "runs from the repo."
+
 ## Quit / reopen / failure behavior
 
 - **Cmd-Q / Quit:** SIGTERM to the child (uvicorn shuts down gracefully), wait up to
