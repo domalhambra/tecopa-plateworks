@@ -4,7 +4,7 @@
 // engine, preserved verbatim in its load-bearing details (the humanized 422, the
 // stamp-only-on-success rule, the one-proof-at-a-time guard) and grown up for a studio
 // where edits re-proof themselves.
-import { state, activePreset, snapshot, applySnapshot } from './store.js';
+import { state, activePreset, snapshot, applySnapshot, savePref } from './store.js';
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as jobs from './jobs.js';
@@ -48,10 +48,7 @@ export function initProof(h = {}) {
 }
 
 function savePrefAuto(v) {
-  try {
-    const p = JSON.parse(localStorage.getItem('trailprint') || '{}');
-    p.autoProof = v; localStorage.setItem('trailprint', JSON.stringify(p));
-  } catch { /* private mode */ }
+  savePref('autoProof', v);   // through the store so the prefs key lives in exactly one place
 }
 
 // The live proof's object URL (or null) — the Social studio re-fits it into each format
@@ -249,7 +246,7 @@ export async function expressFinal() {
 }
 
 async function downloadFinal(url, fmt) {
-  const { blob, filename } = await api.fetchDownload(url, `trailprint.${fmt}`);
+  const { blob, filename } = await api.fetchDownload(url, `tecopa.${fmt}`);
   saveBlob(blob, filename);
   return filename;
 }

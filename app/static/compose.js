@@ -11,6 +11,7 @@ import * as canvas from './canvas.js';
 import * as markers from './markers.js';
 import * as proof from './proof.js';
 import * as inspector from './inspector.js';
+import * as create from './create.js';
 import { $, wireSegmented, toast, announce } from './ui.js';
 
 let hooks = {};                 // { onLoaded(kind), refresh() } provided by app.js
@@ -172,6 +173,10 @@ export async function doUpload(fileList) {
     state.session = j.session;
     if (j.region !== state.region) selectRegion(j.region);
     state.regionName = j.name; $('regionName').textContent = j.name || '';
+    // Reveal chip: an existing plate covered these tracks -> "Matched". Don't clobber a
+    // "Built" set by the creation flow's re-upload (or on further adds this session) — a
+    // plate built this session stays "Built" until Start Over resets the chip.
+    if (state.regionKind !== 'Built') state.regionKind = 'Matched';
     state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
     state.trackDays = j.track_days || [];
     state.starterCrop = j.starter_crop; state.crop = null;
@@ -209,7 +214,16 @@ export async function doUpload(fileList) {
       const dupNote = notes.length ? ` (${notes.join('; ')})` : '';
       toast(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — frame it, then render a proof.`, 'ok');
     }
-  } catch (e) { toast('Upload failed: ' + e.message, 'error'); }
+  } catch (e) {
+    // GPX-first: "no built plate covers these tracks" is the COMMON case, not an error.
+    // Hand the kept File[] to the creation flow, which offers to build a plate for them.
+    // ApiError still carries .status and .message, so the old wizard's check ports as-is.
+    if (e.status === 422 && /any available region/.test(e.message || '')) {
+      create.enterCreationFlow(arr);
+    } else {
+      toast('Upload failed: ' + e.message, 'error');
+    }
+  }
 }
 
 function renderFiles() {
@@ -227,6 +241,7 @@ export async function continueFromPoster(file) {
     state.session = j.session;
     selectRegion(j.region);
     state.regionName = j.name; $('regionName').textContent = j.name || '';
+    state.regionKind = 'Matched';   // a continued poster reopens an existing plate
     state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
     state.trackDays = j.track_days || [];
     state.starterCrop = j.starter_crop; state.crop = null;

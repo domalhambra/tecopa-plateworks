@@ -44,7 +44,7 @@ export async function upload(files, { sessionId, regionId } = {}) {
   return asJson(res);
 }
 
-// Living editions: open a TrailPrint PNG for its next edition. Resurrects a session
+// Living editions: open a Tecopa Printworks PNG for its next edition. Resurrects a session
 // from the file's embedded manifest and returns the /api/upload response shape plus a
 // `prefill` block (style, title, size, output, edition, lineage) and `edition`.
 export async function continuePoster(file) {
@@ -188,7 +188,7 @@ export async function reprint(file, { format = 'png', embedSpec = true } = {}) {
   // a film re-render comes back as JSON {job}; a still is a binary stream.
   const ct = res.headers.get('Content-Type') || '';
   if (ct.includes('application/json')) return { job: (await res.json()).job };
-  const filename = dispositionFilename(res.headers.get('Content-Disposition')) || `trailprint.${format}`;
+  const filename = dispositionFilename(res.headers.get('Content-Disposition')) || `tecopa.${format}`;
   return { blob: await res.blob(), filename };
 }
 
@@ -219,7 +219,7 @@ export async function fetchBlob(url) {
   return res.blob();
 }
 
-// The server names every deliverable (trailprint_<region>[_edition-N][_years]….ext,
+// The server names every deliverable (tecopa_<region>[_edition-N][_years]….ext,
 // a pure function of the spec) via Content-Disposition — same-origin fetch exposes
 // the header. Returns { blob, filename }; `fallback` covers a missing/odd header so
 // the download never loses its old generic name.
@@ -233,4 +233,28 @@ export async function fetchDownload(url, fallback) {
   if (!res.ok) throw new ApiError(res.status, 'result fetch failed');
   const filename = dispositionFilename(res.headers.get('Content-Disposition')) || fallback;
   return { blob: await res.blob(), filename };
+}
+
+// GPX-first region creation (when no built plate covers the dropped tracks):
+//   plan  -> the cost card (padded bbox + UTM zone + honest estimate + name prefill).
+//            Takes the SAME File[] the failed upload had. Pure logic server-side --
+//            never fetches, never writes. Returns {us_covered, prep_ready, over_budget,
+//            bbox, epsg, id, name_prefill, resolution_m, grid, est_dem_mb, n_slices}.
+//   build -> enqueue the background build on the dedicated build queue. Returns {job}.
+//   buildStatus -> poll {state, progress, error, result:{region, labels_note}}.
+export async function planRegion(files) {
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  const res = await fetch('/api/regions/plan', { method: 'POST', body: fd });
+  return asJson(res);
+}
+export async function buildRegion(params) {
+  const res = await fetch('/api/regions/build', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params) });
+  return asJson(res);
+}
+export async function buildStatus(jid) {
+  const res = await fetch(`/api/regions/build/${jid}`);
+  return asJson(res);
 }

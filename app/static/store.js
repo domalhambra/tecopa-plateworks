@@ -16,6 +16,8 @@ export const state = {
   session: null,
   region: null,
   regionName: '',
+  regionKind: '',         // reveal chip beside the region name: '' | 'Matched' (an existing
+                          // plate covered the tracks) | 'Built' (created this session)
   regions: [],            // /api/regions metadata (id,name,bounds,overview_size,native_resolution_m,overview)
   ovSize: null,           // [w, h] overview pixels of the active region
   scale: 1,               // canvas px per overview px
@@ -81,10 +83,21 @@ export const state = {
   autoProof: true,        // live-proofing: re-proof on settle after a picture edit
 };
 
-const LS_KEY = 'trailprint';   // { region, printSize, orient, theme, finalFormat, autoProof, stylePresets }
+const LS_KEY = 'tecopa';       // { region, printSize, orient, theme, finalFormat, autoProof, stylePresets }
+const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Printworks" key; migrated once on read
 
 export function loadPrefs() {
-  try { return JSON.parse(localStorage.getItem(LS_KEY)) || {}; } catch { return {}; }
+  try {
+    const cur = localStorage.getItem(LS_KEY);
+    if (cur) return JSON.parse(cur) || {};
+    // one-time migration from the pre-rebrand key so a returning operator keeps their
+    // theme / region / print size / saved presets. Copy across, then read the new key
+    // from here on; the old key lingers harmlessly. MUST stay in sync with the pre-paint
+    // fallback in index.html/help.html, or a partial rename orphans saved prefs.
+    const old = localStorage.getItem(LS_KEY_OLD);
+    if (old) { localStorage.setItem(LS_KEY, old); return JSON.parse(old) || {}; }
+    return {};
+  } catch { return {}; }
 }
 export function savePref(k, v) {
   const p = loadPrefs(); p[k] = v;

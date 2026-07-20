@@ -1,5 +1,5 @@
-// library.js — the Library home: the region gallery and the "reopen a poster" flow.
-// A TrailPrint PNG carries its whole recipe, so dropping one here first INSPECTS it
+// library.js — the Library home: the GPX dropzone and the "reopen a poster" flow.
+// A Tecopa Printworks PNG carries its whole recipe, so dropping one here first INSPECTS it
 // (a pure manifest read: region, edition, lineage, and the plate verdict — can this
 // server reproduce these exact pixels?) and then offers to continue it as next year's
 // edition or reprint it at full resolution. Surfaces /api/reprint(/inspect), which the
@@ -15,6 +15,27 @@ let posterInputEl = null;
 
 export function initLibrary(h = {}) {
   hooks = h;
+
+  // GPX-first: the Library home leads with a GPX dropzone (the region is an outcome, so
+  // there's no gallery to pick from). Click opens the shared GPX file input (compose wires
+  // its onchange -> doUpload); a drop jumps to Compose first so the medium-res map appears
+  // the moment the tracks land, then uploads. stopPropagation keeps the app.js
+  // drag-anywhere router from double-handling this drop.
+  const gdz = $('homeDropzone');
+  gdz.onclick = () => $('fileInput').click();
+  gdz.addEventListener('dragover', (e) => { e.preventDefault(); gdz.classList.add('over'); });
+  gdz.addEventListener('dragleave', () => gdz.classList.remove('over'));
+  gdz.addEventListener('drop', (e) => {
+    e.preventDefault(); e.stopPropagation(); gdz.classList.remove('over');
+    const fs = e.dataTransfer.files;
+    if (!fs || !fs.length) return;
+    // Mirror the app.js drag-anywhere router: a poster PNG is reopened (inspect / continue
+    // / reprint), track files are uploaded. Without this, a PNG dropped on the prominent
+    // home dropzone would POST to /api/upload as tracks and fail with a confusing error.
+    if (/\.png$/i.test(fs[0].name)) { openPoster(fs[0]); return; }
+    hooks.goCompose && hooks.goCompose(); compose.doUpload(fs);
+  });
+
   // library owns its own file input so it can inspect-first (the map's Continue button
   // uses the shared #posterInput, which goes straight to continue).
   posterInputEl = document.createElement('input');
@@ -34,22 +55,6 @@ export function initLibrary(h = {}) {
   });
 }
 
-export function buildRegionGallery() {
-  const host = $('regionGallery');
-  host.innerHTML = '';
-  for (const r of state.regions) {
-    // DOM API, not interpolated HTML: a hostile/typo'd region name renders as text.
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'region-card'; b.dataset.id = r.id;
-    if (r.id === state.region) b.classList.add('sel');
-    const img = document.createElement('img'); img.src = r.overview; img.alt = '';
-    const span = document.createElement('span'); span.textContent = r.name;
-    b.append(img, span);
-    b.onclick = () => { compose.selectRegion(r.id); toast(`${r.name} — drop your GPX to begin.`, 'info'); hooks.goCompose && hooks.goCompose(); };
-    host.appendChild(b);
-  }
-}
-
 // Inspect a dropped/picked poster and show its provenance card with continue/reprint.
 export async function openPoster(file) {
   pendingFile = file;
@@ -59,7 +64,7 @@ export async function openPoster(file) {
     renderProvenance(info);
     toast('', 'info');
   } catch (e) {
-    // not a TrailPrint PNG / no manifest (a share copy) — say so honestly.
+    // not a Tecopa Printworks PNG / no manifest (a share copy) — say so honestly.
     renderNoManifest(e.message);
     toast('That file carries no reprint recipe.', 'error');
   }
@@ -98,7 +103,7 @@ function renderNoManifest(msg) {
   const card = $('provenanceCard');
   card.hidden = false;
   card.innerHTML = `<h3>No reprint recipe</h3>
-    <p class="lede">This PNG doesn't carry a TrailPrint manifest — it's a share copy (or not a TrailPrint poster), so it can't be reprinted or continued. Open a reprintable copy instead.</p>
+    <p class="lede">This PNG doesn't carry a Tecopa Printworks manifest — it's a share copy (or not a Tecopa Printworks poster), so it can't be reprinted or continued. Open a reprintable copy instead.</p>
     <p class="insp-note">${escapeHtml(msg || '')}</p>`;
 }
 

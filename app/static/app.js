@@ -11,6 +11,7 @@ import * as proof from './proof.js';
 import * as jobs from './jobs.js';
 import * as compose from './compose.js';
 import * as library from './library.js';
+import * as create from './create.js';
 import * as social from './social.js';
 import * as films from './films.js';
 import * as exportsCenter from './exports.js';
@@ -56,7 +57,6 @@ function setSection(name) {
     if (name === 'compose') compose.enterCompose();
     else if (name === 'social') social.buildSocial();
     else if (name === 'films') films.buildFilms();
-    else if (name === 'library') library.buildRegionGallery();
     if (PROOF_SECTIONS.has(name)) proof.refreshProofUI();
 
     focusHeading(name);
@@ -81,6 +81,8 @@ function refreshRail() {
 // ---- shell sync ------------------------------------------------------------------
 function refreshShell() {
   $('regionName').textContent = state.regionName || '';
+  const rk = $('regionKind');
+  rk.hidden = !state.regionKind; rk.textContent = state.regionKind || '';
   const eb = $('editionBadge');
   eb.hidden = state.edition < 2; eb.textContent = state.edition >= 2 ? `Edition ${state.edition}` : '';
   $('yearSpan').textContent = state.yearSpan || '';
@@ -112,6 +114,7 @@ function startOver() {
     session: null, ovSize: null, scale: 1, tracks: [], trackDays: [], hotspots: [],
     crop: null, starterCrop: null, hasSpec: false, proofStale: false, files: [],
     edition: 1, yearSpan: '', title: '', lastFinal: null, journeyLight: null,
+    region: null, regionName: '', regionKind: '',
   });
   state.regions = regions; state.wpPresets = wpPresets;
   $('markerList').innerHTML = ''; $('markersBox').hidden = true; $('fileList').innerHTML = '';
@@ -122,7 +125,7 @@ function startOver() {
   inspector.reflectAll(); compose.reflectStatic();
   refreshShell();
   setSection('library');
-  toast('Cleared — pick a region and drop files to start a new map.', 'info');
+  toast('Cleared — drop your GPX to start a new map.', 'info');
 }
 
 // ---- inspector panels (built once) -----------------------------------------------
@@ -175,10 +178,9 @@ async function loadRegions(pending) {
   let list = [];
   try { list = await pending; } catch { /* leave empty; drop-to-detect still works */ }
   state.regions = list;
-  const prefs = loadPrefs();
-  if (list.length === 1) compose.selectRegion(list[0].id);
-  else if (prefs.region && list.some((r) => r.id === prefs.region)) compose.selectRegion(prefs.region);
-  library.buildRegionGallery();
+  // GPX-first: no pre-pick, no region gallery. The region is an OUTCOME — the server
+  // auto-detects the covering plate from the dropped tracks (or the creation flow builds
+  // one). We still keep the full list so activeRegion()/metresPerPx() resolve a match.
   refreshShell();
   setSection('library');
 }
@@ -222,6 +224,9 @@ function wireShell() {
   // handle their own drops (and stopPropagation), so this is the catch-all elsewhere.
   document.addEventListener('dragover', (e) => { if (e.dataTransfer && e.dataTransfer.types.includes('Files')) e.preventDefault(); });
   document.addEventListener('drop', (e) => {
+    // The creation modal is open: surface dropzones are inert under showModal(), but a drop
+    // onto the dialog itself still bubbles here. Ignore it so nothing uploads behind the modal.
+    if ($('buildDialog').open) return;
     const f = e.dataTransfer && e.dataTransfer.files[0];
     if (!f) return;
     e.preventDefault();
@@ -248,6 +253,9 @@ function initAll() {
   proof.initProof({ onProofed: () => { if (state.section === 'compose') setSection('style'); refreshShell(); }, onSnapshotApplied: () => {} });
   compose.initCompose({ onLoaded: () => { setSection('compose'); refreshShell(); }, refresh: refreshShell });
   library.initLibrary({ goCompose: () => setSection('compose'), trackReprint: (job) => jobs.track(job, { kind: 'reprint', label: 'Film reprint', runningMsg: 'Reprinting film…' }) });
+  // GPX-first region creation: on build done, re-upload the kept tracks (they now match the
+  // fresh plate) and re-sync the shell so the "Built" chip and cleared session take effect.
+  create.initCreate({ reupload: (files) => compose.doUpload(files), refresh: refreshShell });
   exportsCenter.initExports();
   social.setNav({ goExports: () => setSection('exports') });
   initPalette({
