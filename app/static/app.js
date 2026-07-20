@@ -216,7 +216,88 @@ async function doUpload(fileList) {
       const dupNote = notes.length ? ` (${notes.join('; ')})` : '';
       setStatus(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — name places or continue`);
     }
-  } catch (e) { setStatus('Upload failed: ' + e.message); }
+  } catch (e) {
+    if (e.status === 422 && /any available region/.test(e.message || '')) {
+      state.pendingFiles = arr;
+      await enterCreationFlow(arr);
+    } else {
+      setStatus('Upload failed: ' + e.message);
+    }
+  }
+}
+
+// --- region creation (GPX-first: no plate covers the tracks) ---
+async function enterCreationFlow(files) {
+  setStatus('No plate covers these tracks — planning a new region…');
+  let p;
+  try { p = await api.planRegion(files); }
+  catch (e) { setStatus('Planning failed: ' + e.message); return; }
+  const card = $('buildCard');
+  $('dropzone').hidden = true; $('continuePoster').hidden = true;
+  $('browsePlates').hidden = true;
+  card.hidden = false;
+  $('buildError').hidden = true; $('buildProgress').hidden = true;
+  $('buildName').value = p.name_prefill || '';
+  if (!p.us_covered) {
+    $('buildLede').textContent =
+      'These tracks are outside USGS 3DEP coverage — terrain data is US-only, '
+      + 'so a plate can’t be built for them here.';
+    $('buildEstimate').textContent = '';
+    $('buildActions').hidden = true;
+    return;
+  }
+  if (!p.prep_ready) {
+    $('buildLede').textContent = 'The region-build toolchain isn’t set up yet. In the project folder run:';
+    $('buildEstimate').textContent =
+      'python3 -m venv .venv-prep && source .venv-prep/bin/activate\n'
+      + 'pip install -r requirements-regionprep.txt';
+    $('buildActions').hidden = true;
+    return;
+  }
+  $('buildLede').textContent =
+    'Tecopa Printworks can build the terrain for these tracks from USGS data.';
+  $('buildEstimate').textContent =
+    `Terrain: ${p.resolution_m} m grid (${p.grid[0]}×${p.grid[1]}), `
+    + `~${Math.round(p.est_dem_mb)} MB download in ${p.n_slices} slice(s).`;
+  $('buildActions').hidden = false;
+  $('buildGo').disabled = false;
+  $('buildGo').onclick = () => startBuild(p);
+}
+
+async function startBuild(p) {
+  const name = $('buildName').value.trim() || p.name_prefill || p.id;
+  $('buildGo').disabled = true;
+  $('buildError').hidden = true;
+  $('buildProgress').hidden = false; $('buildProgress').textContent = 'Starting…';
+  let jid;
+  try {
+    ({ job: jid } = await api.buildRegion(
+      { id: p.id, name, bbox: p.bbox, epsg: p.epsg }));
+  } catch (e) { showBuildError(e.message); return; }
+  const timer = setInterval(async () => {
+    let st;
+    try { st = await api.buildStatus(jid); } catch { return; }   // transient poll miss
+    if (st.state === 'running' || st.state === 'queued') {
+      if (st.progress) $('buildProgress').textContent = st.progress;
+      return;
+    }
+    clearInterval(timer);
+    if (st.state === 'error') { showBuildError(st.error || 'Build failed'); return; }
+    state.builtRegion = st.result.region;
+    $('buildCard').hidden = true;
+    const files = state.pendingFiles || [];
+    state.pendingFiles = null;
+    setStatus(st.result.labels_note
+      ? `Region built (${st.result.labels_note}) — loading your tracks…`
+      : 'Region built — loading your tracks…');
+    await doUpload(files);                    // now matches the new plate; chip = Built
+  }, 1000);
+}
+
+function showBuildError(msg) {
+  $('buildError').textContent = msg;
+  $('buildError').hidden = false;
+  $('buildGo').disabled = false;
 }
 
 function renderFiles() { $('fileList').innerHTML = state.files.map((n) => `<li>${escapeHtml(n)}</li>`).join(''); }
@@ -721,6 +802,7 @@ function startOver() {
   $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
   $('titleInput').value = ''; $('downloadAgain').hidden = true; updateEditionBadge();
   $('regionBadge').hidden = true; state.builtRegion = null; state.pendingFiles = null;
+  $('buildCard').hidden = true; $('browsePlates').hidden = false;
   go(state.steps[0]);
   setStatus('Cleared — drop files to start a new map');
 }

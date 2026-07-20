@@ -187,3 +187,22 @@ export async function fetchDownload(url, fallback) {
   const filename = dispositionFilename(res.headers.get('Content-Disposition')) || fallback;
   return { blob: await res.blob(), filename };
 }
+
+// Region creation: plan (cost card) and build (background job) for tracks that no
+// built plate covers. plan takes the same File[] the failed upload had.
+export async function planRegion(files) {
+  const fd = new FormData();
+  for (const f of files) fd.append('files', f);
+  const res = await fetch('/api/regions/plan', { method: 'POST', body: fd });
+  return asJson(res);
+}
+export async function buildRegion(params) {
+  const res = await fetch('/api/regions/build', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params) });
+  return asJson(res);
+}
+export async function buildStatus(jid) {
+  const res = await fetch(`/api/regions/build/${jid}`);
+  return asJson(res);
+}
