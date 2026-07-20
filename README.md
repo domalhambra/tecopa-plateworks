@@ -1,4 +1,4 @@
-# TrailPrint
+# Tecopa Printworks
 
 A single local app that turns your GPX tracks into a **self-archiving chronicle of a
 life outdoors**: a shaded-relief poster of where you've been within one curated
@@ -35,9 +35,43 @@ python -c "import rasterio, pyproj, numpy, scipy, shapely, gpxpy, PIL; print('ok
   test deps; `requirements-lock.txt` is the exact pinned set (determinism / CI).
 - `requirements-regionprep.txt` — the heavy offline build stack for `region_prep.py`
   (py3dep/pynhd/pandas/geopandas). Only needed to build a new region.
+- To **build new regions from the app** (drop tracks anywhere in the US and the wizard
+  offers to fetch the terrain — see "GPX-first" below), create the separate prep venv
+  once: `python3 -m venv .venv-prep && .venv-prep/bin/pip install -r
+  requirements-regionprep.txt`. Without it the app still works against already-built
+  plates and shows the setup command on the build card; oversized (corridor-scale)
+  areas are refused in-app and remain a deliberate `region_prep.py` terminal run.
 
 On Apple Silicon, rasterio / pyproj / Pillow ship native wheels — no Homebrew GDAL
 required.
+
+## macOS app (Tecopa Printworks.app)
+
+Build a double-clickable launcher that starts the engine and opens the UI:
+
+```
+scripts/macos/build_app.sh --install     # builds dist/ and copies to /Applications
+```
+
+Double-click **Tecopa Printworks** in `/Applications`: the engine starts from this repo's
+`.venv` on port 8848 and the UI opens in your default browser. Quit the app (Cmd-Q)
+to stop the engine; relaunching while it's already running just reopens the tab. The
+app runs the engine *from this repo*, so `git pull` updates it with no rebuild —
+rebuild only if you move the repo folder or change the launcher itself. Engine output
+logs to `~/Library/Logs/TecopaPrintworks.log`.
+
+**First launch:** because the project lives under `~/Documents`, macOS shows a
+one-time *"Tecopa Printworks would like to access files in your Documents folder"* prompt —
+click **Allow** (the engine can't read the code, `.venv`, or map data without it). The
+grant persists across rebuilds. Note that the rebrand to Tecopa Printworks changed the
+app's bundle id, and macOS treats a new bundle id as a new app — the first launch after
+the rename shows the Documents permission prompt once more. If you miss the prompt, the app shows a "needs
+permission" alert; grant access under System Settings → Privacy & Security → Files and
+Folders (or Full Disk Access) and relaunch.
+
+Verify end-to-end with `scripts/macos/smoke_test.sh` (needs port 8848 free; the first
+run also raises the one-time Documents prompt and an Automation prompt on quit — allow
+both once).
 
 ## Layout
 
@@ -49,11 +83,27 @@ required.
 - `app/render.py` — read DEM window, paint relief + tracks + markers in physical units
 - `app/provenance.py` — the self-describing-poster manifest (embed / extract / sanitize)
 - `app/wallpaper.py` — device presets + `spec_for_preset` (a screen is a sheet with a known ppi)
-- `app/main.py` — the endpoints over the engine (upload, proof, final, reprint)
+- `app/main.py` — the endpoints over the engine (upload, proof, final, reprint, region plan/build)
+- `app/regionbuild.py` — GPX-first region creation: bbox/UTM/US-coverage planning + the `region_prep` subprocess orchestration behind `POST /api/regions/build`
 - `app/plates.py` — stdlib plate installer/verifier (`python -m app.plates install|verify`)
-- `region_prep.py` — offline, one-time: fetch 3DEP DEM, build COG + overview + region.json
+- `region_prep.py` — offline: fetch 3DEP DEM, build COG + overview + region.json. Runnable from the terminal, and spawned in `.venv-prep` by the in-app build (see GPX-first below)
 - `scripts/build_labels.py` — offline: fetch GNIS terrain names → `regions/<id>/labels.json`
 - `scripts/pack_region.py` — offline: pack a built region into a deterministic `.trailplate.zip`
+
+## GPX-first: the region is an outcome, not a first step
+
+You drop GPX/KML/KMZ tracks first; the region is decided from them. If a built plate
+covers the tracks, the upload auto-matches it (a "Matched · <region>" chip). If none
+does — the common case for fresh client tracks — a **build card** appears:
+`POST /api/regions/plan` derives a padded bbox and UTM zone from the raw track extent,
+runs `region_prep.plan_build` (pure logic — no fetch stack) for an honest cost estimate
+(resolution, grid, download size), and prefills a region name from the GPX `<name>`.
+Accepting it calls `POST /api/regions/build`, which spawns `region_prep.py` in
+`.venv-prep` on a dedicated single-slot job queue, streams its progress, builds GNIS
+labels, and hot-reloads the region registry — then your tracks re-upload against the new
+plate ("Built · <region>"). Tracks outside USGS 3DEP coverage (US-only) and
+corridor-scale areas are refused honestly in-app; `app/regionbuild.py` holds the
+planning helpers and the subprocess orchestration.
 
 ## Named geography (GNIS labels)
 
@@ -75,7 +125,7 @@ engine name, and the manifest schema version. (No engine *version* rides the fil
 byte-identical reprints across upgrades rest entirely on the additive-defaults
 discipline: every new spec/animation key is omitted at its pre-feature default, for
 encoders as much as the painter.) That makes the file **stateless-reprintable** —
-`POST /api/reprint` re-renders any TrailPrint PNG at print resolution from the file
+`POST /api/reprint` re-renders any Tecopa Printworks PNG at print resolution from the file
 alone (no session, no DB), and `POST /api/reprint/inspect` reads its provenance
 without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
 
@@ -117,7 +167,7 @@ publish the zips as release assets and commit `plates/index.json`; then run the 
 drill against a fresh clone before announcing anything.
 
 **Fonts:** the cartouche tries Georgia from the host system but the repo/package never
-bundles `Georgia.ttf` (proprietary face); `TRAILPRINT_FONT` is the seam for a licensed
+bundles `Georgia.ttf` (proprietary face); `TECOPA_FONT` is the seam for a licensed
 face, and a packaged build ships a redistributable SIL-OFL serif as its default.
 
 ## Wallpapers ("a screen is a sheet with a known ppi")
@@ -195,6 +245,6 @@ every region has a present DEM whose bounds match its `region.json`.
   artifact can keep rather than a slogan.
 - **Region plates + manifest schema:** CC0-1.0 public-domain dedication — the packs are
   derived from U.S. federal public-domain data (USGS 3DEP / NHD / NLCD 2021 / GNIS).
-- **Name & branding:** "TrailPrint" is covered by neither grant.
+- **Name & branding:** "Tecopa Printworks" is covered by neither grant.
 
 Rationale and the full decision record: `docs/superpowers/plans/2026-07-12-strategy-and-license.md`.

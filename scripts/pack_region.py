@@ -114,10 +114,10 @@ def _plate_txt(rid: str, src: dict, name: str) -> str:
     assets = src.get("assets", {})
     width = max(len(n) for n in assets) if assets else 0
     lines = [
-        f"TrailPrint terrain plate: {rid}",
+        f"Tecopa Printworks terrain plate: {rid}",
         "=" * (26 + len(rid)),
         "",
-        "This archive is a TrailPrint terrain plate: every asset the engine reads",
+        "This archive is a Tecopa Printworks terrain plate: every asset the engine reads",
         "to paint (and re-paint, byte-for-byte) posters for one region. A poster's",
         "embedded manifest names this plate by these same asset hashes, so a reprint",
         "can verify it runs against the exact terrain the poster was painted on.",

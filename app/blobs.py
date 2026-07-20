@@ -14,7 +14,7 @@ import logging
 import os
 import time
 
-log = logging.getLogger("trailprint.blobs")
+log = logging.getLogger("tecopa.blobs")
 
 class LocalBlobs:
     def __init__(self, root: str = "blobs", ttl_seconds: float | None = None):

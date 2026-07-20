@@ -1,4 +1,4 @@
-# Core runtime for the TrailPrint app + render engine.
+# Core runtime for the Tecopa Printworks app + render engine.
 # Exact pinned versions live in requirements-lock.txt (what CI installs); the ranges
 # below are the human-readable minimums. Test stack: requirements-dev.txt. Offline
 # region build (3DEP/NHD): requirements-regionprep.txt.

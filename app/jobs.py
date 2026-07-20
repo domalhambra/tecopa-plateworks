@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-log = logging.getLogger("trailprint.jobs")
+log = logging.getLogger("tecopa.jobs")
 
 class ThreadJobQueue:
     def __init__(self, ttl_seconds: float | None = None, max_concurrency: int = 1):
@@ -46,7 +46,8 @@ class ThreadJobQueue:
         with self._lock:
             self._evict_expired_locked()
             self._jobs[jid] = {"state": "queued", "result": None, "error": None,
-                               "created": time.time(), "finished": None}
+                               "created": time.time(), "finished": None,
+                               "progress": None}
         log.info("event=job.submit jid=%s", jid)
 
         def run():
@@ -72,6 +73,13 @@ class ThreadJobQueue:
 
         threading.Thread(target=run, daemon=True).start()
         return jid
+
+    def set_progress(self, jid: str, text: str) -> None:
+        """Worker-updated one-line status for long jobs (region builds). Unknown jid
+        is a no-op: the record may have been TTL-evicted mid-build."""
+        with self._lock:
+            if jid in self._jobs:
+                self._jobs[jid]["progress"] = text
 
     def status(self, jid: str) -> dict:
         with self._lock:

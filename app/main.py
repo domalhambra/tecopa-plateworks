@@ -1,5 +1,5 @@
 # app/main.py
-import io, json, os, shutil, time
+import io, json, os, re, shutil, time
 import hashlib
 import logging
 from typing import List, Optional
@@ -7,6 +7,7 @@ from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, load_waypoints, Track
@@ -14,15 +15,16 @@ from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
+from app import ingest, regionbuild
 
 logconfig.setup_logging()
-log = logging.getLogger("trailprint.api")
+log = logging.getLogger("tecopa.api")
 
 # The registry replaces the old single hardcoded region: every regions/<id> built
 # by region_prep.py is now selectable. Discovered once at import. The root is
-# env-overridable (TRAILPRINT_REGIONS) so a deploy or the test harness can point
+# env-overridable (TECOPA_REGIONS) so a deploy or the test harness can point
 # the app at a different region tree without editing code.
-REGIONS_ROOT = os.environ.get("TRAILPRINT_REGIONS", "regions")
+REGIONS_ROOT = os.environ.get("TECOPA_REGIONS", "regions")
 REGIONS = regions.discover(REGIONS_ROOT)
 
 # PROOF_DPI / FINAL_DPI describe the PRINT path (FINAL_DPI lives on app.spec -- one
@@ -36,17 +38,25 @@ def _proof_dpi(spec):
 # Lifecycle TTL (red-team V1-8): a back-to-back concierge day otherwise leaks disk +
 # memory (finals, blobs, job records, uploaded photos were never evicted). Default 24h;
 # set 0 to disable eviction (e.g. an archival run).
-TTL_SECONDS = float(os.environ.get("TRAILPRINT_TTL_SECONDS", 86400))
+TTL_SECONDS = float(os.environ.get("TECOPA_TTL_SECONDS", 86400))
 
 # server foundation (v1.3): outputs go to a blob store, finals render off the
 # request thread via a job queue. Both are local impls behind interfaces that a
 # networked store / broker drops into later (see blobs.py, jobs.py).
-BLOBS = blobs.LocalBlobs(os.environ.get("TRAILPRINT_BLOBS", "blobs"), ttl_seconds=TTL_SECONDS)
+BLOBS = blobs.LocalBlobs(os.environ.get("TECOPA_BLOBS", "blobs"), ttl_seconds=TTL_SECONDS)
 # one render at a time by default: a 300-dpi final peaks at ~5 GB RSS, so unbounded
 # concurrency could OOM the operator's machine on double-click (red-team).
 QUEUE = jobs.ThreadJobQueue(
     ttl_seconds=TTL_SECONDS,
-    max_concurrency=int(os.environ.get("TRAILPRINT_RENDER_CONCURRENCY", 1)))
+    max_concurrency=int(os.environ.get("TECOPA_RENDER_CONCURRENCY", 1)))
+
+# Region builds run on their OWN single-slot queue: a multi-minute DEM fetch must
+# never block poster renders behind it, and TECOPA_RENDER_CONCURRENCY must not
+# break the one-build-at-a-time guarantee.
+BUILD_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
+PREP_PYTHON = os.environ.get("TECOPA_PREP_PYTHON", ".venv-prep/bin/python")
+PREP_SCRIPT = os.environ.get("TECOPA_PREP_SCRIPT", "region_prep.py")
+LABELS_SCRIPT = os.environ.get("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py")
 
 # Time-lapse ceiling: total painted pixels across all frames (frames x w x h). A film
 # is many frames, so it needs its own guard above the still-render 120 MP ceiling --
@@ -548,7 +558,7 @@ def _journey_light_meta(tracks):
 
 VALID_ICONS = {"", "dot", "peak", "camp", "water", "flag", "camera", "star"}
 # env-overridable so the test harness never writes into the operator's live dir
-UPLOADS_DIR = os.environ.get("TRAILPRINT_UPLOADS", "uploads")
+UPLOADS_DIR = os.environ.get("TECOPA_UPLOADS", "uploads")
 
 def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
     """Evict per-session photo dirs whose last write is older than the TTL (V1-8).
@@ -569,6 +579,105 @@ def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
             pass
     if removed:
         log.info("event=uploads.sweep removed=%d ttl_s=%s", removed, ttl_seconds)
+
+@app.post("/api/regions/plan")
+async def region_plan(files: List[UploadFile] = File(...)):
+    """The cost card behind 'no plate covers these tracks': derive a padded bbox +
+    UTM zone from the raw lon/lat extent, run region_prep's planner (pure logic --
+    no fetch stack), and return an honest estimate plus a name prefill. Never
+    fetches anything; never writes anything."""
+    import region_prep
+    payloads, total = [], 0
+    for f in files:
+        data = await f.read()
+        total += len(data)
+        if len(data) > TRACK_FILE_MAX_BYTES or total > TRACK_BATCH_MAX_BYTES:
+            raise HTTPException(422, "Track upload exceeds the size limit")
+        payloads.append((data, f.filename))
+    ext = ingest.lonlat_extent(payloads)
+    if ext["bbox"] is None:
+        raise HTTPException(422, "No track points found in the dropped files")
+    bbox = regionbuild.derive_bbox(*ext["bbox"])
+    covered = regionbuild.bbox_covered(bbox)
+    epsg = regionbuild.utm_epsg(bbox)
+    resp = {"us_covered": covered, "bbox": list(bbox), "epsg": epsg,
+            "name_prefill": ext["name"],
+            "id": regionbuild.unique_id(
+                regionbuild.slugify(ext["name"]), REGIONS.keys()),
+            "prep_ready": os.path.exists(PREP_PYTHON)}
+    if covered:
+        plan = region_prep.plan_build(bbox, f"EPSG:{epsg}")
+        resp.update(resolution_m=plan["resolution_m"], grid=list(plan["grid"]),
+                    grid_mpx=round(plan["grid_mpx"], 1),
+                    est_dem_mb=round(plan["est_dem_mb"], 1),
+                    n_slices=plan["n_slices"], over_budget=plan["over_budget"])
+    log.info("event=region.plan covered=%s epsg=%s id=%s", covered, epsg, resp["id"])
+    return resp
+
+
+class RegionBuildRequest(BaseModel):
+    id: str
+    name: str
+    bbox: List[float]
+    epsg: int
+
+
+@app.post("/api/regions/build")
+async def region_build(req: RegionBuildRequest):
+    """Build a new terrain plate from a plan. The client's plan response is
+    untrusted: id shape, US coverage, collision, and the grid budget are all
+    re-checked here before a byte is fetched."""
+    import region_prep
+    if not re.fullmatch(r"[a-z0-9_]{1,64}", req.id):
+        raise HTTPException(422, "Region id must be lowercase letters, digits, _")
+    if len(req.bbox) != 4:
+        raise HTTPException(422, "bbox must be [west, south, east, north]")
+    bbox = tuple(req.bbox)
+    if not regionbuild.bbox_covered(bbox):
+        raise HTTPException(422, "USGS 3DEP terrain covers the US only")
+    if req.id in REGIONS:
+        raise HTTPException(409, f"Region id '{req.id}' already exists")
+    if not (32601 <= req.epsg <= 32660):        # what utm_epsg produces; a bad CRS
+        raise HTTPException(422,                 # would otherwise 500 in plan_build
+                            "epsg must be a northern-hemisphere UTM zone (32601-32660)")
+    plan = region_prep.plan_build(bbox, f"EPSG:{req.epsg}")
+    if plan["over_budget"]:
+        raise HTTPException(422,
+            "This area is too large to build from the app (corridor-scale grid). "
+            "Build it deliberately from the terminal: python region_prep.py ...")
+    name = (req.name or "").strip()[:80] or req.id
+    params = {"id": req.id, "name": name, "bbox": bbox, "epsg": req.epsg}
+
+    # The worker can start before submit() returns the jid, so the progress lambda
+    # reads it from a holder and set_progress no-ops on the not-yet-known jid --
+    # worst case the first progress line is lost, replaced within a second.
+    holder = {}
+
+    def build_job():
+        result = regionbuild.run_build(
+            params, repo_root=os.getcwd(), regions_root=REGIONS_ROOT,
+            prep_python=PREP_PYTHON, prep_script=PREP_SCRIPT,
+            labels_script=LABELS_SCRIPT,
+            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s))
+        fresh = regions.discover(REGIONS_ROOT)   # build BEFORE mutating: a discover()
+        REGIONS.clear()                          # failure (a malformed region.json
+        REGIONS.update(fresh)                    # elsewhere) must not leave REGIONS
+                                                 # wiped. In-place: refs stay valid.
+        return {"region": req.id, "labels_note": result["labels_note"]}
+
+    holder["jid"] = jid = BUILD_QUEUE.submit(build_job)
+    log.info("event=region.build.submit jid=%s id=%s", jid, req.id)
+    return {"job": jid}
+
+
+@app.get("/api/regions/build/{jid}")
+async def region_build_status(jid: str):
+    try:
+        st = BUILD_QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown build job")
+    return {"state": st["state"], "progress": st.get("progress"),
+            "error": st["error"], "result": st["result"]}
 
 # Photo upload guards (red-team V1-6): a small file can declare enormous dimensions
 # (decompression bomb) or just be huge. Cap the raw bytes and the decoded pixel count.
@@ -730,14 +839,14 @@ def credit_line(region) -> str:
 
 def download_name(spec, kind: str = "", fmt: str = "png") -> str:
     """A self-documenting filename for a deliverable, a pure function of the spec:
-    trailprint_<region_id>[_edition-<n>][_<yearspan>]<kind>.<fmt>. The edition suffix
+    tecopa_<region_id>[_edition-<n>][_<yearspan>]<kind>.<fmt>. The edition suffix
     appears from the second edition on (matching the cartouche); the year span comes
     from the spec's track_days (the same year_span the cartouche prints, en dash
     flattened to a filename-safe hyphen). `kind` is "" for prints, "_film" for
     time-lapses, "_wallpapers" for the bundle zip. Charset stays [a-z0-9._-] by
     construction: region ids are ^[a-z0-9_]+$ and years are digits. A reprint names
     the file from the REPRINTED spec (its edition, its years -- there is no clock)."""
-    name = f"trailprint_{spec.region_id}"
+    name = f"tecopa_{spec.region_id}"
     if getattr(spec, "edition", 1) >= 2:
         name += f"_edition-{spec.edition}"
     span = year_span(spec.track_days).replace("–", "-")
@@ -1017,7 +1126,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         pa = (spec.crop[2] - spec.crop[0]) * (spec.crop[3] - spec.crop[1])
         na = (pspec.crop[2] - pspec.crop[0]) * (pspec.crop[3] - pspec.crop[1])
         fitted.append({"preset": pid, "crop_growth": round(na / pa, 2)})
-        items.append((pspec, f"trailprint_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
+        items.append((pspec, f"tecopa_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
     if not items:
         raise HTTPException(422, "No requested device fits this region: "
                             + "; ".join(s["reason"] for s in skipped))
@@ -1207,7 +1316,7 @@ async def mockups_submit(file: UploadFile = File(...),
     from app import mockups
     data = await _read_capped(file)
     if not data.startswith(mockups.PNG_MAGIC):
-        raise HTTPException(422, "not a PNG — mockups take a TrailPrint final (poster or film)")
+        raise HTTPException(422, "not a PNG — mockups take a Tecopa Printworks final (poster or film)")
     vs = [v.strip() for v in variants.split(",") if v.strip()]
     if not vs:
         raise HTTPException(422, "pick at least one variant (plate, frame)")
@@ -1265,7 +1374,7 @@ async def job_result(jid: str):
                         filename=os.path.basename(key))
 
 # ---- self-describing posters: reprint from the file alone (no session, no DB) ----
-# A TrailPrint PNG carries its own spec (see provenance.py). These two endpoints read
+# A Tecopa Printworks PNG carries its own spec (see provenance.py). These two endpoints read
 # it back: /inspect returns the manifest, /reprint re-renders at print resolution.
 REPRINT_MAX_BYTES = 96 * 1024 * 1024   # a 300-dpi PNG is tens of MB; cap the upload
 
@@ -1278,7 +1387,7 @@ async def _read_capped(file: UploadFile) -> bytes:
 def _manifest_or_422(data: bytes) -> dict:
     m = provenance.extract(data)
     if m is None:
-        raise HTTPException(422, "This file carries no TrailPrint manifest — it can't be reprinted. "
+        raise HTTPException(422, "This file carries no Tecopa Printworks manifest — it can't be reprinted. "
                                  "Only PNG finals exported with reprint data embedded are self-describing.")
     return m
 
@@ -1380,7 +1489,7 @@ async def reprint_inspect(file: UploadFile = File(...)):
 @app.post("/api/reprint")
 async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                   embed_spec: bool = Form(True)):
-    """Re-render a TrailPrint PNG at print resolution from the file alone. Stateless:
+    """Re-render a Tecopa Printworks PNG at print resolution from the file alone. Stateless:
     the spec rides the file, so no session or DB row is needed -- a printed poster is
     reproducible forever, photos included (they ride the manifest as embedded bytes).
     The embedded spec is UNTRUSTED input: it passes through provenance.spec_from_manifest
@@ -1493,7 +1602,7 @@ def _match_wallpaper_preset(spec):
 
 @app.post("/api/continue")
 async def continue_poster(file: UploadFile = File(...)):
-    """Open a TrailPrint PNG for its next edition. Reads the embedded spec, rebuilds a
+    """Open a Tecopa Printworks PNG for its next edition. Reads the embedded spec, rebuilds a
     live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
     extends the lineage chain, and returns the /api/upload response shape plus prefill
     hints so the wizard lands with everything restored. The client then adds this year's

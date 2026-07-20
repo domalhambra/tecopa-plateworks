@@ -109,7 +109,7 @@ def to_gpx(trips):
     lines = ['<?xml version="1.0" encoding="UTF-8"?>',
              '<!-- SYNTHETIC dummy track from scripts/make_dummy_gpx.py -->',
              '<!-- Stand-in for a real OnX/Avenza export. Susanville <-> Eagle Lake, Lassen Co. CA. -->',
-             '<gpx version="1.1" creator="trailprint-dummy" xmlns="http://www.topografix.com/GPX/1/1">']
+             '<gpx version="1.1" creator="tecopa-dummy" xmlns="http://www.topografix.com/GPX/1/1">']
     for name, path, stamps in trips:
         lines.append(f'  <trk><name>{name}</name><trkseg>')
         for (lon, lat), t in zip(path, stamps):

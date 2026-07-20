@@ -1,10 +1,10 @@
-# The TrailPrint manifest — schema v1
+# The Tecopa Printworks manifest — schema v1
 
-The file is the artwork. Every TrailPrint final (PNG poster, wallpaper, APNG
+The file is the artwork. Every Tecopa Printworks final (PNG poster, wallpaper, APNG
 time-lapse) carries its complete recipe in **one compressed zTXt chunk**, keyword
 `trailprint`, whose payload is compact JSON with sorted keys (byte-stable for a given
-manifest; no timestamp, no randomness). Any PNG library can read it — no TrailPrint
-code required:
+manifest; no timestamp, no randomness). Any PNG library can read it — no Tecopa
+Printworks code required:
 
     python -c "from PIL import Image; import sys; print(Image.open(sys.argv[1]).text['trailprint'])" poster.png
 
@@ -21,12 +21,18 @@ It is a pure function of the manifest (byte-stable, reprint-identical) and is
 informative, not normative — readers must parse the zTXt manifest, never the note.
 Share copies (`embed_spec=false`) carry neither chunk.
 
+**Frozen chunk keywords.** The zTXt/tEXt chunk keywords remain `trailprint` and
+`trailprint-note` **forever** — they are frozen v1 format keywords. They predate the
+Tecopa Printworks rename and every poster ever printed carries them; renaming the
+keywords would orphan those files. Readers and writers must use these exact keywords
+regardless of the engine's current name.
+
 ## Top-level keys
 
 | key                | always? | meaning |
 |--------------------|---------|---------|
 | `manifest_version` | yes     | `1`, forever (see "The additive contract") |
-| `engine`           | yes     | `"trailprint"` — names the producing engine |
+| `engine`           | yes     | `"tecopa-printworks"` — names the producing engine. Files written before 2026-07-19 carry `"trailprint"` (the engine's former name); readers MUST treat both values as this engine |
 | `region_id`        | yes     | the terrain plate id, e.g. `"lassen_ca"` (duplicates `spec.region_id` for cheap inspection) |
 | `spec`             | yes     | the full CompositionSpec — the entire picture recipe (below) |
 | `sources`          | yes     | GPX provenance records (below); may be `[]` |
@@ -169,7 +175,7 @@ coordinates, no photos, no provenance. Choose per file.
 
 ## License
 
-This document and the TrailPrint manifest format it specifies are dedicated to the
+This document and the Tecopa Printworks manifest format it specifies are dedicated to the
 public domain under **CC0-1.0** (see `docs/superpowers/plans/2026-07-12-strategy-and-license.md`).
 Anyone may implement a manifest reader, inspector, or renderer — commercially or
 otherwise, with or without attribution — without touching the AGPL-licensed engine.

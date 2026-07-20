@@ -6,7 +6,7 @@ what the file is.
 time (never a client knob), bounded in validate() because a crafted manifest rides it
 straight into the renderer, and painted as a third cartouche row when a title block
 exists. `download_name` makes every deliverable self-documenting
-(trailprint_<region>[_edition-<n>][_<years>][kind].<ext>) -- a pure function of the
+(tecopa_<region>[_edition-<n>][_<years>][kind].<ext>) -- a pure function of the
 spec, carried on the blob key so every serving path names the file the same way."""
 import io
 import json
@@ -95,7 +95,7 @@ def test_year_span_ignores_non_ascii_digits():
 def test_download_name_is_latin1_safe_for_crafted_track_days():
     from app.main import download_name
     name = download_name(_spec(track_days=["٢٠٢٣-06-01"]))
-    assert name == "trailprint_lassen_ca.png"
+    assert name == "tecopa_lassen_ca.png"
     name.encode("latin-1")   # what Starlette's header encoding requires
 
 
@@ -104,27 +104,27 @@ def test_download_name_is_latin1_safe_for_crafted_track_days():
 def test_download_name_edition_one_has_no_edition_suffix():
     from app.main import download_name
     s = _spec(edition=1, track_days=["2024-06-01"])
-    assert download_name(s) == "trailprint_lassen_ca_2024.png"
+    assert download_name(s) == "tecopa_lassen_ca_2024.png"
 
 def test_download_name_edition_three_with_span():
     from app.main import download_name
     s = _spec(edition=3, track_days=["2024-06-01", "2026-07-04"])
-    assert download_name(s) == "trailprint_lassen_ca_edition-3_2024-2026.png"
+    assert download_name(s) == "tecopa_lassen_ca_edition-3_2024-2026.png"
     # charset by construction: [a-z0-9._-] only
     assert all(c in "abcdefghijklmnopqrstuvwxyz0123456789._-" for c in download_name(s))
 
 def test_download_name_dayless_has_no_span():
     from app.main import download_name
     s = _spec(track_days=[None])
-    assert download_name(s, fmt="pdf") == "trailprint_lassen_ca.pdf"
+    assert download_name(s, fmt="pdf") == "tecopa_lassen_ca.pdf"
 
 def test_download_name_film_and_wallpaper_kinds():
     from app.main import download_name
     s = _spec(edition=2, track_days=["2024-06-01", "2025-06-01"])
     assert download_name(s, kind="_film", fmt="webp") == \
-        "trailprint_lassen_ca_edition-2_2024-2025_film.webp"
+        "tecopa_lassen_ca_edition-2_2024-2025_film.webp"
     assert download_name(s, kind="_wallpapers", fmt="zip") == \
-        "trailprint_lassen_ca_edition-2_2024-2025_wallpapers.zip"
+        "tecopa_lassen_ca_edition-2_2024-2025_wallpapers.zip"
 
 
 # ---- unit: credit_line (derived from sources.json) ----
@@ -257,7 +257,7 @@ def test_sync_final_content_disposition_is_self_documenting():
     r = c.post("/api/final", data={"session_id": sid})
     assert r.status_code == 200
     # sample.gpx's tracks are all 2024, edition 1 -> no edition suffix, a year span
-    assert 'filename="trailprint_lassen_ca_2024.png"' in r.headers["content-disposition"]
+    assert 'filename="tecopa_lassen_ca_2024.png"' in r.headers["content-disposition"]
 
 def test_job_result_serves_the_blob_keys_basename():
     c = _client()
@@ -273,7 +273,7 @@ def test_job_result_serves_the_blob_keys_basename():
     assert s["state"] == "done", s
     r = c.get(f"/api/jobs/{jid}/result")
     assert r.headers["content-type"] == "image/png"
-    assert 'filename="trailprint_lassen_ca_2024.png"' in r.headers["content-disposition"]
+    assert 'filename="tecopa_lassen_ca_2024.png"' in r.headers["content-disposition"]
 
 def test_reprint_names_the_file_from_the_reprinted_spec():
     c = _client()
@@ -281,7 +281,7 @@ def test_reprint_names_the_file_from_the_reprinted_spec():
     png = c.post("/api/final", data={"session_id": sid}).content
     r = c.post("/api/reprint", files={"file": ("poster.png", png, "image/png")})
     assert r.status_code == 200, r.text
-    assert 'filename="trailprint_lassen_ca_2024.png"' in r.headers["content-disposition"]
+    assert 'filename="tecopa_lassen_ca_2024.png"' in r.headers["content-disposition"]
 
 def test_reprint_survives_crafted_unicode_track_days():
     # a crafted manifest whose track_days use Arabic-Indic digits used to 500
@@ -294,4 +294,4 @@ def test_reprint_survives_crafted_unicode_track_days():
     m["spec"]["track_days"] = ["٢٠٢٣-06-01"]
     r = c.post("/api/reprint", files={"file": ("x.png", _embed(m), "image/png")})
     assert r.status_code == 200, r.text
-    assert 'filename="trailprint_lassen_ca.png"' in r.headers["content-disposition"]
+    assert 'filename="tecopa_lassen_ca.png"' in r.headers["content-disposition"]
