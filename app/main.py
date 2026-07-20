@@ -1,5 +1,5 @@
 # app/main.py
-import io, json, os, shutil, time
+import io, json, os, re, shutil, time
 import hashlib
 import logging
 from typing import List, Optional
@@ -7,6 +7,7 @@ from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, load_waypoints, Track
@@ -14,6 +15,7 @@ from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
+from app import ingest, regionbuild
 
 logconfig.setup_logging()
 log = logging.getLogger("tecopa.api")
@@ -47,6 +49,14 @@ BLOBS = blobs.LocalBlobs(os.environ.get("TECOPA_BLOBS", "blobs"), ttl_seconds=TT
 QUEUE = jobs.ThreadJobQueue(
     ttl_seconds=TTL_SECONDS,
     max_concurrency=int(os.environ.get("TECOPA_RENDER_CONCURRENCY", 1)))
+
+# Region builds run on their OWN single-slot queue: a multi-minute DEM fetch must
+# never block poster renders behind it, and TECOPA_RENDER_CONCURRENCY must not
+# break the one-build-at-a-time guarantee.
+BUILD_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
+PREP_PYTHON = os.environ.get("TECOPA_PREP_PYTHON", ".venv-prep/bin/python")
+PREP_SCRIPT = os.environ.get("TECOPA_PREP_SCRIPT", "region_prep.py")
+LABELS_SCRIPT = os.environ.get("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py")
 
 # Time-lapse ceiling: total painted pixels across all frames (frames x w x h). A film
 # is many frames, so it needs its own guard above the still-render 120 MP ceiling --
@@ -557,6 +567,100 @@ def _sweep_uploads(ttl_seconds=TTL_SECONDS, root=UPLOADS_DIR):
             pass
     if removed:
         log.info("event=uploads.sweep removed=%d ttl_s=%s", removed, ttl_seconds)
+
+@app.post("/api/regions/plan")
+async def region_plan(files: List[UploadFile] = File(...)):
+    """The cost card behind 'no plate covers these tracks': derive a padded bbox +
+    UTM zone from the raw lon/lat extent, run region_prep's planner (pure logic --
+    no fetch stack), and return an honest estimate plus a name prefill. Never
+    fetches anything; never writes anything."""
+    import region_prep
+    payloads, total = [], 0
+    for f in files:
+        data = await f.read()
+        total += len(data)
+        if len(data) > TRACK_FILE_MAX_BYTES or total > TRACK_BATCH_MAX_BYTES:
+            raise HTTPException(422, "Track upload exceeds the size limit")
+        payloads.append((data, f.filename))
+    ext = ingest.lonlat_extent(payloads)
+    if ext["bbox"] is None:
+        raise HTTPException(422, "No track points found in the dropped files")
+    bbox = regionbuild.derive_bbox(*ext["bbox"])
+    covered = regionbuild.bbox_covered(bbox)
+    epsg = regionbuild.utm_epsg(bbox)
+    resp = {"us_covered": covered, "bbox": list(bbox), "epsg": epsg,
+            "name_prefill": ext["name"],
+            "id": regionbuild.unique_id(
+                regionbuild.slugify(ext["name"]), REGIONS.keys()),
+            "prep_ready": os.path.exists(PREP_PYTHON)}
+    if covered:
+        plan = region_prep.plan_build(bbox, f"EPSG:{epsg}")
+        resp.update(resolution_m=plan["resolution_m"], grid=list(plan["grid"]),
+                    grid_mpx=round(plan["grid_mpx"], 1),
+                    est_dem_mb=round(plan["est_dem_mb"], 1),
+                    n_slices=plan["n_slices"], over_budget=plan["over_budget"])
+    log.info("event=region.plan covered=%s epsg=%s id=%s", covered, epsg, resp["id"])
+    return resp
+
+
+class RegionBuildRequest(BaseModel):
+    id: str
+    name: str
+    bbox: List[float]
+    epsg: int
+
+
+@app.post("/api/regions/build")
+async def region_build(req: RegionBuildRequest):
+    """Build a new terrain plate from a plan. The client's plan response is
+    untrusted: id shape, US coverage, collision, and the grid budget are all
+    re-checked here before a byte is fetched."""
+    import region_prep
+    if not re.fullmatch(r"[a-z0-9_]{1,64}", req.id):
+        raise HTTPException(422, "Region id must be lowercase letters, digits, _")
+    if len(req.bbox) != 4:
+        raise HTTPException(422, "bbox must be [west, south, east, north]")
+    bbox = tuple(req.bbox)
+    if not regionbuild.bbox_covered(bbox):
+        raise HTTPException(422, "USGS 3DEP terrain covers the US only")
+    if req.id in REGIONS:
+        raise HTTPException(409, f"Region id '{req.id}' already exists")
+    plan = region_prep.plan_build(bbox, f"EPSG:{req.epsg}")
+    if plan["over_budget"]:
+        raise HTTPException(422,
+            "This area is too large to build from the app (corridor-scale grid). "
+            "Build it deliberately from the terminal: python region_prep.py ...")
+    name = (req.name or "").strip()[:80] or req.id
+    params = {"id": req.id, "name": name, "bbox": bbox, "epsg": req.epsg}
+
+    # The worker can start before submit() returns the jid, so the progress lambda
+    # reads it from a holder and set_progress no-ops on the not-yet-known jid --
+    # worst case the first progress line is lost, replaced within a second.
+    holder = {}
+
+    def build_job():
+        result = regionbuild.run_build(
+            params, repo_root=os.getcwd(), regions_root=REGIONS_ROOT,
+            prep_python=PREP_PYTHON, prep_script=PREP_SCRIPT,
+            labels_script=LABELS_SCRIPT,
+            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s))
+        REGIONS.clear()
+        REGIONS.update(regions.discover(REGIONS_ROOT))   # in-place: refs stay valid
+        return {"region": req.id, "labels_note": result["labels_note"]}
+
+    holder["jid"] = jid = BUILD_QUEUE.submit(build_job)
+    log.info("event=region.build.submit jid=%s id=%s", jid, req.id)
+    return {"job": jid}
+
+
+@app.get("/api/regions/build/{jid}")
+async def region_build_status(jid: str):
+    try:
+        st = BUILD_QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown build job")
+    return {"state": st["state"], "progress": st.get("progress"),
+            "error": st["error"], "result": st["result"]}
 
 # Photo upload guards (red-team V1-6): a small file can declare enormous dimensions
 # (decompression bomb) or just be huge. Cap the raw bytes and the decoded pixel count.
