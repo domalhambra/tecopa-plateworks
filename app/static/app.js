@@ -231,6 +231,8 @@ async function enterCreationFlow(files) {
   setStatus('No plate covers these tracks — planning a new region…');
   $('startOver').hidden = false;    // the card's US-only / no-venv states have no
                                     // Build button; Start over is the way back out
+  // the card is about a NEW region -- clear any stale matched-region label
+  state.region = null; state.regionName = ''; $('regionName').textContent = '';
   let p;
   try { p = await api.planRegion(files); }
   catch (e) { setStatus('Planning failed: ' + e.message); return; }
@@ -807,6 +809,7 @@ function startOver() {
   $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
   $('titleInput').value = ''; $('downloadAgain').hidden = true; updateEditionBadge();
   $('regionBadge').hidden = true; state.builtRegion = null; state.pendingFiles = null;
+  state.region = null; state.regionName = ''; $('regionName').textContent = '';
   $('buildCard').hidden = true; $('browsePlates').hidden = false;
   go(state.steps[0]);
   setStatus('Cleared — drop files to start a new map');

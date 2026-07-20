@@ -57,12 +57,14 @@
                 <b>Drop GPX, KML or KMZ</b>
                 <span>or click to browse — files accumulate</span>
               </button>
-              <button id="continuePoster" class="dz-continue" type="button">
-                ↻ Continue a poster — open last year's PNG to add this year
-              </button>
-              <button id="browsePlates" class="dz-continue" type="button">▦ Built plates — browse existing terrain</button>
               <div id="hint" class="hint" hidden></div>
             </div>
+            <!-- secondary entry actions: below the map, not inside its centered flexbox
+                 (a .dz-continue in the map-pane peeks as a sliver around the dropzone) -->
+            <button id="continuePoster" class="dz-continue" type="button">
+              ↻ Continue a poster — open last year's PNG to add this year
+            </button>
+            <button id="browsePlates" class="dz-continue" type="button">▦ Built plates — browse existing terrain</button>
 
             <dialog id="platesDialog" class="plates-dialog">
               <h3>Built plates</h3>
