@@ -42,7 +42,7 @@ CLASS_RANK = {
 def _get_json(url, params):
     q = urllib.parse.urlencode(params)
     req = urllib.request.Request(url + "?" + q, headers={
-        "Accept-Encoding": "gzip", "User-Agent": "trailprint-labels/1"})
+        "Accept-Encoding": "gzip", "User-Agent": "tecopa-labels/1"})
     with urllib.request.urlopen(req, timeout=60) as r:
         raw = r.read()
         if r.headers.get("Content-Encoding") == "gzip":

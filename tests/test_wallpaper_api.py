@@ -129,8 +129,8 @@ def test_bundle_renders_each_device_at_native_pixels():
     assert out.headers["content-type"] == "application/zip"
     z = zipfile.ZipFile(io.BytesIO(out.content))
     names = sorted(z.namelist())
-    assert names == ["trailprint_lassen_ca_desktop_fhd_1920x1080.png",
-                     "trailprint_lassen_ca_iphone_1179x2556.png"]
+    assert names == ["tecopa_lassen_ca_desktop_fhd_1920x1080.png",
+                     "tecopa_lassen_ca_iphone_1179x2556.png"]
     for name, px in zip(names, [(1920, 1080), (1179, 2556)]):
         data = z.read(name)
         assert Image.open(io.BytesIO(data)).size == px

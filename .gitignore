@@ -30,3 +30,6 @@ blobs/
 
 # generated marketing asset farm (scripts/render_asset_farm.py)
 assets/
+
+# built macOS launcher app (scripts/macos/build_app.sh)
+/dist/

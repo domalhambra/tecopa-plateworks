@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 
-log = logging.getLogger("trailprint.jobs")
+log = logging.getLogger("tecopa.jobs")
 
 class ThreadJobQueue:
     def __init__(self, ttl_seconds: float | None = None, max_concurrency: int = 1):

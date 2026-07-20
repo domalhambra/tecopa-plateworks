@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instagram-ready physical mockups of a finished final -- the Plate and the Frame.
 
-Takes ANY TrailPrint final PNG and stages its pixels as a photographed object on the
+Takes ANY Tecopa Printworks final PNG and stages its pixels as a photographed object on the
 landing page's gallery wall: a circular embossed terrain *plate* (the signature
 Tecopa Plateworks shot) and a matted, framed print. A still final emits JPEGs
 (1080x1080 and 1080x1350); a film APNG emits MP4s in which the journeys ink
@@ -103,7 +103,7 @@ VIDEO_FPS     = 25              # matches timelapse.MP4_BASE_FPS (asserted in te
 # Smoothness is one tick PER reveal step (no hold-then-jump), so the line grows a little
 # every frame instead of snapping a chunk and freezing. Slowness then comes from MANY
 # steps, never from longer holds (holds are what read as chunky). ~180 steps at 25 fps
-# is a ~7 s continuous draw. TRAILPRINT_MOCKUP_FRAMES overrides the count (tests use a
+# is a ~7 s continuous draw. TECOPA_MOCKUP_FRAMES overrides the count (tests use a
 # handful; an operator can trade smoothness for render time).
 MOCKUP_MOTION_PX = 1100         # long-edge px to render the progressive reveal at
 MOCKUP_FRAMES    = 180          # reveal steps -- fine enough that the pen never snaps
@@ -121,7 +121,7 @@ class MockupError(ValueError):
 # ---------------------------------------------------------------- input handling
 
 def load_final(path: str):
-    """(frames, durations_ms, manifest|None) from any TrailPrint final.
+    """(frames, durations_ms, manifest|None) from any Tecopa Printworks final.
 
     A still yields one frame with duration 0; an animated APNG (the film) yields its
     frames + per-frame durations -- read back with load() per frame, the way the film
@@ -132,7 +132,7 @@ def load_final(path: str):
         data = f.read()
     if not data.startswith(PNG_MAGIC):
         raise MockupError(f"not a PNG: {os.path.basename(path)} — mockups take a "
-                          "TrailPrint final (poster or film)")
+                          "Tecopa Printworks final (poster or film)")
     im = Image.open(io.BytesIO(data))
     n = getattr(im, "n_frames", 1)
     frames, durations = [], []
@@ -332,10 +332,10 @@ def _caption_font(px: int):
     # in the same face as the poster's cartouche beside it -- and carries the glyphs the
     # cartouche does (the edition line's em-dash; Pillow's bundled face renders it as
     # tofu). Same cross-host caveat the engine itself accepts and documents: the face
-    # follows TRAILPRINT_FONT / the installed serif, byte-identical within a host (the
+    # follows TECOPA_FONT / the installed serif, byte-identical within a host (the
     # farm's own machine), and no worse cross-host than the poster it stages. Kept a
     # local copy of the chain so still-mode stays a bare Pillow+numpy dependency.
-    names = [os.environ["TRAILPRINT_FONT"]] if os.environ.get("TRAILPRINT_FONT") else []
+    names = [os.environ["TECOPA_FONT"]] if os.environ.get("TECOPA_FONT") else []
     names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
     for name in names:
         try:
@@ -548,7 +548,7 @@ def _parse_sizes(s: str):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("final", help="a TrailPrint final PNG (poster or film APNG)")
+    ap.add_argument("final", help="a Tecopa Printworks final PNG (poster or film APNG)")
     ap.add_argument("-o", "--out", default=None, help="output dir (default: beside the input)")
     ap.add_argument("--variants", default=",".join(VARIANTS))
     ap.add_argument("--sizes", default=",".join(f"{w}x{h}" for w, h in SIZES))

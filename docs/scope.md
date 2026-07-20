@@ -1,6 +1,6 @@
-# TrailPrint scope — the chronicle, not the poster
+# Tecopa Printworks scope — the chronicle, not the poster
 
-TrailPrint began as "a poster maker and a digital visualization of track files."
+Tecopa Printworks began as "a poster maker and a digital visualization of track files."
 Measured against that goal, three later features look like scope creep: time-lapse
 films, photos pinned to markers, and living editions. This document restates the goal
 so that those three features are not passengers but the product — and resolves each
@@ -9,7 +9,7 @@ objection against them with a concrete design commitment that leaves the app
 
 ## The goal, restated
 
-**TrailPrint is a self-archiving chronicle of a life outdoors.** One composition spec
+**Tecopa Printworks is a self-archiving chronicle of a life outdoors.** One composition spec
 is the score; a print, a wallpaper, and a film are performances of it. Every file the
 app emits carries everything needed to reproduce it, continue it, and hand it to the
 future. There is no account, no database, no cloud: **the artifact is the archive.**
@@ -42,7 +42,7 @@ chronicle needs both, and it needs them *inside the file*.
 
 A chronicle grows. `/api/continue` is the product's defining verb: last year's PNG
 plus this year's GPX renders the next edition, lineage carried in the file itself.
-This is the sharpest differentiator TrailPrint has — no other track-print tool can
+This is the sharpest differentiator Tecopa Printworks has — no other track-print tool can
 promise "your artifact can never be orphaned."
 
 ## Each objection, inverted
@@ -116,7 +116,7 @@ consume it. With photos embedded (objection 2), path sanitization drops out of t
 chain entirely, so the unified door is *simpler* than any of today's three.
 
 *Why it strengthens the app:* the 440-line test file inverts from cost to moat. It is
-the executable form of the promise "any TrailPrint PNG from any year opens forever"
+the executable form of the promise "any Tecopa Printworks PNG from any year opens forever"
 (`manifest_edition_v1.json` freezes it), and that promise — not the shaded relief — is
 why someone chooses this app over a print-my-map website. The upload dedup reframes
 the same way: it is what makes the yearly ritual safe. Drop last year's poster and the
@@ -164,6 +164,6 @@ just as sharply as "poster maker" did — on the other side of it remain:
   archive would compete with it.
 - **Fitness metrics** — pace, heart rate, splits. The chronicle records *where* and
   *when*, not *how fast*.
-- **Route planning / live tracking** — TrailPrint looks backward, by design.
+- **Route planning / live tracking** — Tecopa Printworks looks backward, by design.
 - **Track editing** — sources are hashed into provenance; the app renders what
   happened, it does not revise it.
