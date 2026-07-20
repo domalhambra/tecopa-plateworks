@@ -6,22 +6,13 @@
 .home-head { margin-bottom: 22px; }
 .home-head h1 { font-size: 24px; margin-bottom: 4px; }
 .home-sub { font-size: 13px; font-weight: 600; color: var(--text-2); margin: 22px 0 12px; }
-.region-gallery { display: flex; gap: 14px; flex-wrap: wrap; }
-.region-card {
-  position: relative; display: flex; flex-direction: column; gap: 8px; padding: 8px 8px 10px;
-  background: var(--panel); border: 1px solid var(--hairline); border-radius: var(--radius-lg);
-  cursor: pointer; color: var(--text); width: 150px; box-shadow: var(--shadow-btn);
-  transition: transform .12s ease, border-color .12s, box-shadow .12s;
-}
-.region-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
-.region-card img { width: 100%; height: 168px; object-fit: cover; border-radius: 7px; background: var(--control-inset); }
-.region-card span { font-size: 12.5px; text-align: center; color: var(--text-2); padding: 0 2px; }
-.region-card.sel { border-color: var(--tint); box-shadow: 0 0 0 2px var(--tint) inset, var(--shadow-btn); }
-.region-card.sel span { color: var(--text); }
-.region-card.sel::after {
-  content: '✓'; position: absolute; top: 14px; right: 14px; width: 22px; height: 22px;
-  display: grid; place-items: center; border-radius: 999px; font-size: 12px; font-weight: 700;
-  background: var(--tint); color: var(--on-tint); box-shadow: 0 1px 3px rgba(0,0,0,.35);
+/* GPX-first: the home leads with a full-width dropzone. It reuses the .dropzone look but
+   must undo the map-pane overlay's absolute positioning (inset:20px) for block flow. The
+   descendant selector raises specificity above the later, equal-specificity `.dropzone`
+   rule — otherwise source order wins and the dropzone floats out of flow over the home. */
+.surface-home .home-dropzone {
+  position: static; inset: auto; width: 100%; max-width: 640px;
+  min-height: 200px; margin: 4px 0 26px; padding: 30px;
 }
 .home-open { margin-top: 8px; max-width: 640px; }
 .poster-drop {
@@ -218,6 +209,12 @@
   letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-accent-gold-foreground, var(--on-tint));
   background: var(--color-accent-gold, var(--tint-strong)); border-radius: 999px;
 }
+/* ---- region reveal chip: "Matched" (existing plate) vs "Built" (created this session) ---- */
+.region-kind {
+  display: inline-flex; align-items: center; padding: 2px 8px; font: 600 10px/1.4 var(--font-ui);
+  letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-2);
+  background: color-mix(in srgb, var(--tint) 16%, transparent); border-radius: 999px;
+}
 
 /* ---- guide + shortcuts dialogs ---- */
 .guide { width: min(520px, 92vw); padding: 24px 26px; border: 1px solid var(--hairline-strong);
@@ -237,6 +234,21 @@
 .shortcut-list > div { display: flex; align-items: baseline; gap: 14px; padding: 4px 0; }
 .shortcut-list dt { flex: none; width: 104px; display: flex; gap: 3px; flex-wrap: wrap; }
 .shortcut-list dd { margin: 0; font-size: 13px; color: var(--text-2); }
+
+/* ---- new terrain plate (GPX-first creation) dialog ---- */
+.build-dialog { width: min(460px, 92vw); }
+.build-dialog .field { margin: 4px 0 14px; }
+.build-est {
+  font-size: 12.5px; line-height: 1.55; margin: 2px 0 14px; padding: 10px 12px;
+  white-space: pre-wrap; color: var(--text-2); background: var(--control-inset);
+  border-radius: var(--radius-sm); font-family: var(--font-ui);
+}
+.build-progress {
+  font-family: var(--font-mono); font-size: 11px; line-height: 1.5; margin: 4px 0 12px;
+  max-height: 96px; overflow-y: auto; white-space: pre-wrap; color: var(--text-2);
+  background: var(--control-inset); border-radius: var(--radius-sm); padding: 9px 11px;
+}
+.build-error { color: var(--color-error); font-size: 12.5px; white-space: pre-wrap; margin: 0 0 12px; }
 
 /* first-step nudge after the welcome closes */
 .rail-item.pulse { animation: railpulse 1.2s ease-in-out 3; }

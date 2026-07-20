@@ -3,11 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>TrailPrint Studio</title>
-  <!-- apply the saved theme before first paint to avoid a flash -->
+  <title>Tecopa Printworks Studio</title>
+  <!-- apply the saved theme before first paint to avoid a flash. Reads the current
+       'tecopa' prefs key, falling back to the pre-rebrand 'trailprint' key so a
+       returning operator's theme survives the rename (store.js migrates it on load). -->
   <script>
     try {
-      var p = JSON.parse(localStorage.getItem('trailprint') || '{}');
+      var p = JSON.parse(localStorage.getItem('tecopa') || localStorage.getItem('trailprint') || '{}');
       if (p.theme) document.documentElement.setAttribute('data-color-scheme', p.theme);
     } catch (e) { /* private mode */ }
   </script>
@@ -23,9 +25,10 @@
     <!-- ===================== top bar ===================== -->
     <header class="topbar">
       <div class="tb-group">
-        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>TrailPrint <b>Studio</b></span>
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa Printworks <b>Studio</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
+        <span id="regionKind" class="region-kind" hidden></span>
         <span id="editionBadge" class="edition-badge" hidden></span>
         <span id="yearSpan" class="year-span"></span>
       </div>
@@ -73,13 +76,16 @@
           <div class="surface-scroll">
             <div class="home-head">
               <h1 id="h-home" tabindex="-1">Turn your tracks into a poster</h1>
-              <p class="lede">Choose a region and drop your GPX, or reopen last year's poster to add a new edition.</p>
+              <p class="lede">Drop your GPX, KML or KMZ — your map appears the moment your tracks land. No terrain plate for your area yet? We'll build it from USGS data.</p>
             </div>
-            <h2 class="home-sub">Regions</h2>
-            <div id="regionGallery" class="region-gallery"></div>
+            <button id="homeDropzone" class="dropzone home-dropzone" type="button">
+              <span class="dz-ico" aria-hidden="true">↧</span>
+              <b>Drop GPX, KML or KMZ</b>
+              <span>or click to browse — files accumulate</span>
+            </button>
             <div class="home-open">
               <h2 class="home-sub">Reopen a poster</h2>
-              <p class="lede">A TrailPrint PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
+              <p class="lede">A Tecopa Printworks PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
               <div id="posterDrop" class="poster-drop">
                 <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
                 <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
@@ -246,7 +252,7 @@
 
           <!-- LIBRARY / EXPORTS have no inspector controls -->
           <div id="panel-library" class="panel" hidden>
-            <section class="insp-group"><p class="lede insp-empty">Pick a region or reopen a poster to begin. Presets and options light up once your tracks are loaded.</p></section>
+            <section class="insp-group"><p class="lede insp-empty">Drop your GPX to begin, or reopen a poster. Presets and options light up once your tracks are loaded.</p></section>
           </div>
           <div id="panel-exports" class="panel" hidden>
             <section class="insp-group"><p class="lede insp-empty">Downloads keep their self-documenting names. Jobs stay listed for the whole session.</p></section>
@@ -296,7 +302,7 @@
     <h2 id="welcomeTitle" class="guide-title">Welcome to the studio</h2>
     <p class="guide-lede">Four moves take you from a GPX file to a printed poster and a feed post:</p>
     <ol class="guide-steps">
-      <li><span class="guide-ico" aria-hidden="true">◳</span><div><b>Compose</b> — pick a region, drop your tracks, frame the poster.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">◳</span><div><b>Compose</b> — drop your tracks; your map appears, then frame the poster. No plate for your area yet builds one from USGS terrain.</div></li>
       <li><span class="guide-ico" aria-hidden="true">✦</span><div><b>Style · Layers · Light</b> — render a proof, then tune it live. Every edit re-proofs itself.</div></li>
       <li><span class="guide-ico" aria-hidden="true">◉</span><div><b>Social</b> — repurpose it for Reels, feed posts and stories, with safe zones and a caption.</div></li>
       <li><span class="guide-ico" aria-hidden="true">⇩</span><div><b>Exports</b> — accept to render the full-resolution final; every render lands here.</div></li>
@@ -319,6 +325,25 @@
       <div><dt><kbd>Esc</kbd></dt><dd>Close this / the palette / cancel a frame draw</dd></div>
     </dl>
     <div class="guide-actions"><button id="shortcutsClose" class="primary" type="button" autofocus>Close</button></div>
+  </dialog>
+
+  <!-- new terrain plate (GPX-first: no built plate covers the dropped tracks). The cost
+       card + streamed build progress live here so it works from any section and always
+       has an exit (Cancel / Esc) — the pre-Studio card dead-ended in its non-build states. -->
+  <dialog id="buildDialog" class="guide build-dialog" aria-labelledby="buildTitle">
+    <h2 id="buildTitle" class="guide-title">New terrain plate</h2>
+    <p id="buildLede" class="guide-lede"></p>
+    <pre id="buildEstimate" class="build-est" hidden></pre>
+    <div id="buildNameField" class="field" hidden>
+      <label for="buildName">Region name</label>
+      <input id="buildName" type="text" maxlength="80" placeholder="Name this region — it prints on the poster">
+    </div>
+    <pre id="buildProgress" class="build-progress" aria-live="polite" hidden></pre>
+    <p id="buildError" class="build-error" hidden></p>
+    <div class="guide-actions">
+      <button id="buildCancel" class="ghost" type="button">Cancel</button>
+      <button id="buildGo" class="primary" type="button">Build this region</button>
+    </div>
   </dialog>
 
   <input type="file" id="fileInput" accept=".gpx,.kml,.kmz" multiple hidden>

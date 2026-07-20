@@ -1,4 +1,4 @@
-/* TrailPrint Studio — a native-feeling (macOS-flavored) app shell. All colour comes
+/* Tecopa Printworks Studio — a native-feeling (macOS-flavored) app shell. All colour comes
    from tokens.css so the Night/Day toggle restyles the whole UI at once. The chrome
    speaks the system font; the poster (canvas.js) stays Georgia and is never themed. */
 * { box-sizing: border-box; }

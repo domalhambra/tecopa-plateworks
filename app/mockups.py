@@ -46,11 +46,11 @@ def parse_sizes(s: str):
 
 
 def _load_frames(data: bytes):
-    """(frames, durations_ms, manifest|None) from a TrailPrint final's bytes. Mirrors
+    """(frames, durations_ms, manifest|None) from a Tecopa Printworks final's bytes. Mirrors
     scripts.render_mockups.load_final, but from bytes (the upload) rather than a path.
     A still yields one frame; a film APNG yields its frames + durations (-> video)."""
     if not data.startswith(PNG_MAGIC):
-        raise MockupError("not a PNG — mockups take a TrailPrint final (poster or film)")
+        raise MockupError("not a PNG — mockups take a Tecopa Printworks final (poster or film)")
     im = Image.open(io.BytesIO(data))
     n = getattr(im, "n_frames", 1)
     frames, durations = [], []

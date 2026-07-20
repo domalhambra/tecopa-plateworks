@@ -86,7 +86,7 @@ async function renderTimelapse() {
     });
     if (result) {
       const ext = fmt === 'apng' ? 'png' : fmt;
-      const { blob, filename } = await api.fetchDownload(result, `trailprint-timelapse.${ext}`);
+      const { blob, filename } = await api.fetchDownload(result, `tecopa-timelapse.${ext}`);
       jobs.markDownloaded(sub.job, filename);
       if (tlUrl) URL.revokeObjectURL(tlUrl);
       tlUrl = URL.createObjectURL(blob);
