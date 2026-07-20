@@ -202,3 +202,24 @@ def test_job_queue_evicts_finished_after_ttl():
     q.submit(lambda: 2)                             # submit triggers the eviction sweep
     with pytest.raises(KeyError):
         q.status(jid)
+
+def test_job_progress_field_updates_and_survives_status():
+    from app.jobs import ThreadJobQueue
+    import threading, time
+    q = ThreadJobQueue()
+    release = threading.Event()
+
+    def work():
+        release.wait(timeout=5)
+        return "ok"
+
+    jid = q.submit(work)
+    q.set_progress(jid, "fetching slice 1/3")
+    assert q.status(jid)["progress"] == "fetching slice 1/3"
+    q.set_progress("nonexistent", "ignored")     # unknown jid: silently dropped
+    release.set()
+    for _ in range(50):
+        if q.status(jid)["state"] == "done":
+            break
+        time.sleep(0.1)
+    assert q.status(jid)["result"] == "ok"

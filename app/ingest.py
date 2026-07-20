@@ -341,3 +341,46 @@ def load_waypoints(data: bytes, region: RegionGeo,
         if len(out) >= MAX_WAYPOINTS:
             break
     return out
+
+
+def lonlat_extent(payloads) -> dict:
+    """Raw lon/lat bounding box + a name prefill across (data, filename) payloads --
+    the no-region parse behind /api/regions/plan. Malformed files are skipped, not
+    fatal: the caller reports 'no points' only when NOTHING parsed. The name prefill
+    is the first GPX <name> found (file-level, else first track's)."""
+    import gpxpy
+    w = s = float("inf")
+    e = n = float("-inf")
+    name = ""
+    for data, filename in payloads:
+        fn = (filename or "").lower()
+        try:
+            if fn.endswith(".kmz"):
+                segs = _kml_segments(_parse_kml_bytes(_kmz_to_kml(data)))
+                pts = [(p[0], p[1]) for seg in segs for p in seg]
+            elif fn.endswith(".kml"):
+                segs = _kml_segments(_parse_kml_bytes(data))
+                pts = [(p[0], p[1]) for seg in segs for p in seg]
+            else:
+                g = gpxpy.parse(data.decode("utf-8", errors="replace"))
+                if not name:
+                    name = (g.name
+                            or next((t.name for t in g.tracks if t.name), "")
+                            or next((r.name for r in g.routes if r.name), "")
+                            or "").strip()
+                # route-only <rte>/<rtept> files (Garmin/planning-app exports) parse to
+                # zero tracks -- load_gpx_tracks supports them, so planning must too.
+                pts = [(pt.longitude, pt.latitude)
+                       for t in g.tracks for sg in t.segments for pt in sg.points]
+                pts += [(pt.longitude, pt.latitude)
+                        for r in g.routes for pt in r.points]
+        except Exception:
+            continue                      # one bad file must not sink the batch
+        for lon, lat in pts:
+            if lon < w: w = lon
+            if lon > e: e = lon
+            if lat < s: s = lat
+            if lat > n: n = lat
+    if not (w <= e and s <= n):
+        return {"bbox": None, "name": name}
+    return {"bbox": (w, s, e, n), "name": name}
