@@ -64,3 +64,43 @@ def unique_id(slug: str, existing) -> str:
         if cand not in existing:
             return cand
     raise ValueError(f"no free id for slug {slug!r}")
+
+
+def run_build(params: dict, repo_root: str, regions_root: str,
+              prep_python: str, prep_script: str, labels_script: str,
+              set_progress) -> dict:
+    """Spawn region_prep in the prep venv, stream its stdout into set_progress,
+    then run the GNIS labels build (non-fatal). Raises RuntimeError with the last
+    output lines on prep failure -- after sweeping the partial region dir so a
+    retry starts clean. The id is trusted here only as far as its shape: callers
+    (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this."""
+    rid = params["id"]
+    if not re.fullmatch(r"[a-z0-9_]+", rid):
+        raise ValueError(f"unsafe region id {rid!r}")
+    w, s, e, n = params["bbox"]
+    cmd = [prep_python, prep_script,
+           "--id", rid, "--name", params["name"],
+           "--bbox", str(w), str(s), str(e), str(n),
+           "--epsg", str(params["epsg"])]
+    tail: deque = deque(maxlen=10)
+    proc = subprocess.Popen(cmd, cwd=repo_root, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            tail.append(line)
+            set_progress(line)
+    rc = proc.wait()
+    if rc != 0:
+        shutil.rmtree(os.path.join(regions_root, rid), ignore_errors=True)
+        raise RuntimeError(
+            f"region build failed (exit {rc}). Last output:\n" + "\n".join(tail))
+    set_progress("Building place-name labels (GNIS)...")
+    labels_note = None
+    lab = subprocess.run([prep_python, labels_script, rid], cwd=repo_root,
+                         capture_output=True, text=True)
+    if lab.returncode != 0:
+        labels_note = ("Place-name labels failed to build -- the region works "
+                       "without them. Rebuild later with: "
+                       f"python {labels_script} {rid}")
+    return {"labels_note": labels_note}

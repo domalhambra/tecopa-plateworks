@@ -107,3 +107,90 @@ def test_lonlat_extent_garbage_is_skipped_not_raised():
     ext = ingest.lonlat_extent([(b"\x00\x01not xml", "junk.gpx"),
                                 (KML_MIN, "b.kml")])
     assert ext["bbox"] is not None            # the good file still counts
+
+
+# ---- run_build: subprocess orchestration against stub scripts (no network) ----
+
+import json as _json
+import sys
+
+
+def _write_stub_prep(tmp_path, body):
+    """A stand-in region_prep.py: same argv contract, controllable behavior."""
+    p = tmp_path / "stub_prep.py"
+    p.write_text(
+        "import argparse, os, sys, json\n"
+        "ap = argparse.ArgumentParser()\n"
+        "for a in ('--id','--name','--epsg'): ap.add_argument(a, required=True)\n"
+        "ap.add_argument('--bbox', nargs=4, type=float, required=True)\n"
+        "args = ap.parse_args()\n" + body)
+    return str(p)
+
+STUB_OK = """
+out = os.path.join(os.environ['STUB_REGIONS_ROOT'], args.id)
+os.makedirs(out, exist_ok=True)
+print('Build plan: 10 m (auto) -> grid 100x100')
+print('Fetching NHD hydrography...')
+json.dump({'name': args.name, 'id': args.id}, open(os.path.join(out, 'region.json'), 'w'))
+open(os.path.join(out, 'overview.png'), 'wb').write(b'png')
+print('done')
+"""
+
+STUB_FAIL = """
+out = os.path.join(os.environ['STUB_REGIONS_ROOT'], args.id)
+os.makedirs(out, exist_ok=True)
+open(os.path.join(out, 'region.json'), 'w').write('{}')   # partial output
+print('Build plan: ...')
+print('Fetching NHD hydrography...')
+sys.exit(3)
+"""
+
+
+def _write_stub_labels(tmp_path, ok=True):
+    p = tmp_path / "stub_labels.py"
+    p.write_text("import sys\nsys.exit(0)\n" if ok else "import sys\nsys.exit(1)\n")
+    return str(p)
+
+
+def _params():
+    return {"id": "stub_region", "name": "Stub Region",
+            "bbox": (-120.9, 40.3, -120.5, 40.8), "epsg": 32610}
+
+
+def test_run_build_streams_progress_and_returns(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    lines = []
+    res = rb.run_build(_params(), repo_root=".",
+                       regions_root=str(tmp_path / "regions"),
+                       prep_python=sys.executable,
+                       prep_script=_write_stub_prep(tmp_path, STUB_OK),
+                       labels_script=_write_stub_labels(tmp_path, ok=True),
+                       set_progress=lines.append)
+    assert res["labels_note"] is None
+    assert any("hydrography" in l for l in lines)
+    assert (tmp_path / "regions" / "stub_region" / "region.json").exists()
+
+
+def test_run_build_failure_cleans_partial_and_raises(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    with pytest.raises(RuntimeError) as ei:
+        rb.run_build(_params(), repo_root=".",
+                     regions_root=str(tmp_path / "regions"),
+                     prep_python=sys.executable,
+                     prep_script=_write_stub_prep(tmp_path, STUB_FAIL),
+                     labels_script=_write_stub_labels(tmp_path),
+                     set_progress=lambda s: None)
+    assert "hydrography" in str(ei.value)          # tail lines ride the error
+    assert not (tmp_path / "regions" / "stub_region").exists()   # partial swept
+
+
+def test_run_build_labels_failure_is_nonfatal(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    res = rb.run_build(_params(), repo_root=".",
+                       regions_root=str(tmp_path / "regions"),
+                       prep_python=sys.executable,
+                       prep_script=_write_stub_prep(tmp_path, STUB_OK),
+                       labels_script=_write_stub_labels(tmp_path, ok=False),
+                       set_progress=lambda s: None)
+    assert res["labels_note"]                       # note, not an exception
+    assert (tmp_path / "regions" / "stub_region").exists()
