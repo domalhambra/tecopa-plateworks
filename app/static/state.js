@@ -2,10 +2,12 @@
 // Every module imports `state`; only app.js mutates `state.step`.
 export const state = {
   step: 'tracks',
-  steps: ['region', 'tracks', 'frame', 'proof'],
+  steps: ['tracks', 'frame', 'proof'],
   session: null,
   region: null,
   regionName: '',
+  pendingFiles: null,     // File[] kept across a no-region 422 (GPX-first rebuild)
+  builtRegion: null,      // id of a region built this session — drives the chip verb
   regions: [],            // /api/regions metadata (id,name,bounds,overview_size,native_resolution_m,overview)
   ovSize: null,           // [w, h] overview pixels of the active region
   scale: 1,               // canvas px per overview px

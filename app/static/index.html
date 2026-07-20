@@ -21,6 +21,7 @@
         <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa <b>Printworks</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
+        <span id="regionBadge" class="region-badge" hidden></span>
         <span id="editionBadge" class="edition-badge" hidden></span>
       </div>
       <div class="tb-group header-actions">
@@ -41,19 +42,6 @@
       <nav id="stepper" class="rail" aria-label="Progress"></nav>
 
       <section id="stage" class="stage">
-        <!-- STEP: Region -->
-        <div class="pane pane-region" id="pane-region" hidden>
-          <div class="pane-head">
-            <h2 id="h-region" tabindex="-1">Choose a region</h2>
-            <p class="lede">Turn your GPX tracks into a shaded-relief poster.</p>
-          </div>
-          <div id="regionGallery" class="region-gallery"></div>
-          <div class="pane-foot">
-            <button id="continuePosterRegion" class="ghost" type="button">Continue a poster…</button>
-            <button id="toTracks" class="primary" type="button" disabled>Continue</button>
-          </div>
-        </div>
-
         <!-- STEPS: Tracks & Frame (document + inspector) -->
         <div class="pane workspace" id="workspace" hidden>
           <div class="doc">
@@ -72,7 +60,29 @@
               <button id="continuePoster" class="dz-continue" type="button">
                 ↻ Continue a poster — open last year's PNG to add this year
               </button>
+              <button id="browsePlates" class="dz-continue" type="button">▦ Built plates — browse existing terrain</button>
               <div id="hint" class="hint" hidden></div>
+            </div>
+
+            <dialog id="platesDialog" class="plates-dialog">
+              <h3>Built plates</h3>
+              <p class="lede">Terrain already on this machine. Drop tracks anywhere in the US to build a new one.</p>
+              <div id="platesList" class="region-gallery"></div>
+              <button id="platesClose" class="ghost" type="button">Close</button>
+            </dialog>
+
+            <div id="buildCard" class="build-card" hidden>
+              <h3 id="buildTitle">No plate covers these tracks</h3>
+              <p id="buildLede" class="lede"></p>
+              <div id="buildEstimate" class="build-est"></div>
+              <label class="build-name">Region name
+                <input id="buildName" type="text" maxlength="80" placeholder="Name this region — it prints on the poster">
+              </label>
+              <div id="buildActions">
+                <button id="buildGo" class="primary" type="button">Build this region</button>
+              </div>
+              <pre id="buildProgress" class="build-progress" hidden></pre>
+              <p id="buildError" class="build-error" hidden></p>
             </div>
           </div>
 

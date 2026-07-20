@@ -9,7 +9,7 @@ import * as markers from './markers.js';
 
 const $ = (id) => document.getElementById(id);
 const escapeHtml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-const STEP_LABELS = { region: 'Region', tracks: 'Tracks', frame: 'Frame', proof: 'Proof' };
+const STEP_LABELS = { tracks: 'Tracks', frame: 'Frame', proof: 'Proof' };
 const WORKSPACE_HEADING = { tracks: 'Add your tracks', frame: 'Frame the poster' };
 
 function setStatus(msg, which = 'status') { const el = $(which); if (el) el.textContent = msg || ''; }
@@ -39,7 +39,6 @@ function buildStepper() {
 function go(step) {
   state.step = step;
   const inWork = step === 'tracks' || step === 'frame';
-  $('pane-region').hidden = step !== 'region';
   $('workspace').hidden = !inWork;
   $('pane-proof').hidden = step !== 'proof';
 
@@ -81,7 +80,7 @@ function go(step) {
 }
 
 function focusHeading(step) {
-  const id = { region: 'h-region', tracks: 'h-workspace', frame: 'h-workspace', proof: 'h-proof' }[step];
+  const id = { tracks: 'h-workspace', frame: 'h-workspace', proof: 'h-proof' }[step];
   const el = $(id); if (el) el.focus();
 }
 
@@ -110,41 +109,14 @@ function selectRegion(id) {
   const meta = state.regions.find((r) => r.id === id);
   state.regionName = meta ? meta.name : '';
   $('regionName').textContent = state.regionName;
-  for (const el of document.querySelectorAll('.region-card')) el.classList.toggle('sel', el.dataset.id === id);
-  $('toTracks').disabled = !id;
-}
-
-function buildRegionGallery() {
-  const host = $('regionGallery'); host.innerHTML = '';
-  for (const r of state.regions) {
-    // built with DOM APIs, not interpolated HTML: region.json is our own data, but
-    // a hostile/typo'd region name must render as text, never as markup (red-team).
-    const b = document.createElement('button');
-    b.type = 'button'; b.className = 'region-card'; b.dataset.id = r.id;
-    const img = document.createElement('img'); img.src = r.overview; img.alt = '';
-    const span = document.createElement('span'); span.textContent = r.name;
-    b.append(img, span);
-    b.onclick = () => selectRegion(r.id);
-    host.appendChild(b);
-  }
 }
 
 async function loadRegions(pending) {
   let list = [];
   try { list = await pending; } catch { /* leave empty; drop-to-detect still works */ }
-  state.regions = list;
-  const prefs = loadPrefs();
-  if (list.length <= 1) {                              // auto-skip the Region step
-    state.steps = ['tracks', 'frame', 'proof'];
-    if (list.length === 1) selectRegion(list[0].id);
-    go('tracks');
-  } else {
-    state.steps = ['region', 'tracks', 'frame', 'proof'];
-    buildRegionGallery();
-    if (prefs.region && list.some((r) => r.id === prefs.region)) selectRegion(prefs.region);
-    $('startOver').hidden = false;
-    go('region');
-  }
+  state.regions = list;                      // kept for the plates dialog + match echo
+  state.steps = ['tracks', 'frame', 'proof'];
+  go('tracks');
 }
 
 // The device-preset table comes from the server (single source of truth); the picker
@@ -193,6 +165,9 @@ async function doUpload(fileList) {
     state.session = j.session;
     if (j.region !== state.region) selectRegion(j.region);   // reflect an auto-detected region
     state.regionName = j.name; $('regionName').textContent = j.name || '';
+    const badge = $('regionBadge');
+    badge.textContent = state.builtRegion === j.region ? 'Built' : 'Matched';
+    badge.hidden = false;
     state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
     state.starterCrop = j.starter_crop; state.crop = null;    // set on Frame entry
     state.hasSpec = false; state.proofStale = true;           // new tracks invalidate any spec
@@ -745,6 +720,7 @@ function startOver() {
   $('map').hidden = true; $('addFiles').hidden = true;
   $('posterImg').removeAttribute('src'); $('toFrame').disabled = true;
   $('titleInput').value = ''; $('downloadAgain').hidden = true; updateEditionBadge();
+  $('regionBadge').hidden = true; state.builtRegion = null; state.pendingFiles = null;
   go(state.steps[0]);
   setStatus('Cleared — drop files to start a new map');
 }
@@ -830,13 +806,24 @@ function wire() {
   const pi = $('posterInput');
   pi.onchange = (e) => { continueFromPoster(e.target.files[0]); e.target.value = ''; };
   $('continuePoster').onclick = () => pi.click();
-  $('continuePosterRegion').onclick = () => pi.click();
+  $('browsePlates').onclick = () => {
+    const host = $('platesList'); host.innerHTML = '';
+    for (const r of state.regions) {
+      const card = document.createElement('div');
+      card.className = 'region-card static';
+      const img = document.createElement('img'); img.src = r.overview; img.alt = '';
+      const span = document.createElement('span'); span.textContent = r.name;
+      card.append(img, span);
+      host.appendChild(card);
+    }
+    $('platesDialog').showModal();
+  };
+  $('platesClose').onclick = () => $('platesDialog').close();
   const mapPane = $('mapPane');
   mapPane.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
   mapPane.addEventListener('dragleave', () => dz.classList.remove('over'));
   mapPane.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); doUpload(e.dataTransfer.files); });
 
-  $('toTracks').onclick = () => go('tracks');
   $('toFrame').onclick = () => go('frame');
   $('renderProof').onclick = renderProof;
   $('expressBtn').onclick = expressFinal;
