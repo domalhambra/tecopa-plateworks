@@ -625,6 +625,9 @@ async def region_build(req: RegionBuildRequest):
         raise HTTPException(422, "USGS 3DEP terrain covers the US only")
     if req.id in REGIONS:
         raise HTTPException(409, f"Region id '{req.id}' already exists")
+    if not (32601 <= req.epsg <= 32660):        # what utm_epsg produces; a bad CRS
+        raise HTTPException(422,                 # would otherwise 500 in plan_build
+                            "epsg must be a northern-hemisphere UTM zone (32601-32660)")
     plan = region_prep.plan_build(bbox, f"EPSG:{req.epsg}")
     if plan["over_budget"]:
         raise HTTPException(422,
@@ -644,8 +647,10 @@ async def region_build(req: RegionBuildRequest):
             prep_python=PREP_PYTHON, prep_script=PREP_SCRIPT,
             labels_script=LABELS_SCRIPT,
             set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s))
-        REGIONS.clear()
-        REGIONS.update(regions.discover(REGIONS_ROOT))   # in-place: refs stay valid
+        fresh = regions.discover(REGIONS_ROOT)   # build BEFORE mutating: a discover()
+        REGIONS.clear()                          # failure (a malformed region.json
+        REGIONS.update(fresh)                    # elsewhere) must not leave REGIONS
+                                                 # wiped. In-place: refs stay valid.
         return {"region": req.id, "labels_note": result["labels_note"]}
 
     holder["jid"] = jid = BUILD_QUEUE.submit(build_job)

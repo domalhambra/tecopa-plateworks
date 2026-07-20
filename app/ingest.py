@@ -364,9 +364,16 @@ def lonlat_extent(payloads) -> dict:
             else:
                 g = gpxpy.parse(data.decode("utf-8", errors="replace"))
                 if not name:
-                    name = (g.name or next((t.name for t in g.tracks if t.name), "") or "").strip()
+                    name = (g.name
+                            or next((t.name for t in g.tracks if t.name), "")
+                            or next((r.name for r in g.routes if r.name), "")
+                            or "").strip()
+                # route-only <rte>/<rtept> files (Garmin/planning-app exports) parse to
+                # zero tracks -- load_gpx_tracks supports them, so planning must too.
                 pts = [(pt.longitude, pt.latitude)
                        for t in g.tracks for sg in t.segments for pt in sg.points]
+                pts += [(pt.longitude, pt.latitude)
+                        for r in g.routes for pt in r.points]
         except Exception:
             continue                      # one bad file must not sink the batch
         for lon, lat in pts:

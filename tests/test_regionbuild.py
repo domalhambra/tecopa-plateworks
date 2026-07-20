@@ -109,6 +109,23 @@ def test_lonlat_extent_garbage_is_skipped_not_raised():
     assert ext["bbox"] is not None            # the good file still counts
 
 
+GPX_ROUTE_ONLY = b"""<?xml version="1.0"?>
+<gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">
+ <rte><name>Planned Loop</name>
+  <rtept lat="40.4" lon="-120.6"/><rtept lat="40.5" lon="-120.5"/>
+ </rte></gpx>"""
+
+
+def test_lonlat_extent_route_only_gpx():
+    # <rte>/<rtept> route-only files (Garmin/planning exports) have zero tracks;
+    # load_gpx_tracks supports them, so the plan entry point must too.
+    ext = ingest.lonlat_extent([(GPX_ROUTE_ONLY, "route.gpx")])
+    assert ext["bbox"] is not None
+    assert ext["name"] == "Planned Loop"          # name prefill from the route
+    w, s, e, n = ext["bbox"]
+    assert (w, s, e, n) == pytest.approx((-120.6, 40.4, -120.5, 40.5))
+
+
 # ---- run_build: subprocess orchestration against stub scripts (no network) ----
 
 import json as _json

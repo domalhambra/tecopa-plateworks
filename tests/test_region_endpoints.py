@@ -138,3 +138,73 @@ def test_build_rejects_bad_id_us_and_collision(tmp_path, monkeypatch):
 
 def test_build_unknown_job_404():
     assert client.get("/api/regions/build/nope").status_code == 404
+
+
+def test_build_rejects_over_budget_bbox():
+    # A US-covered but corridor-scale box: bbox_covered passes, but plan_build's
+    # auto path is over budget even at 60 m -> 422, before any job is submitted.
+    huge = {"id": "conus_scale", "name": "Too Big",
+            "bbox": [-125.4, 24.4, -66.9, 49.4], "epsg": 32614}
+    r = client.post("/api/regions/build", json=huge)
+    assert r.status_code == 422
+    assert "corridor-scale" in r.json()["detail"]
+
+
+def test_build_rejects_bad_epsg():
+    # epsg is only int-typed; an out-of-UTM value would 500 in plan_build -> reject 422.
+    bad = dict(BUILD_REQ, epsg=0)
+    r = client.post("/api/regions/build", json=bad)
+    assert r.status_code == 422
+    assert "UTM" in r.json()["detail"]
+
+
+def test_plan_rejects_oversize_upload(monkeypatch):
+    monkeypatch.setattr(main, "TRACK_FILE_MAX_BYTES", 64)
+    big = b"<gpx>" + b"x" * 200 + b"</gpx>"
+    r = _plan([(big, "big.gpx")])
+    assert r.status_code == 422
+    assert "size limit" in r.json()["detail"]
+
+
+def test_build_streams_progress_to_status(tmp_path, monkeypatch):
+    # Exercise the endpoint's real progress glue (holder -> BUILD_QUEUE.set_progress):
+    # a stub that emits a marker then blocks, so the status poll can observe it.
+    regions_root = tmp_path / "regions"
+    regions_root.mkdir()
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(regions_root))
+    monkeypatch.setattr(main, "REGIONS_ROOT", str(regions_root))
+    prep = tmp_path / "prep.py"
+    prep.write_text(
+        "import argparse, os, json, time\n"
+        "ap = argparse.ArgumentParser()\n"
+        "for a in ('--id','--name','--epsg'): ap.add_argument(a, required=True)\n"
+        "ap.add_argument('--bbox', nargs=4, type=float, required=True)\n"
+        "a = ap.parse_args()\n"
+        "out = os.path.join(os.environ['STUB_REGIONS_ROOT'], a.id)\n"
+        "os.makedirs(out, exist_ok=True)\n"
+        "print('STREAM_MARKER', flush=True)\n"
+        "time.sleep(1.2)\n"
+        "cfg = json.load(open('regions/susanville_reno/region.json'))\n"
+        "cfg['name'] = a.name\n"
+        "json.dump(cfg, open(os.path.join(out, 'region.json'), 'w'))\n"
+        "open(os.path.join(out, 'overview.png'), 'wb').write(b'x')\n")
+    labels = tmp_path / "labels.py"
+    labels.write_text("import sys\nsys.exit(0)\n")
+    monkeypatch.setattr(main, "PREP_PYTHON", sys.executable)
+    monkeypatch.setattr(main, "PREP_SCRIPT", str(prep))
+    monkeypatch.setattr(main, "LABELS_SCRIPT", str(labels))
+    saved = dict(main.REGIONS)
+    try:
+        jid = client.post("/api/regions/build",
+                          json=dict(BUILD_REQ, id="stream_test")).json()["job"]
+        saw = False
+        for _ in range(60):
+            prog = client.get(f"/api/regions/build/{jid}").json()["progress"]
+            if prog and "STREAM_MARKER" in prog:
+                saw = True
+                break
+            time.sleep(0.1)
+        assert saw, "progress never reflected the streamed prep output"
+        assert _wait_done(jid)["state"] == "done"
+    finally:
+        main.REGIONS.clear(); main.REGIONS.update(saved)
