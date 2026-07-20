@@ -35,6 +35,12 @@ python -c "import rasterio, pyproj, numpy, scipy, shapely, gpxpy, PIL; print('ok
   test deps; `requirements-lock.txt` is the exact pinned set (determinism / CI).
 - `requirements-regionprep.txt` — the heavy offline build stack for `region_prep.py`
   (py3dep/pynhd/pandas/geopandas). Only needed to build a new region.
+- To **build new regions from the app** (drop tracks anywhere in the US and the wizard
+  offers to fetch the terrain — see "GPX-first" below), create the separate prep venv
+  once: `python3 -m venv .venv-prep && .venv-prep/bin/pip install -r
+  requirements-regionprep.txt`. Without it the app still works against already-built
+  plates and shows the setup command on the build card; oversized (corridor-scale)
+  areas are refused in-app and remain a deliberate `region_prep.py` terminal run.
 
 On Apple Silicon, rasterio / pyproj / Pillow ship native wheels — no Homebrew GDAL
 required.
@@ -77,11 +83,27 @@ both once).
 - `app/render.py` — read DEM window, paint relief + tracks + markers in physical units
 - `app/provenance.py` — the self-describing-poster manifest (embed / extract / sanitize)
 - `app/wallpaper.py` — device presets + `spec_for_preset` (a screen is a sheet with a known ppi)
-- `app/main.py` — the endpoints over the engine (upload, proof, final, reprint)
+- `app/main.py` — the endpoints over the engine (upload, proof, final, reprint, region plan/build)
+- `app/regionbuild.py` — GPX-first region creation: bbox/UTM/US-coverage planning + the `region_prep` subprocess orchestration behind `POST /api/regions/build`
 - `app/plates.py` — stdlib plate installer/verifier (`python -m app.plates install|verify`)
-- `region_prep.py` — offline, one-time: fetch 3DEP DEM, build COG + overview + region.json
+- `region_prep.py` — offline: fetch 3DEP DEM, build COG + overview + region.json. Runnable from the terminal, and spawned in `.venv-prep` by the in-app build (see GPX-first below)
 - `scripts/build_labels.py` — offline: fetch GNIS terrain names → `regions/<id>/labels.json`
 - `scripts/pack_region.py` — offline: pack a built region into a deterministic `.trailplate.zip`
+
+## GPX-first: the region is an outcome, not a first step
+
+You drop GPX/KML/KMZ tracks first; the region is decided from them. If a built plate
+covers the tracks, the upload auto-matches it (a "Matched · <region>" chip). If none
+does — the common case for fresh client tracks — a **build card** appears:
+`POST /api/regions/plan` derives a padded bbox and UTM zone from the raw track extent,
+runs `region_prep.plan_build` (pure logic — no fetch stack) for an honest cost estimate
+(resolution, grid, download size), and prefills a region name from the GPX `<name>`.
+Accepting it calls `POST /api/regions/build`, which spawns `region_prep.py` in
+`.venv-prep` on a dedicated single-slot job queue, streams its progress, builds GNIS
+labels, and hot-reloads the region registry — then your tracks re-upload against the new
+plate ("Built · <region>"). Tracks outside USGS 3DEP coverage (US-only) and
+corridor-scale areas are refused honestly in-app; `app/regionbuild.py` holds the
+planning helpers and the subprocess orchestration.
 
 ## Named geography (GNIS labels)
 
