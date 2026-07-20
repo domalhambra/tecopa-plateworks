@@ -182,7 +182,7 @@ async function doUpload(fileList) {
     state.journeyLight = j.journey_light || null;   // { available, date, sun } | null
     syncJourneyUI();
     canvas.setOverview(j.overview, j.overview_size);
-    $('dropzone').hidden = true; $('continuePoster').hidden = true;
+    $('dropzone').hidden = true; $('continuePoster').hidden = true; $('browsePlates').hidden = true;
     $('map').hidden = false; $('addFiles').hidden = false;
     $('startOver').hidden = false;               // reset is reachable from any step now
     markers.render($('markerList'), (msg) => setStatus(msg));
@@ -229,6 +229,8 @@ async function doUpload(fileList) {
 // --- region creation (GPX-first: no plate covers the tracks) ---
 async function enterCreationFlow(files) {
   setStatus('No plate covers these tracks — planning a new region…');
+  $('startOver').hidden = false;    // the card's US-only / no-venv states have no
+                                    // Build button; Start over is the way back out
   let p;
   try { p = await api.planRegion(files); }
   catch (e) { setStatus('Planning failed: ' + e.message); return; }
@@ -285,6 +287,9 @@ async function startBuild(p) {
     if (st.state === 'error') { showBuildError(st.error || 'Build failed'); return; }
     state.builtRegion = st.result.region;
     $('buildCard').hidden = true;
+    try { state.regions = await api.getRegions(); } catch { /* keep stale list */ }
+    // ^ refresh the client cache so activeRegion()/metresPerPx() resolve the new
+    //   plate -- the Frame-step refit/zoom-floor/feasibility guards need its bounds.
     const files = state.pendingFiles || [];
     state.pendingFiles = null;
     setStatus(st.result.labels_note
@@ -473,7 +478,7 @@ async function continueFromPoster(file) {
     applyPrefill(j.prefill);
     renderFiles(); updateEditionBadge();
     canvas.setOverview(j.overview, j.overview_size);
-    $('dropzone').hidden = true; $('continuePoster').hidden = true;
+    $('dropzone').hidden = true; $('continuePoster').hidden = true; $('browsePlates').hidden = true;
     $('map').hidden = false; $('addFiles').hidden = false; $('startOver').hidden = false;
     markers.render($('markerList'), (msg) => setStatus(msg));
     $('toFrame').disabled = state.tracks.length === 0;
