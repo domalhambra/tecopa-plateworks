@@ -1207,7 +1207,7 @@ async def mockups_submit(file: UploadFile = File(...),
     from app import mockups
     data = await _read_capped(file)
     if not data.startswith(mockups.PNG_MAGIC):
-        raise HTTPException(422, "not a PNG — mockups take a TrailPrint final (poster or film)")
+        raise HTTPException(422, "not a PNG — mockups take a Tecopa Printworks final (poster or film)")
     vs = [v.strip() for v in variants.split(",") if v.strip()]
     if not vs:
         raise HTTPException(422, "pick at least one variant (plate, frame)")
