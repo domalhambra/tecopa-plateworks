@@ -122,3 +122,22 @@ Gotchas already paid for:
 | `region_prep.py` | offline DEM/hydro/landcover bake — run in `.venv-prep` |
 | `docs/scope.md`, `docs/MANIFEST.md`, `docs/marketing.md` | the goal, the CC0 file format, the story |
 | `docs/superpowers/` | `specs/` `plans/` `assessments/` `handoffs/` `quality/golden/` — the design record |
+
+## Session logging
+
+Log sessions to the Notion **Session Log** database. This is written here, in the repo, on purpose: a cloud container clones only this repo, so a convention that lives in the workspace CLAUDE.md or a Mac-local skill never reaches it. Everything needed is below — no other file required.
+
+- Parent: `{"type": "data_source_id", "data_source_id": "60f3ea17-4424-4815-8a4b-6a4d4de61c4f"}`
+- `Session Title` (title) and `date:Date:start` (ISO date — note the expanded property name, not `Date`)
+- `Repo` — relation. **This repo is** `["https://app.notion.com/p/3a44f171f472818782c1c9dbb2b6547a"]`
+- `Activity` — build | fix | research | write | ops | plan
+- `Status` — Complete | In Progress | Blocked
+- `Shipped` — checkbox (`"__YES__"`) for deploys and launches
+- `Tags` — JSON array **encoded as a string**, not a native array
+- `Quarter` computes itself from Date. Never set it by hand.
+
+Body sections: What We Did / Open Threads / Next Steps / Notes.
+
+Also open a **Threads** record for work deliberately left unfinished, and a **Decisions** record for any durable choice that will constrain future work.
+
+**If Notion is unreachable** — no connector attached in this container, or offline — append the entry to this repo's own `SESSION_LOG.md` (newest first, append-only, never rewrite history) and say so plainly in the closing summary. Confirm the Notion write returned a page ID before reporting the log as done. A log that silently doesn't happen is the failure this fallback exists to prevent.
