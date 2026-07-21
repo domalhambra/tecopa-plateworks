@@ -1,6 +1,6 @@
 {
   "id": "lassen_ca",
-  "built": "2026-07-03",
+  "built": "2026-07-21",
   "fetch_bbox_4326": [
     -121.06,
     40.16,
@@ -8,27 +8,27 @@
     40.85
   ],
   "crs": "EPSG:32610",
-  "rebuild": "python region_prep.py --id lassen_ca --name <name> --bbox -121.06 40.16 -120.34 40.85 --epsg 32610",
+  "rebuild": "python region_prep.py --id lassen_ca --name <name> --bbox -121.06 40.16 -120.34 40.85 --epsg 32610 --resolution 10",
   "assets": {
     "dem.tif": {
-      "sha256": "0ec1b940c9f3bd02cdfa070179ea12a6b2c7bf5be899d011508ee83d785efc58",
-      "bytes": 183391503
+      "sha256": "20cec75c3a6c6eae726ceb1576c04c49858538a64cc1faaf9da38f3613e3418a",
+      "bytes": 192087365
     },
     "hydro.json": {
-      "sha256": "c426ee3406ed91a2b1c14a443cd7db78ff90a09ea86684a9feee38d6c8b52067",
-      "bytes": 190421
+      "sha256": "87594158478ffdefe3a3226f964a0a9eb29ef26708ed3899cf606cbe8900fcf0",
+      "bytes": 190424
     },
     "region.json": {
-      "sha256": "1525c0c849f7c2f03331aae3e03843e2e8fad742fc3c6968388f4e2fcb779138",
-      "bytes": 501
+      "sha256": "1d769539f93a5af4e60514104ecb331f5a85d5af8500361e52122a2f40cd265a",
+      "bytes": 469
     },
     "overview.png": {
-      "sha256": "fd3c3f1a27a16ad4043aff3fd4f3770f18b124ccfbe717ed88ac6c1d9ebbe436",
-      "bytes": 636491
+      "sha256": "18829df7107d4a15b45a503833d2456cb55ff6f2589ce6242e72b75253bce27d",
+      "bytes": 573166
     },
     "landcover.tif": {
-      "sha256": "540b09b123ee0ed297e33c55e0cb0d5f9cd6fb28066c7e8c0da89a89cc913360",
-      "bytes": 456444
+      "sha256": "870c74f069828328aa2c345ab6712c852bbb81b4c852874fea371e0f0e8be1a1",
+      "bytes": 468957
     },
     "labels.json": {
       "sha256": "a8b371eb5419ab25f7236dfa9786a36ce65e1c34f7ae4d2f7da4fb77594299ef",
