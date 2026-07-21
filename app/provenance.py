@@ -43,7 +43,10 @@ ENGINE = "tecopa-plateworks"
 # "tecopa-printworks" (2026-07-19..21); readers treat all three as this engine
 # (docs/MANIFEST.md). Nothing in this module gates on the engine value.
 LEGACY_ENGINES = ("trailprint", "tecopa-printworks")
-ENGINE_URL = "https://github.com/domalhambra/badwatertrails"
+ENGINE_URL = "https://github.com/domalhambra/tecopa-plateworks"
+# Must track the repo's real name, not a redirect. GitHub 301s a renamed repo only
+# until someone reuses the old name -- and this string is the pointer a stranger
+# follows to resurrect a poster years from now, so it cannot rest on that.
 
 
 class ManifestError(SpecError):

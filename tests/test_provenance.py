@@ -275,7 +275,7 @@ def test_resurrection_note_is_pure_ascii_and_names_the_essentials():
     assert "save file" in note
     assert '"trailprint"' in note and "docs/MANIFEST.md" in note
     assert "AGPL-3.0-or-later" in note
-    assert "https://github.com/domalhambra/badwatertrails" in note
+    assert "https://github.com/domalhambra/tecopa-plateworks" in note
     # pre-pack manifest (no region_pack): the plate line names the region, no version
     assert "plate lassen_ca" in note
     assert "USGS" in note and "/api/reprint" in note
