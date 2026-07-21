@@ -31,11 +31,19 @@ orphan server, and a server with NO regions at all must refuse with the honest
 import json
 import os
 
+import pytest
+
 from app import main, provenance, regions
 from app.plates import install_plate
 from scripts.pack_region import pack_region
 
 REGION_DIR = "regions/lassen_ca"
+
+# This drill moves the SHARED regions/lassen_ca dir aside for a few seconds (its
+# defense against a reprint leaking to the default root). Under `pytest -n auto` that
+# makes lassen briefly vanish for every other worker mid-render, so this test must run
+# ALONE: CI runs `-m "not serial"` in parallel, then `-m serial` on its own.
+pytestmark = pytest.mark.serial
 
 
 def _client():

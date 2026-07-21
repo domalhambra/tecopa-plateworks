@@ -21,10 +21,21 @@ import tempfile
 # Isolate the app's writable stores BEFORE any test module imports app.main: the
 # endpoint tests used to write finals into the repo's live blobs/ and uploads/
 # (417 MB accumulated) and every put() swept the operator's real store (red-team).
-os.environ.setdefault("TECOPA_BLOBS",
-                      tempfile.mkdtemp(prefix="tecopa-test-blobs-"))
-os.environ.setdefault("TECOPA_UPLOADS",
-                      tempfile.mkdtemp(prefix="tecopa-test-uploads-"))
+#
+# Under pytest-xdist each worker MUST get its own store: the workers inherit the
+# controller's environment (where the setdefault below already ran), so without this
+# they would all share one blobs/ dir and one worker's TTL/orphan sweep would evict
+# another worker's in-flight result. PYTEST_XDIST_WORKER ("gw0", "gw1", …) is set in
+# each worker's env before conftest imports, so key the private store on it.
+_worker = os.environ.get("PYTEST_XDIST_WORKER")
+if _worker:
+    os.environ["TECOPA_BLOBS"] = tempfile.mkdtemp(prefix=f"tecopa-test-blobs-{_worker}-")
+    os.environ["TECOPA_UPLOADS"] = tempfile.mkdtemp(prefix=f"tecopa-test-uploads-{_worker}-")
+else:
+    os.environ.setdefault("TECOPA_BLOBS",
+                          tempfile.mkdtemp(prefix="tecopa-test-blobs-"))
+    os.environ.setdefault("TECOPA_UPLOADS",
+                          tempfile.mkdtemp(prefix="tecopa-test-uploads-"))
 
 import numpy as np
 import rasterio
@@ -67,10 +78,22 @@ def _build_synthetic_dem(region_dir: str, cfg: dict) -> None:
                    transform=transform, nodata=np.nan, tiled=True,
                    blockxsize=128, blockysize=128, compress="deflate")
     out = os.path.join(region_dir, cfg.get("dem_path", "dem.tif"))
-    with rasterio.open(out, "w", **profile) as ds:
-        ds.write(data, 1)
-        ds.build_overviews([2, 4], Resampling.average)
-        ds.update_tags(synthetic="1")   # marks this as a test DEM, not real terrain
+    # Atomic write: under `pytest -n auto` several workers hydrate the SHARED regions/
+    # tree at once, so build into a private temp file (same dir → same filesystem →
+    # os.replace is atomic) and swap it in. A reader never sees a half-written DEM, and
+    # two concurrent builders just race to a valid file (the loser's write is a no-op
+    # overwrite). The GTiff driver is explicit, so the .tmp extension is irrelevant, and
+    # build_overviews on a "w" dataset writes overviews INTERNALLY (no .ovr sidecar).
+    tmp = f"{out}.{os.getpid()}.tmp"
+    try:
+        with rasterio.open(tmp, "w", **profile) as ds:
+            ds.write(data, 1)
+            ds.build_overviews([2, 4], Resampling.average)
+            ds.update_tags(synthetic="1")   # marks this as a test DEM, not real terrain
+        os.replace(tmp, out)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def _hydrate_regions(root: str = REGIONS_ROOT) -> None:
