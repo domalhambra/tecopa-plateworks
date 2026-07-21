@@ -16,9 +16,9 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # the suite renders real posters, films, and social-preview mockups end to end,
-    # so it runs ~25-30 min; keep headroom over that (a hang still can't run forever)
-    timeout-minutes: 45
+    # Under `pytest -n auto` the full suite is ~8-10 min (was ~30 serial) and the PR tier
+    # less; keep headroom over the full run so a hang still can't run forever.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -45,5 +45,22 @@ jobs:
       # rasterio/pyproj/Pillow ship manylinux wheels (bundled GDAL/PROJ), so no apt
       # GDAL is needed. tests/conftest.py hydrates a synthetic DEM, so the
       # endpoint/render/registration suites run here instead of skipping.
+      #
+      # Two axes:
+      #   -n auto     fan the run across every runner core (pytest-xdist).
+      #   slow        heavy full-res render tests -> excluded from the fast PR tier.
+      #   serial      mutate the shared regions/ tree -> must run alone (never under -n).
+      #
+      # A pull_request runs only the FAST, parallel-safe tier for minutes-fast feedback.
+      # A push to main (i.e. every merge) runs EVERYTHING -- the parallel bucket first,
+      # then the serial bucket on its own -- so the slow render tests that PRs skip always
+      # run when code actually lands. The job name stays "test" for both, so a
+      # required-status-check named "test" needs no reconfiguration.
       - name: Run tests
-        run: pytest -q
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            python -m pytest -n auto -m "not slow and not serial"
+          else
+            python -m pytest -n auto -m "not serial"
+            python -m pytest -m "serial"
+          fi

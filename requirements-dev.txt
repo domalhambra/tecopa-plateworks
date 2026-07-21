@@ -2,4 +2,5 @@
 # pinned requirements-lock.txt (what CI uses); this file is the unpinned convenience.
 -r requirements.txt
 pytest>=8.0
+pytest-xdist>=3.6    # parallel test runner (`pytest -n auto`) — CI's fast tier
 httpx>=0.27          # FastAPI TestClient
