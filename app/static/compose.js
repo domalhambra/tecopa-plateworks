@@ -73,6 +73,17 @@ export function initCompose(h = {}) {
 }
 
 function stalePicture() { if (state.hasSpec) state.proofStale = true; }
+
+// The top-bar target switcher drives the composition's output kind through here, so
+// the segmented face, prefs, field visibility, and the reframe chain stay one code path.
+export function setOutput(v) {
+  if (state.output === v) return;
+  state.output = v; savePref('output', v);
+  segOutput && segOutput.reflect(v);
+  applyOutputVisibility();
+  reframe();
+  hooks.refresh && hooks.refresh();
+}
 function showHint(text) { const h = $('hint'); if (!h) return; h.textContent = text; h.hidden = !text; }
 
 function setMapMode(m) {

@@ -14,28 +14,30 @@ let active = 0;
 let dlg, input, listEl;
 
 const SECTION_LABEL = {
-  library: 'Library', compose: 'Compose', style: 'Style', layers: 'Layers',
-  light: 'Light', social: 'Social', films: 'Films', export: 'Export', exports: 'Exports',
+  compose: 'Page', style: 'Style', layers: 'Layers',
+  light: 'Light', social: 'Social', films: 'Film', export: 'Export',
 };
 
-export function initPalette({ setSection, actions }) {
+export function initPalette({ setTarget, setView, jumpToControl, actions }) {
   dlg = $('paletteDialog'); input = $('paletteInput'); listEl = $('paletteList');
 
   items = [];
-  // sections
-  for (const s of ['library', 'compose', 'style', 'layers', 'light', 'social', 'films', 'exports']) {
-    items.push({ label: `Go to ${SECTION_LABEL[s]}`, hint: 'section', keys: [s, SECTION_LABEL[s]], run: () => setSection(s) });
+  // targets + stage views (the single-window router)
+  for (const [t, label] of [['poster', 'Poster'], ['wallpaper', 'Wallpaper'], ['film', 'Film'], ['social', 'Social']]) {
+    items.push({ label: `Switch to ${label}`, hint: 'target', keys: [t, label, 'target', 'output'], run: () => setTarget(t) });
   }
+  items.push({ label: 'Show the Map', hint: 'view', keys: ['map', 'frame', 'compose'], run: () => setView('map') });
+  items.push({ label: 'Show the Preview', hint: 'view', keys: ['preview', 'proof'], run: () => setView('preview') });
   // actions (provided by app.js)
   for (const a of actions) items.push({ label: a.label, hint: 'action', keys: [a.label], run: a.run });
   // presets
   for (const p of CURATED) items.push({ label: `Apply preset: ${p.name}`, hint: 'preset', keys: [p.name, 'preset'], run: () => presets.apply(p.snap, p.name) });
-  // controls -> jump to their section
+  // controls -> expand their group and focus them (switching target if needed)
   for (const c of CONTROLS) {
     items.push({
       label: c.label, hint: SECTION_LABEL[c.section] || c.section,
       keys: [c.label, ...(c.keywords || []), c.section],
-      run: () => { setSection(c.section === 'export' ? 'style' : c.section); setTimeout(() => $(`c_${c.id}`)?.focus(), 60); },
+      run: () => jumpToControl(c),
     });
   }
 

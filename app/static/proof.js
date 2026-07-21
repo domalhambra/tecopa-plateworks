@@ -230,6 +230,7 @@ export function refreshProofUI() {
   // explicit Re-proof + Accept pair is clearer, so retire it.
   const eb = $('expressBtn'); if (eb) { eb.hidden = state.hasSpec; eb.disabled = proofInFlight || canvas.sizeInfeasibleForRegion(); }
   renderFilmstrip();
+  hooks.onUiRefresh && hooks.onUiRefresh();   // the status strip mirrors proof freshness
 }
 
 // --- proof history filmstrip -------------------------------------------------------

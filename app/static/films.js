@@ -1,49 +1,84 @@
-// films.js — the Films section: the accepted composition as a time-lapse, the
-// day-ordered journeys inking themselves onto the terrain to the finished poster. Full
-// pacing (frames, per-frame hold, final hold, opening hold — the API always accepted
-// these; the old UI exposed only frame count), the container choice (APNG archival vs
-// WebP/MP4 share twins), and Journey Light motion (the sun travels with the hike). Uses
-// the generic registry controls for pacing/format/motion and adds the target picker,
-// the submit, and the preview.
-import { state } from './store.js';
+// films.js — the Film target: the accepted composition as a time-lapse, the
+// day-ordered journeys inking themselves onto the terrain to the finished poster.
+// Split for the single-window studio: the film SETUP (target sheet, container format,
+// light motion, the render action) lives in the LEFT project sidebar (#filmPanel);
+// PACING rides the right appearance sidebar (built by app.js from the registry); the
+// CENTER stage (#filmStage) is the player. Nothing is gated — the render action simply
+// explains what it needs until a fresh proof exists.
+import { state, subscribe } from './store.js';
 import * as api from './api.js';
 import * as jobs from './jobs.js';
 import * as inspector from './inspector.js';
 import * as proof from './proof.js';
-import { subscribe } from './store.js';
 import { $, toast, saveBlob } from './ui.js';
 
 let tlInFlight = false;
 let tlUrl = null;
-let built = false;
+let tlIsVideo = false;
 
-export function buildFilms() {
-  const panel = $('panel-films');
-  if (!state.hasSpec) {
-    panel.innerHTML = '<section class="insp-group"><p class="lede insp-empty">Render and accept a proof first — a film is your accepted poster, animated. Frame it in Compose, then come back.</p></section>';
-    built = false;
-    return;
-  }
-  panel.innerHTML = '';
-  const controls = document.createElement('div');
-  panel.appendChild(controls);
-  inspector.buildSectionPanel('films', controls);   // pacing + format + light motion
+// Build the left-sidebar setup panel ONCE at boot (registry controls must not be
+// re-registered on every target switch). Target options populate after presets load.
+export function initFilms() {
+  const host = $('filmPanel');
+  const fmtHost = document.createElement('div');
+  inspector.buildSectionPanel('films', fmtHost, { panels: ['Output'] });   // tlFormat + lightMotion
 
   const g = document.createElement('section');
   g.className = 'insp-group';
   g.innerHTML =
-    `<div class="insp-head"><span class="insp-title">Target &amp; render</span></div>` +
+    `<div class="insp-head"><span class="insp-title">Film</span></div>` +
     `<div class="field" id="tlTargetField" hidden><label for="tlTarget">Target</label>` +
     `<div class="select-wrap"><select id="tlTarget"></select></div></div>` +
     `<p class="insp-note" id="tlLightNote" hidden>A Journey Light film (the sun travels with the hike) is a share copy — WebP or MP4.</p>` +
-    `<div class="tl-preview"><img id="tlPreview" alt="" hidden></div>` +
-    `<button id="tlBtn" class="primary" type="button">Render time-lapse</button>`;
-  panel.appendChild(g);
+    `<p class="insp-note" id="tlGateNote" hidden>A film animates your proofed poster — render a proof first.</p>` +
+    `<button id="tlBtn" class="primary" type="button">Render film</button>`;
+  host.append(g, fmtHost);
 
   populateTarget();
   $('tlBtn').onclick = renderTimelapse;
   reflectLightNote();
-  built = true;
+  refreshGate();
+}
+
+// Called when the Film target activates (and on shell refreshes while active).
+export function buildFilms() {
+  populateTarget();
+  reflectLightNote();
+  refreshGate();
+  renderStage();
+}
+
+// The no-gate rule: everything visible, the ACTION carries the reason when it can't run.
+export function refreshGate() {
+  const btn = $('tlBtn'); if (!btn) return;
+  const ok = proof.hasFreshProof();
+  btn.disabled = tlInFlight || !ok;
+  const note = $('tlGateNote'); if (note) note.hidden = ok;
+}
+
+function renderStage() {
+  const stage = $('filmStage'); if (!stage) return;
+  let head = stage.querySelector('.home-head');
+  if (!head) {
+    stage.innerHTML =
+      `<div class="home-head"><h1 id="h-film" tabindex="-1">Film</h1>` +
+      `<p class="lede">Your journeys ink themselves onto the terrain, day by day, to the finished poster. ` +
+      `Pick pacing on the right and the container on the left, then render.</p></div>` +
+      `<div class="tl-stage"><img id="tlPreview" alt="Time-lapse preview" hidden>` +
+      `<video id="tlVideo" controls loop playsinline hidden></video>` +
+      `<p class="lede" id="tlEmpty">No film yet — it appears here when the render lands.</p></div>`;
+  }
+  reflectPlayer();
+}
+
+function reflectPlayer() {
+  const img = $('tlPreview'), vid = $('tlVideo'), empty = $('tlEmpty');
+  if (!img || !vid) return;
+  img.hidden = !(tlUrl && !tlIsVideo);
+  vid.hidden = !(tlUrl && tlIsVideo);
+  if (empty) empty.hidden = !!tlUrl;
+  if (tlUrl && tlIsVideo && vid.src !== tlUrl) vid.src = tlUrl;
+  if (tlUrl && !tlIsVideo && img.src !== tlUrl) img.src = tlUrl;
 }
 
 function populateTarget() {
@@ -66,12 +101,12 @@ function reflectLightNote() {
 }
 
 // keep the light-motion note honest as the registry select changes it
-subscribe((path) => { if (built && (path === null || path === 'lightMotion' || path === 'tlFormat')) reflectLightNote(); });
+subscribe((path) => { if (path === null || path === 'lightMotion' || path === 'tlFormat') reflectLightNote(); });
 
-async function renderTimelapse() {
+export async function renderTimelapse() {
   if (tlInFlight) return;
   if (!proof.hasFreshProof()) { toast('Re-proof first — the film renders the accepted composition.', 'error'); return; }
-  tlInFlight = true; $('tlBtn').disabled = true;
+  tlInFlight = true; refreshGate();
   const fmt = state.tlFormat;
   toast('Queuing time-lapse…', 'working');
   try {
@@ -90,11 +125,8 @@ async function renderTimelapse() {
       jobs.markDownloaded(sub.job, filename);
       if (tlUrl) URL.revokeObjectURL(tlUrl);
       tlUrl = URL.createObjectURL(blob);
-      const img = $('tlPreview');
-      if (img) {
-        if (fmt === 'mp4') { img.hidden = true; img.removeAttribute('src'); }   // <img> can't play video
-        else { img.src = tlUrl; img.hidden = false; }
-      }
+      tlIsVideo = fmt === 'mp4';
+      renderStage();
       saveBlob(blob, filename);
       toast(`Time-lapse ready — ${sub.frames} frames, downloaded.`, 'ok');
     }
@@ -102,5 +134,5 @@ async function renderTimelapse() {
     // the server's honest 422 (e.g. APNG + moving sun, or no timestamps) reads well as-is
     toast('Time-lapse failed: ' + e.message, 'error');
   }
-  tlInFlight = false; const b = $('tlBtn'); if (b) b.disabled = false;
+  tlInFlight = false; refreshGate();
 }

@@ -32,6 +32,12 @@
         <span id="editionBadge" class="edition-badge" hidden></span>
         <span id="yearSpan" class="year-span"></span>
       </div>
+      <nav id="targetBar" class="target-bar" aria-label="Output target">
+        <button class="target-item" type="button" data-target="poster" data-key="1">Poster</button>
+        <button class="target-item" type="button" data-target="wallpaper" data-key="2">Wallpaper</button>
+        <button class="target-item" type="button" data-target="film" data-key="3">Film</button>
+        <button class="target-item" type="button" data-target="social" data-key="4">Social</button>
+      </nav>
       <div class="tb-group header-actions">
         <button id="paletteBtn" class="tb-btn" type="button" aria-label="Command palette (Ctrl or Cmd + K)">
           <span class="tb-ico">⌘</span><span class="tb-txt">Search</span><kbd class="tb-kbd">⌘K</kbd>
@@ -49,30 +55,125 @@
     </header>
 
     <div class="studio-body">
-      <!-- ===================== section rail ===================== -->
-      <nav id="rail" class="rail" aria-label="Studio sections">
-        <button class="rail-item" type="button" data-section="library" data-key="1">
-          <span class="rail-ico" aria-hidden="true">▤</span><span class="rail-label">Library</span></button>
-        <button class="rail-item" type="button" data-section="compose" data-key="2">
-          <span class="rail-ico" aria-hidden="true">◳</span><span class="rail-label">Compose</span></button>
-        <button class="rail-item" type="button" data-section="style" data-key="3">
-          <span class="rail-ico" aria-hidden="true">✦</span><span class="rail-label">Style</span></button>
-        <button class="rail-item" type="button" data-section="layers" data-key="4">
-          <span class="rail-ico" aria-hidden="true">▦</span><span class="rail-label">Layers</span></button>
-        <button class="rail-item" type="button" data-section="light" data-key="5">
-          <span class="rail-ico" aria-hidden="true">☀</span><span class="rail-label">Light</span></button>
-        <button class="rail-item" type="button" data-section="social" data-key="6">
-          <span class="rail-ico" aria-hidden="true">◉</span><span class="rail-label">Social</span></button>
-        <button class="rail-item" type="button" data-section="films" data-key="7">
-          <span class="rail-ico" aria-hidden="true">▷</span><span class="rail-label">Films</span></button>
-        <button class="rail-item" type="button" data-section="exports" data-key="8">
-          <span class="rail-ico" aria-hidden="true">⇩</span><span class="rail-label">Exports</span></button>
-      </nav>
+      <!-- ===================== project sidebar (left): what is being made ===================== -->
+      <aside id="projectbar" class="projectbar" aria-label="Project setup">
+        <div class="projectbar-body">
+          <!-- page setup (poster / wallpaper targets) -->
+          <div id="pagePanel">
+            <section class="insp-group">
+              <div class="insp-head"><span class="insp-title">Page</span>
+                <button id="resetFrame" class="mini" type="button">Reset frame</button>
+              </div>
+              <div class="field" id="outputField" hidden>
+                <label>Output</label>
+                <div class="segmented" data-for="output" role="radiogroup" aria-label="Output">
+                  <button type="button" role="radio" data-val="print">Print</button>
+                  <button type="button" role="radio" data-val="wallpaper">Wallpaper</button>
+                </div>
+                <select id="output" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="print">Print</option><option value="wallpaper">Wallpaper</option>
+                </select>
+              </div>
+              <div class="field" id="sizeField">
+                <label for="size">Print size</label>
+                <div class="select-wrap"><select id="size">
+                  <option value="18,24">18 × 24 in</option>
+                  <option value="24,36">24 × 36 in</option>
+                  <option value="12,16">12 × 16 in</option>
+                  <option value="9,12">9 × 12 in</option>
+                </select></div>
+              </div>
+              <div class="field" id="bleedField">
+                <div class="slider-top"><label for="bleed">Print-shop bleed</label><output id="bleedVal">None</output></div>
+                <input type="range" id="bleed" min="0" max="0.5" step="0.125" value="0">
+              </div>
+              <div class="field" id="wpPresetField" hidden>
+                <label for="wpPreset">Device</label>
+                <div class="select-wrap"><select id="wpPreset"></select></div>
+              </div>
+              <div class="field" id="customDeviceField" hidden>
+                <label for="customPxW">Custom device</label>
+                <div class="custom-device" title="Exact native pixels and physical ppi of your screen.">
+                  <input id="customPxW" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="width px" aria-label="Custom device width in pixels">
+                  <span aria-hidden="true">×</span>
+                  <input id="customPxH" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="height px" aria-label="Custom device height in pixels">
+                  <span aria-hidden="true">@</span>
+                  <input id="customPpi" type="number" inputmode="numeric" min="72" max="600" step="1" placeholder="ppi" aria-label="Custom device pixels per inch">
+                </div>
+              </div>
+              <div class="field" id="orientField">
+                <label>Orientation</label>
+                <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">
+                  <button type="button" role="radio" data-val="auto">Auto</button>
+                  <button type="button" role="radio" data-val="landscape">Landscape</button>
+                  <button type="button" role="radio" data-val="portrait">Portrait</button>
+                </div>
+                <select id="orient" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option>
+                </select>
+              </div>
+              <div class="field" id="titleField">
+                <label for="titleInput">Poster title</label>
+                <input id="titleInput" type="text" maxlength="60" placeholder="Region name — “-” for none">
+              </div>
+            </section>
+          </div>
+
+          <!-- film setup (film target; built by films.js) -->
+          <div id="filmPanel" hidden></div>
+
+          <section id="filesBlock" class="insp-group">
+            <div class="insp-head"><span class="insp-title">Files</span>
+              <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
+            </div>
+            <ul id="fileList" class="file-list"></ul>
+          </section>
+          <section id="markersBox" class="insp-group" hidden>
+            <div class="insp-head"><span class="insp-title">Places</span>
+              <span class="insp-note">name · icon · photo</span></div>
+            <div id="markerList"></div>
+          </section>
+          <div id="provenanceCard" class="provenance-card side" hidden></div>
+        </div>
+
+        <div id="inspectorFoot" class="inspector-foot">
+          <div class="foot-export" id="footExport">
+            <div class="field inline" id="formatField">
+              <label for="finalFormat">Format</label>
+              <div class="segmented" data-for="finalFormat" role="radiogroup" aria-label="Final format">
+                <button type="button" role="radio" data-val="png">PNG</button>
+                <button type="button" role="radio" data-val="pdf">PDF</button>
+              </div>
+              <select id="finalFormat" class="sr-only" tabindex="-1" aria-hidden="true">
+                <option value="png">PNG</option><option value="pdf">PDF (print shop)</option>
+              </select>
+            </div>
+            <label class="reprint-toggle" title="Embed the poster's recipe in the PNG so it reprints from the file alone. Off = a share copy that keeps your exact route coordinates out of the file.">
+              <span class="switch"><input type="checkbox" id="embedSpecChk" checked><span class="slider"></span></span>
+              <span>Reprintable file</span>
+            </label>
+          </div>
+          <p class="insp-note save-file-note" id="saveFileNote"></p>
+          <div class="foot-actions">
+            <button id="reframeBtn" class="ghost" type="button" hidden>Reframe</button>
+            <button id="downloadAgain" class="ghost" type="button" hidden>Save another copy</button>
+            <button id="expressBtn" class="ghost" type="button">Proof + final</button>
+            <button id="renderProof" class="primary" type="button">Render proof</button>
+            <button id="acceptBtn" class="primary" type="button" hidden>Accept &amp; render final</button>
+          </div>
+        </div>
+      </aside>
 
       <!-- ===================== center stage ===================== -->
       <main class="stage">
-        <!-- surface: LIBRARY / home -->
-        <section id="surface-home" class="surface surface-home" hidden aria-label="Library">
+        <!-- Map | Preview toggle for the poster/wallpaper workspace -->
+        <div id="stageView" class="stage-view" hidden role="group" aria-label="Stage view">
+          <button id="viewMapBtn" class="seg-mini" type="button">Map</button>
+          <button id="viewPreviewBtn" class="seg-mini" type="button">Preview</button>
+        </div>
+
+        <!-- surface: empty state / start here -->
+        <section id="surface-home" class="surface surface-home" hidden aria-label="Start">
           <div class="surface-scroll">
             <div class="home-head">
               <h1 id="h-home" tabindex="-1">Turn your tracks into a poster</h1>
@@ -143,7 +244,7 @@
           <div class="proof-wrap viewport" id="proofViewport">
             <div id="proofEmpty" class="proof-empty">
               <p>No proof yet.</p>
-              <p class="lede">Frame your poster in <b>Compose</b>, then render a proof to preview it here.</p>
+              <p class="lede">Frame your poster on the <b>Map</b>, then render a proof to preview it here.</p>
             </div>
             <div class="viewport-content" id="proofContent">
               <div class="poster-card" id="posterCard" hidden>
@@ -160,142 +261,53 @@
           <div class="surface-scroll" id="socialPreview"></div>
         </section>
 
-        <!-- surface: EXPORTS / jobs -->
-        <section id="surface-queue" class="surface surface-queue" hidden aria-label="Exports">
-          <div class="surface-scroll">
-            <div class="home-head"><h1 id="h-queue" tabindex="-1">Exports</h1>
-              <p class="lede">Every render this session — finals, wallpaper bundles, films, and kits — with live progress and re-download.</p></div>
-            <div id="jobList" class="job-list"></div>
-            <div id="jobEmpty" class="job-empty lede">Nothing rendered yet. Accept a proof or build a social kit to see jobs here.</div>
-          </div>
+        <!-- surface: FILM preview -->
+        <section id="surface-film" class="surface surface-film" hidden aria-label="Film preview">
+          <div class="surface-scroll" id="filmStage"></div>
         </section>
       </main>
 
-      <!-- ===================== inspector ===================== -->
-      <aside class="inspector" aria-label="Inspector">
+      <!-- ===================== appearance sidebar (right): how it looks ===================== -->
+      <aside class="inspector" aria-label="Appearance">
         <div class="inspector-head">
-          <span id="inspectorTitle" class="insp-section-title">Compose</span>
+          <span id="inspectorTitle" class="insp-section-title">Appearance</span>
           <div id="inspectorAction" class="insp-action"></div>
         </div>
         <div id="inspectorBody" class="inspector-body">
-          <!-- COMPOSE panel (static; wired by compose.js) -->
-          <div id="panel-compose" class="panel" hidden>
-            <section class="insp-group">
-              <div class="insp-head"><span class="insp-title">Page</span>
-                <button id="resetFrame" class="mini" type="button">Reset frame</button>
-              </div>
-              <div class="field" id="outputField">
-                <label>Output</label>
-                <div class="segmented" data-for="output" role="radiogroup" aria-label="Output">
-                  <button type="button" role="radio" data-val="print">Print</button>
-                  <button type="button" role="radio" data-val="wallpaper">Wallpaper</button>
-                </div>
-                <select id="output" class="sr-only" tabindex="-1" aria-hidden="true">
-                  <option value="print">Print</option><option value="wallpaper">Wallpaper</option>
-                </select>
-              </div>
-              <div class="field" id="sizeField">
-                <label for="size">Print size</label>
-                <div class="select-wrap"><select id="size">
-                  <option value="18,24">18 × 24 in</option>
-                  <option value="24,36">24 × 36 in</option>
-                  <option value="12,16">12 × 16 in</option>
-                  <option value="9,12">9 × 12 in</option>
-                </select></div>
-              </div>
-              <div class="field" id="bleedField">
-                <div class="slider-top"><label for="bleed">Print-shop bleed</label><output id="bleedVal">None</output></div>
-                <input type="range" id="bleed" min="0" max="0.5" step="0.125" value="0">
-              </div>
-              <div class="field" id="wpPresetField" hidden>
-                <label for="wpPreset">Device</label>
-                <div class="select-wrap"><select id="wpPreset"></select></div>
-              </div>
-              <div class="field" id="customDeviceField" hidden>
-                <label for="customPxW">Custom device</label>
-                <div class="custom-device" title="Exact native pixels and physical ppi of your screen.">
-                  <input id="customPxW" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="width px" aria-label="Custom device width in pixels">
-                  <span aria-hidden="true">×</span>
-                  <input id="customPxH" type="number" inputmode="numeric" min="240" max="10240" step="1" placeholder="height px" aria-label="Custom device height in pixels">
-                  <span aria-hidden="true">@</span>
-                  <input id="customPpi" type="number" inputmode="numeric" min="72" max="600" step="1" placeholder="ppi" aria-label="Custom device pixels per inch">
-                </div>
-              </div>
-              <div class="field" id="orientField">
-                <label>Orientation</label>
-                <div class="segmented" data-for="orient" role="radiogroup" aria-label="Orientation">
-                  <button type="button" role="radio" data-val="auto">Auto</button>
-                  <button type="button" role="radio" data-val="landscape">Landscape</button>
-                  <button type="button" role="radio" data-val="portrait">Portrait</button>
-                </div>
-                <select id="orient" class="sr-only" tabindex="-1" aria-hidden="true">
-                  <option value="auto">Auto</option><option value="landscape">Landscape</option><option value="portrait">Portrait</option>
-                </select>
-              </div>
-              <div class="field" id="titleField">
-                <label for="titleInput">Poster title</label>
-                <input id="titleInput" type="text" maxlength="60" placeholder="Region name — “-” for none">
-              </div>
-            </section>
-            <section id="filesBlock" class="insp-group">
-              <div class="insp-head"><span class="insp-title">Files</span>
-                <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
-              </div>
-              <ul id="fileList" class="file-list"></ul>
-            </section>
-            <section id="markersBox" class="insp-group" hidden>
-              <div class="insp-head"><span class="insp-title">Places</span>
-                <span class="insp-note">name · icon · photo</span></div>
-              <div id="markerList"></div>
-            </section>
+          <div id="noTracksHint" class="insp-hint-card">
+            <p>Everything here shapes the picture live. <b>Drop a GPX to see it take effect</b> — anything you set now still applies to your first proof.</p>
+            <button id="noTracksHintClose" class="mini" type="button">Got it</button>
           </div>
-
-          <!-- registry-driven panels (populated by inspector.js) -->
-          <div id="panel-style" class="panel" hidden></div>
-          <div id="panel-layers" class="panel" hidden></div>
-          <div id="panel-light" class="panel" hidden></div>
-          <div id="panel-films" class="panel" hidden></div>
-
-          <!-- SOCIAL panel (built by social.js) -->
+          <!-- target-specific panels lead when their target is active -->
+          <div id="filmPacingHost" hidden></div>
           <div id="panel-social" class="panel" hidden></div>
-
-          <!-- LIBRARY / EXPORTS have no inspector controls -->
-          <div id="panel-library" class="panel" hidden>
-            <section class="insp-group"><p class="lede insp-empty">Drop your GPX to begin, or reopen a poster. Presets and options light up once your tracks are loaded.</p></section>
-          </div>
-          <div id="panel-exports" class="panel" hidden>
-            <section class="insp-group"><p class="lede insp-empty">Downloads keep their self-documenting names. Jobs stay listed for the whole session.</p></section>
-          </div>
-        </div>
-
-        <div id="inspectorFoot" class="inspector-foot" hidden>
-          <div class="foot-export" id="footExport">
-            <div class="field inline" id="formatField">
-              <label for="finalFormat">Format</label>
-              <div class="segmented" data-for="finalFormat" role="radiogroup" aria-label="Final format">
-                <button type="button" role="radio" data-val="png">PNG</button>
-                <button type="button" role="radio" data-val="pdf">PDF</button>
-              </div>
-              <select id="finalFormat" class="sr-only" tabindex="-1" aria-hidden="true">
-                <option value="png">PNG</option><option value="pdf">PDF (print shop)</option>
-              </select>
-            </div>
-            <label class="reprint-toggle" title="Embed the poster's recipe in the PNG so it reprints from the file alone. Off = a share copy that keeps your exact route coordinates out of the file.">
-              <span class="switch"><input type="checkbox" id="embedSpecChk" checked><span class="slider"></span></span>
-              <span>Reprintable file</span>
-            </label>
-          </div>
-          <p class="insp-note save-file-note" id="saveFileNote"></p>
-          <div class="foot-actions">
-            <button id="reframeBtn" class="ghost" type="button" hidden>Reframe</button>
-            <button id="downloadAgain" class="ghost" type="button" hidden>Save another copy</button>
-            <button id="expressBtn" class="ghost" type="button">Proof + final</button>
-            <button id="renderProof" class="primary" type="button">Render proof</button>
-            <button id="acceptBtn" class="primary" type="button" hidden>Accept &amp; render final</button>
-          </div>
+          <section class="insp-group" id="presetsGroup">
+            <div class="insp-head"><span class="insp-title">Looks</span></div>
+            <div id="stylePresets"></div>
+          </section>
+          <div id="styleHost"></div>
+          <div id="layersHost"></div>
+          <div id="lightHost"></div>
         </div>
       </aside>
     </div>
+
+    <!-- ===================== status strip + jobs drawer ===================== -->
+    <footer id="statusbar" class="statusbar">
+      <span id="sbProof" class="sb-proof"></span>
+      <span class="toolbar-spring"></span>
+      <span id="sbJob" class="sb-job" hidden><span class="job-spinner sb-spinner"></span><span id="sbJobLabel"></span></span>
+      <button id="jobsBtn" class="sb-btn" type="button">Jobs</button>
+    </footer>
+    <aside id="jobsDrawer" class="jobs-drawer" hidden aria-label="Exports">
+      <div class="drawer-head">
+        <h2 id="h-queue" tabindex="-1">Exports</h2>
+        <button id="jobsClose" class="mini" type="button">Close</button>
+      </div>
+      <p class="lede drawer-lede">Every render this session — finals, wallpaper bundles, films, and kits — with live progress and re-download.</p>
+      <div id="jobList" class="job-list"></div>
+      <div id="jobEmpty" class="job-empty lede">Nothing rendered yet. Accept a proof or build a social kit to see jobs here.</div>
+    </aside>
 
     <div id="toast" class="toast" role="status" hidden></div>
   </div>
@@ -326,7 +338,8 @@
   <dialog id="shortcutsDialog" class="guide" aria-labelledby="shortcutsTitle">
     <h2 id="shortcutsTitle" class="guide-title">Keyboard shortcuts</h2>
     <dl class="shortcut-list">
-      <div><dt><kbd>1</kbd>–<kbd>8</kbd></dt><dd>Jump to a section</dd></div>
+      <div><dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>Switch output target (Poster · Wallpaper · Film · Social)</dd></div>
+      <div><dt><kbd>M</kbd> / <kbd>P</kbd></dt><dd>Map or Preview in the center stage</dd></div>
       <div><dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd>Command palette — search every option &amp; action</dd></div>
       <div><dt><kbd>?</kbd></dt><dd>This shortcuts sheet</dd></div>
       <div><dt><kbd>Enter</kbd></dt><dd>On the map: render a proof</dd></div>

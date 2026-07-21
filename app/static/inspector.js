@@ -118,17 +118,22 @@ function register(c, wrap, reflect) {
   rendered.push({ control: c, container: wrap, reflect });
 }
 
-// Build a whole section's inspector panel, grouped by the controls' `panel`. Skips
-// advanced-only controls (they surface in the command palette / all-options search).
-export function buildSectionPanel(section, host, { includeAdvanced = false } = {}) {
+// Build a whole section's inspector panel, grouped by the controls' `panel`, as
+// collapsible <details> groups (all open by default — collapsing is a reading aid, not
+// a hiding place). `panels` restricts to named groups so a section can split across
+// hosts (film pacing right, film output left). Skips advanced-only controls (they
+// surface in the command palette / all-options search).
+export function buildSectionPanel(section, host, { includeAdvanced = false, panels = null } = {}) {
   host.innerHTML = '';
   for (const panel of panelsOf(section)) {
+    if (panels && !panels.includes(panel)) continue;
     const items = forSection(section).filter((c) => c.panel === panel && (includeAdvanced || !c.advanced));
     const usable = items.filter((c) => ['slider', 'toggle', 'toggleMap', 'select', 'segmented', 'swatch'].includes(c.type));
     if (!usable.length) continue;
-    const group = document.createElement('section');
+    const group = document.createElement('details');
     group.className = 'insp-group';
-    const head = document.createElement('div');
+    group.open = true;
+    const head = document.createElement('summary');
     head.className = 'insp-head';
     head.innerHTML = `<span class="insp-title">${panel}</span>`;
     group.appendChild(head);

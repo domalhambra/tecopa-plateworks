@@ -265,9 +265,9 @@
 .build-error { color: var(--color-error); font-size: 12.5px; white-space: pre-wrap; margin: 0 0 12px; }
 
 /* first-step nudge after the welcome closes */
-.rail-item.pulse { animation: railpulse 1.2s ease-in-out 3; }
+.pulse { animation: railpulse 1.2s ease-in-out 3; }
 @keyframes railpulse { 0%, 100% { box-shadow: none; } 50% { box-shadow: 0 0 0 2px var(--tint) inset; } }
-@media (prefers-reduced-motion: reduce) { .rail-item.pulse { animation: none; box-shadow: 0 0 0 2px var(--tint) inset; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; box-shadow: 0 0 0 2px var(--tint) inset; } }
 
 /* container-query polish: stack the inspector foot on a narrow inspector (stacked layout) */
 @container inspector (max-width: 300px) {
@@ -279,3 +279,8 @@
 @media (prefers-reduced-motion: no-preference) {
   ::view-transition-old(root), ::view-transition-new(root) { animation-duration: .18s; }
 }
+
+/* ---- film stage (center player) ---- */
+.tl-stage { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.tl-stage img, .tl-stage video { display: block; max-width: min(720px, 100%); max-height: 70vh;
+  border-radius: var(--radius-sm); border: 1px solid var(--hairline); }

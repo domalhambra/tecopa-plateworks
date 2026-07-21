@@ -22,13 +22,16 @@ function socialPresets() { return state.wpPresets.filter((p) => p.device_class =
 export function buildSocial() {
   const preview = $('socialPreview');
   const panel = $('panel-social');
+  // no gate: the panel (caption, privacy, kit) always builds; only the gallery needs a
+  // proof's pixels, and the kit action carries the reason while it can't run.
+  renderPanel(panel);
   if (!proof.hasFreshProof()) {
-    preview.innerHTML = '<div class="home-head"><h1>Social studio</h1><p class="lede">Render and accept a proof first — then repurpose it here for Reels, feed posts, and stories.</p></div>';
-    panel.innerHTML = '<section class="insp-group"><p class="lede insp-empty">A fresh proof unlocks the social formats, the caption helper, and the share kit.</p></section>';
+    preview.innerHTML = '<div class="home-head"><h1 id="h-social" tabindex="-1">Social studio</h1><p class="lede">The formats preview your live poster — render a proof to see them. The caption helper and privacy switch on the right already work.</p></div>';
+    const kb = $('kitBuild'); if (kb) { kb.disabled = true; kb.title = 'Render a proof first — the kit renders the accepted composition.'; }
+    const mb = $('mockBuild'); if (mb) { mb.disabled = true; mb.title = 'Render a proof first.'; }
     return;
   }
   renderGallery(preview);
-  renderPanel(panel);
 }
 
 // ---- the format gallery (center) --------------------------------------------------
@@ -201,7 +204,7 @@ function syncKit() {
   const parts = (includePoster ? 1 : 0) + selected.size + (includeFilm ? 1 : 0);
   const sum = $('kitSummary');
   if (sum) sum.textContent = parts ? `${parts} item${parts === 1 ? '' : 's'} — queued together in Exports.` : 'Pick at least one item.';
-  const btn = $('kitBuild'); if (btn) btn.disabled = !parts;
+  const btn = $('kitBuild'); if (btn) btn.disabled = !parts || !proof.hasFreshProof();
 }
 
 function renderKitListSelectionOnly() {
