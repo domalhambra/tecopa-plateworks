@@ -44,7 +44,7 @@ export async function upload(files, { sessionId, regionId } = {}) {
   return asJson(res);
 }
 
-// Living editions: open a Tecopa Printworks PNG for its next edition. Resurrects a session
+// Living editions: open a Tecopa Plateworks PNG for its next edition. Resurrects a session
 // from the file's embedded manifest and returns the /api/upload response shape plus a
 // `prefill` block (style, title, size, output, edition, lineage) and `edition`.
 export async function continuePoster(file) {
@@ -210,6 +210,18 @@ export async function submitMockups(file, { variants = 'plate,frame',
 
 export async function jobStatus(jid) {
   const res = await fetch(`/api/jobs/${jid}`);
+  return asJson(res);   // { state, error, result? }
+}
+
+// Progressive proof: enqueue the high-dpi refine of the stamped spec. Refines run on
+// their own server queue with their own status door, so they never surface in the
+// exports drawer's /api/jobs namespace. Returns { skip, dpi, job? }.
+export async function submitProofRefine(sessionId) {
+  const res = await postForm('/api/proof/refine', { session_id: sessionId });
+  return asJson(res);
+}
+export async function refineStatus(jid) {
+  const res = await fetch(`/api/proof/refine/${jid}`);
   return asJson(res);   // { state, error, result? }
 }
 

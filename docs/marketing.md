@@ -1,6 +1,6 @@
-# Tecopa Printworks marketing plan — one story, told three times
+# Tecopa Plateworks marketing plan — one story, told three times
 
-Tecopa Printworks's feature list reads as thirteen things: GPX import, relief posters,
+Tecopa Plateworks's feature list reads as thirteen things: GPX import, relief posters,
 contours, biome tint, place names, markers, icons, pinned photos, wallpapers, device
 bundles, time-lapse films, reprinting, editions. Nobody buys thirteen things. The fix
 is to never market features side by side, but as **one story told at three depths** —
@@ -95,7 +95,7 @@ fiction anyway. Full price architecture and funnel:
 
 ## The demo IS the marketing
 
-Tecopa Printworks manufactures its own marketing assets — don't design promo graphics,
+Tecopa Plateworks manufactures its own marketing assets — don't design promo graphics,
 render them. The 90-second hero sequence (also the landing-page scroll story):
 
 1. *(0–10s)* A folder of GPX files drags onto the window; trails snap onto shaded
@@ -112,7 +112,7 @@ render them. The 90-second hero sequence (also the landing-page scroll story):
 6. *(75–90s)* The print on a wall. — "Your years outdoors, as one artifact that keeps
    growing."
 
-Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Printworks sells a
+Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Plateworks sells a
 *continuing thing*. Lead every long-form asset toward that beat.
 
 ## Landing page blueprint

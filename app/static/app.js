@@ -1,8 +1,9 @@
-// app.js — the studio bootstrap + router. Shrunk from the old 1000-line wizard to the
-// orchestrator: it loads regions/presets, builds the inspector panels once, wires the
-// shell (rail, foot export controls, theme, palette, keyboard, drag-anywhere), and drives
-// the section router. Every section's behaviour lives in its own module; this file only
-// decides which surface + panel is showing and keeps the shell in sync with the store.
+// app.js — the studio bootstrap + router. One window, no steps: a top output-target
+// switcher (Poster / Wallpaper / Film / Social), the project sidebar on the left, the
+// always-present appearance sidebar on the right, and a center stage that adapts to
+// the target (Map|Preview workspace, film player, social gallery). Every target's
+// behaviour lives in its own module; this file decides what the stage shows and keeps
+// the shell in sync with the store.
 import { state, savePref, loadPrefs, markProofPaths, subscribe } from './store.js';
 import * as api from './api.js';
 import * as controls from './controls.js';
@@ -18,64 +19,83 @@ import * as exportsCenter from './exports.js';
 import * as presets from './presets.js';
 import * as sunDial from './sunDial.js';
 import * as guided from './guided.js';
+import * as viewer from './viewer.js';
+import * as statusbar from './statusbar.js';
 import { initPalette, open as openPalette } from './palette.js';
 import { $, toast, wireSegmented, updateSaveFileNote, withTransition } from './ui.js';
 
-const SURFACE = { library: 'surface-home', compose: 'surface-map', style: 'surface-proof',
-  layers: 'surface-proof', light: 'surface-proof', social: 'surface-social',
-  films: 'surface-proof', exports: 'surface-queue' };
-const PANEL = { library: 'panel-library', compose: 'panel-compose', style: 'panel-style',
-  layers: 'panel-layers', light: 'panel-light', social: 'panel-social',
-  films: 'panel-films', exports: 'panel-exports' };
-const TITLE = { library: 'Library', compose: 'Compose', style: 'Style', layers: 'Layers',
-  light: 'Light', social: 'Social', films: 'Films', exports: 'Exports' };
-const FOOT = new Set(['compose', 'style', 'layers', 'light']);
-const PROOF_SECTIONS = new Set(['style', 'layers', 'light']);
+const TARGETS = ['poster', 'wallpaper', 'film', 'social'];
 
-// A section is reachable once its inputs exist: options need tracks; social/films need a
-// stamped proof. Library/Compose/Exports are always open.
-function ready(section) {
-  if (['library', 'compose', 'exports'].includes(section)) return true;
-  if (['style', 'layers', 'light'].includes(section)) return state.tracks.length > 0;
-  if (['social', 'films'].includes(section)) return state.hasSpec;
-  return true;
-}
-
-// ---- router ----------------------------------------------------------------------
-function setSection(name) {
-  if (!ready(name)) { toast(hintFor(name), 'info'); return; }
+// ---- router: target (what you're making) x view (map or preview) -----------------
+export function setTarget(name) {
+  if (!TARGETS.includes(name)) return;
+  if (name === 'wallpaper' && !state.wpPresets.length) { toast('No wallpaper presets available (server offline at load?)', 'info'); return; }
   withTransition(() => {
-    state.section = name;
-    for (const s of document.querySelectorAll('.surface')) s.hidden = s.id !== SURFACE[name];
-    for (const p of document.querySelectorAll('.panel')) p.hidden = p.id !== PANEL[name];
-    for (const b of document.querySelectorAll('.rail-item')) b.setAttribute('aria-current', b.dataset.section === name ? 'true' : 'false');
-    $('inspectorTitle').textContent = TITLE[name];
-    $('inspectorFoot').hidden = !FOOT.has(name);
-    $('reframeBtn').hidden = !(state.hasSpec && PROOF_SECTIONS.has(name));
-    $('formatField').hidden = state.output === 'wallpaper';
-
-    if (name === 'compose') compose.enterCompose();
+    state.target = name;
+    // poster/wallpaper drive the composition's output kind; film/social present it
+    if (name === 'poster') compose.setOutput('print');
+    else if (name === 'wallpaper') compose.setOutput('wallpaper');
+    for (const b of document.querySelectorAll('.target-item')) {
+      b.setAttribute('aria-current', b.dataset.target === name ? 'true' : 'false');
+    }
+    // left sidebar: page setup for poster/wallpaper, film setup for films
+    $('pagePanel').hidden = !(name === 'poster' || name === 'wallpaper');
+    $('filmPanel').hidden = name !== 'film';
+    // right sidebar: film pacing + social panel appear with their targets
+    $('filmPacingHost').hidden = name !== 'film';
+    $('panel-social').hidden = name !== 'social';
+    // the poster action foot only makes sense when composing the sheet
+    $('inspectorFoot').hidden = !(name === 'poster' || name === 'wallpaper');
+    if (name === 'film') films.buildFilms();
     else if (name === 'social') social.buildSocial();
-    else if (name === 'films') films.buildFilms();
-    if (PROOF_SECTIONS.has(name)) proof.refreshProofUI();
-
-    focusHeading(name);
+    refreshStage();
   });
-  refreshRail();
+  refreshShell();
 }
 
-function hintFor(name) {
-  if (['style', 'layers', 'light'].includes(name)) return 'Drop your tracks in Compose first.';
-  return 'Render and accept a proof to unlock this.';
+// Which center surface is showing. Map|Preview applies to the poster/wallpaper
+// workspace; film and social bring their own stages; no tracks = the start surface.
+export function setView(v) {
+  state.view = v === 'map' ? 'map' : 'preview';
+  refreshStage();
 }
 
-function focusHeading(name) {
-  const id = { library: 'h-home', exports: 'h-queue', social: 'h-social' }[name];
-  const el = id && $(id); if (el) el.focus();
+function currentSurfaceId() {
+  if (!state.tracks.length) return 'surface-home';
+  if (state.target === 'film') return 'surface-film';
+  if (state.target === 'social') return 'surface-social';
+  return state.view === 'map' ? 'surface-map' : 'surface-proof';
 }
 
-function refreshRail() {
-  for (const b of document.querySelectorAll('.rail-item')) b.disabled = !ready(b.dataset.section);
+let lastSurface = null;
+function refreshStage() {
+  const id = currentSurfaceId();
+  for (const s of document.querySelectorAll('.surface')) s.hidden = s.id !== id;
+  const sv = $('stageView');
+  sv.hidden = !(state.tracks.length && (state.target === 'poster' || state.target === 'wallpaper'));
+  $('viewMapBtn').classList.toggle('on', state.view === 'map');
+  $('viewPreviewBtn').classList.toggle('on', state.view !== 'map');
+  if (id !== lastSurface) {
+    lastSurface = id;
+    // entering the map re-seeds the frame + feasibility (and kicks the canvas layout)
+    if (id === 'surface-map') compose.enterCompose();
+    if (id === 'surface-proof') proof.refreshProofUI();
+  }
+}
+
+// Palette / deep-link helper: land on the target that owns a control, then focus it.
+export function jumpToControl(c) {
+  if (c.section === 'films') { if (state.target !== 'film') setTarget('film'); }
+  else if (state.target === 'film' || state.target === 'social') {
+    setTarget(state.output === 'wallpaper' ? 'wallpaper' : 'poster');
+  }
+  setTimeout(() => {
+    const el = $(`c_${c.id}`);
+    if (!el) return;
+    const group = el.closest('details'); if (group) group.open = true;
+    el.scrollIntoView({ block: 'center' });
+    el.focus();
+  }, 60);
 }
 
 // ---- shell sync ------------------------------------------------------------------
@@ -88,11 +108,15 @@ function refreshShell() {
   $('yearSpan').textContent = state.yearSpan || '';
   $('startOver').hidden = !(state.session || state.files.length);
   $('themeToggle').hidden = false;
+  $('noTracksHint').hidden = state.tracks.length > 0 || state.hintDismissed;
+  $('targetBar').querySelector('[data-target="wallpaper"]').hidden = !state.wpPresets.length;
   updateSaveFileNote();
   compose.updateLightAvailability();
   $('formatField').hidden = state.output === 'wallpaper';
-  refreshRail();
+  if (state.target === 'film') films.refreshGate();
   proof.refreshProofUI();
+  statusbar.refreshProof();
+  refreshStage();
 }
 
 // ---- theme -----------------------------------------------------------------------
@@ -121,34 +145,50 @@ function startOver() {
   $('dropzone').hidden = false; $('map').hidden = true; $('addFiles').hidden = true;
   $('continuePoster').hidden = false; $('mapMode').hidden = true;
   $('posterImg').removeAttribute('src'); $('posterCard').hidden = true; $('proofEmpty').hidden = false;
+  viewer.reset();
   $('titleInput').value = ''; $('provenanceCard').hidden = true;
   inspector.reflectAll(); compose.reflectStatic();
+  statusbar.closeDrawer();
+  setTarget('poster');
+  setView('map');
   refreshShell();
-  setSection('library');
   toast('Cleared — drop your GPX to start a new map.', 'info');
 }
 
-// ---- inspector panels (built once) -----------------------------------------------
+// ---- appearance sidebar (built once, always visible) ------------------------------
 function buildPanels() {
-  // Style: presets bar + the registry controls
-  const ps = $('panel-style');
-  const pg = document.createElement('section'); pg.className = 'insp-group';
-  pg.innerHTML = '<div class="insp-head"><span class="insp-title">Presets</span></div><div id="stylePresets"></div>';
-  const sc = document.createElement('div');
-  ps.append(pg, sc);
-  inspector.buildSectionPanel('style', sc);
   presets.renderInto($('stylePresets'), { onApply: () => { inspector.reflectAll(); compose.reflectStatic(); proof.refreshProofUI(); } });
+  inspector.buildSectionPanel('style', $('styleHost'));
+  inspector.buildSectionPanel('layers', $('layersHost'));
 
-  inspector.buildSectionPanel('layers', $('panel-layers'));
-
-  // Light: the registry controls, then the sun dial
-  const pl = $('panel-light');
-  const ctl = document.createElement('div');
-  const dialGroup = document.createElement('section'); dialGroup.className = 'insp-group';
-  dialGroup.innerHTML = '<div class="insp-head"><span class="insp-title">Sun position</span></div><div id="sunDialHost"></div>';
-  pl.append(ctl, dialGroup);
-  inspector.buildSectionPanel('light', ctl);
+  // Light: the registry controls, then the sun dial in its own group
+  const lightHost = $('lightHost');
+  inspector.buildSectionPanel('light', lightHost);
+  const dialGroup = document.createElement('details'); dialGroup.className = 'insp-group'; dialGroup.open = true;
+  dialGroup.innerHTML = '<summary class="insp-head"><span class="insp-title">Sun position</span></summary><div id="sunDialHost"></div>';
+  lightHost.appendChild(dialGroup);
   sunDial.mount($('sunDialHost'));
+
+  // Film pacing rides the right sidebar when the Film target is active; the film
+  // target/format/render controls live in the left sidebar (films.js).
+  inspector.buildSectionPanel('films', $('filmPacingHost'), { panels: ['Pacing'] });
+
+  attachStaticHelp();
+}
+
+// The static page-setup rows get the same ? affordance as registry rows, reusing the
+// registry's own sentences where an entry exists.
+function attachStaticHelp() {
+  const H = (id, help) => { const el = $(id); if (el && help) inspector.attachHelp(el, help); };
+  H('sizeField', controls.control('size').help);
+  H('orientField', controls.control('orientation').help);
+  H('bleedField', controls.control('bleed').help);
+  H('titleField', controls.control('title').help);
+  H('wpPresetField', "Pick the exact screen this wallpaper is for — it renders at that device's native pixels.");
+  H('customDeviceField', "A device the list doesn't carry: its exact pixel size and physical pixels-per-inch.");
+  H('formatField', controls.control('finalFormat').help);
+  const rt = document.querySelector('.reprint-toggle');
+  if (rt) { rt.removeAttribute('title'); inspector.attachHelp(rt, controls.control('embedSpec').help); }
 }
 
 // ---- wallpaper presets (server truth; decides whether wallpaper mode exists) ------
@@ -182,7 +222,6 @@ async function loadRegions(pending) {
   // auto-detects the covering plate from the dropped tracks (or the creation flow builds
   // one). We still keep the full list so activeRegion()/metresPerPx() resolve a match.
   refreshShell();
-  setSection('library');
 }
 
 // ---- foot export controls + shell wiring -----------------------------------------
@@ -191,7 +230,7 @@ function wireShell() {
   $('themeToggle').onclick = toggleTheme;
   $('paletteBtn').onclick = openPalette;
   $('startOver').onclick = startOver;
-  $('reframeBtn').onclick = () => setSection('compose');
+  $('reframeBtn').onclick = () => setView('map');
 
   // final format + reprintable toggle (foot)
   wireSegmented($('formatField').querySelector('.segmented'), (v) => {
@@ -204,11 +243,14 @@ function wireShell() {
   $('embedSpecChk').onchange = (e) => { state.embedSpec = e.target.checked; updateSaveFileNote(); };
   if (loadPrefs().autoProof === false) state.autoProof = false;
 
-  // rail
-  for (const b of document.querySelectorAll('.rail-item')) b.onclick = () => setSection(b.dataset.section);
+  // target switcher + stage view toggle + hint dismissal
+  for (const b of document.querySelectorAll('.target-item')) b.onclick = () => setTarget(b.dataset.target);
+  $('viewMapBtn').onclick = () => setView('map');
+  $('viewPreviewBtn').onclick = () => setView('preview');
+  $('noTracksHintClose').onclick = () => { state.hintDismissed = true; $('noTracksHint').hidden = true; };
   $('shortcutsClose').onclick = () => $('shortcutsDialog').close();
 
-  // keyboard: Cmd/Ctrl+K palette; ? shortcuts; 1..8 sections
+  // keyboard: Cmd/Ctrl+K palette; ? shortcuts; 1..4 targets; M/P map or preview
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) { e.preventDefault(); openPalette(); return; }
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -216,8 +258,10 @@ function wireShell() {
     if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
     if ($('paletteDialog').open) return;
     if (e.key === '?') { e.preventDefault(); const d = $('shortcutsDialog'); if (!d.open) d.showModal(); return; }
-    const b = [...document.querySelectorAll('.rail-item')].find((x) => x.dataset.key === e.key);
-    if (b) { e.preventDefault(); setSection(b.dataset.section); }
+    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); setView('map'); return; }
+    if (e.key === 'p' || e.key === 'P') { e.preventDefault(); setView('preview'); return; }
+    const b = [...document.querySelectorAll('.target-item')].find((x) => x.dataset.key === e.key);
+    if (b && !b.hidden) { e.preventDefault(); setTarget(b.dataset.target); }
   });
 
   // drag-anywhere: PNG -> reopen a poster; GPX/KML/KMZ -> upload. Surface drop zones
@@ -230,8 +274,8 @@ function wireShell() {
     const f = e.dataTransfer && e.dataTransfer.files[0];
     if (!f) return;
     e.preventDefault();
-    if (/\.png$/i.test(f.name)) { setSection('library'); library.openPoster(f); }
-    else if (/\.(gpx|kml|kmz)$/i.test(f.name)) { setSection('compose'); compose.doUpload([f]); }
+    if (/\.png$/i.test(f.name)) library.openPoster(f);
+    else if (/\.(gpx|kml|kmz)$/i.test(f.name)) compose.doUpload([f]);
   });
 }
 
@@ -250,22 +294,38 @@ function initAll() {
   markProofPaths(controls.proofAffectingPaths());   // the stale-proof rule, declared once
   buildPanels();
   wireShell();
-  proof.initProof({ onProofed: () => { if (state.section === 'compose') setSection('style'); refreshShell(); }, onSnapshotApplied: () => {} });
-  compose.initCompose({ onLoaded: () => { setSection('compose'); refreshShell(); }, refresh: refreshShell });
-  library.initLibrary({ goCompose: () => setSection('compose'), trackReprint: (job) => jobs.track(job, { kind: 'reprint', label: 'Film reprint', runningMsg: 'Reprinting film…' }) });
+  statusbar.initStatusbar({ onReproof: () => proof.renderProof() });
+  proof.initProof({
+    onProofed: () => { setView('preview'); refreshShell(); },
+    onSnapshotApplied: () => {},
+    onUiRefresh: () => statusbar.refreshProof(),
+  });
+  compose.initCompose({
+    onLoaded: () => {
+      // an upload always lands in the sheet workspace — leave film/social presentation
+      if (state.target === 'film' || state.target === 'social') {
+        setTarget(state.output === 'wallpaper' ? 'wallpaper' : 'poster');
+      }
+      setView('map'); refreshShell();
+    },
+    refresh: refreshShell,
+  });
+  library.initLibrary({ goCompose: () => setView('map'), trackReprint: (job) => jobs.track(job, { kind: 'reprint', label: 'Film reprint', runningMsg: 'Reprinting film…' }) });
   // GPX-first region creation: on build done, re-upload the kept tracks (they now match the
   // fresh plate) and re-sync the shell so the "Built" chip and cleared session take effect.
   create.initCreate({ reupload: (files) => compose.doUpload(files), refresh: refreshShell });
   exportsCenter.initExports();
-  social.setNav({ goExports: () => setSection('exports') });
+  films.initFilms();
+  social.setNav({ goExports: () => statusbar.openDrawer() });
   initPalette({
-    setSection,
+    setTarget,
+    setView,
+    jumpToControl,
     actions: [
       { label: 'Render proof', run: () => proof.renderProof() },
       { label: 'Accept & render final', run: () => proof.acceptFinal() },
       { label: 'Proof + final (express)', run: () => proof.expressFinal() },
-      { label: 'Open Social studio', run: () => setSection('social') },
-      { label: 'Open Films', run: () => setSection('films') },
+      { label: 'Open Exports', run: () => statusbar.openDrawer() },
       { label: 'Start over', run: startOver },
       { label: 'Toggle Day / Night theme', run: toggleTheme },
       { label: 'Keyboard shortcuts', run: () => $('shortcutsDialog').showModal() },
@@ -289,6 +349,8 @@ function initAll() {
   const pendingRegions = api.getRegions();
   await loadWallpaperPresets();
   initAll();
+  // land on the target matching the restored output pref (compose.restorePagePrefs)
+  setTarget(state.output === 'wallpaper' && state.wpPresets.length ? 'wallpaper' : 'poster');
   await loadRegions(pendingRegions);
   guided.maybeStart();               // first-run welcome (once per browser)
 })();

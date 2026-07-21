@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tecopa Printworks Studio</title>
+  <title>Tecopa Plateworks Studio</title>
   <!-- apply the saved theme before first paint to avoid a flash. Reads the current
        'tecopa' prefs key, falling back to the pre-rebrand 'trailprint' key so a
        returning operator's theme survives the rename (store.js migrates it on load). -->
@@ -25,13 +25,19 @@
     <!-- ===================== top bar ===================== -->
     <header class="topbar">
       <div class="tb-group">
-        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa Printworks <b>Studio</b></span>
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa Plateworks <b>Studio</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
         <span id="regionKind" class="region-kind" hidden></span>
         <span id="editionBadge" class="edition-badge" hidden></span>
         <span id="yearSpan" class="year-span"></span>
       </div>
+      <nav id="targetBar" class="target-bar" aria-label="Output target">
+        <button class="target-item" type="button" data-target="poster" data-key="1">Poster</button>
+        <button class="target-item" type="button" data-target="wallpaper" data-key="2">Wallpaper</button>
+        <button class="target-item" type="button" data-target="film" data-key="3">Film</button>
+        <button class="target-item" type="button" data-target="social" data-key="4">Social</button>
+      </nav>
       <div class="tb-group header-actions">
         <button id="paletteBtn" class="tb-btn" type="button" aria-label="Command palette (Ctrl or Cmd + K)">
           <span class="tb-ico">⌘</span><span class="tb-txt">Search</span><kbd class="tb-kbd">⌘K</kbd>
@@ -49,133 +55,16 @@
     </header>
 
     <div class="studio-body">
-      <!-- ===================== section rail ===================== -->
-      <nav id="rail" class="rail" aria-label="Studio sections">
-        <button class="rail-item" type="button" data-section="library" data-key="1">
-          <span class="rail-ico" aria-hidden="true">▤</span><span class="rail-label">Library</span></button>
-        <button class="rail-item" type="button" data-section="compose" data-key="2">
-          <span class="rail-ico" aria-hidden="true">◳</span><span class="rail-label">Compose</span></button>
-        <button class="rail-item" type="button" data-section="style" data-key="3">
-          <span class="rail-ico" aria-hidden="true">✦</span><span class="rail-label">Style</span></button>
-        <button class="rail-item" type="button" data-section="layers" data-key="4">
-          <span class="rail-ico" aria-hidden="true">▦</span><span class="rail-label">Layers</span></button>
-        <button class="rail-item" type="button" data-section="light" data-key="5">
-          <span class="rail-ico" aria-hidden="true">☀</span><span class="rail-label">Light</span></button>
-        <button class="rail-item" type="button" data-section="social" data-key="6">
-          <span class="rail-ico" aria-hidden="true">◉</span><span class="rail-label">Social</span></button>
-        <button class="rail-item" type="button" data-section="films" data-key="7">
-          <span class="rail-ico" aria-hidden="true">▷</span><span class="rail-label">Films</span></button>
-        <button class="rail-item" type="button" data-section="exports" data-key="8">
-          <span class="rail-ico" aria-hidden="true">⇩</span><span class="rail-label">Exports</span></button>
-      </nav>
-
-      <!-- ===================== center stage ===================== -->
-      <main class="stage">
-        <!-- surface: LIBRARY / home -->
-        <section id="surface-home" class="surface surface-home" hidden aria-label="Library">
-          <div class="surface-scroll">
-            <div class="home-head">
-              <h1 id="h-home" tabindex="-1">Turn your tracks into a poster</h1>
-              <p class="lede">Drop your GPX, KML or KMZ — your map appears the moment your tracks land. No terrain plate for your area yet? We'll build it from USGS data.</p>
-            </div>
-            <button id="homeDropzone" class="dropzone home-dropzone" type="button">
-              <span class="dz-ico" aria-hidden="true">↧</span>
-              <b>Drop GPX, KML or KMZ</b>
-              <span>or click to browse — files accumulate</span>
-            </button>
-            <div class="home-open">
-              <h2 class="home-sub">Reopen a poster</h2>
-              <p class="lede">A Tecopa Printworks PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
-              <div id="posterDrop" class="poster-drop">
-                <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
-                <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
-              </div>
-              <div id="provenanceCard" class="provenance-card" hidden></div>
-            </div>
-          </div>
-        </section>
-
-        <!-- surface: COMPOSE map workspace -->
-        <section id="surface-map" class="surface surface-map" hidden aria-label="Map workspace">
-          <div class="map-pane" id="mapPane">
-            <canvas id="map" tabindex="0"
-                    aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
-                    hidden></canvas>
-            <button id="dropzone" class="dropzone" type="button">
-              <span class="dz-ico" aria-hidden="true">↧</span>
-              <b>Drop GPX, KML or KMZ</b>
-              <span>or click to browse — files accumulate</span>
-            </button>
-            <button id="continuePoster" class="dz-continue" type="button" hidden>
-              ↻ Continue a poster — open last year's PNG to add this year
-            </button>
-            <div id="hint" class="hint" hidden></div>
-            <div id="mapMode" class="map-mode" hidden>
-              <button id="mapModeTracks" class="seg-mini on" type="button">Tracks</button>
-              <button id="mapModeFrame" class="seg-mini" type="button">Frame</button>
-            </div>
-          </div>
-        </section>
-
-        <!-- surface: PROOF (live preview) -->
-        <section id="surface-proof" class="surface surface-proof" hidden aria-label="Poster proof">
-          <div class="proof-toolbar">
-            <label class="auto-proof"><span class="switch"><input type="checkbox" id="autoProofChk"><span class="slider"></span></span>
-              <span>Live proof</span></label>
-            <div class="ab-bar" id="abBar" hidden>
-              <button id="abClearBtn" class="mini" type="button">Clear B</button>
-              <input type="range" id="abScrub" min="0" max="100" value="50" aria-label="Compare A and B">
-              <span class="ab-legend"><b>A</b> live · <b>B</b> pinned</span>
-            </div>
-            <button id="abPinBtn" class="mini" type="button" title="Pin the current proof as B to compare">Pin B</button>
-          </div>
-          <div class="proof-wrap">
-            <div id="proofEmpty" class="proof-empty">
-              <p>No proof yet.</p>
-              <p class="lede">Frame your poster in <b>Compose</b>, then render a proof to preview it here.</p>
-            </div>
-            <div class="poster-card" id="posterCard" hidden>
-              <img id="posterImg" alt="Poster proof">
-              <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
-              <div id="proofStale" class="stale-pill" hidden>
-                <span>Changes not proofed</span>
-                <button id="reproofBtn" class="mini-primary" type="button">Re-proof</button>
-              </div>
-            </div>
-          </div>
-          <div id="proofFilmstrip" class="filmstrip" hidden aria-label="Earlier proofs this session"></div>
-        </section>
-
-        <!-- surface: SOCIAL preview -->
-        <section id="surface-social" class="surface surface-social" hidden aria-label="Social preview">
-          <div class="surface-scroll" id="socialPreview"></div>
-        </section>
-
-        <!-- surface: EXPORTS / jobs -->
-        <section id="surface-queue" class="surface surface-queue" hidden aria-label="Exports">
-          <div class="surface-scroll">
-            <div class="home-head"><h1 id="h-queue" tabindex="-1">Exports</h1>
-              <p class="lede">Every render this session — finals, wallpaper bundles, films, and kits — with live progress and re-download.</p></div>
-            <div id="jobList" class="job-list"></div>
-            <div id="jobEmpty" class="job-empty lede">Nothing rendered yet. Accept a proof or build a social kit to see jobs here.</div>
-          </div>
-        </section>
-      </main>
-
-      <!-- ===================== inspector ===================== -->
-      <aside class="inspector" aria-label="Inspector">
-        <div class="inspector-head">
-          <span id="inspectorTitle" class="insp-section-title">Compose</span>
-          <div id="inspectorAction" class="insp-action"></div>
-        </div>
-        <div id="inspectorBody" class="inspector-body">
-          <!-- COMPOSE panel (static; wired by compose.js) -->
-          <div id="panel-compose" class="panel" hidden>
+      <!-- ===================== project sidebar (left): what is being made ===================== -->
+      <aside id="projectbar" class="projectbar" aria-label="Project setup">
+        <div class="projectbar-body">
+          <!-- page setup (poster / wallpaper targets) -->
+          <div id="pagePanel">
             <section class="insp-group">
               <div class="insp-head"><span class="insp-title">Page</span>
                 <button id="resetFrame" class="mini" type="button">Reset frame</button>
               </div>
-              <div class="field" id="outputField">
+              <div class="field" id="outputField" hidden>
                 <label>Output</label>
                 <div class="segmented" data-for="output" role="radiogroup" aria-label="Output">
                   <button type="button" role="radio" data-val="print">Print</button>
@@ -228,38 +117,26 @@
                 <input id="titleInput" type="text" maxlength="60" placeholder="Region name — “-” for none">
               </div>
             </section>
-            <section id="filesBlock" class="insp-group">
-              <div class="insp-head"><span class="insp-title">Files</span>
-                <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
-              </div>
-              <ul id="fileList" class="file-list"></ul>
-            </section>
-            <section id="markersBox" class="insp-group" hidden>
-              <div class="insp-head"><span class="insp-title">Places</span>
-                <span class="insp-note">name · icon · photo</span></div>
-              <div id="markerList"></div>
-            </section>
           </div>
 
-          <!-- registry-driven panels (populated by inspector.js) -->
-          <div id="panel-style" class="panel" hidden></div>
-          <div id="panel-layers" class="panel" hidden></div>
-          <div id="panel-light" class="panel" hidden></div>
-          <div id="panel-films" class="panel" hidden></div>
+          <!-- film setup (film target; built by films.js) -->
+          <div id="filmPanel" hidden></div>
 
-          <!-- SOCIAL panel (built by social.js) -->
-          <div id="panel-social" class="panel" hidden></div>
-
-          <!-- LIBRARY / EXPORTS have no inspector controls -->
-          <div id="panel-library" class="panel" hidden>
-            <section class="insp-group"><p class="lede insp-empty">Drop your GPX to begin, or reopen a poster. Presets and options light up once your tracks are loaded.</p></section>
-          </div>
-          <div id="panel-exports" class="panel" hidden>
-            <section class="insp-group"><p class="lede insp-empty">Downloads keep their self-documenting names. Jobs stay listed for the whole session.</p></section>
-          </div>
+          <section id="filesBlock" class="insp-group">
+            <div class="insp-head"><span class="insp-title">Files</span>
+              <button id="addFiles" class="mini" type="button" hidden>+ Add</button>
+            </div>
+            <ul id="fileList" class="file-list"></ul>
+          </section>
+          <section id="markersBox" class="insp-group" hidden>
+            <div class="insp-head"><span class="insp-title">Places</span>
+              <span class="insp-note">name · icon · photo</span></div>
+            <div id="markerList"></div>
+          </section>
+          <div id="provenanceCard" class="provenance-card side" hidden></div>
         </div>
 
-        <div id="inspectorFoot" class="inspector-foot" hidden>
+        <div id="inspectorFoot" class="inspector-foot">
           <div class="foot-export" id="footExport">
             <div class="field inline" id="formatField">
               <label for="finalFormat">Format</label>
@@ -286,7 +163,151 @@
           </div>
         </div>
       </aside>
+
+      <!-- ===================== center stage ===================== -->
+      <main class="stage">
+        <!-- Map | Preview toggle for the poster/wallpaper workspace -->
+        <div id="stageView" class="stage-view" hidden role="group" aria-label="Stage view">
+          <button id="viewMapBtn" class="seg-mini" type="button">Map</button>
+          <button id="viewPreviewBtn" class="seg-mini" type="button">Preview</button>
+        </div>
+
+        <!-- surface: empty state / start here -->
+        <section id="surface-home" class="surface surface-home" hidden aria-label="Start">
+          <div class="surface-scroll">
+            <div class="home-head">
+              <h1 id="h-home" tabindex="-1">Turn your tracks into a poster</h1>
+              <p class="lede">Drop your GPX, KML or KMZ — your map appears the moment your tracks land. No terrain plate for your area yet? We'll build it from USGS data.</p>
+            </div>
+            <button id="homeDropzone" class="dropzone home-dropzone" type="button">
+              <span class="dz-ico" aria-hidden="true">↧</span>
+              <b>Drop GPX, KML or KMZ</b>
+              <span>or click to browse — files accumulate</span>
+            </button>
+            <div class="home-open">
+              <h2 class="home-sub">Reopen a poster</h2>
+              <p class="lede">A Tecopa Plateworks PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
+              <div id="posterDrop" class="poster-drop">
+                <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
+                <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
+              </div>
+              <div id="provenanceCard" class="provenance-card" hidden></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- surface: COMPOSE map workspace -->
+        <section id="surface-map" class="surface surface-map" hidden aria-label="Map workspace">
+          <div class="map-pane" id="mapPane">
+            <canvas id="map" tabindex="0"
+                    aria-label="Map. On the Frame step, arrow keys move the frame, Shift+arrows resize it, Enter renders the proof."
+                    hidden></canvas>
+            <button id="dropzone" class="dropzone" type="button">
+              <span class="dz-ico" aria-hidden="true">↧</span>
+              <b>Drop GPX, KML or KMZ</b>
+              <span>or click to browse — files accumulate</span>
+            </button>
+            <button id="continuePoster" class="dz-continue" type="button" hidden>
+              ↻ Continue a poster — open last year's PNG to add this year
+            </button>
+            <div id="hint" class="hint" hidden></div>
+            <div id="mapMode" class="map-mode" hidden>
+              <button id="mapModeTracks" class="seg-mini on" type="button">Tracks</button>
+              <button id="mapModeFrame" class="seg-mini" type="button">Frame</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- surface: PROOF (live preview) -->
+        <section id="surface-proof" class="surface surface-proof" hidden aria-label="Poster proof">
+          <div class="proof-toolbar">
+            <label class="auto-proof"><span class="switch"><input type="checkbox" id="autoProofChk"><span class="slider"></span></span>
+              <span>Live proof</span></label>
+            <div id="proofStale" class="stale-flag" hidden>
+              <span>Changes not proofed</span>
+              <button id="reproofBtn" class="mini-primary" type="button">Re-proof</button>
+            </div>
+            <span id="refineChip" class="refine-chip" hidden></span>
+            <span class="toolbar-spring"></span>
+            <div class="ab-bar" id="abBar" hidden>
+              <button id="abClearBtn" class="mini" type="button">Clear B</button>
+              <input type="range" id="abScrub" min="0" max="100" value="50" aria-label="Compare A and B">
+              <span class="ab-legend"><b>A</b> live · <b>B</b> pinned</span>
+            </div>
+            <button id="abPinBtn" class="mini" type="button" title="Pin the current proof as B to compare">Pin B</button>
+            <div class="zoom-ctls" role="group" aria-label="Zoom">
+              <button id="zoomFitBtn" class="mini" type="button" title="Fit the sheet in the window">Fit</button>
+              <button id="zoom100Btn" class="mini" type="button" title="One proof pixel per screen pixel — inspect print detail">100%</button>
+              <span id="zoomPct" class="zoom-pct" aria-live="off"></span>
+            </div>
+          </div>
+          <div class="proof-wrap viewport" id="proofViewport">
+            <div id="proofEmpty" class="proof-empty">
+              <p>No proof yet.</p>
+              <p class="lede">Frame your poster on the <b>Map</b>, then render a proof to preview it here.</p>
+            </div>
+            <div class="viewport-content" id="proofContent">
+              <div class="poster-card" id="posterCard" hidden>
+                <img id="posterImg" alt="Poster proof">
+                <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
+              </div>
+            </div>
+          </div>
+          <div id="proofFilmstrip" class="filmstrip" hidden aria-label="Earlier proofs this session"></div>
+        </section>
+
+        <!-- surface: SOCIAL preview -->
+        <section id="surface-social" class="surface surface-social" hidden aria-label="Social preview">
+          <div class="surface-scroll" id="socialPreview"></div>
+        </section>
+
+        <!-- surface: FILM preview -->
+        <section id="surface-film" class="surface surface-film" hidden aria-label="Film preview">
+          <div class="surface-scroll" id="filmStage"></div>
+        </section>
+      </main>
+
+      <!-- ===================== appearance sidebar (right): how it looks ===================== -->
+      <aside class="inspector" aria-label="Appearance">
+        <div class="inspector-head">
+          <span id="inspectorTitle" class="insp-section-title">Appearance</span>
+          <div id="inspectorAction" class="insp-action"></div>
+        </div>
+        <div id="inspectorBody" class="inspector-body">
+          <div id="noTracksHint" class="insp-hint-card">
+            <p>Everything here shapes the picture live. <b>Drop a GPX to see it take effect</b> — anything you set now still applies to your first proof.</p>
+            <button id="noTracksHintClose" class="mini" type="button">Got it</button>
+          </div>
+          <!-- target-specific panels lead when their target is active -->
+          <div id="filmPacingHost" hidden></div>
+          <div id="panel-social" class="panel" hidden></div>
+          <section class="insp-group" id="presetsGroup">
+            <div class="insp-head"><span class="insp-title">Looks</span></div>
+            <div id="stylePresets"></div>
+          </section>
+          <div id="styleHost"></div>
+          <div id="layersHost"></div>
+          <div id="lightHost"></div>
+        </div>
+      </aside>
     </div>
+
+    <!-- ===================== status strip + jobs drawer ===================== -->
+    <footer id="statusbar" class="statusbar">
+      <span id="sbProof" class="sb-proof"></span>
+      <span class="toolbar-spring"></span>
+      <span id="sbJob" class="sb-job" hidden><span class="job-spinner sb-spinner"></span><span id="sbJobLabel"></span></span>
+      <button id="jobsBtn" class="sb-btn" type="button">Jobs</button>
+    </footer>
+    <aside id="jobsDrawer" class="jobs-drawer" hidden aria-label="Exports">
+      <div class="drawer-head">
+        <h2 id="h-queue" tabindex="-1">Exports</h2>
+        <button id="jobsClose" class="mini" type="button">Close</button>
+      </div>
+      <p class="lede drawer-lede">Every render this session — finals, wallpaper bundles, films, and kits — with live progress and re-download.</p>
+      <div id="jobList" class="job-list"></div>
+      <div id="jobEmpty" class="job-empty lede">Nothing rendered yet. Accept a proof or build a social kit to see jobs here.</div>
+    </aside>
 
     <div id="toast" class="toast" role="status" hidden></div>
   </div>
@@ -300,12 +321,12 @@
   <!-- first-run guide -->
   <dialog id="welcomeDialog" class="guide" aria-labelledby="welcomeTitle">
     <h2 id="welcomeTitle" class="guide-title">Welcome to the studio</h2>
-    <p class="guide-lede">Four moves take you from a GPX file to a printed poster and a feed post:</p>
+    <p class="guide-lede">Everything lives in one window — here's how it's laid out:</p>
     <ol class="guide-steps">
-      <li><span class="guide-ico" aria-hidden="true">◳</span><div><b>Compose</b> — drop your tracks; your map appears, then frame the poster. No plate for your area yet builds one from USGS terrain.</div></li>
-      <li><span class="guide-ico" aria-hidden="true">✦</span><div><b>Style · Layers · Light</b> — render a proof, then tune it live. Every edit re-proofs itself.</div></li>
-      <li><span class="guide-ico" aria-hidden="true">◉</span><div><b>Social</b> — repurpose it for Reels, feed posts and stories, with safe zones and a caption.</div></li>
-      <li><span class="guide-ico" aria-hidden="true">⇩</span><div><b>Exports</b> — accept to render the full-resolution final; every render lands here.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">↧</span><div><b>Drop your tracks</b> — GPX, KML or KMZ, anywhere. Your map appears in the center; no terrain plate for your area yet builds one from USGS data.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">◧</span><div><b>Left: the project</b> — page size, files, places, and the render actions. The switcher up top picks what you're making: a poster, a wallpaper, a film, or social posts.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">◨</span><div><b>Right: the look</b> — route ink, terrain, cartography, light. Always there; every control explains itself behind its <b>?</b>. Edits re-proof live, and the preview sharpens to print quality by itself.</div></li>
+      <li><span class="guide-ico" aria-hidden="true">⇩</span><div><b>Bottom: your renders</b> — the status strip tracks proof freshness and running jobs; the Jobs drawer keeps every export for re-download.</div></li>
     </ol>
     <p class="guide-tip">Tip: press <kbd>?</kbd> any time for shortcuts, or <kbd>⌘K</kbd> to search every option (it can reopen this guide too).</p>
     <div class="guide-actions">
@@ -317,7 +338,8 @@
   <dialog id="shortcutsDialog" class="guide" aria-labelledby="shortcutsTitle">
     <h2 id="shortcutsTitle" class="guide-title">Keyboard shortcuts</h2>
     <dl class="shortcut-list">
-      <div><dt><kbd>1</kbd>–<kbd>8</kbd></dt><dd>Jump to a section</dd></div>
+      <div><dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>Switch output target (Poster · Wallpaper · Film · Social)</dd></div>
+      <div><dt><kbd>M</kbd> / <kbd>P</kbd></dt><dd>Map or Preview in the center stage</dd></div>
       <div><dt><kbd>⌘</kbd><kbd>K</kbd></dt><dd>Command palette — search every option &amp; action</dd></div>
       <div><dt><kbd>?</kbd></dt><dd>This shortcuts sheet</dd></div>
       <div><dt><kbd>Enter</kbd></dt><dd>On the map: render a proof</dd></div>

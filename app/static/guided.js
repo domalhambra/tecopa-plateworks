@@ -36,11 +36,11 @@ function wireStart(dlg) {
 function finish(dlg) {
   savePref('guided', 'done');
   if (dlg.open) dlg.close();
-  // gently point at the first step
-  const rail = document.querySelector('.rail-item[data-section="compose"]');
-  if (rail) {
-    rail.classList.add('pulse');
-    setTimeout(() => rail.classList.remove('pulse'), 3600);
+  // gently point at the way in: the drop target on the start surface
+  const dz = $('homeDropzone');
+  if (dz) {
+    dz.classList.add('pulse');
+    setTimeout(() => dz.classList.remove('pulse'), 3600);
   }
   const home = $('h-home');
   if (home) home.focus();

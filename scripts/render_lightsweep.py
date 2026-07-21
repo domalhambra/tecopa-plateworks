@@ -59,7 +59,7 @@ def sweep_mp4(spec, dpi, region_dir, cfg) -> bytes:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("final", help="a Tecopa Printworks final PNG whose manifest names the composition")
+    ap.add_argument("final", help="a Tecopa Plateworks final PNG whose manifest names the composition")
     ap.add_argument("--region-dir", required=True,
                     help="the plate directory (dem.tif etc.) -- the sweep re-renders")
     ap.add_argument("-o", "--out", default=None)
@@ -72,7 +72,7 @@ def main(argv=None) -> int:
         # a wrong file gets an honest refusal -- no embed_spec toggle will ever
         # put a manifest in a JPEG export
         print(f"not a PNG: {os.path.basename(args.final)} — the sweep takes a "
-              "Tecopa Printworks final", file=sys.stderr)
+              "Tecopa Plateworks final", file=sys.stderr)
         return 2
     manifest = provenance.extract(data)
     if manifest is None:

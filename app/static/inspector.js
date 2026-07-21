@@ -5,7 +5,7 @@
 // an auto-proof. This is the generic half of the UI — the section modules own the bits
 // that need bespoke wiring (geometry, upload, film submit, social kit).
 import { state, setField } from './store.js';
-import { CONTROLS, forSection, panelsOf, fmtHour } from './controls.js';
+import { CONTROLS, GROUPS, forSection, panelsOf, fmtHour } from './controls.js';
 import { $, wireSegmented } from './ui.js';
 import * as proof from './proof.js';
 
@@ -103,10 +103,39 @@ export function renderControl(c) {
   } else {
     return null;   // dial + text + geometry types are handled by their bespoke owners
   }
+  attachHelp(wrap, c.help);
   return wrap;
 }
 
 function hint(c) { return c.hint ? ` <span class="ctl-hint">· ${c.hint}</span>` : ''; }
+
+// Every control explains itself: a small ? toggle reveals one plain sentence INLINE
+// below the row (not a hover tooltip — works for touch and keyboard, and stays put
+// while the reader adjusts the control). Exported so static rows (page setup, film
+// target) get the identical affordance.
+export function attachHelp(row, help) {
+  if (!help) return row;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'ctl-help';
+  btn.setAttribute('aria-label', 'What is this?');
+  btn.setAttribute('aria-expanded', 'false');
+  btn.textContent = '?';
+  const text = document.createElement('p');
+  text.className = 'ctl-help-text';
+  text.textContent = help;
+  text.hidden = true;
+  btn.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    text.hidden = !text.hidden;
+    btn.setAttribute('aria-expanded', text.hidden ? 'false' : 'true');
+  };
+  // the toggle rides the row's label line; the sentence lands after the whole row
+  const anchor = row.querySelector('label, .switch-label, .field-label, .slider-top label');
+  (anchor || row).appendChild(btn);
+  row.appendChild(text);
+  return row;
+}
 
 function read(c) {
   const dot = c.path.indexOf('.');
@@ -118,20 +147,31 @@ function register(c, wrap, reflect) {
   rendered.push({ control: c, container: wrap, reflect });
 }
 
-// Build a whole section's inspector panel, grouped by the controls' `panel`. Skips
-// advanced-only controls (they surface in the command palette / all-options search).
-export function buildSectionPanel(section, host, { includeAdvanced = false } = {}) {
+// Build a whole section's inspector panel, grouped by the controls' `panel`, as
+// collapsible <details> groups (all open by default — collapsing is a reading aid, not
+// a hiding place). `panels` restricts to named groups so a section can split across
+// hosts (film pacing right, film output left). Skips advanced-only controls (they
+// surface in the command palette / all-options search).
+export function buildSectionPanel(section, host, { includeAdvanced = false, panels = null } = {}) {
   host.innerHTML = '';
   for (const panel of panelsOf(section)) {
+    if (panels && !panels.includes(panel)) continue;
     const items = forSection(section).filter((c) => c.panel === panel && (includeAdvanced || !c.advanced));
     const usable = items.filter((c) => ['slider', 'toggle', 'toggleMap', 'select', 'segmented', 'swatch'].includes(c.type));
     if (!usable.length) continue;
-    const group = document.createElement('section');
+    const group = document.createElement('details');
     group.className = 'insp-group';
-    const head = document.createElement('div');
+    group.open = true;
+    const head = document.createElement('summary');
     head.className = 'insp-head';
     head.innerHTML = `<span class="insp-title">${panel}</span>`;
     group.appendChild(head);
+    if (GROUPS[panel]) {
+      const desc = document.createElement('p');
+      desc.className = 'insp-desc';
+      desc.textContent = GROUPS[panel];
+      group.appendChild(desc);
+    }
     for (const c of usable) {
       const el = renderControl(c);
       if (el) group.appendChild(el);

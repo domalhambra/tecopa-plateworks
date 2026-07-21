@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 PORT=8848
-APP="$REPO/dist/Tecopa Printworks.app"
+APP="$REPO/dist/Tecopa Plateworks.app"
 READY="http://127.0.0.1:$PORT/readyz"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -28,7 +28,7 @@ for _ in $(seq 1 120); do
   if serving; then up=1; break; fi
   sleep 0.5
 done
-[[ "$up" == 1 ]] || fail "engine did not become ready within 60s (see ~/Library/Logs/TecopaPrintworks.log)"
+[[ "$up" == 1 ]] || fail "engine did not become ready within 60s (see ~/Library/Logs/TecopaPlateworks.log)"
 echo "  launch + ready: OK"
 
 # 4. The engine process exists and we own it
@@ -36,12 +36,12 @@ pgrep -f "uvicorn app.main:app" >/dev/null || fail "no uvicorn process found aft
 echo "  engine process present: OK"
 
 # 5. Quit the app. The FIRST run raises a one-time macOS Automation (TCC) prompt —
-#    "<terminal> wants to control Tecopa Printworks.app". Click Allow. If denied (or run
+#    "<terminal> wants to control Tecopa Plateworks.app". Click Allow. If denied (or run
 #    unattended so the dialog times out), the quit event never arrives; catch that
 #    specific case so the failure isn't misread as a launcher bug.
-if ! osascript -e 'quit app "Tecopa Printworks"' 2>/tmp/tecopa-quit.err; then
+if ! osascript -e 'quit app "Tecopa Plateworks"' 2>/tmp/tecopa-quit.err; then
   if grep -qiE "1743|not authoriz|not permitted" /tmp/tecopa-quit.err; then
-    fail "macOS Automation permission was denied — allow your terminal to control Tecopa Printworks under System Settings > Privacy & Security > Automation, then rerun (the launcher's own quit path is fine)"
+    fail "macOS Automation permission was denied — allow your terminal to control Tecopa Plateworks under System Settings > Privacy & Security > Automation, then rerun (the launcher's own quit path is fine)"
   fi
 fi
 

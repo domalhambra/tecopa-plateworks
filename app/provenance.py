@@ -33,18 +33,22 @@ from app import serialize
 from app.spec import CompositionSpec, SpecError
 
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword -- FROZEN v1 format keyword: it
-                                   # predates the Tecopa Printworks rename and every existing
+                                   # predates the Tecopa Plateworks rename and every existing
                                    # poster carries it; renaming would orphan those files.
 NOTE_KEY = "trailprint-note"       # the plain-tEXt resurrection note beside it -- frozen v1
                                    # keyword for the same reason as MANIFEST_KEY.
 MANIFEST_VERSION = 1
-ENGINE = "tecopa-printworks"
+ENGINE = "tecopa-plateworks"
+# Manifests written by earlier engine names carry "trailprint" (pre 2026-07-19) or
+# "tecopa-printworks" (2026-07-19..21); readers treat all three as this engine
+# (docs/MANIFEST.md). Nothing in this module gates on the engine value.
+LEGACY_ENGINES = ("trailprint", "tecopa-printworks")
 ENGINE_URL = "https://github.com/domalhambra/badwatertrails"
 
 
 class ManifestError(SpecError):
     """An untrusted manifest can't be turned into a safe, renderable spec because it isn't
-    a well-formed Tecopa Printworks manifest. A SpecError subclass, so a single `except SpecError`
+    a well-formed Tecopa Plateworks manifest. A SpecError subclass, so a single `except SpecError`
     in the API catches it alongside the geometry/zoom gates as one 422 (see
     spec_from_manifest)."""
 
@@ -219,7 +223,7 @@ def resurrection_note(manifest: dict) -> str:
         pv = None                             # pre-pack file (or a crafted value): no version
     plate = f"{rid} {pv}" if pv else rid
     return "\n".join([
-        "This PNG is a Tecopa Printworks self-describing poster and its own save file.",
+        "This PNG is a Tecopa Plateworks self-describing poster and its own save file.",
         'Its full render recipe and route data live in this file\'s compressed zTXt chunk "trailprint"',
         "(JSON; schema: docs/MANIFEST.md in the engine repo, CC0-1.0).",
         f"Engine: AGPL-3.0-or-later -- {ENGINE_URL}",
@@ -263,7 +267,7 @@ def extract(png_bytes: bytes) -> dict | None:
 
 def manifest_to_spec(manifest: dict) -> CompositionSpec:
     """Rebuild the CompositionSpec from a manifest. Raises (KeyError / TypeError /
-    ValueError) on a manifest that isn't a well-formed Tecopa Printworks one; callers map to
+    ValueError) on a manifest that isn't a well-formed Tecopa Plateworks one; callers map to
     422. spec_from_json fills missing fields with dataclass defaults (forward-compat)."""
     return serialize.spec_from_json(manifest["spec"])
 
@@ -385,7 +389,7 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
     except SpecError:
         raise
     except Exception as e:
-        raise ManifestError("This file's Tecopa Printworks manifest is malformed.") from e
+        raise ManifestError("This file's Tecopa Plateworks manifest is malformed.") from e
     drop_unembedded_photos(spec)
     bound_geometry(spec)
     spec.validate(spec.final_dpi())

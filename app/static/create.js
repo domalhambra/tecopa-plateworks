@@ -116,7 +116,7 @@ export async function enterCreationFlow(files) {
   // Buildable: arm the flow. currentPlan + phase gate the (already-bound) Build button.
   currentPlan = p;
   phase = 'ready';
-  $('buildLede').textContent = 'Tecopa Printworks can build the terrain for these tracks from USGS data.';
+  $('buildLede').textContent = 'Tecopa Plateworks can build the terrain for these tracks from USGS data.';
   $('buildEstimate').textContent = estimateLine(p);
   $('buildEstimate').hidden = false;
   $('buildNameField').hidden = false;

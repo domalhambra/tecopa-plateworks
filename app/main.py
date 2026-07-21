@@ -35,6 +35,22 @@ PROOF_DPI = 96    # cheap mid-fidelity preview
 def _proof_dpi(spec):
     return spec.final_dpi() * PROOF_DPI / FINAL_DPI    # 96 for a print, ppi*0.32 for a wallpaper
 
+# Progressive proof: the sync /api/proof draft stays instant at PROOF_DPI; a refine
+# pass then re-rasterizes the SAME stamped spec at the highest dpi whose canvas stays
+# under REFINE_MAX_PIXELS (a few-seconds-class render), never above the final's dpi.
+# The refine runs on its own queue so it is never stuck behind a multi-minute final.
+REFINE_MAX_PIXELS = 40_000_000
+# Prints stop at 200 dpi: past that a screen preview gains nothing while pixels
+# quadruple. A wallpaper's final is already screen-sized (a 6K display is ~20 MP),
+# so it refines straight to native device ppi -- the cap would only blur it.
+REFINE_DPI_CAP = 200
+
+def _refine_dpi(spec):
+    area_in = ((spec.print_w_in + 2 * spec.bleed_in)
+               * (spec.print_h_in + 2 * spec.bleed_in))
+    cap = REFINE_DPI_CAP if spec.output_kind == "print" else spec.final_dpi()
+    return min(cap, (REFINE_MAX_PIXELS / area_in) ** 0.5, spec.final_dpi())
+
 # Lifecycle TTL (red-team V1-8): a back-to-back concierge day otherwise leaks disk +
 # memory (finals, blobs, job records, uploaded photos were never evicted). Default 24h;
 # set 0 to disable eviction (e.g. an archival run).
@@ -54,6 +70,10 @@ QUEUE = jobs.ThreadJobQueue(
 # never block poster renders behind it, and TECOPA_RENDER_CONCURRENCY must not
 # break the one-build-at-a-time guarantee.
 BUILD_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
+# Proof refines get the same isolation for the same reason in reverse: a refine
+# queued behind a final would defeat "the preview sharpens while you look at it".
+# A refine peaks far below a final (REFINE_MAX_PIXELS), so one extra slot is safe.
+PROOF_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
 PREP_PYTHON = os.environ.get("TECOPA_PREP_PYTHON", ".venv-prep/bin/python")
 PREP_SCRIPT = os.environ.get("TECOPA_PREP_SCRIPT", "region_prep.py")
 LABELS_SCRIPT = os.environ.get("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py")
@@ -1025,6 +1045,66 @@ async def proof(session_id: str = Form(...),
     buf = io.BytesIO(); img.save(buf, "PNG"); buf.seek(0)
     return StreamingResponse(buf, media_type="image/png")
 
+
+# ---- progressive proof: the refine pass ----
+
+def _render_refine_to_blob(spec, region_dir, key, cfg=None):
+    """The refine worker: re-rasterize the stamped spec at _refine_dpi with the same
+    watermark + bleed-band crop as the sync draft, so the sharp image is a drop-in
+    replacement for the draft the client is already showing. Runs on PROOF_QUEUE."""
+    dpi = _refine_dpi(spec)
+    img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
+                           watermark=True, cfg=cfg)
+    if spec.bleed_in:
+        b = round(spec.bleed_in * dpi)
+        w, h = img.size
+        img = img.crop((b, b, w - b, h - b))
+    buf = io.BytesIO(); img.save(buf, "PNG")
+    BLOBS.put(key, buf.getvalue())
+    return key
+
+@app.post("/api/proof/refine")
+async def proof_refine(session_id: str = Form(...)):
+    """Enqueue the high-dpi refine of the CURRENTLY STAMPED spec. Because /api/proof
+    stamps only on success, the refine always paints exactly the picture the draft
+    showed. skip=true means the draft is already at (or near) the sharpest this
+    output can get -- tiny wallpapers -- and no job was queued. The fixed blob key
+    means each refine supersedes the last; the TTL sweep evicts it with the session."""
+    spec, region, _sources, _lineage = _require_stamped(session_id)
+    dpi = _refine_dpi(spec)
+    if dpi <= _proof_dpi(spec) * 1.2:
+        return {"skip": True, "dpi": _proof_dpi(spec)}
+    key = f"{session_id}/proof_refine.png"
+    jid = PROOF_QUEUE.submit(_render_refine_to_blob, spec, region.dir, key, region.cfg)
+    log.info("event=proof.refine.submit session=%s dpi=%.0f jid=%s", session_id, dpi, jid)
+    return {"skip": False, "job": jid, "dpi": dpi}
+
+@app.get("/api/proof/refine/{jid}")
+async def proof_refine_status(jid: str):
+    """Refine jobs live on PROOF_QUEUE, not QUEUE, so they never appear in the
+    exports drawer's /api/jobs namespace -- they get their own status door."""
+    try:
+        s = PROOF_QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown refine job")
+    out = {"state": s["state"], "error": s["error"]}
+    if s["state"] == "done":
+        out["result"] = f"/api/proof/refine/{jid}/result"
+    return out
+
+@app.get("/api/proof/refine/{jid}/result")
+async def proof_refine_result(jid: str):
+    try:
+        s = PROOF_QUEUE.status(jid)
+    except KeyError:
+        raise HTTPException(404, "Unknown refine job")
+    if s["state"] != "done":
+        raise HTTPException(409, f"job is {s['state']}")
+    key = s["result"]
+    if not BLOBS.exists(key):
+        raise HTTPException(404, "result expired")
+    return FileResponse(BLOBS.path(key), media_type="image/png")
+
 @app.post("/api/final")
 async def final(session_id: str = Form(...), format: str = Form("png"),
                 embed_spec: bool = Form(True)):
@@ -1316,7 +1396,7 @@ async def mockups_submit(file: UploadFile = File(...),
     from app import mockups
     data = await _read_capped(file)
     if not data.startswith(mockups.PNG_MAGIC):
-        raise HTTPException(422, "not a PNG — mockups take a Tecopa Printworks final (poster or film)")
+        raise HTTPException(422, "not a PNG — mockups take a Tecopa Plateworks final (poster or film)")
     vs = [v.strip() for v in variants.split(",") if v.strip()]
     if not vs:
         raise HTTPException(422, "pick at least one variant (plate, frame)")
@@ -1374,7 +1454,7 @@ async def job_result(jid: str):
                         filename=os.path.basename(key))
 
 # ---- self-describing posters: reprint from the file alone (no session, no DB) ----
-# A Tecopa Printworks PNG carries its own spec (see provenance.py). These two endpoints read
+# A Tecopa Plateworks PNG carries its own spec (see provenance.py). These two endpoints read
 # it back: /inspect returns the manifest, /reprint re-renders at print resolution.
 REPRINT_MAX_BYTES = 96 * 1024 * 1024   # a 300-dpi PNG is tens of MB; cap the upload
 
@@ -1387,7 +1467,7 @@ async def _read_capped(file: UploadFile) -> bytes:
 def _manifest_or_422(data: bytes) -> dict:
     m = provenance.extract(data)
     if m is None:
-        raise HTTPException(422, "This file carries no Tecopa Printworks manifest — it can't be reprinted. "
+        raise HTTPException(422, "This file carries no Tecopa Plateworks manifest — it can't be reprinted. "
                                  "Only PNG finals exported with reprint data embedded are self-describing.")
     return m
 
@@ -1489,7 +1569,7 @@ async def reprint_inspect(file: UploadFile = File(...)):
 @app.post("/api/reprint")
 async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                   embed_spec: bool = Form(True)):
-    """Re-render a Tecopa Printworks PNG at print resolution from the file alone. Stateless:
+    """Re-render a Tecopa Plateworks PNG at print resolution from the file alone. Stateless:
     the spec rides the file, so no session or DB row is needed -- a printed poster is
     reproducible forever, photos included (they ride the manifest as embedded bytes).
     The embedded spec is UNTRUSTED input: it passes through provenance.spec_from_manifest
@@ -1602,7 +1682,7 @@ def _match_wallpaper_preset(spec):
 
 @app.post("/api/continue")
 async def continue_poster(file: UploadFile = File(...)):
-    """Open a Tecopa Printworks PNG for its next edition. Reads the embedded spec, rebuilds a
+    """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
     live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
     extends the lineage chain, and returns the /api/upload response shape plus prefill
     hints so the wizard lands with everything restored. The client then adds this year's

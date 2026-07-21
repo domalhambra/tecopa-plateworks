@@ -9,9 +9,12 @@
 // a new control silently shipped a stale spec to the final render. Now a control just
 // declares `affectsProof` in controls.js and the choke-point can never forget.
 export const state = {
-  // section machine (replaces the old linear `step`/`steps`): the active studio
-  // section and whether the guided first-run overlay is walking the user through.
-  section: 'library',
+  // single-window router (replaces the old section rail): which output target the
+  // studio is presenting (poster | wallpaper | film | social) and, for the sheet
+  // targets, whether the center stage shows the map workspace or the proof preview.
+  target: 'poster',
+  view: 'map',            // 'map' | 'preview' (poster/wallpaper targets only)
+  hintDismissed: false,   // the "controls apply once tracks land" sidebar hint
   guided: false,
   session: null,
   region: null,
@@ -84,7 +87,7 @@ export const state = {
 };
 
 const LS_KEY = 'tecopa';       // { region, printSize, orient, theme, finalFormat, autoProof, stylePresets }
-const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Printworks" key; migrated once on read
+const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Plateworks" key; migrated once on read
 
 export function loadPrefs() {
   try {
