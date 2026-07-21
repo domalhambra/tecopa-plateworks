@@ -127,8 +127,8 @@ _hydrate_regions()
 
 
 # --- slow-tier policy (single source of truth) ---------------------------------------
-# The PR tier runs `-m "not slow"` for minutes-fast feedback; the full suite (main +
-# nightly) runs everything. Rather than scatter markers across ~20 files, classify here
+# The PR tier runs `-m "not slow"` for minutes-fast feedback; the full suite runs on
+# every push to main (each merge). Rather than scatter markers across ~20 files, classify here
 # from `--durations` (on in pytest.ini) so the whole policy is auditable and updatable in
 # one place. Threshold: a test costing >5s of render is "slow". Re-derive after adding
 # heavy tests: `python -m pytest -n auto -m "not serial" --durations=0`.
