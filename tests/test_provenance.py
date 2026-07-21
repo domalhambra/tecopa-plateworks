@@ -143,6 +143,15 @@ def test_spec_from_manifest_runs_the_whole_guard_chain():
     assert "photo" not in spec.hotspots[0]                 # bare path dropped, never opened
     spec.validate(spec.final_dpi())                        # already gated -> still passes
 
+def test_spec_from_manifest_accepts_every_legacy_engine_name():
+    # The engine has been named trailprint, tecopa-printworks, and now tecopa-plateworks.
+    # MANIFEST.md: readers MUST treat all three as this engine — a file from any era opens.
+    m = json.load(open("tests/fixtures/manifest_v1.json"))
+    for engine in (provenance.ENGINE, *provenance.LEGACY_ENGINES):
+        m["engine"] = engine
+        spec = provenance.spec_from_manifest(m)
+        spec.validate(spec.final_dpi())
+
 def test_spec_from_manifest_rejects_a_malformed_manifest():
     try:
         provenance.spec_from_manifest({"spec": "not a spec dict"})

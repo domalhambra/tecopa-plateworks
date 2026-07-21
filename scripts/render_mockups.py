@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instagram-ready physical mockups of a finished final -- the Plate and the Frame.
 
-Takes ANY Tecopa Printworks final PNG and stages its pixels as a photographed object on the
+Takes ANY Tecopa Plateworks final PNG and stages its pixels as a photographed object on the
 landing page's gallery wall: a circular embossed terrain *plate* (the signature
 Tecopa Plateworks shot) and a matted, framed print. A still final emits JPEGs
 (1080x1080 and 1080x1350); a film APNG emits MP4s in which the journeys ink
@@ -121,7 +121,7 @@ class MockupError(ValueError):
 # ---------------------------------------------------------------- input handling
 
 def load_final(path: str):
-    """(frames, durations_ms, manifest|None) from any Tecopa Printworks final.
+    """(frames, durations_ms, manifest|None) from any Tecopa Plateworks final.
 
     A still yields one frame with duration 0; an animated APNG (the film) yields its
     frames + per-frame durations -- read back with load() per frame, the way the film
@@ -132,7 +132,7 @@ def load_final(path: str):
         data = f.read()
     if not data.startswith(PNG_MAGIC):
         raise MockupError(f"not a PNG: {os.path.basename(path)} — mockups take a "
-                          "Tecopa Printworks final (poster or film)")
+                          "Tecopa Plateworks final (poster or film)")
     im = Image.open(io.BytesIO(data))
     n = getattr(im, "n_frames", 1)
     frames, durations = [], []
@@ -548,7 +548,7 @@ def _parse_sizes(s: str):
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("final", help="a Tecopa Printworks final PNG (poster or film APNG)")
+    ap.add_argument("final", help="a Tecopa Plateworks final PNG (poster or film APNG)")
     ap.add_argument("-o", "--out", default=None, help="output dir (default: beside the input)")
     ap.add_argument("--variants", default=",".join(VARIANTS))
     ap.add_argument("--sizes", default=",".join(f"{w}x{h}" for w, h in SIZES))

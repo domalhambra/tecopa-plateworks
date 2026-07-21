@@ -5,7 +5,7 @@ import Foundation
 let kPort = 8848
 let kBaseURL = "http://127.0.0.1:8848/"
 let kReadyURL = "http://127.0.0.1:8848/readyz"
-let kLogPath = NSHomeDirectory() + "/Library/Logs/TecopaPrintworks.log"
+let kLogPath = NSHomeDirectory() + "/Library/Logs/TecopaPlateworks.log"
 
 // One append-mode log fd, opened once and shared by the launcher AND the child engine.
 // O_APPEND makes every write land atomically at EOF, so the launcher's own log lines and
@@ -65,7 +65,7 @@ func httpGet(_ urlString: String, timeout: TimeInterval) -> (Data?, Bool) {
 
 enum ServingState { case tecopa, foreign, none }
 
-/// Is something already serving on the port, and is it Tecopa Printworks?
+/// Is something already serving on the port, and is it Tecopa Plateworks?
 func probeExisting(timeout: TimeInterval) -> ServingState {
     let (data, hadResponse) = httpGet(kReadyURL, timeout: timeout)
     if !hadResponse { return .none }
@@ -122,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1. Repo path baked at build time
         guard let repo = Bundle.main.object(forInfoDictionaryKey: "TecopaRepoPath") as? String,
               !repo.isEmpty else {
-            die("Tecopa Printworks can’t find its files",
+            die("Tecopa Plateworks can’t find its files",
                 "No repository path is baked into this app. Rebuild it with:\n\nscripts/macos/build_app.sh --install")
             return
         }
@@ -131,27 +131,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // 2. Preflight
         if !fm.fileExists(atPath: repo) {
-            die("Tecopa Printworks can’t find its files",
+            die("Tecopa Plateworks can’t find its files",
                 "The project folder isn’t where it was when this app was built:\n\n\(repo)\n\nRebuild with scripts/macos/build_app.sh --install after moving it back or rebuilding in place.")
             return
         }
         if !fm.fileExists(atPath: py) {
-            die("Tecopa Printworks isn’t set up yet",
+            die("Tecopa Plateworks isn’t set up yet",
                 "No Python environment was found at:\n\n\(py)\n\nCreate it first:\n  python3 -m venv .venv && source .venv/bin/activate\n  pip install -r requirements-lock.txt")
             return
         }
 
         // 2b. Ensure this app can read the project (surfaces the one-time macOS
         //     Documents-folder permission prompt; the engine subprocess inherits it).
-        let accessMsg = "Tecopa Printworks couldn’t read the project files in your Documents folder.\n\nGrant access in System Settings → Privacy & Security → Files and Folders (enable Tecopa Printworks’ “Documents Folder”), or add Tecopa Printworks under Full Disk Access, then relaunch."
+        let accessMsg = "Tecopa Plateworks couldn’t read the project files in your Documents folder.\n\nGrant access in System Settings → Privacy & Security → Files and Folders (enable Tecopa Plateworks’ “Documents Folder”), or add Tecopa Plateworks under Full Disk Access, then relaunch."
         switch primeDocumentsAccess(repo, timeout: 90) {
         case .granted:
             logLine("documents access ok")
         case .denied:
-            die("Tecopa Printworks needs permission", accessMsg)
+            die("Tecopa Plateworks needs permission", accessMsg)
             return
         case .timedOut:
-            die("Tecopa Printworks needs permission", accessMsg)
+            die("Tecopa Plateworks needs permission", accessMsg)
             return
         }
 
@@ -163,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         case .foreign:
             die("Port \(kPort) is in use",
-                "Another program is already using port \(kPort). Quit it, then relaunch Tecopa Printworks.")
+                "Another program is already using port \(kPort). Quit it, then relaunch Tecopa Plateworks.")
             return
         case .none:
             break
@@ -180,14 +180,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         p.terminationHandler = { [weak self] proc in
             guard let self = self, !self.isQuitting else { return }
-            self.die("Tecopa Printworks’ engine stopped",
+            self.die("Tecopa Plateworks’ engine stopped",
                      "The rendering engine exited unexpectedly (status \(proc.terminationStatus)).\n\nSee the log:\n\(kLogPath)")
         }
         logLine("starting engine: \(py) -m uvicorn app.main:app --port \(kPort) (cwd=\(repo))")
         do {
             try p.run()
         } catch {
-            die("Tecopa Printworks couldn’t start its engine",
+            die("Tecopa Plateworks couldn’t start its engine",
                 "\(error.localizedDescription)\n\nSee the log:\n\(kLogPath)")
             return
         }
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        die("Tecopa Printworks took too long to start",
+        die("Tecopa Plateworks took too long to start",
             "The engine didn’t become ready within 60 seconds.\n\nSee the log:\n\(kLogPath)")
     }
 
@@ -245,10 +245,10 @@ let appItem = NSMenuItem()
 mainMenu.addItem(appItem)
 let appMenu = NSMenu()
 appItem.submenu = appMenu
-appMenu.addItem(withTitle: "About Tecopa Printworks",
+appMenu.addItem(withTitle: "About Tecopa Plateworks",
                 action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
 appMenu.addItem(NSMenuItem.separator())
-appMenu.addItem(withTitle: "Quit Tecopa Printworks",
+appMenu.addItem(withTitle: "Quit Tecopa Plateworks",
                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 app.mainMenu = mainMenu
 

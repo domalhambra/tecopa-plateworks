@@ -1,5 +1,5 @@
 // library.js — the Library home: the GPX dropzone and the "reopen a poster" flow.
-// A Tecopa Printworks PNG carries its whole recipe, so dropping one here first INSPECTS it
+// A Tecopa Plateworks PNG carries its whole recipe, so dropping one here first INSPECTS it
 // (a pure manifest read: region, edition, lineage, and the plate verdict — can this
 // server reproduce these exact pixels?) and then offers to continue it as next year's
 // edition or reprint it at full resolution. Surfaces /api/reprint(/inspect), which the
@@ -64,7 +64,7 @@ export async function openPoster(file) {
     renderProvenance(info);
     toast('', 'info');
   } catch (e) {
-    // not a Tecopa Printworks PNG / no manifest (a share copy) — say so honestly.
+    // not a Tecopa Plateworks PNG / no manifest (a share copy) — say so honestly.
     renderNoManifest(e.message);
     toast('That file carries no reprint recipe.', 'error');
   }
@@ -103,7 +103,7 @@ function renderNoManifest(msg) {
   const card = $('provenanceCard');
   card.hidden = false;
   card.innerHTML = `<h3>No reprint recipe</h3>
-    <p class="lede">This PNG doesn't carry a Tecopa Printworks manifest — it's a share copy (or not a Tecopa Printworks poster), so it can't be reprinted or continued. Open a reprintable copy instead.</p>
+    <p class="lede">This PNG doesn't carry a Tecopa Plateworks manifest — it's a share copy (or not a Tecopa Plateworks poster), so it can't be reprinted or continued. Open a reprintable copy instead.</p>
     <p class="insp-note">${escapeHtml(msg || '')}</p>`;
 }
 

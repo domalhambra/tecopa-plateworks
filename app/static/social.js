@@ -266,7 +266,7 @@ function generateCaption() {
   if (state.edition >= 2) line2.push(`Edition ${state.edition}`);
   if (line2.length) bits.push(line2.join(' · '));
   if (named.length) bits.push(`Favorite spots: ${named.slice(0, 4).join(', ')}.`);
-  bits.push('Every mile I actually walked, printed as shaded-relief terrain. #tecopaprintworks #hiking #mapmaking');
+  bits.push('Every mile I actually walked, printed as shaded-relief terrain. #tecopaplateworks #hiking #mapmaking');
   return bits.join('\n');
 }
 

@@ -217,7 +217,7 @@ def verify_poster(png_path: str, root: str = "regions") -> int:
     with open(png_path, "rb") as f:
         manifest = provenance.extract(f.read())
     if manifest is None:
-        print(f"{png_path} carries no Tecopa Printworks manifest — only PNG finals exported "
+        print(f"{png_path} carries no Tecopa Plateworks manifest — only PNG finals exported "
               f"with reprint data embedded can name their plate")
         return 1
     rp = manifest.get("region_pack")
@@ -272,7 +272,7 @@ def verify_poster(png_path: str, root: str = "regions") -> int:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m app.plates",
-                                 description="Install and verify Tecopa Printworks terrain "
+                                 description="Install and verify Tecopa Plateworks terrain "
                                              "plates (.trailplate.zip)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p_i = sub.add_parser("install", help="install a plate from a path or URL")

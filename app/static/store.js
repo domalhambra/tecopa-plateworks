@@ -84,7 +84,7 @@ export const state = {
 };
 
 const LS_KEY = 'tecopa';       // { region, printSize, orient, theme, finalFormat, autoProof, stylePresets }
-const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Printworks" key; migrated once on read
+const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Plateworks" key; migrated once on read
 
 export function loadPrefs() {
   try {
