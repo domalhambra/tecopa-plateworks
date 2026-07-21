@@ -36,7 +36,7 @@ export function initPalette({ setTarget, setView, jumpToControl, actions }) {
   for (const c of CONTROLS) {
     items.push({
       label: c.label, hint: SECTION_LABEL[c.section] || c.section,
-      keys: [c.label, ...(c.keywords || []), c.section],
+      keys: [c.label, ...(c.keywords || []), c.section, ...(c.help ? [c.help] : [])],
       run: () => jumpToControl(c),
     });
   }

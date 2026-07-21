@@ -172,6 +172,23 @@ function buildPanels() {
   // Film pacing rides the right sidebar when the Film target is active; the film
   // target/format/render controls live in the left sidebar (films.js).
   inspector.buildSectionPanel('films', $('filmPacingHost'), { panels: ['Pacing'] });
+
+  attachStaticHelp();
+}
+
+// The static page-setup rows get the same ? affordance as registry rows, reusing the
+// registry's own sentences where an entry exists.
+function attachStaticHelp() {
+  const H = (id, help) => { const el = $(id); if (el && help) inspector.attachHelp(el, help); };
+  H('sizeField', controls.control('size').help);
+  H('orientField', controls.control('orientation').help);
+  H('bleedField', controls.control('bleed').help);
+  H('titleField', controls.control('title').help);
+  H('wpPresetField', "Pick the exact screen this wallpaper is for — it renders at that device's native pixels.");
+  H('customDeviceField', "A device the list doesn't carry: its exact pixel size and physical pixels-per-inch.");
+  H('formatField', controls.control('finalFormat').help);
+  const rt = document.querySelector('.reprint-toggle');
+  if (rt) { rt.removeAttribute('title'); inspector.attachHelp(rt, controls.control('embedSpec').help); }
 }
 
 // ---- wallpaper presets (server truth; decides whether wallpaper mode exists) ------

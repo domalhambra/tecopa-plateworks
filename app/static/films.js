@@ -35,6 +35,7 @@ export function initFilms() {
   host.append(g, fmtHost);
 
   populateTarget();
+  inspector.attachHelp($('tlTargetField'), 'Render the film at the accepted sheet, or re-target any device preset.');
   $('tlBtn').onclick = renderTimelapse;
   reflectLightNote();
   refreshGate();
