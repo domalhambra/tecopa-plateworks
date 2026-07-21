@@ -18,6 +18,7 @@ import * as exportsCenter from './exports.js';
 import * as presets from './presets.js';
 import * as sunDial from './sunDial.js';
 import * as guided from './guided.js';
+import * as viewer from './viewer.js';
 import { initPalette, open as openPalette } from './palette.js';
 import { $, toast, wireSegmented, updateSaveFileNote, withTransition } from './ui.js';
 
@@ -121,6 +122,7 @@ function startOver() {
   $('dropzone').hidden = false; $('map').hidden = true; $('addFiles').hidden = true;
   $('continuePoster').hidden = false; $('mapMode').hidden = true;
   $('posterImg').removeAttribute('src'); $('posterCard').hidden = true; $('proofEmpty').hidden = false;
+  viewer.reset();
   $('titleInput').value = ''; $('provenanceCard').hidden = true;
   inspector.reflectAll(); compose.reflectStatic();
   refreshShell();

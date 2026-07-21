@@ -8,6 +8,7 @@ import { state, activePreset, snapshot, applySnapshot, savePref } from './store.
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as jobs from './jobs.js';
+import * as viewer from './viewer.js';
 import { $, toast, announce, saveBlob } from './ui.js';
 
 let hooks = {};
@@ -25,6 +26,7 @@ let abValue = 0;             // 0..100 scrub position (A on the left)
 
 export function initProof(h = {}) {
   hooks = h;
+  viewer.initViewer();
   $('renderProof').onclick = () => renderProof();
   $('reproofBtn').onclick = () => renderProof();
   $('acceptBtn').onclick = acceptFinal;
@@ -115,6 +117,7 @@ export async function renderProof({ auto = false } = {}) {
     const da = $('downloadAgain'); if (da) da.hidden = true;
     hooks.onProofed && hooks.onProofed();
     refreshProofUI();
+    startRefine();
     toast('Proof ready — accept to render the full-resolution final', 'ok');
     return true;
   } catch (e) {
@@ -125,6 +128,64 @@ export async function renderProof({ auto = false } = {}) {
     refreshProofUI();
     // a settle landed mid-render: run exactly one more (coalescing many edits into one).
     if (coalesced) { coalesced = false; scheduleAutoProof(); }
+  }
+}
+
+// --- progressive refine ------------------------------------------------------------
+// Every successful draft proof kicks off one background refine of the SAME stamped
+// spec. Generation counting (not cancellation) keeps it correct: a newer draft, or an
+// edit that stales the proof, simply orphans the in-flight refine — its result is
+// discarded when it lands. The refine deliberately bypasses jobs.track so it never
+// clutters the exports drawer.
+let refineGen = 0;
+const REFINE_POLL_MS = 600;
+
+function setRefineChip(mode, dpi) {
+  const chip = $('refineChip');
+  if (!chip) return;
+  chip.hidden = false;
+  chip.classList.toggle('is-sharp', mode === 'sharp');
+  chip.title = 'The proof appears instantly as a fast draft, then sharpens to print-inspection quality';
+  if (mode === 'draft') chip.textContent = 'Draft';
+  else if (mode === 'refining') chip.textContent = `Refining to ${Math.round(dpi)} dpi…`;
+  else if (mode === 'sharp') chip.textContent = `Sharp — ${Math.round(dpi)} dpi`;
+  else chip.hidden = true;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function startRefine() {
+  const gen = ++refineGen;
+  setRefineChip('draft');
+  let sub;
+  try { sub = await api.submitProofRefine(state.session); }
+  catch { return; }                                   // refine is best-effort: draft stands
+  if (gen !== refineGen) return;
+  if (sub.skip) { setRefineChip('sharp', sub.dpi); return; }   // draft already near-native
+  setRefineChip('refining', sub.dpi);
+  while (true) {
+    await sleep(REFINE_POLL_MS);
+    if (gen !== refineGen) return;
+    let s;
+    try { s = await api.refineStatus(sub.job); }
+    catch { setRefineChip('draft'); return; }
+    if (s.state === 'error') { setRefineChip('draft'); return; }
+    if (s.state !== 'done') continue;
+    if (gen !== refineGen || state.proofStale) return;   // superseded while rendering
+    let blob;
+    try { blob = await api.fetchBlob(s.result); }
+    catch { setRefineChip('draft'); return; }
+    // decode off-DOM first so the swap is a single paint, never a visible pop
+    const url = URL.createObjectURL(blob);
+    const pre = new Image();
+    pre.src = url;
+    try { await pre.decode(); } catch { /* decode hint only; the load event still fires */ }
+    if (gen !== refineGen || state.proofStale) { URL.revokeObjectURL(url); return; }
+    if (proofUrl) URL.revokeObjectURL(proofUrl);   // the draft: never shared with history/B
+    proofUrl = url;
+    $('posterImg').src = proofUrl;                 // same layout size -> zoom state survives
+    setRefineChip('sharp', sub.dpi);
+    return;
   }
 }
 
@@ -148,6 +209,8 @@ function handleProofError(e) {
 export function refreshProofUI() {
   const stale = $('proofStale');
   if (stale) stale.hidden = !(state.hasSpec && state.proofStale);
+  const chip = $('refineChip');
+  if (chip && !state.hasSpec) chip.hidden = true;
   const empty = $('proofEmpty');
   if (empty) empty.hidden = state.hasSpec;
   const card = $('posterCard');

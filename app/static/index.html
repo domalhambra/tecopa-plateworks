@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tecopa Printworks Studio</title>
+  <title>Tecopa Plateworks Studio</title>
   <!-- apply the saved theme before first paint to avoid a flash. Reads the current
        'tecopa' prefs key, falling back to the pre-rebrand 'trailprint' key so a
        returning operator's theme survives the rename (store.js migrates it on load). -->
@@ -25,7 +25,7 @@
     <!-- ===================== top bar ===================== -->
     <header class="topbar">
       <div class="tb-group">
-        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa Printworks <b>Studio</b></span>
+        <span class="brand"><span class="brand-mark" aria-hidden="true"></span>Tecopa Plateworks <b>Studio</b></span>
         <span class="tb-sep" aria-hidden="true"></span>
         <span id="regionName" class="doc-title"></span>
         <span id="regionKind" class="region-kind" hidden></span>
@@ -85,7 +85,7 @@
             </button>
             <div class="home-open">
               <h2 class="home-sub">Reopen a poster</h2>
-              <p class="lede">A Tecopa Printworks PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
+              <p class="lede">A Tecopa Plateworks PNG carries its whole recipe. Drop it here to inspect it, reprint it, or add this year as the next edition.</p>
               <div id="posterDrop" class="poster-drop">
                 <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
                 <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
@@ -122,24 +122,33 @@
           <div class="proof-toolbar">
             <label class="auto-proof"><span class="switch"><input type="checkbox" id="autoProofChk"><span class="slider"></span></span>
               <span>Live proof</span></label>
+            <div id="proofStale" class="stale-flag" hidden>
+              <span>Changes not proofed</span>
+              <button id="reproofBtn" class="mini-primary" type="button">Re-proof</button>
+            </div>
+            <span id="refineChip" class="refine-chip" hidden></span>
+            <span class="toolbar-spring"></span>
             <div class="ab-bar" id="abBar" hidden>
               <button id="abClearBtn" class="mini" type="button">Clear B</button>
               <input type="range" id="abScrub" min="0" max="100" value="50" aria-label="Compare A and B">
               <span class="ab-legend"><b>A</b> live · <b>B</b> pinned</span>
             </div>
             <button id="abPinBtn" class="mini" type="button" title="Pin the current proof as B to compare">Pin B</button>
+            <div class="zoom-ctls" role="group" aria-label="Zoom">
+              <button id="zoomFitBtn" class="mini" type="button" title="Fit the sheet in the window">Fit</button>
+              <button id="zoom100Btn" class="mini" type="button" title="One proof pixel per screen pixel — inspect print detail">100%</button>
+              <span id="zoomPct" class="zoom-pct" aria-live="off"></span>
+            </div>
           </div>
-          <div class="proof-wrap">
+          <div class="proof-wrap viewport" id="proofViewport">
             <div id="proofEmpty" class="proof-empty">
               <p>No proof yet.</p>
               <p class="lede">Frame your poster in <b>Compose</b>, then render a proof to preview it here.</p>
             </div>
-            <div class="poster-card" id="posterCard" hidden>
-              <img id="posterImg" alt="Poster proof">
-              <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
-              <div id="proofStale" class="stale-pill" hidden>
-                <span>Changes not proofed</span>
-                <button id="reproofBtn" class="mini-primary" type="button">Re-proof</button>
+            <div class="viewport-content" id="proofContent">
+              <div class="poster-card" id="posterCard" hidden>
+                <img id="posterImg" alt="Poster proof">
+                <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
               </div>
             </div>
           </div>

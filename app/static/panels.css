@@ -81,21 +81,35 @@
 .ab-bar input[type="range"] { flex: 1; }
 .ab-legend { font-size: 11px; color: var(--text-3); white-space: nowrap; }
 .ab-legend b { color: var(--text-2); }
-.proof-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; }
-.proof-empty { text-align: center; color: var(--text-2); display: flex; flex-direction: column; gap: 6px; }
+/* the zoom/pan viewport (viewer.js): the card is laid out at a fixed CSS size
+   (--proof-w/--proof-h) and the wrapper is translate+scaled, so swapping the draft
+   for the refined image never moves the view */
+.proof-wrap.viewport { flex: 1; position: relative; overflow: hidden; min-height: 0;
+  border-radius: var(--radius-sm); cursor: grab; touch-action: none; }
+.proof-wrap.viewport.is-panning { cursor: grabbing; }
+.viewport-content { position: absolute; left: 0; top: 0; transform-origin: 0 0;
+  width: max-content; will-change: transform; }
+.proof-empty { position: absolute; inset: 0; z-index: 1; text-align: center; color: var(--text-2);
+  display: flex; flex-direction: column; gap: 6px; align-items: center; justify-content: center; }
 .poster-card { position: relative; border-radius: 5px; box-shadow: var(--shadow-pop); background: #F3EDDF; padding: 10px; }
-.poster-card img { display: block; max-width: min(620px, 100%); max-height: 62vh; border-radius: 1px; }
+.poster-card img { display: block; width: var(--proof-w, 620px); height: var(--proof-h, auto); border-radius: 1px; }
 .poster-card #posterImg { transition: filter .2s ease; }
 .poster-card #posterImg.is-stale { filter: saturate(.55) brightness(.94); }
 /* A/B: B sits exactly over A and is revealed left-to-right by a clip */
 .poster-b-wrap { position: absolute; inset: 10px; clip-path: inset(0 100% 0 0); pointer-events: none; }
-.poster-b-wrap img { display: block; max-width: min(620px, 100%); max-height: 62vh; border-radius: 1px; }
-.stale-pill {
-  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
-  display: inline-flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px;
-  background: var(--panel); border: 1px solid var(--hairline-strong); box-shadow: var(--shadow-pop);
+.poster-b-wrap img { width: 100%; height: 100%; }
+/* proof status lives in the TOOLBAR, never over the picture */
+.stale-flag {
+  display: inline-flex; align-items: center; gap: 10px; padding: 4px 6px 4px 12px; border-radius: 999px;
+  background: var(--panel); border: 1px solid var(--hairline-strong);
   font-size: 12px; color: var(--text);
 }
+.refine-chip { font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+.refine-chip.is-sharp { color: var(--text-2); }
+.toolbar-spring { flex: 1; }
+.zoom-ctls { display: inline-flex; align-items: center; gap: 6px; }
+.zoom-pct { font-size: 11.5px; color: var(--text-3); min-width: 40px; text-align: right;
+  font-variant-numeric: tabular-nums; }
 .filmstrip { flex: none; display: flex; gap: 8px; margin-top: 12px; overflow-x: auto; padding: 4px 2px; }
 .strip-thumb { flex: none; padding: 0; border: 1px solid var(--hairline-strong); border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--panel); }
 .strip-thumb:hover { border-color: var(--tint); }
