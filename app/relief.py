@@ -1,5 +1,7 @@
 # app/relief.py
 from __future__ import annotations
+from dataclasses import dataclass, field
+import math as _m
 import numpy as np
 from scipy.ndimage import gaussian_filter, distance_transform_edt, rotate, zoom
 
@@ -117,6 +119,122 @@ GOLDEN_WARM_MAX = 0.50             # max warm weight at golden=1
 GOLDEN_COOL_MAX = 0.45             # max cool weight at golden=1
 GOLDEN_LIT_GAMMA = 1.4             # concentrate the warmth on the well-lit faces
 # ---------------------------------------------------------------------
+# ---- the extension seam: where the NEXT relief technique plugs in ----
+#
+# Every technique added so far (terrain depth, cast shadows + sky occlusion, Journey
+# Light) arrived the same way: three or four new parameters on `shaded_relief`, a new
+# `if knob > 0:` block wired into the middle of the composition chain, and a matching
+# edit in `render._paint_base`. That works, but it means each new module edits the one
+# function every existing poster's pixels come out of -- exactly the code the
+# forever-contract says to leave alone.
+#
+# A pass registers instead. It receives a `ReliefFrame` carrying the terrain and every
+# expensive intermediate the core already computed (slope/aspect, the texture and
+# valley fields, the ray-marched cast shadow and sky-occlusion masks), so a new
+# technique never re-derives a gradient or re-marches a shadow. Stages, in composition
+# order:
+#
+#   "color"  (base RGB 0..1)   after the hypsometric ramp + biome tint, before light
+#   "light"  (scalar plane)    after hillshade/valley/cast/AO, before it meets colour
+#   "finish" (RGB 0..1)        after texture + atmosphere, before the tonal curve
+#   "grade"  (RGB 0..1)        after the tonal curve, before the paper grain
+#
+# A pass is `fn(array, frame) -> array` and MAY write its argument in place. It runs
+# only when its `enabled(frame)` predicate is true, and its knob rides `frame.extras`
+# (see `render.relief_extra`), so nothing here needs a new parameter. The registry is
+# EMPTY by default and an empty stage is a strict no-op -- the forever-contract's
+# additive-default rule, applied to the extension mechanism itself.
+#
+# Adding a module is then: a spec field (omitted from the manifest at its pre-feature
+# default), one `@relief_extra` reader, one `register_relief_pass` call. Nothing in
+# this file's composition chain changes, so no shipped poster can move.
+# See docs/relief-passes.md for a worked example.
+
+RELIEF_STAGES = ("color", "light", "finish", "grade")
+_RELIEF_PASSES = {stage: [] for stage in RELIEF_STAGES}
+
+@dataclass
+class ReliefFrame:
+    """What a registered pass sees: the terrain, the knobs, and the intermediates the
+    core already paid for. Fields are populated as the chain reaches them, so a pass
+    only reads what its stage documents (`cast`/`ao` are None unless the shadow pass
+    ran; `tex`/`val` are None at the "color" stage)."""
+    elev: np.ndarray                 # NaN-repaired float32 elevation, padded window
+    res_m: float                     # ground metres per pixel -- size everything in
+    norm: np.ndarray                 # 0..1 elevation over the plate's range         [these]
+    elev_min: float
+    elev_max: float
+    seed: int                        # any RNG a pass uses MUST derive from this
+    azimuth: float                   # the plate's archival light
+    altitude: float
+    z_factor: float
+    depth: float = 0.0               # the resolved scale-keyed terrain-depth strength
+    shadow: float = 0.0
+    golden: float = 0.0
+    sun_azimuth: float | None = None  # the journey sun, when one is set
+    sun_altitude: float | None = None
+    extras: dict = field(default_factory=dict)   # module knobs (render.relief_extra)
+    rev: int = 1                     # the relief-chain revision this render is on
+                                     # (see RELIEF_REVS); a pass wanting a wide blur
+                                     # should route it through relief._blur(a, px, rev)
+    tex: np.ndarray | None = None    # the texture high-pass, 0..1
+    val: np.ndarray | None = None    # the valley-depth field, 0..1
+    cast: np.ndarray | None = None   # ray-marched cast shadow, 0 = lit
+    ao: np.ndarray | None = None     # multi-scale sky occlusion, 0 = open
+    _terrain: tuple | None = None
+
+    def terrain(self):
+        """(slope, aspect) for this frame, computed once and shared. A pass wanting
+        its own light should use this rather than a fresh gradient pass."""
+        if self._terrain is None:
+            self._terrain = slope_aspect(self.elev, self.res_m, self.z_factor)
+        return self._terrain
+
+    def light_from(self, azimuth, altitude):
+        """A hillshade of this frame's terrain from any bearing, on the shared
+        slope/aspect field."""
+        return shade_from(*self.terrain(), azimuth, altitude)
+
+    def px(self, metres):
+        """`metres` of GROUND as a pixel count on this frame's grid. Every length a
+        pass uses must go through here, or it will change with the render dpi and
+        break "one spec, painted at many sizes" (invariant 1/2)."""
+        return metres / self.res_m
+
+
+def register_relief_pass(stage, name, fn, enabled=None):
+    """Register `fn(array, frame) -> array` at `stage`. `enabled(frame) -> bool`
+    decides per render (default: always). Re-registering a name replaces it, so a
+    module can be reloaded without stacking duplicates."""
+    if stage not in _RELIEF_PASSES:
+        raise ValueError(f"stage must be one of {RELIEF_STAGES}")
+    passes = _RELIEF_PASSES[stage]
+    for i, (existing, _, _) in enumerate(passes):
+        if existing == name:
+            passes[i] = (name, fn, enabled)
+            return
+    passes.append((name, fn, enabled))
+
+def unregister_relief_pass(stage, name):
+    """Drop a registered pass (used by tests to restore the empty default)."""
+    _RELIEF_PASSES[stage] = [p for p in _RELIEF_PASSES[stage] if p[0] != name]
+
+def registered_relief_passes(stage=None):
+    """The registry, for introspection/tests. Empty is the shipped state."""
+    if stage is None:
+        return {s: [p[0] for p in v] for s, v in _RELIEF_PASSES.items()}
+    return [p[0] for p in _RELIEF_PASSES[stage]]
+
+def _run_stage(stage, arr, frame):
+    """Apply the registered passes for `stage` in registration order. With an empty
+    registry -- the shipped state -- this returns `arr` untouched, so the composition
+    chain is byte-for-byte what it was before the seam existed."""
+    for _name, fn, enabled in _RELIEF_PASSES[stage]:
+        if enabled is None or enabled(frame):
+            arr = fn(arr, frame)
+    return arr
+
+# ---------------------------------------------------------------------
 
 def _fill_nan(elev):
     """Repair stray nodata pixels from the NEAREST finite neighbour -- NOT the crop
@@ -132,36 +250,109 @@ def _fill_nan(elev):
     idx = distance_transform_edt(mask, return_distances=False, return_indices=True)
     return elev[tuple(idx)]
 
-def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
+def slope_aspect(elev, res_m, z_factor=1.0):
+    """(slope, aspect) in radians -- the terrain half of a hillshade, which depends
+    only on the GROUND, never on the light. Hoisted out of `hillshade` so a caller
+    lighting the same terrain several times (the multidirectional blend, the Journey
+    Light sun beside the archival one) pays for one gradient pass instead of N. The
+    expressions are lifted verbatim, so every light computed from these is bit-
+    identical to the pre-hoist single-shot version."""
+    dy, dx = np.gradient(elev * z_factor, res_m)
+    slope = np.pi/2 - np.arctan(np.hypot(dx, dy))
+    aspect = np.arctan2(-dx, dy)
+    return slope, aspect
+
+def shade_from(slope, aspect, azimuth=315, altitude=45, rev=1):
+    """One light on a precomputed (slope, aspect) field. See `hillshade` for why the
+    azimuth enters the aspect frame unrotated.
+
+    rev 1 keeps the shipped arithmetic verbatim, including its accident: `np.radians`
+    returns a float64 SCALAR, which is strong under NEP 50, so shading float32 terrain
+    produced a float64 plane -- and since that plane multiplies the base colour, the
+    entire RGB composition downstream ran at double width for no precision anyone
+    asked for. rev 2 converts the same angles to Python floats, which are weak, so the
+    result keeps the terrain's own float32 (see RELIEF_REVS). The formula is
+    character-for-character the same; only the scalar type differs."""
+    if rev >= 2:
+        az = float(np.radians(azimuth))
+        alt = float(np.radians(altitude))
+        shaded = (_m.sin(alt) * np.sin(slope)
+                  + _m.cos(alt) * np.cos(slope) * np.cos(az - aspect))
+        return np.clip(shaded, 0, 1)
+    az = np.radians(azimuth)
+    alt = np.radians(altitude)
+    shaded = (np.sin(alt) * np.sin(slope)
+              + np.cos(alt) * np.cos(slope) * np.cos(az - aspect))
+    return np.clip(shaded, 0, 1)
+
+# ---- wide-kernel blurs (rev 2) ----------------------------------------------------
+# scipy's gaussian_filter is separable but still O(sigma) taps per pixel per axis, and
+# the relief leans on genuinely wide kernels: sky occlusion reaches 3200 GROUND metres,
+# the valley pass 400, the multiscale texture up to 8x its base radius. On a flagship
+# final those are hundreds of pixels wide and the blurs became the single largest cost
+# in the engine (~11 s of a 24 s sheet, measured).
+#
+# A wide Gaussian is a low-pass, so it carries almost no information at the sampling
+# rate it is being computed at -- the standard answer, in every renderer that does
+# this, is to decimate, blur small, and resample back. That is what rev 2 does above a
+# threshold. It is an APPROXIMATION of the exact kernel (hence the rev gate), but the
+# error is confined to spatial frequencies the blur is discarding anyway.
+#
+# Why this is safe for "one spec, painted at many sizes" (invariant 1): every sigma
+# here is a GROUND distance divided by the grid's resolution, so sigma_px scales as
+# 1/res_m, and the decimation factor k = sigma_px / BLUR_PYRAMID_SIGMA_PX scales the
+# same way. The decimated grid's resolution is therefore
+#
+#     res_m * k  =  radius_m / BLUR_PYRAMID_SIGMA_PX
+#
+# -- a CONSTANT ground resolution, independent of the render dpi. The proof and the
+# final blur the same ground grid and only differ in the resample back, exactly like
+# the cast-shadow working grid (render._shadow_res_m). A threshold in raw pixels would
+# have made the final take the pyramid while the proof did not, and the preview would
+# have stopped predicting the print.
+BLUR_PYRAMID_SIGMA_PX = 16.0    # blurs wider than this run decimated
+
+def _blur(a, sigma_px, rev=1):
+    """gaussian_filter, or its pyramid approximation for a wide kernel under rev 2."""
+    if rev < 2 or sigma_px <= BLUR_PYRAMID_SIGMA_PX:
+        return gaussian_filter(a, sigma_px)
+    k = sigma_px / BLUR_PYRAMID_SIGMA_PX                  # decimation factor > 1
+    small = zoom(a, 1.0 / k, order=1)
+    if min(small.shape) < 2:                              # degenerate: blur in place
+        return gaussian_filter(a, sigma_px)
+    small = gaussian_filter(small, BLUR_PYRAMID_SIGMA_PX)
+    return _resize_to(small, a.shape).astype(a.dtype, copy=False)
+
+def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, terrain=None, rev=1):
     # `aspect` below (arctan2(-dx, dy)) is the compass bearing of the downhill
     # direction (0=N, 90=E, 180=S, 270=W), so the light bearing must be the sun
     # azimuth in the same frame. The plain `radians(azimuth)` lights each slope
     # from the requested direction; `radians(360 - azimuth + 90)` would rotate the
     # light 90 deg off (an east-facing slope brightest under a north sun).
-    az = np.radians(azimuth)
-    alt = np.radians(altitude)
-    dy, dx = np.gradient(elev * z_factor, res_m)
-    slope = np.pi/2 - np.arctan(np.hypot(dx, dy))
-    aspect = np.arctan2(-dx, dy)
-    shaded = (np.sin(alt) * np.sin(slope)
-              + np.cos(alt) * np.cos(slope) * np.cos(az - aspect))
-    return np.clip(shaded, 0, 1)
+    # `terrain` is an already-computed slope_aspect() pair for this elev/res_m/
+    # z_factor -- an optimization only; None recomputes it and is exactly equivalent.
+    slope, aspect = slope_aspect(elev, res_m, z_factor) if terrain is None else terrain
+    return shade_from(slope, aspect, azimuth, altitude, rev=rev)
 
-def multidirectional_hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
+def multidirectional_hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
+                               terrain=None, rev=1):
     """A weighted blend of hillshades from several light bearings around the principal
     azimuth (USGS MDOW / Esri's terrain default). One light leaves ranges that run
     parallel to it unmodelled -- they vanish when the map is zoomed far out; the
     flanking lights recover them, while the principal light stays dominant so the
-    sheet keeps a single, compass-consistent sun direction."""
+    sheet keeps a single, compass-consistent sun direction. The five lights share ONE
+    slope/aspect pass (see slope_aspect) -- bit-identical, five times less gradient."""
     offsets = ((0.0, 1.0), (-45.0, 0.5), (45.0, 0.5), (-90.0, 0.25), (90.0, 0.25))
+    if terrain is None:
+        terrain = slope_aspect(elev, res_m, z_factor)
     acc = np.zeros_like(elev, dtype="float32")
     wsum = 0.0
     for off, wt in offsets:
-        acc += wt * hillshade(elev, res_m, azimuth + off, altitude, z_factor)
+        acc += wt * shade_from(terrain[0], terrain[1], azimuth + off, altitude, rev=rev)
         wsum += wt
     return acc / wsum
 
-def multiscale_texture(elev, base_radius_px):
+def multiscale_texture(elev, base_radius_px, rev=1):
     """Texture shading (Leland Brown / Tom Patterson): a single fine high-pass loses
     the major ridge/drainage structure when the map is zoomed out. Summing high-pass
     responses across octaves (2x/4x/8x the base radius) keeps that structure crisp at
@@ -170,14 +361,14 @@ def multiscale_texture(elev, base_radius_px):
     acc = np.zeros_like(elev, dtype="float32")
     wsum = 0.0
     for mult, wt in ((2.0, 0.5), (4.0, 0.3), (8.0, 0.2)):
-        blur = gaussian_filter(elev, base_radius_px * mult)
+        blur = _blur(elev, base_radius_px * mult, rev)
         hp = elev - blur
         s = np.std(hp) + 1e-9
         acc += wt * np.clip(0.5 + hp / (4 * s), 0, 1)
         wsum += wt
     return acc / wsum
 
-def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
+def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, rev=1):
     """Terrain-occlusion shadow (0 = lit, 1 = fully shadowed): rotate the grid so the
     light travels along +columns, sweep a running sun-horizon down each row, rotate the
     bounded mask back, and soften the edge by a ground-metre penumbra.
@@ -202,9 +393,9 @@ def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
     r0 = (back.shape[0] - elev.shape[0]) // 2
     c0 = (back.shape[1] - elev.shape[1]) // 2
     m = back[r0:r0 + elev.shape[0], c0:c0 + elev.shape[1]]
-    return gaussian_filter(m, max(0.6, PENUMBRA_M / res_m))
+    return _blur(m, max(0.6, PENUMBRA_M / res_m), rev)
 
-def sky_occlusion(elev, res_m):
+def sky_occlusion(elev, res_m, rev=1):
     """Multi-scale sky-openness occlusion (0 = open, 1 = deep concavity): depth below
     the neighbourhood mean at several ground radii, each normalized by the horizon
     slope that radius implies (depth / (r * AO_SLOPE)) -- physical and content-
@@ -212,7 +403,7 @@ def sky_occlusion(elev, res_m):
     it is part of the frozen shadow=0 base look)."""
     acc = np.zeros_like(elev, dtype="float32")
     for r_m, wt in zip(AO_RADII_M, AO_WEIGHTS):
-        big = gaussian_filter(elev, max(1.0, r_m / res_m))
+        big = _blur(elev, max(1.0, r_m / res_m), rev)
         acc += wt * np.clip((big - elev) / (r_m * AO_SLOPE), 0.0, 1.0)
     return acc / sum(AO_WEIGHTS)
 
@@ -228,7 +419,7 @@ def _resize_to(a, shape):
     return out
 
 def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
-                  shadow_res_m=None):
+                  shadow_res_m=None, rev=1):
     """(cast, ao) at elev's grid, computed on a fixed GROUND-resolution working grid
     (shadow_res_m, normally the proof's own pixel grid -- see render._shadow_res_m).
     The proof and the final thereby ray-march the same terrain, so the masks agree
@@ -242,33 +433,40 @@ def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
         e = gaussian_filter(e, sig_px)
     if work_res / res_m > 1.1:                        # work grid meaningfully coarser
         small = zoom(e, res_m / work_res, order=1)
-        cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor)
-        ao = sky_occlusion(small, work_res)
+        cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor, rev)
+        ao = sky_occlusion(small, work_res, rev)
         cast = np.clip(_resize_to(cast, elev.shape), 0.0, 1.0)
         ao = np.clip(_resize_to(ao, elev.shape), 0.0, 1.0)
     else:
-        cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor)
-        ao = sky_occlusion(e, res_m)
+        cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor, rev)
+        ao = sky_occlusion(e, res_m, rev)
     return cast.astype("float32"), ao.astype("float32")
 
 def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     """Aerial perspective + salt-pan, both scaled by `depth`. Low ground recedes into
     a faint haze while high ground stays crisp (Imhof), giving the sheet front-to-back
     depth; then the flattest, lowest ground -- the playa -- lifts toward a luminous
-    salt-white with a fine mottle, so it reads as salt instead of a lifeless void."""
+    salt-white with a fine mottle, so it reads as salt instead of a lifeless void.
+
+    CONSUMES `img` (it is written in place). Every step below is the same IEEE
+    operation in the same order as the allocating form it replaced -- only the
+    destination changed -- so the pixels are bit-identical while the pass no longer
+    builds five full-sheet RGB temporaries (invariant 1 / the forever-contract)."""
     # aerial perspective: haze rises the lower the ground sits
     aer = (AERIAL_MAX * depth * np.clip(1.0 - norm, 0, 1) ** 1.5)[..., None]
     haze = np.array(HAZE, np.float32)[None, None, :] / 255.0
-    img = img * (1.0 - aer) + haze * aer
+    img *= (1.0 - aer)
+    img += haze * aer
     # salt pan: low AND flat (near-zero local relief from the texture high-pass)
     low = np.clip((SALT_LOW_NORM - norm) / SALT_LOW_NORM, 0, 1)
     flat = np.clip(1.0 - np.abs(tex - 0.5) * 4.0, 0, 1)
     sw = (SALT_MAX * depth * low * flat)
     salt = np.array(SALT, np.float32)[None, None, :] / 255.0
-    img = img * (1.0 - sw[..., None]) + salt * sw[..., None]
+    img *= (1.0 - sw[..., None])
+    img += salt * sw[..., None]
     # a fine, dpi-stable mottle so the pan has grain -- only where it actually is salt
     mottle = grain(elev.shape, max(1.0, MOTTLE_CELL_M / res_m), MOTTLE_STRENGTH, seed + 1)
-    img = img * (1.0 + (mottle - 1.0)[..., None] * np.clip(sw * 3.0, 0, 1)[..., None])
+    img *= (1.0 + (mottle - 1.0)[..., None] * np.clip(sw * 3.0, 0, 1)[..., None])
     return img
 
 def _tonal_finish(img):
@@ -277,20 +475,44 @@ def _tonal_finish(img):
     muddy sheet into one with punch -- deeper shadows, cleaner highlights, and
     colours that separate instead of collapsing into olive-brown. Both are pure
     per-pixel functions, so the proof and the final transform identically (invariant
-    1). Endpoints are fixed (0->0, 1->1), so nothing clips to black or blows out."""
+    1). Endpoints are fixed (0->0, 1->1), so nothing clips to black or blows out.
+
+    This was the single heaviest allocator in the engine -- the naive form built ~10
+    full-sheet RGB temporaries (a 300 dpi 18x24 sheet is ~260 MB each). The rewrite
+    keeps every IEEE operation and its order (a*b and b*a, a+b and b+a are exact in
+    IEEE), so it is bit-identical; only the destinations changed. `img` itself is
+    never written -- the first stage clips into a fresh buffer and the rest composite
+    into that -- so a direct caller's array is safe."""
+    owned = False                    # True once `img` is a buffer this call created
     if RELIEF_CONTRAST > 0:
-        x = np.clip(img, 0.0, 1.0)
-        s_curve = x * x * (3.0 - 2.0 * x)                 # smoothstep: fixes 0,0.5,1
-        img = (1.0 - RELIEF_CONTRAST) * x + RELIEF_CONTRAST * s_curve
+        x = np.clip(img, 0.0, 1.0)                        # our own buffer from here
+        ramp = x * -2.0                                   # -(2x)
+        ramp += 3.0                                       # (3 - 2x)
+        curve = x * x                                     # multiplication is NOT
+        curve *= ramp                                     # associative: keep (x*x)*(3-2x)
+        del ramp
+        curve *= RELIEF_CONTRAST
+        x *= (1.0 - RELIEF_CONTRAST)
+        x += curve
+        del curve
+        img, owned = x, True
     if RELIEF_SATURATION != 1.0:
         # luminance-preserving chroma scale (Rec. 601 weights); keeps the value the
         # contrast curve just set, only spreads the colour away from grey.
         lum = (img * np.array([0.299, 0.587, 0.114], np.float32)).sum(axis=2, keepdims=True)
-        img = lum + (img - lum) * RELIEF_SATURATION
-    return np.clip(img, 0.0, 1.0)
+        if not owned:                                     # never mutate a caller's array
+            img, owned = img.copy(), True
+        img -= lum
+        img *= RELIEF_SATURATION
+        img += lum
+    return np.clip(img, 0.0, 1.0, out=img if owned else None)
 
-def hypsometric(elev, elev_min, elev_max):
-    norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
+def hypsometric(elev, elev_min, elev_max, norm=None):
+    """The elevation colour ramp. `norm` is the already-clipped 0..1 elevation the
+    caller may have computed with the identical expression (shaded_relief does) --
+    an optimization only; None recomputes it and is exactly equivalent."""
+    if norm is None:
+        norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
     stops = HYPSO_STOPS
     xs = np.array([s[0] for s in stops])
     rgb = np.zeros(elev.shape + (3,), dtype="float32")
@@ -298,18 +520,19 @@ def hypsometric(elev, elev_min, elev_max):
     for ch in range(3):
         ys = np.array([s[1][ch] for s in stops], dtype="float32")
         rgb[..., ch] = np.interp(norm, xs, ys) * (1.0 - PAPER_LIFT) + paper[ch] * PAPER_LIFT
-    return rgb / 255.0
+    rgb /= 255.0
+    return rgb
 
-def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
+def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX, rev=1):
     # high-pass: sharpen ridges and drainages (a cheap stand-in for true texture shading)
-    blur = gaussian_filter(elev, radius_px)
+    blur = _blur(elev, radius_px, rev)
     hp = elev - blur
     s = np.std(hp) + 1e-9
     return np.clip(0.5 + (hp / (4 * s)), 0, 1)   # 0..1, centered
 
-def valley_pass(elev, radius_px=VALLEY_RADIUS_PX):
+def valley_pass(elev, radius_px=VALLEY_RADIUS_PX, rev=1):
     # darken places that sit well below their surroundings
-    big = gaussian_filter(elev, radius_px)
+    big = _blur(elev, radius_px, rev)
     depth = np.clip(big - elev, 0, None)
     s = np.percentile(depth, 99) + 1e-9
     return np.clip(depth / s, 0, 1)              # 0..1, 1 = deep valley
@@ -330,7 +553,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                   grain_cell_px=2.0, grain_strength=0.05,
                   texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX,
                   biome=None, depth=0.0, shadow=0.0, shadow_res_m=None,
-                  sun_azimuth=None, sun_altitude=None, golden=0.0):
+                  sun_azimuth=None, sun_altitude=None, golden=0.0, extras=None, rev=1):
     """biome: optional (tint01, weight01) from render._biome_layers -- an RGB tint
     field (0..1) and per-pixel confidence, aligned to `elev`. Applied to the
     hypsometric base with luminance matching + the alpine fade (see BIOME_MIX).
@@ -355,7 +578,15 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     render is byte-identical to pre-feature output."""
     elev = _fill_nan(elev.astype("float32"))
     norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
-    base = hypsometric(elev, elev_min, elev_max)                  # color
+    # The frame registered passes read (see the extension seam at the top of this
+    # file). Building it is free; with an empty registry no stage below does anything.
+    frame = ReliefFrame(elev=elev, res_m=res_m, norm=norm, elev_min=elev_min,
+                        elev_max=elev_max, seed=seed, azimuth=azimuth,
+                        altitude=altitude, z_factor=z_factor, depth=depth,
+                        shadow=shadow, golden=golden, sun_azimuth=sun_azimuth,
+                        sun_altitude=sun_altitude, extras=dict(extras or {}), rev=rev)
+    # `norm` is the identical expression hypsometric would recompute -- hand it over.
+    base = hypsometric(elev, elev_min, elev_max, norm=norm)        # color
     if biome is not None:
         tint, weight = biome
         base_lum = base.mean(axis=2, keepdims=True)
@@ -365,9 +596,15 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                        (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
         w3 = (weight * BIOME_MIX * fade)[..., None]
         base = base * (1 - w3) + matched * w3
-    hs = hillshade(elev, res_m, azimuth, altitude, z_factor) ** HILLSHADE_GAMMA
-    tex = texture_pass(elev, texture_radius_px)
-    val = valley_pass(elev, valley_radius_px)
+    base = _run_stage("color", base, frame)          # no-op with an empty registry
+    # one slope/aspect pass serves the archival light, the multidirectional blend, and
+    # the Journey Light sun -- they differ only in bearing (see slope_aspect). The
+    # frame shares it, so a registered pass never pays for a second gradient.
+    terrain = frame.terrain()
+    hs = hillshade(elev, res_m, azimuth, altitude, z_factor,
+                   terrain=terrain, rev=rev) ** HILLSHADE_GAMMA
+    tex = texture_pass(elev, texture_radius_px, rev)
+    val = valley_pass(elev, valley_radius_px, rev)
 
     # terrain depth: at depth 0 these blocks are skipped, so hs/tex are untouched and
     # the output is identical to the single-light relief (invariant 1, existing tests).
@@ -375,13 +612,22 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         d = float(np.clip(depth, 0.0, 1.5))
         w = MULTIDIR_MAX * min(d, 1.0)
         hs_multi = multidirectional_hillshade(
-            elev, res_m, azimuth, altitude, z_factor) ** HILLSHADE_GAMMA
+            elev, res_m, azimuth, altitude, z_factor,
+            terrain=terrain, rev=rev) ** HILLSHADE_GAMMA
         hs = hs * (1.0 - w) + hs_multi * w
-        tex_ms = multiscale_texture(elev, texture_radius_px)
+        tex_ms = multiscale_texture(elev, texture_radius_px, rev)
         tex = np.clip(tex + TEXTURE_DEPTH_MAX * d * (tex_ms - 0.5), 0, 1)
 
-    light = (SHADOW_FLOOR + (1.0 - SHADOW_FLOOR) * hs)            # never fully black
-    light = light * (1.0 - VALLEY_STRENGTH * val)                # sink the valleys
+    # `hs` is ours (** built it), so the tonal remap runs in place. Addition and
+    # multiplication are commutative in IEEE, so this is bit-identical to
+    #   light = (SHADOW_FLOOR + (1 - SHADOW_FLOOR) * hs) * (1 - VALLEY_STRENGTH * val)
+    light = hs
+    light *= (1.0 - SHADOW_FLOOR)
+    light += SHADOW_FLOOR                                        # never fully black
+    sink = val * -VALLEY_STRENGTH
+    sink += 1.0
+    light *= sink                                                # sink the valleys
+    del sink
 
     # cast shadows + sky occlusion: at shadow 0 this block is skipped entirely
     # (strict no-op, like the depth pass); shadows darken with an absolute floor so
@@ -393,22 +639,32 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         # so an archival render is byte-identical.
         cast_az = azimuth if sun_azimuth is None else float(sun_azimuth)
         cast_alt = altitude if sun_altitude is None else float(sun_altitude)
-        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
-        light = light * (1.0 - CAST_DARKEN * s * cast) * (1.0 - AO_MAX * s * ao)
-        light = np.maximum(light, CAST_LIGHT_FLOOR)
+        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m,
+                                 rev=rev)
+        frame.cast, frame.ao = cast, ao          # the ray-march, shared with passes
+        light *= (1.0 - CAST_DARKEN * s * cast)
+        light *= (1.0 - AO_MAX * s * ao)
+        np.maximum(light, CAST_LIGHT_FLOOR, out=light)
+    frame.tex, frame.val = tex, val
+    light = _run_stage("light", light, frame)
     light = light[..., None]
 
+    # From here `img` is the full-sheet RGB plane -- ~260 MB at a 300 dpi 18x24 final,
+    # so every stage composites INTO it rather than allocating a fresh copy. The
+    # operations and their order are unchanged (see _tonal_finish), so the sheet is
+    # bit-identical; only the peak memory and the memory traffic drop.
     img = base * light
+    del base
     if s > 0:                                         # cool skylight in the shadows
         w = (CAST_TINT_MAX * s * cast)[..., None]
         cool = np.array(CAST_TINT, np.float32)[None, None, :]
-        img = img * (1.0 - w + cool * w)
+        img *= (1.0 - w + cool * w)
     # Journey Light golden grade: warm the sunlit faces, cool the shadowed ground. Strict
     # no-op unless a journey sun + golden strength are set (archival stays byte-identical).
     if golden > 0 and sun_azimuth is not None:
         g = float(np.clip(golden, 0.0, 1.0))
         hs_sun = np.clip(hillshade(elev, res_m, float(sun_azimuth), float(sun_altitude),
-                                   z_factor), 0.0, 1.0)
+                                   z_factor, terrain=terrain, rev=rev), 0.0, 1.0)
         lit = hs_sun ** GOLDEN_LIT_GAMMA
         shade = 1.0 - hs_sun
         if s > 0:                       # a cast-shadowed face isn't really sunlit
@@ -418,12 +674,20 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         cw = (GOLDEN_COOL_MAX * g * shade)[..., None]
         warm = np.array(GOLDEN_WARM, np.float32)[None, None, :]
         cool2 = np.array(GOLDEN_COOL, np.float32)[None, None, :]
-        img = img * (1.0 - ww + warm * ww)
-        img = img * (1.0 - cw + cool2 * cw)
+        img *= (1.0 - ww + warm * ww)
+        img *= (1.0 - cw + cool2 * cw)
     # blend texture as a soft dodge/burn around mid-gray
-    img = img * (1.0 + TEXTURE_STRENGTH * (tex[..., None] - 0.5))
+    dodge = tex - 0.5
+    dodge *= TEXTURE_STRENGTH
+    dodge += 1.0
+    img *= dodge[..., None]
+    del dodge
     if depth > 0:
         img = _depth_atmosphere(img, elev, norm, tex, res_m, seed, float(np.clip(depth, 0, 1.5)))
+    img = _run_stage("finish", img, frame)
     img = _tonal_finish(img)                                      # levels + curves + vibrance
-    img = img * grain(elev.shape, grain_cell_px, grain_strength, seed)[..., None]
-    return (np.clip(img, 0, 1) * 255).astype("uint8")
+    img = _run_stage("grade", img, frame)
+    img *= grain(elev.shape, grain_cell_px, grain_strength, seed)[..., None]
+    np.clip(img, 0, 1, out=img)
+    img *= 255
+    return img.astype("uint8")

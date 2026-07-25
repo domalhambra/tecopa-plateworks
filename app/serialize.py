@@ -80,6 +80,11 @@ def spec_to_json(s: CompositionSpec) -> dict:
     # manifest re-stamps byte-identically; spec_from_json refills the default.
     if d["profile_rev"] == 1:
         del d["profile_rev"]
+    # relief revision (v1.13): 1 is the relief chain as shipped, omitted so every
+    # earlier manifest re-stamps AND re-renders byte-identically; spec_from_json
+    # refills the default. This one gates PIXELS, not layout -- see RELIEF_REVS.
+    if d["relief_rev"] == 1:
+        del d["relief_rev"]
     if d["track_color_by"] == "none":
         del d["track_color_by"]
     # smart label placement + chronological weave (v1.10): omitted at their pre-feature
