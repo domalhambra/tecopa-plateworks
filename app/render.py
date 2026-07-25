@@ -1,6 +1,6 @@
 # app/render.py
 from __future__ import annotations
-import json, math as _m, os
+import json, math as _m, os, threading
 from dataclasses import dataclass, replace
 import numpy as np
 import rasterio
@@ -129,6 +129,24 @@ GEO_ROUTE_TOL = 0.06                 # max mean route coverage under a box in th
 def _pt_to_px(pt, dpi):  # points -> pixels
     return pt * dpi / 72.0
 
+# ---- the spec side of the relief extension seam (see app/relief.py) ----
+# A registered relief pass needs its knob, and its knob is a spec field. Rather than
+# grow `_paint_base`'s shaded_relief() call by a parameter per module -- the edit the
+# seam exists to avoid -- a module registers a reader here and the value arrives in
+# `ReliefFrame.extras`. The registry ships EMPTY, so `_relief_extras` returns None and
+# the call below is character-for-character the pre-seam one.
+RELIEF_EXTRAS = {}
+
+def relief_extra(name):
+    """Register `fn(spec) -> value` as `frame.extras[name]` for every render."""
+    def deco(fn):
+        RELIEF_EXTRAS[name] = fn
+        return fn
+    return deco
+
+def _relief_extras(spec):
+    return {name: fn(spec) for name, fn in RELIEF_EXTRAS.items()} or None
+
 # Terrain-depth ramp (v1.3, Dom): keyed to the DPI-INDEPENDENT map-scale denominator
 # (ground metres per print metre), NOT gpp -- gpp varies with dpi, the scale does not,
 # so proof and final share one depth value. 0 below ~1:150k (county scale, where the
@@ -245,18 +263,53 @@ def _probe_dem(region_dir, cfg, rect):
 # All reprint-safe: they read the authoritative region DEM at the tracks' CRS coords, so
 # they reproduce from (region, crop, tracks) alone -- no per-point data in the manifest.
 
-def _sample_dem_elev(region_dir, cfg, xy):
+# A bulk point sample reads one window covering the points and gathers from it. Past
+# this many pixels the window would be the wasteful read (a trip spanning a whole
+# corridor plate), so it falls back to rasterio's per-point windowed sampling. ~64 MP
+# is a 256 MB float32 block -- the same order as one render window, well under the
+# render's own peak.
+DEM_SAMPLE_WINDOW_MAX_PX = 64_000_000
+
+def _sample_dem_open(ds, xy):
+    """`ds.sample()` for a whole (N, 2) coordinate array at once, on an already-open
+    dataset. rasterio's sampler issues ONE 1x1 windowed read per point -- ~1 s per
+    40k vertices here, and worse on a real tiled 3DEP plate where consecutive points
+    hit different tiles. This resolves every row/col with the same `rowcol` call the
+    sampler uses, reads the one window that covers them, and gathers; an out-of-raster
+    point gets the same `nodata or 0` fill rasterio yields. Same pixels, same values."""
+    from rasterio.transform import rowcol
+    from rasterio.windows import Window
+    rows, cols = rowcol(ds.transform, xy[:, 0], xy[:, 1])
+    rows = np.asarray(rows).ravel()
+    cols = np.asarray(cols).ravel()
+    out = np.full(xy.shape[0], (ds.nodata or 0), dtype=ds.dtypes[0])
+    inb = ((rows >= 0) & (rows < ds.height) & (cols >= 0) & (cols < ds.width))
+    if inb.any():
+        r, c = rows[inb], cols[inb]
+        r0, r1 = int(r.min()), int(r.max()) + 1
+        c0, c1 = int(c.min()), int(c.max()) + 1
+        if (r1 - r0) * (c1 - c0) <= DEM_SAMPLE_WINDOW_MAX_PX:
+            block = ds.read(1, window=Window(c0, r0, c1 - c0, r1 - r0))
+            out[inb] = block[r - r0, c - c0]
+        else:                                    # corridor-wide scatter: point reads
+            out[inb] = [ds.read(1, window=Window(int(cc), int(rr), 1, 1))[0, 0]
+                        for rr, cc in zip(r, c)]
+    return out
+
+def _sample_dem_elev(region_dir, cfg, xy, ds=None):
     """DEM elevation (metres, NaN off-coverage) at each (x, y) CRS point. Samples the
-    native DEM, so it is DPI-independent -- proof and final agree by construction."""
+    native DEM, so it is DPI-independent -- proof and final agree by construction.
+    `ds` is an already-open dataset for this plate (a caller sampling several tracks
+    hands one in instead of re-opening the GeoTIFF per track)."""
     xy = np.asarray(xy, dtype=float)
     if xy.shape[0] == 0:
         return np.zeros(0)
-    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
-        nodata = ds.nodata
-        vals = np.array([v[0] for v in ds.sample(
-            [(float(x), float(y)) for x, y in xy])], dtype=float)
-    if nodata is not None:
-        vals[vals == nodata] = np.nan
+    if ds is None:
+        with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as opened:
+            return _sample_dem_elev(region_dir, cfg, xy, ds=opened)
+    vals = np.asarray(_sample_dem_open(ds, xy), dtype=float)
+    if ds.nodata is not None:
+        vals[vals == ds.nodata] = np.nan
     return vals
 
 # elevation ramp (low -> high): a legible teal -> green -> warm-gold -> pale climb that
@@ -275,6 +328,25 @@ def _ramp(stops, t):
             return tuple(int(round(c0[k] + (c1[k] - c0[k]) * f)) for k in range(3))
     return stops[-1][1]
 
+def _ramp_array(stops, t):
+    """`_ramp` for a whole vertex array at once -> (N, 3) uint8. The scalar form ran a
+    Python loop per vertex (a season of GPX is tens of thousands of them); this picks
+    the same interval (the first whose upper stop is >= t, which is what the scalar
+    loop's first `t <= t1` hit means) and evaluates the same
+    `c0 + (c1 - c0) * f` in float64, then the same round-half-to-even. Bit-identical."""
+    t = np.asarray(t, dtype=float)
+    t = np.where(np.isfinite(t), t, 0.0)
+    np.clip(t, 0.0, 1.0, out=t)
+    t0 = np.array([s[0] for s in stops[:-1]], dtype=float)
+    t1 = np.array([s[0] for s in stops[1:]], dtype=float)
+    c0 = np.array([s[1] for s in stops[:-1]], dtype=float)
+    c1 = np.array([s[1] for s in stops[1:]], dtype=float)
+    idx = np.clip(np.searchsorted(t1, t, side="left"), 0, len(t1) - 1)
+    span = t1[idx] - t0[idx]
+    f = np.where(span == 0.0, 0.0, (t - t0[idx]) / np.where(span == 0.0, 1.0, span))
+    vals = c0[idx] + (c1[idx] - c0[idx]) * f[:, None]
+    return np.rint(vals).astype(np.uint8)
+
 def _track_color_arrays(spec, region_dir, cfg):
     """Per-vertex RGB (uint8, one row per track vertex) under spec.track_color_by, or None
     for 'none'. 'elevation' colors by DEM height over the region range; 'grade' by the
@@ -285,30 +357,33 @@ def _track_color_arrays(spec, region_dir, cfg):
     lo, hi = cfg["elevation_min"], cfg["elevation_max"]
     swatch = np.array(spec.track_rgb, np.uint8)
     out = []
-    for track in spec.tracks:
-        track = np.asarray(track, float)
-        elev = _sample_dem_elev(region_dir, cfg, track)
-        n = track.shape[0]
-        if mode == "elevation":
-            norm = (elev - lo) / (hi - lo + 1e-9)
-            cols = np.array([_ramp(_ELEV_RAMP, v) for v in norm], np.uint8)
-        else:                                            # grade
-            seg = np.hypot(np.diff(track[:, 0]), np.diff(track[:, 1]))
-            with np.errstate(invalid="ignore", divide="ignore"):
-                gseg = np.where(seg > 1e-6, np.diff(elev) / seg, 0.0)
-            g = np.zeros(n)
-            if n > 1:
-                g[1:] = gseg
-                g[0] = gseg[0]
-            norm = 0.5 + 0.5 * np.clip(g / GRADE_FULL_SCALE, -1.0, 1.0)
-            cols = np.array([_ramp(_GRADE_RAMP, v) for v in norm], np.uint8)
-        bad = ~np.isfinite(elev)
-        if bad.any():
-            cols[bad] = swatch
-        out.append(cols)
+    # one open dataset for the whole trip: this used to re-open (and re-read the
+    # header/overviews of) the plate's GeoTIFF once per track segment.
+    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
+        for track in spec.tracks:
+            track = np.asarray(track, float)
+            elev = _sample_dem_elev(region_dir, cfg, track, ds=ds)
+            n = track.shape[0]
+            if mode == "elevation":
+                norm = (elev - lo) / (hi - lo + 1e-9)
+                cols = _ramp_array(_ELEV_RAMP, norm)
+            else:                                            # grade
+                seg = np.hypot(np.diff(track[:, 0]), np.diff(track[:, 1]))
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    gseg = np.where(seg > 1e-6, np.diff(elev) / seg, 0.0)
+                g = np.zeros(n)
+                if n > 1:
+                    g[1:] = gseg
+                    g[0] = gseg[0]
+                norm = 0.5 + 0.5 * np.clip(g / GRADE_FULL_SCALE, -1.0, 1.0)
+                cols = _ramp_array(_GRADE_RAMP, norm)
+            bad = ~np.isfinite(elev)
+            if bad.any():
+                cols[bad] = swatch
+            out.append(cols)
     return out
 
-def _track_color_field(spec, track_colors, out_w, out_h, width_px, ctx):
+def _track_color_field(spec, track_colors, out_w, out_h, width_px, ctx, pts=None):
     """Sheet-space per-pixel ink COLOR for track coloring: each segment drawn in its
     vertex colour over a swatch background, then (under the plan-oblique warp) gathered
     through the SAME winner buffer as _coverage, so the colour drapes with the ribbon.
@@ -323,13 +398,14 @@ def _track_color_field(spec, track_colors, out_w, out_h, width_px, ctx):
     colimg = Image.new("RGB", (w, h), base_swatch)
     dd = ImageDraw.Draw(colimg)
     wpx = max(1, width_px)
-    for i, track in enumerate(spec.tracks):
+    if pts is None:
+        pts = _PolylineCache(spec.tracks, spec.crop, out_w, out_h, dx, dy)
+    for i in range(len(spec.tracks)):
         cols = track_colors[i]
-        pts = [(px + dx, py + dy) for px, py in
-               (_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in track)]
-        for k in range(len(pts) - 1):
+        line = pts.points(i)
+        for k in range(len(line) - 1):
             c = tuple(int(v) for v in cols[min(k + 1, len(cols) - 1)])
-            dd.line([pts[k], pts[k + 1]], fill=c, width=wpx, joint="curve")
+            dd.line([line[k], line[k + 1]], fill=c, width=wpx, joint="curve")
     field = np.asarray(colimg, np.float32) / 255.0
     if ctx is None:
         return field
@@ -404,6 +480,37 @@ def _crs_to_px(x, y, crop, out_w, out_h):
     px = (x - crop[0]) / (crop[2]-crop[0]) * out_w
     py = (crop[3] - y) / (crop[3]-crop[1]) * out_h
     return px, py
+
+def _polyline_px(track, crop, out_w, out_h, dx=0.0, dy=0.0):
+    """A whole polyline projected to sheet pixels as a list of (px, py) tuples --
+    `_crs_to_px` for every vertex, done in numpy instead of a Python generator.
+    The arithmetic is the same expression on the same float64 values, so the points
+    are bit-identical; a route ribbon is rasterized four times per journey layer (ink,
+    halo, and both worn widths) and once per film frame, so this is the hottest pure-
+    Python loop on the route path. `dx`/`dy` are the padded-grid offsets the oblique
+    path adds after projection, exactly as the scalar form did."""
+    a = np.asarray(track, dtype=float)
+    if a.size == 0:                       # an empty track drew nothing before, either
+        return []
+    px = (a[:, 0] - crop[0]) / (crop[2] - crop[0]) * out_w + dx
+    py = (crop[3] - a[:, 1]) / (crop[3] - crop[1]) * out_h + dy
+    return list(zip(px.tolist(), py.tolist()))
+
+class _PolylineCache(dict):
+    """Projected sheet points for a spec's tracks, memoized by index for ONE
+    (crop, out_w, out_h, dx, dy) geometry -- the lifetime of a single `_ink_tracks`
+    call, where the same tracks are re-projected for every coverage raster and every
+    weave layer. Keyed by index because the geometry is fixed for the whole call."""
+    def __init__(self, tracks, crop, out_w, out_h, dx, dy):
+        super().__init__()
+        self._args = (tracks, crop, out_w, out_h, dx, dy)
+
+    def points(self, i):
+        pts = self.get(i)
+        if pts is None:
+            tracks, crop, out_w, out_h, dx, dy = self._args
+            pts = self[i] = _polyline_px(tracks[i], crop, out_w, out_h, dx, dy)
+        return pts
 
 # ---- the plan-oblique warp (High relief). Geometry primer: numpy row 0 is the crop's
 # NORTH edge and rows grow southward, exactly like sheet py -- so "up-sheet" is a
@@ -581,7 +688,7 @@ def _chrono_group_order(spec, groups):
                                    _group_day(spec, groups[gi]) or "", gi))
     return [groups[gi] for gi in order]
 
-def _coverage(spec, out_w, out_h, width_px, groups=None, ctx=None):
+def _coverage(spec, out_w, out_h, width_px, groups=None, ctx=None, pts=None):
     """Anti-aliased per-pixel visit count: how many distinct JOURNEYS cover each
     pixel. All segments of one journey draw onto one layer (self-overlap counts
     once); summing layers makes overlap across journeys = frequency.
@@ -599,19 +706,24 @@ def _coverage(spec, out_w, out_h, width_px, groups=None, ctx=None):
         w = out_w + 2 * ctx.pad_x
         h = out_h + ctx.pad_top + ctx.pad_bot
         dx, dy = float(ctx.pad_x), float(ctx.pad_top)
+    if pts is None:                     # a direct caller: project this call's own points
+        pts = _PolylineCache(spec.tracks, spec.crop, out_w, out_h, dx, dy)
     cov = np.zeros((h, w), np.float32)
     for g in groups:
         layer = Image.new("L", (w, h), 0)
         d = ImageDraw.Draw(layer)
         drew = False
         for i in g:
-            pts = [(px + dx, py + dy) for px, py in
-                   (_crs_to_px(x, y, spec.crop, out_w, out_h) for x, y in spec.tracks[i])]
-            if len(pts) >= 2:
-                d.line(pts, fill=255, width=max(1, width_px), joint="curve")
+            line = pts.points(i)
+            if len(line) >= 2:
+                d.line(line, fill=255, width=max(1, width_px), joint="curve")
                 drew = True
         if drew:
-            cov += np.asarray(layer, np.float32) / 255.0
+            # accumulate through one scratch buffer: `cov` is up to 150 MB on a
+            # flagship final and this runs once per journey per width
+            lay = np.asarray(layer, np.float32)
+            lay /= 255.0
+            cov += lay
     if ctx is None:
         return cov
     return _oblique_warp_coverage(cov, ctx)
@@ -652,7 +764,8 @@ def _oblique_warp_coverage(cov_pad, ctx):
             vis = np.maximum(vis, ghost)
     return vis
 
-def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None):
+def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None,
+                         pts=None):
     """Composite ONE set of journey `groups` onto the float image `img` (0..1) as a
     cased, inked, grained route, and return the new float image. This is the single
     definition of the casing -> ink math: `_ink_tracks` calls it once for the whole
@@ -671,16 +784,18 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     worn_possible = len(groups) >= 2
 
     # per-journey coverage at both widths (overlap across journeys = frequency)
-    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups, ctx=ctx),
-                                  feather)
+    visits_base = gaussian_filter(_coverage(spec, out_w, out_h, ink_w, groups, ctx=ctx,
+                                            pts=pts), feather)
 
     # 1) paper halo under the line (strength = the client's outline slider; 0 skips
     #    the halo work entirely), following the worn width where paths repeat.
     #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
     if spec.track_halo > 0:
-        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups, ctx=ctx), 0, 1)
+        cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups, ctx=ctx,
+                                pts=pts), 0, 1)
         if worn_possible:
-            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups, ctx=ctx)
+            cas_worn = _coverage(spec, out_w, out_h, worn_w + 2 * pad, groups, ctx=ctx,
+                                 pts=pts)
             cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
             del cas_worn
         cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
@@ -694,8 +809,8 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
     del visits_base
     if worn_possible:
-        visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w, groups, ctx=ctx),
-                                      feather)
+        visits_worn = gaussian_filter(_coverage(spec, out_w, out_h, worn_w, groups,
+                                                ctx=ctx, pts=pts), feather)
         op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
         op = np.maximum(op, op_worn)
         del visits_worn, op_worn
@@ -709,7 +824,8 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     # the flat swatch, warped through the same winner buffer as the ink. None -> the
     # classic single-swatch composite, byte-identical.
     if track_colors is not None and spec.track_color_by != "none":
-        ink_field = _track_color_field(spec, track_colors, out_w, out_h, ink_w, ctx)
+        ink_field = _track_color_field(spec, track_colors, out_w, out_h, ink_w, ctx,
+                                       pts=pts)
         img = img * (1 - op) + ink_field * op
     else:
         ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
@@ -740,13 +856,17 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_co
     shears, exactly as on a flat sheet."""
     img = rgb_u8.astype(np.float32) / 255.0
     groups = _journey_groups(spec) if groups is None else groups
+    # one projection of the route per call, shared by every coverage raster below (the
+    # ink, the halo, both worn widths -- and, in weave mode, by every journey layer).
+    dx, dy = (0.0, 0.0) if ctx is None else (float(ctx.pad_x), float(ctx.pad_top))
+    pts = _PolylineCache(spec.tracks, spec.crop, out_w, out_h, dx, dy)
     if spec.track_weave and len(groups) >= 2:
         for g in _chrono_group_order(spec, groups):
             img = _composite_ink_layer(img, spec, out_w, out_h, dpi, [g], ctx=ctx,
-                                       track_colors=track_colors)
+                                       track_colors=track_colors, pts=pts)
     else:
         img = _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=ctx,
-                                   track_colors=track_colors)
+                                   track_colors=track_colors, pts=pts)
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 def _draw_termini(img, spec, out_w, out_h, dpi, groups=None, ctx=None):
@@ -795,10 +915,35 @@ PHOTO_FRAME = (243, 237, 223)       # cream mat around a pinned photo
 PHOTO_EDGE = (54, 40, 30)           # thin dark keyline + connector stem
 # -------------------------------------------------------------------
 
+# Font cache. Every label, every glyph-halo pass and every film frame asks for the
+# same handful of sizes, and each ask re-opened and re-parsed the TTF (a label-dense
+# sheet ~40 times, a 40-frame film ~40x that). The cache is THREAD-LOCAL on purpose:
+# Pillow's FreeTypeFont wraps one FT_Face whose glyph-rendering state is not
+# thread-safe, and this process renders a final and a proof refine on separate queue
+# threads -- a shared face could race and make a glyph nondeterministic (invariant 3).
+# Per-thread instances keep the win with no sharing at all.
+_FONT_CACHE_MAX = 256
+_font_local = threading.local()
+
 def _font(size):
+    """The sheet's type face at `size` px, memoized per thread on (face, size).
+    TECOPA_FONT is part of the key, so pointing it at another face still takes
+    effect on the next call."""
+    cache = getattr(_font_local, "fonts", None)
+    if cache is None:
+        cache = _font_local.fonts = {}
+    key = (os.environ.get("TECOPA_FONT") or "", size)
+    font = cache.get(key)
+    if font is None:
+        if len(cache) >= _FONT_CACHE_MAX:      # a render uses a dozen sizes; this is
+            cache.clear()                      # a leak bound, not a working set
+        font = cache[key] = _load_font(*key)
+    return font
+
+def _load_font(override, size):
     # TECOPA_FONT lets the operator drop in a licensed display face (a real
     # poster face beats the DejaVu screen workhorse); then the serif chain.
-    names = ([os.environ["TECOPA_FONT"]] if os.environ.get("TECOPA_FONT") else [])
+    names = [override] if override else []
     names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
     for name in names:
         try:
@@ -1235,19 +1380,26 @@ def _contour_interval(range_m, ground_m_per_in):
             return iv
     return 2000
 
-def _contour_alpha(elev, interval, width_px):
-    """Anti-aliased constant-screen-width contour coverage (0..1) plus each pixel's
-    nearest level index. Distance-to-level in PIXELS = |frac| / |gradient|, so the
-    line width holds across slopes and DPIs; flat ground (gradient ~ 0) draws no
-    line rather than flooding a whole plateau that sits exactly on a level."""
+def _contour_distance(elev, interval):
+    """(distance in PIXELS to the nearest contour level, nearest level index).
+    Distance = |frac| / |gradient|, so a line drawn from it holds its screen width
+    across slopes and DPIs; flat ground (gradient ~ 0) is infinitely far from a level
+    and so draws nothing, rather than flooding a whole plateau that sits exactly on
+    one. Split out from `_contour_alpha` because it does ALL the work and does not
+    depend on the line width -- the minor and index passes share one computation."""
     t = elev / float(interval)
     f = np.abs(t - np.round(t))
     gy, gx = np.gradient(t)
     g = np.hypot(gx, gy)
     with np.errstate(divide="ignore", invalid="ignore"):
         d_px = np.where(g > 1e-6, f / g, np.inf)
-    a = np.clip(1.0 - d_px / max(width_px, 0.5), 0.0, 1.0)
-    return a, np.round(t).astype(np.int64)
+    return d_px, np.round(t).astype(np.int64)
+
+def _contour_alpha(elev, interval, width_px):
+    """Anti-aliased constant-screen-width contour coverage (0..1) plus each pixel's
+    nearest level index."""
+    d_px, levels = _contour_distance(elev, interval)
+    return np.clip(1.0 - d_px / max(width_px, 0.5), 0.0, 1.0), levels
 
 def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     """Composite elevation contours over the relief (under water/tracks): minor
@@ -1261,8 +1413,12 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     if rng < 1.0:                              # a dead-flat crop has no contours
         return rgb_u8
     iv = _contour_interval(rng, ground_m_per_in)
-    a_minor, levels = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_MINOR_PT, dpi))
-    a_index, _ = _contour_alpha(elev, iv, _pt_to_px(CONTOUR_INDEX_PT, dpi))
+    # the minor and index passes differ ONLY in line width, so the distance field
+    # (two gradients + a hypot over the whole window) is computed once for both
+    d_px, levels = _contour_distance(elev, iv)
+    a_minor = np.clip(1.0 - d_px / max(_pt_to_px(CONTOUR_MINOR_PT, dpi), 0.5), 0.0, 1.0)
+    a_index = np.clip(1.0 - d_px / max(_pt_to_px(CONTOUR_INDEX_PT, dpi), 0.5), 0.0, 1.0)
+    del d_px
     is_index = (levels % 5 == 0)
     alpha = np.where(is_index, a_index * CONTOUR_INDEX_OPACITY,
                      a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32)
@@ -1328,13 +1484,21 @@ def _draw_compass(img, spec, out_w, out_h, dpi, trim=None):
     d.text((nx - nl, ny - nt), "N", fill=TERMINUS_INK + (240,), font=f)
     return img
 
+def _load_region_json(region_dir, name):
+    """A region asset, or None when the plate doesn't carry it. Closed explicitly:
+    the old `json.load(open(p))` leaked the handle to the garbage collector, and a
+    film or a wallpaper bundle re-reads these once per frame / per device."""
+    p = os.path.join(region_dir, name)
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        return json.load(f)
+
 def _load_hydro(region_dir):
-    p = os.path.join(region_dir, "hydro.json")
-    return json.load(open(p)) if os.path.exists(p) else None
+    return _load_region_json(region_dir, "hydro.json")
 
 def _load_labels(region_dir):
-    p = os.path.join(region_dir, "labels.json")
-    return json.load(open(p)) if os.path.exists(p) else None
+    return _load_region_json(region_dir, "labels.json")
 
 def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
     """Build the ranked label candidates in output pixels, from the terrain names
@@ -1781,7 +1945,8 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec),
         sun_azimuth=spec.sun_azimuth_deg if journey else None,
         sun_altitude=spec.sun_altitude_deg if journey else None,
-        golden=spec.golden_strength if journey else 0.0)
+        golden=spec.golden_strength if journey else 0.0,
+        extras=_relief_extras(spec))
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).
