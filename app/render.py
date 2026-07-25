@@ -1946,7 +1946,11 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         sun_azimuth=spec.sun_azimuth_deg if journey else None,
         sun_altitude=spec.sun_altitude_deg if journey else None,
         golden=spec.golden_strength if journey else 0.0,
-        extras=_relief_extras(spec))
+        extras=_relief_extras(spec),
+        # relief-chain revision: 1 is the shipped chain (every poster printed before
+        # v1.13 carries it, so it reprints byte-identically); 2 is the float32 +
+        # pyramid-blur chain new proofs stamp. See app/spec.RELIEF_REVS.
+        rev=getattr(spec, "relief_rev", 1))
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).

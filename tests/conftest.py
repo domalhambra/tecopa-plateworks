@@ -181,6 +181,15 @@ _SLOW_TESTS = {
         "test_rev1_render_unchanged_by_the_refactor",
         "test_rev2_labels_feet_and_render_differs_from_rev1",
     },
+    "test_relief_rev": {
+        # these two render the same spec at 96 AND 300 dpi to prove the pyramid blur
+        # didn't leak the render resolution into the picture -- the full-res half is
+        # what makes them slow, and it is the whole point of the test
+        "test_rev_2_proof_is_a_faithful_scale_of_the_final",
+        "test_the_two_revs_agree_on_dpi_stability",
+        "test_rev_1_renders_deterministically",
+        "test_rev_2_renders_deterministically",
+    },
     "test_journey_light": {
         "test_journey_light_film_deterministic_and_moves",
         "test_journey_composes_with_high_relief",

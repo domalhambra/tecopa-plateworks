@@ -1,6 +1,7 @@
 # app/relief.py
 from __future__ import annotations
 from dataclasses import dataclass, field
+import math as _m
 import numpy as np
 from scipy.ndimage import gaussian_filter, distance_transform_edt, rotate, zoom
 
@@ -173,6 +174,9 @@ class ReliefFrame:
     sun_azimuth: float | None = None  # the journey sun, when one is set
     sun_altitude: float | None = None
     extras: dict = field(default_factory=dict)   # module knobs (render.relief_extra)
+    rev: int = 1                     # the relief-chain revision this render is on
+                                     # (see RELIEF_REVS); a pass wanting a wide blur
+                                     # should route it through relief._blur(a, px, rev)
     tex: np.ndarray | None = None    # the texture high-pass, 0..1
     val: np.ndarray | None = None    # the valley-depth field, 0..1
     cast: np.ndarray | None = None   # ray-marched cast shadow, 0 = lit
@@ -258,16 +262,68 @@ def slope_aspect(elev, res_m, z_factor=1.0):
     aspect = np.arctan2(-dx, dy)
     return slope, aspect
 
-def shade_from(slope, aspect, azimuth=315, altitude=45):
+def shade_from(slope, aspect, azimuth=315, altitude=45, rev=1):
     """One light on a precomputed (slope, aspect) field. See `hillshade` for why the
-    azimuth enters the aspect frame unrotated."""
+    azimuth enters the aspect frame unrotated.
+
+    rev 1 keeps the shipped arithmetic verbatim, including its accident: `np.radians`
+    returns a float64 SCALAR, which is strong under NEP 50, so shading float32 terrain
+    produced a float64 plane -- and since that plane multiplies the base colour, the
+    entire RGB composition downstream ran at double width for no precision anyone
+    asked for. rev 2 converts the same angles to Python floats, which are weak, so the
+    result keeps the terrain's own float32 (see RELIEF_REVS). The formula is
+    character-for-character the same; only the scalar type differs."""
+    if rev >= 2:
+        az = float(np.radians(azimuth))
+        alt = float(np.radians(altitude))
+        shaded = (_m.sin(alt) * np.sin(slope)
+                  + _m.cos(alt) * np.cos(slope) * np.cos(az - aspect))
+        return np.clip(shaded, 0, 1)
     az = np.radians(azimuth)
     alt = np.radians(altitude)
     shaded = (np.sin(alt) * np.sin(slope)
               + np.cos(alt) * np.cos(slope) * np.cos(az - aspect))
     return np.clip(shaded, 0, 1)
 
-def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, terrain=None):
+# ---- wide-kernel blurs (rev 2) ----------------------------------------------------
+# scipy's gaussian_filter is separable but still O(sigma) taps per pixel per axis, and
+# the relief leans on genuinely wide kernels: sky occlusion reaches 3200 GROUND metres,
+# the valley pass 400, the multiscale texture up to 8x its base radius. On a flagship
+# final those are hundreds of pixels wide and the blurs became the single largest cost
+# in the engine (~11 s of a 24 s sheet, measured).
+#
+# A wide Gaussian is a low-pass, so it carries almost no information at the sampling
+# rate it is being computed at -- the standard answer, in every renderer that does
+# this, is to decimate, blur small, and resample back. That is what rev 2 does above a
+# threshold. It is an APPROXIMATION of the exact kernel (hence the rev gate), but the
+# error is confined to spatial frequencies the blur is discarding anyway.
+#
+# Why this is safe for "one spec, painted at many sizes" (invariant 1): every sigma
+# here is a GROUND distance divided by the grid's resolution, so sigma_px scales as
+# 1/res_m, and the decimation factor k = sigma_px / BLUR_PYRAMID_SIGMA_PX scales the
+# same way. The decimated grid's resolution is therefore
+#
+#     res_m * k  =  radius_m / BLUR_PYRAMID_SIGMA_PX
+#
+# -- a CONSTANT ground resolution, independent of the render dpi. The proof and the
+# final blur the same ground grid and only differ in the resample back, exactly like
+# the cast-shadow working grid (render._shadow_res_m). A threshold in raw pixels would
+# have made the final take the pyramid while the proof did not, and the preview would
+# have stopped predicting the print.
+BLUR_PYRAMID_SIGMA_PX = 16.0    # blurs wider than this run decimated
+
+def _blur(a, sigma_px, rev=1):
+    """gaussian_filter, or its pyramid approximation for a wide kernel under rev 2."""
+    if rev < 2 or sigma_px <= BLUR_PYRAMID_SIGMA_PX:
+        return gaussian_filter(a, sigma_px)
+    k = sigma_px / BLUR_PYRAMID_SIGMA_PX                  # decimation factor > 1
+    small = zoom(a, 1.0 / k, order=1)
+    if min(small.shape) < 2:                              # degenerate: blur in place
+        return gaussian_filter(a, sigma_px)
+    small = gaussian_filter(small, BLUR_PYRAMID_SIGMA_PX)
+    return _resize_to(small, a.shape).astype(a.dtype, copy=False)
+
+def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, terrain=None, rev=1):
     # `aspect` below (arctan2(-dx, dy)) is the compass bearing of the downhill
     # direction (0=N, 90=E, 180=S, 270=W), so the light bearing must be the sun
     # azimuth in the same frame. The plain `radians(azimuth)` lights each slope
@@ -276,10 +332,10 @@ def hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, terrain=None)
     # `terrain` is an already-computed slope_aspect() pair for this elev/res_m/
     # z_factor -- an optimization only; None recomputes it and is exactly equivalent.
     slope, aspect = slope_aspect(elev, res_m, z_factor) if terrain is None else terrain
-    return shade_from(slope, aspect, azimuth, altitude)
+    return shade_from(slope, aspect, azimuth, altitude, rev=rev)
 
 def multidirectional_hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
-                               terrain=None):
+                               terrain=None, rev=1):
     """A weighted blend of hillshades from several light bearings around the principal
     azimuth (USGS MDOW / Esri's terrain default). One light leaves ranges that run
     parallel to it unmodelled -- they vanish when the map is zoomed far out; the
@@ -292,11 +348,11 @@ def multidirectional_hillshade(elev, res_m, azimuth=315, altitude=45, z_factor=1
     acc = np.zeros_like(elev, dtype="float32")
     wsum = 0.0
     for off, wt in offsets:
-        acc += wt * shade_from(terrain[0], terrain[1], azimuth + off, altitude)
+        acc += wt * shade_from(terrain[0], terrain[1], azimuth + off, altitude, rev=rev)
         wsum += wt
     return acc / wsum
 
-def multiscale_texture(elev, base_radius_px):
+def multiscale_texture(elev, base_radius_px, rev=1):
     """Texture shading (Leland Brown / Tom Patterson): a single fine high-pass loses
     the major ridge/drainage structure when the map is zoomed out. Summing high-pass
     responses across octaves (2x/4x/8x the base radius) keeps that structure crisp at
@@ -305,14 +361,14 @@ def multiscale_texture(elev, base_radius_px):
     acc = np.zeros_like(elev, dtype="float32")
     wsum = 0.0
     for mult, wt in ((2.0, 0.5), (4.0, 0.3), (8.0, 0.2)):
-        blur = gaussian_filter(elev, base_radius_px * mult)
+        blur = _blur(elev, base_radius_px * mult, rev)
         hp = elev - blur
         s = np.std(hp) + 1e-9
         acc += wt * np.clip(0.5 + hp / (4 * s), 0, 1)
         wsum += wt
     return acc / wsum
 
-def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
+def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0, rev=1):
     """Terrain-occlusion shadow (0 = lit, 1 = fully shadowed): rotate the grid so the
     light travels along +columns, sweep a running sun-horizon down each row, rotate the
     bounded mask back, and soften the edge by a ground-metre penumbra.
@@ -337,9 +393,9 @@ def cast_shadow_mask(elev, res_m, azimuth=315, altitude=45, z_factor=1.0):
     r0 = (back.shape[0] - elev.shape[0]) // 2
     c0 = (back.shape[1] - elev.shape[1]) // 2
     m = back[r0:r0 + elev.shape[0], c0:c0 + elev.shape[1]]
-    return gaussian_filter(m, max(0.6, PENUMBRA_M / res_m))
+    return _blur(m, max(0.6, PENUMBRA_M / res_m), rev)
 
-def sky_occlusion(elev, res_m):
+def sky_occlusion(elev, res_m, rev=1):
     """Multi-scale sky-openness occlusion (0 = open, 1 = deep concavity): depth below
     the neighbourhood mean at several ground radii, each normalized by the horizon
     slope that radius implies (depth / (r * AO_SLOPE)) -- physical and content-
@@ -347,7 +403,7 @@ def sky_occlusion(elev, res_m):
     it is part of the frozen shadow=0 base look)."""
     acc = np.zeros_like(elev, dtype="float32")
     for r_m, wt in zip(AO_RADII_M, AO_WEIGHTS):
-        big = gaussian_filter(elev, max(1.0, r_m / res_m))
+        big = _blur(elev, max(1.0, r_m / res_m), rev)
         acc += wt * np.clip((big - elev) / (r_m * AO_SLOPE), 0.0, 1.0)
     return acc / sum(AO_WEIGHTS)
 
@@ -363,7 +419,7 @@ def _resize_to(a, shape):
     return out
 
 def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
-                  shadow_res_m=None):
+                  shadow_res_m=None, rev=1):
     """(cast, ao) at elev's grid, computed on a fixed GROUND-resolution working grid
     (shadow_res_m, normally the proof's own pixel grid -- see render._shadow_res_m).
     The proof and the final thereby ray-march the same terrain, so the masks agree
@@ -377,13 +433,13 @@ def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
         e = gaussian_filter(e, sig_px)
     if work_res / res_m > 1.1:                        # work grid meaningfully coarser
         small = zoom(e, res_m / work_res, order=1)
-        cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor)
-        ao = sky_occlusion(small, work_res)
+        cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor, rev)
+        ao = sky_occlusion(small, work_res, rev)
         cast = np.clip(_resize_to(cast, elev.shape), 0.0, 1.0)
         ao = np.clip(_resize_to(ao, elev.shape), 0.0, 1.0)
     else:
-        cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor)
-        ao = sky_occlusion(e, res_m)
+        cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor, rev)
+        ao = sky_occlusion(e, res_m, rev)
     return cast.astype("float32"), ao.astype("float32")
 
 def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
@@ -467,16 +523,16 @@ def hypsometric(elev, elev_min, elev_max, norm=None):
     rgb /= 255.0
     return rgb
 
-def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
+def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX, rev=1):
     # high-pass: sharpen ridges and drainages (a cheap stand-in for true texture shading)
-    blur = gaussian_filter(elev, radius_px)
+    blur = _blur(elev, radius_px, rev)
     hp = elev - blur
     s = np.std(hp) + 1e-9
     return np.clip(0.5 + (hp / (4 * s)), 0, 1)   # 0..1, centered
 
-def valley_pass(elev, radius_px=VALLEY_RADIUS_PX):
+def valley_pass(elev, radius_px=VALLEY_RADIUS_PX, rev=1):
     # darken places that sit well below their surroundings
-    big = gaussian_filter(elev, radius_px)
+    big = _blur(elev, radius_px, rev)
     depth = np.clip(big - elev, 0, None)
     s = np.percentile(depth, 99) + 1e-9
     return np.clip(depth / s, 0, 1)              # 0..1, 1 = deep valley
@@ -497,7 +553,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                   grain_cell_px=2.0, grain_strength=0.05,
                   texture_radius_px=TEXTURE_RADIUS_PX, valley_radius_px=VALLEY_RADIUS_PX,
                   biome=None, depth=0.0, shadow=0.0, shadow_res_m=None,
-                  sun_azimuth=None, sun_altitude=None, golden=0.0, extras=None):
+                  sun_azimuth=None, sun_altitude=None, golden=0.0, extras=None, rev=1):
     """biome: optional (tint01, weight01) from render._biome_layers -- an RGB tint
     field (0..1) and per-pixel confidence, aligned to `elev`. Applied to the
     hypsometric base with luminance matching + the alpine fade (see BIOME_MIX).
@@ -528,7 +584,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                         elev_max=elev_max, seed=seed, azimuth=azimuth,
                         altitude=altitude, z_factor=z_factor, depth=depth,
                         shadow=shadow, golden=golden, sun_azimuth=sun_azimuth,
-                        sun_altitude=sun_altitude, extras=dict(extras or {}))
+                        sun_altitude=sun_altitude, extras=dict(extras or {}), rev=rev)
     # `norm` is the identical expression hypsometric would recompute -- hand it over.
     base = hypsometric(elev, elev_min, elev_max, norm=norm)        # color
     if biome is not None:
@@ -545,9 +601,10 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     # the Journey Light sun -- they differ only in bearing (see slope_aspect). The
     # frame shares it, so a registered pass never pays for a second gradient.
     terrain = frame.terrain()
-    hs = hillshade(elev, res_m, azimuth, altitude, z_factor, terrain=terrain) ** HILLSHADE_GAMMA
-    tex = texture_pass(elev, texture_radius_px)
-    val = valley_pass(elev, valley_radius_px)
+    hs = hillshade(elev, res_m, azimuth, altitude, z_factor,
+                   terrain=terrain, rev=rev) ** HILLSHADE_GAMMA
+    tex = texture_pass(elev, texture_radius_px, rev)
+    val = valley_pass(elev, valley_radius_px, rev)
 
     # terrain depth: at depth 0 these blocks are skipped, so hs/tex are untouched and
     # the output is identical to the single-light relief (invariant 1, existing tests).
@@ -555,9 +612,10 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         d = float(np.clip(depth, 0.0, 1.5))
         w = MULTIDIR_MAX * min(d, 1.0)
         hs_multi = multidirectional_hillshade(
-            elev, res_m, azimuth, altitude, z_factor, terrain=terrain) ** HILLSHADE_GAMMA
+            elev, res_m, azimuth, altitude, z_factor,
+            terrain=terrain, rev=rev) ** HILLSHADE_GAMMA
         hs = hs * (1.0 - w) + hs_multi * w
-        tex_ms = multiscale_texture(elev, texture_radius_px)
+        tex_ms = multiscale_texture(elev, texture_radius_px, rev)
         tex = np.clip(tex + TEXTURE_DEPTH_MAX * d * (tex_ms - 0.5), 0, 1)
 
     # `hs` is ours (** built it), so the tonal remap runs in place. Addition and
@@ -581,7 +639,8 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         # so an archival render is byte-identical.
         cast_az = azimuth if sun_azimuth is None else float(sun_azimuth)
         cast_alt = altitude if sun_altitude is None else float(sun_altitude)
-        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
+        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m,
+                                 rev=rev)
         frame.cast, frame.ao = cast, ao          # the ray-march, shared with passes
         light *= (1.0 - CAST_DARKEN * s * cast)
         light *= (1.0 - AO_MAX * s * ao)
@@ -605,7 +664,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     if golden > 0 and sun_azimuth is not None:
         g = float(np.clip(golden, 0.0, 1.0))
         hs_sun = np.clip(hillshade(elev, res_m, float(sun_azimuth), float(sun_altitude),
-                                   z_factor, terrain=terrain), 0.0, 1.0)
+                                   z_factor, terrain=terrain, rev=rev), 0.0, 1.0)
         lit = hs_sun ** GOLDEN_LIT_GAMMA
         shade = 1.0 - hs_sun
         if s > 0:                       # a cast-shadowed face isn't really sunlit

@@ -979,6 +979,7 @@ async def proof(session_id: str = Form(...),
                 sun_altitude_deg: Optional[float] = Form(None),
                 golden_strength: float = Form(0.7), profile: bool = Form(False),
                 profile_height_in: float = Form(0.9), profile_rev: int = Form(2),
+                relief_rev: int = Form(2),
                 track_color_by: str = Form("none"),
                 label_place: str = Form("smart"), track_weave: bool = Form(True),
                 output: str = Form("print"), wallpaper_preset: str = Form(""),
@@ -994,6 +995,10 @@ async def proof(session_id: str = Form(...),
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
              "profile_height_in": profile_height_in, "profile_rev": profile_rev,
+             # relief_rev (v1.13): NEW proofs get the float32 + pyramid-blur chain; the
+             # spec/manifest omit it at 1 so a poster printed on the old chain reprints
+             # byte-identically (see app/spec.RELIEF_REVS).
+             "relief_rev": relief_rev,
              "bleed_in": bleed, "track_color_by": track_color_by,
              # smart label placement + chronological weave (v1.10) + profile_rev (v1.12):
              # NEW posters default to the enhanced look (the Form defaults above), while the
@@ -1774,6 +1779,10 @@ async def continue_poster(file: UploadFile = File(...)):
                   # profile_rev restore: a pre-rev-2 poster continues as rev 1 -- its
                   # strip layout is the poster's own, not the current server default.
                   "profileRev": spec.profile_rev,
+                  # relief_rev restore: a poster printed on the shipped chain continues
+                  # on it -- the edition must look like its predecessor, not like the
+                  # current server default.
+                  "reliefRev": spec.relief_rev,
                   # bleed restore: a continued print keeps its trim + bleed exactly
                   # (print_w_in/print_h_in above are the TRIM size; bleed rides separately).
                   "bleed": spec.bleed_in,
