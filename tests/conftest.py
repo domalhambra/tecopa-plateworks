@@ -151,6 +151,9 @@ _SLOW_TESTS = {
         "test_a_failing_render_is_not_cached",
         "test_caller_supplied_plate_data_bypasses_the_cache",
         "test_the_proof_endpoint_reuses_the_terrain_across_a_style_knob",
+        "test_phase2_serves_the_knobs_phase1_could_not",
+        "test_every_masked_field_leaves_the_terrain_byte_identical",
+        "test_the_terrain_is_cached_with_its_alpha_intact",
     },
     "test_main": {
         "test_async_final_via_job_queue", "test_final_blob_seam_srgb_and_dpi",

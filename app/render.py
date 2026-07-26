@@ -2246,35 +2246,38 @@ def _plate_fingerprint(region_dir, cfg):
 # where an allowlist would quietly serve stale terrain and the proof would stop
 # predicting the print. tests/test_base_cache.py enumerates the dataclass to enforce it.
 #
-# ALWAYS safe: nothing reachable from _paint_base reads these. They are the route ink,
-# the point symbols, and the photo frames -- painted by _paint_journey/_paint_overlays.
+# ALWAYS safe: nothing reachable from `_paint_terrain` reads these.
+#
+# The old BASE_KEY_MASK_UNLABELLED is folded in here. It existed because `_draw_labels`
+# used to run INSIDE the cached unit, which dragged the whole sheet furniture into the
+# terrain's identity: `_label_keepout` measures the bottom-left stack, and at
+# profile_rev 2 that reaches _profile_rect -> _furniture_stack_top ->
+# _title_block_metrics, so the title/label point sizes, the credit line and the edition
+# were terrain inputs; under smart placement the drawn route was a placement obstacle,
+# so the track geometry was too. Labels are now drawn by `_apply_labels` AFTER the
+# cached terrain, so none of that reaches it any more and every one of these knobs hits
+# the cache -- place names on or off.
 BASE_KEY_MASK_ALWAYS = (
+    # route ink, point symbols, photo frames -- _paint_journey / _paint_overlays
     "track_rgb", "track_halo", "track_max_darken", "track_color_by", "track_weave",
     "marker_diameter_in", "marker_ring", "photo_frame_style", "photo_box_in",
     "keyline", "hotspots",
-)
-# Safe ONLY when place names are off. With spec.labels on, _draw_labels runs inside
-# _paint_base and _label_keepout measures the bottom-left furniture stack -- which at
-# profile_rev 2 reaches _profile_rect -> _furniture_stack_top -> _title_block_metrics,
-# so the title/label point sizes, the credit line and the edition are in it too. And
-# under label_place == "smart" the drawn route is a placement obstacle, so the track
-# geometry and its width reach the base as well. Phase 2 of the plan dissolves this
-# list by caching the sheet BEFORE labels are drawn.
-BASE_KEY_MASK_UNLABELLED = (
+    # the place-name switches themselves: the label pass is outside the cached unit,
+    # so toggling names on reuses the terrain it was already showing
+    "labels", "label_place",
+    # sheet furniture -- read only by the label keep-out and by _paint_overlays
     "title_text", "title_pt", "label_pt", "credit_text", "edition",
     "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    # track geometry -- reached the base only as a smart-label obstacle
     "tracks", "track_days", "track_width_pt",
 )
 
 def base_cache_key(spec, dpi, region_dir, cfg):
-    """A stable digest of everything `_paint_base` can see for this (spec, dpi, plate).
-    `spec` is the PAINT spec (post-bleed), because that is what _paint_base receives."""
+    """A stable digest of everything `_paint_terrain` can see for this (spec, dpi,
+    plate). `spec` is the PAINT spec (post-bleed), because that is what it receives."""
     payload = serialize.spec_to_json(spec)
     for name in BASE_KEY_MASK_ALWAYS:
         payload.pop(name, None)
-    if not spec.labels:
-        for name in BASE_KEY_MASK_UNLABELLED:
-            payload.pop(name, None)
     # cfg is in the key, not just the file fingerprint. rasterize takes cfg as an
     # OVERRIDE (scripts/render_lightsweep.py renders a turntable as
     # {**cfg, "light_azimuth": az}), so the same spec + dpi + plate can legitimately
@@ -2287,18 +2290,22 @@ def base_cache_key(spec, dpi, region_dir, cfg):
 
 
 def _entry_bytes(rgb, ctx):
-    """What one cached base costs. The plan-oblique context is the swing factor: its
-    padded elevation and winner buffers are several times the trimmed sheet."""
+    """What one cached terrain costs. The plan-oblique context is the swing factor: its
+    padded elevation and winner buffers are several times the trimmed sheet. Measured
+    on an 18x24 at 200 dpi: 69 MB of sheet against 185 MB of context."""
     n = int(rgb.nbytes)
     if ctx is not None:
         n += int(ctx.elev.nbytes) + int(ctx.winner.nbytes)
     return n
 
 def _freeze(rgb, ctx):
-    """Mark a cached base read-only. Nothing downstream writes to it today, so this
+    """Mark a cached terrain read-only. Nothing downstream writes to it today, so this
     costs nothing -- and it converts a future in-place write from a silently poisoned
-    cache into an immediate exception. Applied on the cold path too, so the tripwire
-    fires on the first render rather than only on a later hit."""
+    cache into an immediate exception. Applied on the miss path, so the tripwire fires
+    on the first render rather than only on a later hit.
+
+    `ctx` matters most here: unlike the pixels, the SAME context object is handed to
+    every request that hits, so an in-place write to it would leak across renders."""
     rgb.flags.writeable = False
     if ctx is not None:
         ctx.elev.flags.writeable = False
@@ -2308,8 +2315,15 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
     """`_paint_base` through the cache when one is supplied. `base_cache=None` -- every
     caller except the two proof endpoints -- is the pre-cache path, unchanged.
 
-    On a hit `lum` is recomputed from the cached pixels rather than stored: it is a
-    pure function of them, so the hit is byte-identical to a cold render, and a float64
+    What is cached is the TERRAIN: the sheet as it stands before place names. Labels
+    are only 2-3% of the base, but they read the sheet furniture (via `_label_keepout`)
+    and, in smart mode, the drawn route -- so caching them in made every furniture and
+    track knob a miss. They are redrawn per request, hit or miss, which is what lets
+    `BASE_KEY_MASK_ALWAYS` cover those fields and extends the win to all 25 non-terrain
+    knobs regardless of label settings.
+
+    On a hit `lum` is recomputed from the pixels rather than stored: it is a pure
+    function of them, so the hit is byte-identical to a cold render, and a float64
     plane would be ~2.7x the size of the uint8 sheet it derives from.
 
     A render that RAISES (the off-DEM guard) is never cached -- and need not be, since
@@ -2328,13 +2342,22 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
     key = base_cache_key(paint, dpi, region_dir, cfg)
     hit = base_cache.get(key)
     if hit is not None:
-        rgb, ctx = hit
-        return rgb, _luminance(rgb), ctx
-    rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
-                                trim=trim)
-    _freeze(rgb, ctx)
-    base_cache.put(key, (rgb, ctx), _entry_bytes(rgb, ctx))
-    return rgb, lum, ctx
+        terrain, ctx = hit
+        # A fresh writable image every time: _apply_labels draws onto it in place, and
+        # the cached plane is frozen. RGBA, not RGB -- _draw_hydro fills lakes at 235
+        # alpha so the lakebed relief ghosts through, and _draw_glyph_rotated composites
+        # curved labels with img.alpha_composite, which READS that destination alpha. A
+        # curved name crossing a lake would land on different pixels if the alpha were
+        # rebuilt as opaque, so the 25% an RGB plane would save is not available.
+        himg = Image.fromarray(np.array(terrain), "RGBA")
+    else:
+        himg, ctx, _ = _paint_terrain(paint, dpi, region_dir, cfg, hydro=None)
+        terrain = np.array(himg)      # a copy -- labels are about to draw onto himg
+        _freeze(terrain, ctx)
+        base_cache.put(key, (terrain, ctx), _entry_bytes(terrain, ctx))
+    himg = _apply_labels(himg, paint, dpi, region_dir, cfg, ctx=ctx, trim=trim)
+    rgb = np.asarray(himg.convert("RGB"))
+    return rgb, _luminance(rgb), ctx
 
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
