@@ -108,3 +108,112 @@ def test_plate_fingerprint_tolerates_a_missing_asset(tmp_path):
     from app import render
     fp = render._plate_fingerprint(str(tmp_path), {"dem_path": "dem.tif"})
     assert isinstance(fp, str) and fp
+
+
+# ---- the key and its mask contract -------------------------------------------------
+
+from app.spec import CompositionSpec
+
+REGION_DIR = "regions/lassen_ca"
+
+
+def _cfg():
+    with open(os.path.join(REGION_DIR, "region.json")) as f:
+        return json.load(f)
+
+
+def _live_spec(**kw):
+    """A spec with EVERYTHING switched on, so no field is inert and every one of them
+    is expected to reach the key. A field masked only because the feature that reads it
+    happens to be off would be a false pass."""
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
+    crop = (cx - 13500, cy - 18000, cx + 13500, cy + 18000)
+    d = dict(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+             print_w_in=9, print_h_in=12, native_resolution_m=10,
+             tracks=[np.array([[crop[0] + 2000, crop[1] + 2000],
+                               [crop[2] - 2000, crop[3] - 2000]])],
+             track_days=["2026-05-01"],
+             hotspots=[{"x": cx, "y": cy, "weight": 2}],
+             title_text="GOLDEN", credit_text="USGS 3DEP", seed=7,
+             contours=True, compass=True, biome=True, labels=True,
+             label_place="smart", track_weave=True, track_color_by="elevation",
+             profile=True, profile_rev=2, relief_rev=2, oblique=0.4,
+             light_mode="journey", top_clear_frac=0.1, bottom_clear_frac=0.1)
+    d.update(kw)
+    return CompositionSpec(**d)
+
+
+# One perturbation per field type. Explicit rather than clever, because a wrong
+# perturbation here would make the guard below pass vacuously.
+_PERTURB = {
+    "crop": lambda s: dataclasses.replace(s, crop=tuple(v + 10.0 for v in s.crop)),
+    "tracks": lambda s: dataclasses.replace(
+        s, tracks=[np.asarray(t, float) + 7.0 for t in s.tracks]),
+    "track_days": lambda s: dataclasses.replace(s, track_days=["2019-02-03"]),
+    "hotspots": lambda s: dataclasses.replace(
+        s, hotspots=list(s.hotspots) + [{"x": 1.0, "y": 2.0, "weight": 1}]),
+    "track_rgb": lambda s: dataclasses.replace(s, track_rgb=(1, 2, 3)),
+}
+
+
+def _perturb(spec, name):
+    if name in _PERTURB:
+        return _PERTURB[name](spec)
+    v = getattr(spec, name)
+    if isinstance(v, bool):
+        return dataclasses.replace(spec, **{name: not v})
+    if isinstance(v, int):
+        return dataclasses.replace(spec, **{name: v + 1})
+    if isinstance(v, float):
+        return dataclasses.replace(spec, **{name: v + 0.5})
+    if isinstance(v, str):
+        return dataclasses.replace(spec, **{name: v + "-x"})
+    raise AssertionError(f"no perturbation defined for {name} ({type(v).__name__}) -- "
+                         f"add one to _PERTURB so the guard below cannot pass vacuously")
+
+
+def _key(spec, dpi=96):
+    from app import render
+    return render.base_cache_key(spec, dpi, REGION_DIR, _cfg())
+
+
+def test_every_unmasked_spec_field_changes_the_key():
+    """The guard that keeps this cache honest as the spec grows.
+
+    Enumerating the dataclass means a field added next year is in this test the day it
+    lands: either it is deliberately masked, or changing it MUST change the key. The
+    failure direction is the point -- an unclassified field costs a cache miss (slow
+    but correct), where an allowlist would serve stale terrain and the proof would stop
+    predicting the print."""
+    from app import render
+    base = _live_spec()
+    key = _key(base)
+    masked = set(render.BASE_KEY_MASK_ALWAYS)
+    for f in dataclasses.fields(CompositionSpec):
+        alt = _perturb(base, f.name)
+        if f.name in masked:
+            assert _key(alt) == key, f"{f.name} is masked but still changed the key"
+        else:
+            assert _key(alt) != key, (
+                f"{f.name} is not masked, so it may reach _paint_base -- it MUST be in "
+                f"the key, or added to a mask list with a reason")
+
+
+def test_the_unlabelled_mask_applies_only_when_place_names_are_off():
+    """With labels on, _draw_labels runs INSIDE _paint_base: _label_keepout measures the
+    cartouche/compass/profile stack (and, at profile_rev 2, the title and label point
+    sizes through _title_block_metrics), and smart placement rasterizes the route as an
+    obstacle. So the furniture and track fields reach the base -- but only then."""
+    from app import render
+    off = _live_spec(labels=False)
+    on = _live_spec(labels=True)
+    for name in render.BASE_KEY_MASK_UNLABELLED:
+        assert _key(_perturb(off, name)) == _key(off), f"{name} keyed with labels off"
+        assert _key(_perturb(on, name)) != _key(on), f"{name} not keyed with labels on"
+
+
+def test_dpi_and_plate_are_part_of_the_key():
+    s = _live_spec()
+    assert _key(s, dpi=96) != _key(s, dpi=200)

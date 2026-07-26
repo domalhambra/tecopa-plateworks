@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M, _fill_nan
-from app import provenance
+from app import provenance, serialize
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 # Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
@@ -2206,6 +2206,48 @@ def _plate_fingerprint(region_dir, cfg):
         except OSError:
             parts.append(f"{name}:-")          # an absent asset is part of the identity
     return "|".join(parts)
+
+
+# The key is derived by MASKING, never by listing. It is the serialized spec MINUS the
+# fields that provably cannot reach _paint_base; everything else -- including a field
+# added years from now -- stays in the key by default. That direction is the whole
+# safety argument: an unclassified new field costs a cache MISS (slow but correct),
+# where an allowlist would quietly serve stale terrain and the proof would stop
+# predicting the print. tests/test_base_cache.py enumerates the dataclass to enforce it.
+#
+# ALWAYS safe: nothing reachable from _paint_base reads these. They are the route ink,
+# the point symbols, and the photo frames -- painted by _paint_journey/_paint_overlays.
+BASE_KEY_MASK_ALWAYS = (
+    "track_rgb", "track_halo", "track_max_darken", "track_color_by", "track_weave",
+    "marker_diameter_in", "marker_ring", "photo_frame_style", "photo_box_in",
+    "keyline", "hotspots",
+)
+# Safe ONLY when place names are off. With spec.labels on, _draw_labels runs inside
+# _paint_base and _label_keepout measures the bottom-left furniture stack -- which at
+# profile_rev 2 reaches _profile_rect -> _furniture_stack_top -> _title_block_metrics,
+# so the title/label point sizes, the credit line and the edition are in it too. And
+# under label_place == "smart" the drawn route is a placement obstacle, so the track
+# geometry and its width reach the base as well. Phase 2 of the plan dissolves this
+# list by caching the sheet BEFORE labels are drawn.
+BASE_KEY_MASK_UNLABELLED = (
+    "title_text", "title_pt", "label_pt", "credit_text", "edition",
+    "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    "tracks", "track_days", "track_width_pt",
+)
+
+def base_cache_key(spec, dpi, region_dir, cfg):
+    """A stable digest of everything `_paint_base` can see for this (spec, dpi, plate).
+    `spec` is the PAINT spec (post-bleed), because that is what _paint_base receives."""
+    payload = serialize.spec_to_json(spec)
+    for name in BASE_KEY_MASK_ALWAYS:
+        payload.pop(name, None)
+    if not spec.labels:
+        for name in BASE_KEY_MASK_UNLABELLED:
+            payload.pop(name, None)
+    blob = json.dumps([payload, os.path.abspath(region_dir), float(dpi),
+                       _plate_fingerprint(region_dir, cfg)],
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
