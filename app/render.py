@@ -1890,15 +1890,22 @@ def _luminance(rgb):
     float64 plane ~2.7x the size of the uint8 sheet it derives from."""
     return (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
 
-def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
-                hydro=None, labels=None, trim=None):
-    """The static layers UNDER the route -- relief, contours, hydro, geography labels --
-    plus the luminance plane the markers key on. Identical for every frame of a
-    time-lapse, so it is painted once. Returns (rgb_u8, lum, oblique_ctx); the ctx is
-    None on the classic top-down path (spec.oblique == 0 or a dead-flat crop), and
+def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
+                   hydro=None):
+    """Everything UNDER the place names: the off-DEM guard, relief, contours, the
+    plan-oblique warp, and the water.
+
+    Split out of `_paint_base` so the base cache can store the sheet *before* labels
+    are drawn. Labels are only 2-3% of the base, but they read the sheet furniture
+    (via `_label_keepout`) and, in smart mode, the drawn route -- so caching them in
+    made every furniture and track knob a cache miss. Nothing in here reads any of
+    that, which is what lets `BASE_KEY_MASK_ALWAYS` cover those fields.
+
+    Returns `(himg_rgba, ctx, hydro)`. `himg_rgba` is what `_draw_hydro` painted; `ctx`
+    is None on the classic top-down path (spec.oblique == 0 or a dead-flat crop), and
     every downstream painter treats None as the identity transform, so the classic
-    sheet is byte-identical to the pre-feature engine. Raises the off-DEM guard
-    (invariant 5) before any pixels are invented under the tracks."""
+    sheet is byte-identical to the pre-feature engine. `hydro` is handed back resolved
+    so the cold path reads the plate exactly once, as it did before the split."""
     out_w, out_h = spec.pixel_size(dpi)
     # Off-DEM guard: refuse a plausible-but-wrong poster before any painting invents
     # terrain under the tracks (red-team V1-1). DPI-independent probe, so proof and
@@ -1998,13 +2005,37 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         raise ValueError(f"hydro CRS {hydro['crs']} != region CRS {cfg['crs']}")
     himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
                        hydro, spec, out_w, out_h, dpi, ctx=ctx)
-    # named geography: on the terrain, under the route/markers (the journey stays the
-    # subject). Opt-in (spec.labels); terrain names from labels.json, water from hydro.
-    if spec.labels:
-        if labels is None:
-            labels = _load_labels(region_dir)
-        himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx,
-                            trim=trim)
+    return himg, ctx, hydro
+
+def _apply_labels(himg, spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
+                  hydro=None, labels=None, ctx=None, trim=None):
+    """Named geography over a painted terrain sheet: on the terrain, under the
+    route/markers (the journey stays the subject). Opt-in (spec.labels); terrain names
+    come from labels.json, water names from hydro.
+
+    The other half of the `_paint_base` split. Drawn per request rather than cached,
+    because it is the part of the base that reads the furniture and the route."""
+    if not spec.labels:
+        return himg
+    out_w, out_h = spec.pixel_size(dpi)
+    if labels is None:
+        labels = _load_labels(region_dir)
+    if hydro is None:
+        hydro = _load_hydro(region_dir)
+    return _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
+
+def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
+                hydro=None, labels=None, trim=None):
+    """The static layers UNDER the route -- relief, contours, hydro, geography labels --
+    plus the luminance plane the markers key on. Identical for every frame of a
+    time-lapse, so it is painted once. Raises the off-DEM guard (invariant 5) before
+    any pixels are invented under the tracks.
+
+    Now a composition of `_paint_terrain` + `_apply_labels`; this is the uncached
+    reference path, and the cache's job is to be byte-identical to it."""
+    himg, ctx, hydro = _paint_terrain(spec, dpi, region_dir, cfg, hydro=hydro)
+    himg = _apply_labels(himg, spec, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+                         ctx=ctx, trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
     lum = _luminance(rgb)
     return rgb, lum, ctx
