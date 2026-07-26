@@ -1,6 +1,6 @@
 # app/render.py
 from __future__ import annotations
-import json, math as _m, os, threading
+import hashlib, json, math as _m, os, threading
 from dataclasses import dataclass, replace
 import numpy as np
 import rasterio
@@ -2187,6 +2187,25 @@ def sheet_geometry(spec, dpi):
                     bleed_in=0.0)
     bpx = round(spec.bleed_in * dpi)
     return paint, (bpx, bpx, out_w - bpx, out_h - bpx)
+
+
+# ---- the base-layer cache (the store is app/basecache.py) ---------------------------
+
+def _plate_fingerprint(region_dir, cfg):
+    """A cheap identity for the plate's assets so a rebuilt region invalidates the
+    cache. (mtime_ns, size), NOT a content hash: hashing a 188 MB DEM on every proof
+    would cost more than the render this cache exists to skip. A shared or
+    cross-process cache would have to upgrade this."""
+    parts = []
+    for name in (cfg.get("dem_path", "dem.tif"),
+                 cfg.get("landcover_path", "landcover.tif"),
+                 "hydro.json", "labels.json"):
+        try:
+            st = os.stat(os.path.join(region_dir, name))
+            parts.append(f"{name}:{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            parts.append(f"{name}:-")          # an absent asset is part of the identity
+    return "|".join(parts)
 
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,

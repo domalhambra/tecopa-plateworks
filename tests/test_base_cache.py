@@ -86,3 +86,25 @@ def test_luminance_matches_the_inline_expression():
     rgb = np.random.default_rng(0).integers(0, 256, (40, 30, 3), dtype=np.uint8)
     want = (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]) / 255.0
     assert np.array_equal(render._luminance(rgb), want)
+
+
+# ---- the plate fingerprint ---------------------------------------------------------
+
+def test_plate_fingerprint_changes_when_an_asset_is_rebuilt(tmp_path):
+    """Rebuilding a region must invalidate the cache. (mtime_ns, size) rather than a
+    content hash: hashing a 188 MB DEM on every proof would cost more than the render
+    the cache exists to skip."""
+    from app import render
+    cfg = {"dem_path": "dem.tif"}
+    (tmp_path / "dem.tif").write_bytes(b"one")
+    first = render._plate_fingerprint(str(tmp_path), cfg)
+    assert first == render._plate_fingerprint(str(tmp_path), cfg)   # stable
+    (tmp_path / "dem.tif").write_bytes(b"two-different-length")
+    assert render._plate_fingerprint(str(tmp_path), cfg) != first
+
+
+def test_plate_fingerprint_tolerates_a_missing_asset(tmp_path):
+    # labels.json / landcover.tif are optional; absence is part of the identity
+    from app import render
+    fp = render._plate_fingerprint(str(tmp_path), {"dem_path": "dem.tif"})
+    assert isinstance(fp, str) and fp
