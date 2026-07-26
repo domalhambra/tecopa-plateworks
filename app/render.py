@@ -2007,7 +2007,7 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
                        hydro, spec, out_w, out_h, dpi, ctx=ctx)
     return himg, ctx, hydro
 
-def _apply_labels(himg, spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
+def _apply_labels(himg, spec: CompositionSpec, dpi: int, region_dir: str,
                   hydro=None, labels=None, ctx=None, trim=None):
     """Named geography over a painted terrain sheet: on the terrain, under the
     route/markers (the journey stays the subject). Opt-in (spec.labels); terrain names
@@ -2034,7 +2034,7 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     Now a composition of `_paint_terrain` + `_apply_labels`; this is the uncached
     reference path, and the cache's job is to be byte-identical to it."""
     himg, ctx, hydro = _paint_terrain(spec, dpi, region_dir, cfg, hydro=hydro)
-    himg = _apply_labels(himg, spec, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+    himg = _apply_labels(himg, spec, dpi, region_dir, hydro=hydro, labels=labels,
                          ctx=ctx, trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
     lum = _luminance(rgb)
@@ -2355,7 +2355,7 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
         terrain = np.array(himg)      # a copy -- labels are about to draw onto himg
         _freeze(terrain, ctx)
         base_cache.put(key, (terrain, ctx), _entry_bytes(terrain, ctx))
-    himg = _apply_labels(himg, paint, dpi, region_dir, cfg, ctx=ctx, trim=trim)
+    himg = _apply_labels(himg, paint, dpi, region_dir, ctx=ctx, trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
     return rgb, _luminance(rgb), ctx
 
