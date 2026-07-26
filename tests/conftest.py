@@ -143,6 +143,15 @@ _SLOW_MODULES = {
 # Otherwise-fast modules with a heavy subset: mark only the renders, so their fast
 # validation/unit/security tests still run on PRs.
 _SLOW_TESTS = {
+    "test_base_cache": {
+        "test_a_cache_hit_is_pixel_identical_to_a_cold_render",
+        "test_a_route_knob_hits_the_cache_and_a_terrain_knob_misses_it",
+        "test_the_cached_arrays_are_read_only",
+        "test_a_disabled_cache_is_the_pre_cache_path",
+        "test_a_failing_render_is_not_cached",
+        "test_caller_supplied_plate_data_bypasses_the_cache",
+        "test_the_proof_endpoint_reuses_the_terrain_across_a_style_knob",
+    },
     "test_main": {
         "test_async_final_via_job_queue", "test_final_blob_seam_srgb_and_dpi",
         "test_proof_then_final_happy_path", "test_async_final_pdf_via_job_queue",
