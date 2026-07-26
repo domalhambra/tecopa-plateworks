@@ -2250,8 +2250,53 @@ def base_cache_key(spec, dpi, region_dir, cfg):
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _entry_bytes(rgb, ctx):
+    """What one cached base costs. The plan-oblique context is the swing factor: its
+    padded elevation and winner buffers are several times the trimmed sheet."""
+    n = int(rgb.nbytes)
+    if ctx is not None:
+        n += int(ctx.elev.nbytes) + int(ctx.winner.nbytes)
+    return n
+
+def _freeze(rgb, ctx):
+    """Mark a cached base read-only. Nothing downstream writes to it today, so this
+    costs nothing -- and it converts a future in-place write from a silently poisoned
+    cache into an immediate exception. Applied on the cold path too, so the tripwire
+    fires on the first render rather than only on a later hit."""
+    rgb.flags.writeable = False
+    if ctx is not None:
+        ctx.elev.flags.writeable = False
+        ctx.winner.flags.writeable = False
+
+def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
+    """`_paint_base` through the cache when one is supplied. `base_cache=None` -- every
+    caller except the two proof endpoints -- is the pre-cache path, unchanged.
+
+    On a hit `lum` is recomputed from the cached pixels rather than stored: it is a
+    pure function of them, so the hit is byte-identical to a cold render, and a float64
+    plane would be ~2.7x the size of the uint8 sheet it derives from.
+
+    A render that RAISES (the off-DEM guard) is never cached -- and need not be, since
+    the guard reads only crop + plate + oblique band, all of which are in the key, so a
+    hit already implies it passed."""
+    if base_cache is None or not base_cache.enabled:
+        return _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+                           trim=trim)
+    key = base_cache_key(paint, dpi, region_dir, cfg)
+    hit = base_cache.get(key)
+    if hit is not None:
+        rgb, ctx = hit
+        return rgb, _luminance(rgb), ctx
+    rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+                                trim=trim)
+    _freeze(rgb, ctx)
+    base_cache.put(key, (rgb, ctx), _entry_bytes(rgb, ctx))
+    return rgb, lum, ctx
+
+
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
+              watermark: bool = False, hydro=None, cfg=None, labels=None,
+              base_cache=None) -> Image.Image:
     spec.validate(dpi)
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
@@ -2259,8 +2304,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # bleed seam: content paints the grown sheet; furniture measures from the trim box
     paint, trim = sheet_geometry(spec, dpi)
     out_w, out_h = paint.pixel_size(dpi)
-    base_rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro,
-                                     labels=labels, trim=trim)
+    base_rgb, lum, ctx = _base_layer(paint, dpi, region_dir, cfg, hydro=hydro,
+                                     labels=labels, trim=trim, base_cache=base_cache)
     # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
     track_colors = _track_color_arrays(paint, region_dir, cfg)
     profile = _profile_data(paint, region_dir, cfg)

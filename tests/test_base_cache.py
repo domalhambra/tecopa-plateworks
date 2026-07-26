@@ -217,3 +217,96 @@ def test_the_unlabelled_mask_applies_only_when_place_names_are_off():
 def test_dpi_and_plate_are_part_of_the_key():
     s = _live_spec()
     assert _key(s, dpi=96) != _key(s, dpi=200)
+
+
+# ---- cached vs cold ----------------------------------------------------------------
+
+CACHE_MATRIX = {
+    "plain": {},
+    "contours": {"contours": True},
+    "labels_anchor": {"labels": True, "label_place": "anchor"},
+    "labels_smart": {"labels": True, "label_place": "smart"},
+    "oblique": {"oblique": 0.6},
+    "oblique_labels": {"oblique": 0.6, "labels": True, "contours": True},
+    "biome": {"biome": True},
+    "bleed": {"bleed_in": 0.125},
+    "journey": {"light_mode": "journey", "sun_azimuth_deg": 140.0,
+                "sun_altitude_deg": 22.0, "golden_strength": 0.8},
+}
+
+
+@pytest.mark.parametrize("name", sorted(CACHE_MATRIX))
+def test_a_cache_hit_is_pixel_identical_to_a_cold_render(name):
+    """The cache may only ever be invisible. Anything else is a proof that stops
+    predicting the print."""
+    from app import basecache, render
+    # the matrix entry wins over the all-off baseline (a case that turns a knob ON
+    # must not be silently overridden by the baseline's OFF value)
+    spec = _live_spec(**{"labels": False, "oblique": 0.0, "contours": False,
+                         "biome": False, "profile": False, "light_mode": "archival",
+                         "label_place": "anchor", **CACHE_MATRIX[name]})
+    cold = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR))
+    cache = basecache.BaseCache(400_000_000)
+    warm = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR,
+                                       base_cache=cache))          # miss, fills
+    hit = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR,
+                                      base_cache=cache))           # hit
+    assert cache.stats()["hits"] == 1
+    assert np.array_equal(cold, warm)
+    assert np.array_equal(cold, hit)
+
+
+def test_a_route_knob_hits_the_cache_and_a_terrain_knob_misses_it():
+    from app import basecache, render
+    spec = _live_spec(labels=False)
+    cache = basecache.BaseCache(400_000_000)
+    render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache)
+    render.rasterize(dataclasses.replace(spec, track_rgb=(10, 20, 30)), 96,
+                     region_dir=REGION_DIR, base_cache=cache)
+    assert cache.stats()["hits"] == 1, "a route-ink knob must reuse the terrain"
+    render.rasterize(dataclasses.replace(spec, shadow_strength=0.1), 96,
+                     region_dir=REGION_DIR, base_cache=cache)
+    assert cache.stats()["hits"] == 1, "a terrain knob must NOT reuse it"
+
+
+def test_the_cached_arrays_are_read_only():
+    """A tripwire, not a guarantee: nothing writes to the base today (_ink_tracks
+    copies to float, the vector painters build their own images), so freezing costs
+    nothing -- and turns a future in-place write from a silently poisoned cache into an
+    immediate exception."""
+    from app import basecache, render
+    spec = _live_spec(labels=False, oblique=0.5)
+    cache = basecache.BaseCache(400_000_000)
+    render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache)
+    rgb, ctx = next(iter(cache._entries.values()))
+    assert not rgb.flags.writeable
+    assert ctx is not None and not ctx.elev.flags.writeable
+    with pytest.raises(ValueError):
+        rgb[0, 0, 0] = 1
+
+
+def test_a_disabled_cache_is_the_pre_cache_path():
+    from app import basecache, render
+    spec = _live_spec(labels=False)
+    off = basecache.BaseCache(0)
+    a = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=off))
+    b = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR))
+    assert np.array_equal(a, b)
+    assert off.stats()["entries"] == 0
+
+
+def test_a_failing_render_is_not_cached():
+    """The off-DEM guard lives inside _paint_base. A hit implies it passed for exactly
+    this key (it reads only crop + plate + oblique band), and a failure must re-raise
+    every time rather than being remembered."""
+    from app import basecache, render
+    from app.spec import OffDemError
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    off_plate = (bx[2] + 60000, bx[3] + 60000, bx[2] + 87000, bx[3] + 96000)
+    spec = _live_spec(labels=False, crop=off_plate)
+    cache = basecache.BaseCache(400_000_000)
+    for _ in range(2):
+        with pytest.raises(OffDemError):
+            render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache)
+    assert cache.stats()["entries"] == 0
