@@ -1,6 +1,6 @@
 # app/render.py
 from __future__ import annotations
-import json, math as _m, os, threading
+import hashlib, json, math as _m, os, threading
 from dataclasses import dataclass, replace
 import numpy as np
 import rasterio
@@ -10,7 +10,7 @@ from scipy.ndimage import gaussian_filter
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M, _fill_nan
-from app import provenance
+from app import provenance, serialize
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 # Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
@@ -1882,6 +1882,14 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
 # app/timelapse.py reuses the same three stages so a film's last frame is pixel-equal
 # to the still poster.
 
+def _luminance(rgb):
+    """The marker-contrast luminance plane of a painted sheet (Rec. 709 weights). ONE
+    definition, because it is now computed in two places: at the end of a cold
+    _paint_base, and again from a CACHED base. It is a pure function of the pixels, so
+    recomputing on a cache hit is byte-identical -- and far cheaper than storing a
+    float64 plane ~2.7x the size of the uint8 sheet it derives from."""
+    return (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
+
 def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
                 hydro=None, labels=None, trim=None):
     """The static layers UNDER the route -- relief, contours, hydro, geography labels --
@@ -1998,7 +2006,7 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx,
                             trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
-    lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
+    lum = _luminance(rgb)
     return rgb, lum, ctx
 
 def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
@@ -2181,8 +2189,126 @@ def sheet_geometry(spec, dpi):
     return paint, (bpx, bpx, out_w - bpx, out_h - bpx)
 
 
+# ---- the base-layer cache (the store is app/basecache.py) ---------------------------
+
+def _plate_fingerprint(region_dir, cfg):
+    """A cheap identity for the plate's assets so a rebuilt region invalidates the
+    cache. (mtime_ns, size), NOT a content hash: hashing a 188 MB DEM on every proof
+    would cost more than the render this cache exists to skip. A shared or
+    cross-process cache would have to upgrade this."""
+    parts = []
+    for name in (cfg.get("dem_path", "dem.tif"),
+                 cfg.get("landcover_path", "landcover.tif"),
+                 "hydro.json", "labels.json"):
+        try:
+            st = os.stat(os.path.join(region_dir, name))
+            parts.append(f"{name}:{st.st_mtime_ns}:{st.st_size}")
+        except OSError:
+            parts.append(f"{name}:-")          # an absent asset is part of the identity
+    return "|".join(parts)
+
+
+# The key is derived by MASKING, never by listing. It is the serialized spec MINUS the
+# fields that provably cannot reach _paint_base; everything else -- including a field
+# added years from now -- stays in the key by default. That direction is the whole
+# safety argument: an unclassified new field costs a cache MISS (slow but correct),
+# where an allowlist would quietly serve stale terrain and the proof would stop
+# predicting the print. tests/test_base_cache.py enumerates the dataclass to enforce it.
+#
+# ALWAYS safe: nothing reachable from _paint_base reads these. They are the route ink,
+# the point symbols, and the photo frames -- painted by _paint_journey/_paint_overlays.
+BASE_KEY_MASK_ALWAYS = (
+    "track_rgb", "track_halo", "track_max_darken", "track_color_by", "track_weave",
+    "marker_diameter_in", "marker_ring", "photo_frame_style", "photo_box_in",
+    "keyline", "hotspots",
+)
+# Safe ONLY when place names are off. With spec.labels on, _draw_labels runs inside
+# _paint_base and _label_keepout measures the bottom-left furniture stack -- which at
+# profile_rev 2 reaches _profile_rect -> _furniture_stack_top -> _title_block_metrics,
+# so the title/label point sizes, the credit line and the edition are in it too. And
+# under label_place == "smart" the drawn route is a placement obstacle, so the track
+# geometry and its width reach the base as well. Phase 2 of the plan dissolves this
+# list by caching the sheet BEFORE labels are drawn.
+BASE_KEY_MASK_UNLABELLED = (
+    "title_text", "title_pt", "label_pt", "credit_text", "edition",
+    "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    "tracks", "track_days", "track_width_pt",
+)
+
+def base_cache_key(spec, dpi, region_dir, cfg):
+    """A stable digest of everything `_paint_base` can see for this (spec, dpi, plate).
+    `spec` is the PAINT spec (post-bleed), because that is what _paint_base receives."""
+    payload = serialize.spec_to_json(spec)
+    for name in BASE_KEY_MASK_ALWAYS:
+        payload.pop(name, None)
+    if not spec.labels:
+        for name in BASE_KEY_MASK_UNLABELLED:
+            payload.pop(name, None)
+    # cfg is in the key, not just the file fingerprint. rasterize takes cfg as an
+    # OVERRIDE (scripts/render_lightsweep.py renders a turntable as
+    # {**cfg, "light_azimuth": az}), so the same spec + dpi + plate can legitimately
+    # paint different terrain. region.json is small and pure JSON, so keying on it
+    # costs nothing and the override can never collide.
+    blob = json.dumps([payload, os.path.abspath(region_dir), float(dpi), cfg,
+                       _plate_fingerprint(region_dir, cfg)],
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _entry_bytes(rgb, ctx):
+    """What one cached base costs. The plan-oblique context is the swing factor: its
+    padded elevation and winner buffers are several times the trimmed sheet."""
+    n = int(rgb.nbytes)
+    if ctx is not None:
+        n += int(ctx.elev.nbytes) + int(ctx.winner.nbytes)
+    return n
+
+def _freeze(rgb, ctx):
+    """Mark a cached base read-only. Nothing downstream writes to it today, so this
+    costs nothing -- and it converts a future in-place write from a silently poisoned
+    cache into an immediate exception. Applied on the cold path too, so the tripwire
+    fires on the first render rather than only on a later hit."""
+    rgb.flags.writeable = False
+    if ctx is not None:
+        ctx.elev.flags.writeable = False
+        ctx.winner.flags.writeable = False
+
+def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
+    """`_paint_base` through the cache when one is supplied. `base_cache=None` -- every
+    caller except the two proof endpoints -- is the pre-cache path, unchanged.
+
+    On a hit `lum` is recomputed from the cached pixels rather than stored: it is a
+    pure function of them, so the hit is byte-identical to a cold render, and a float64
+    plane would be ~2.7x the size of the uint8 sheet it derives from.
+
+    A render that RAISES (the off-DEM guard) is never cached -- and need not be, since
+    the guard reads only crop + plate + oblique band, all of which are in the key, so a
+    hit already implies it passed."""
+    # Explicit hydro/labels are plate data the caller pre-loaded (the wallpaper bundle
+    # reads them once for a dozen device sheets). They are NOT in the key -- only the
+    # plate's files are -- so a caller could hand us data that differs from what is on
+    # disk and the key could not tell. Nothing does that today and neither proof path
+    # passes them; refusing to cache keeps it that way by construction rather than by
+    # convention. Same direction as the mask: an unclassified input costs a miss.
+    if (base_cache is None or not base_cache.enabled
+            or hydro is not None or labels is not None):
+        return _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+                           trim=trim)
+    key = base_cache_key(paint, dpi, region_dir, cfg)
+    hit = base_cache.get(key)
+    if hit is not None:
+        rgb, ctx = hit
+        return rgb, _luminance(rgb), ctx
+    rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
+                                trim=trim)
+    _freeze(rgb, ctx)
+    base_cache.put(key, (rgb, ctx), _entry_bytes(rgb, ctx))
+    return rgb, lum, ctx
+
+
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
-              watermark: bool = False, hydro=None, cfg=None, labels=None) -> Image.Image:
+              watermark: bool = False, hydro=None, cfg=None, labels=None,
+              base_cache=None) -> Image.Image:
     spec.validate(dpi)
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
@@ -2190,8 +2316,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # bleed seam: content paints the grown sheet; furniture measures from the trim box
     paint, trim = sheet_geometry(spec, dpi)
     out_w, out_h = paint.pixel_size(dpi)
-    base_rgb, lum, ctx = _paint_base(paint, dpi, region_dir, cfg, hydro=hydro,
-                                     labels=labels, trim=trim)
+    base_rgb, lum, ctx = _base_layer(paint, dpi, region_dir, cfg, hydro=hydro,
+                                     labels=labels, trim=trim, base_cache=base_cache)
     # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
     track_colors = _track_color_arrays(paint, region_dir, cfg)
     profile = _profile_data(paint, region_dir, cfg)

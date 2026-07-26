@@ -15,6 +15,7 @@ from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
+from app import basecache
 from app import ingest, regionbuild
 
 logconfig.setup_logging()
@@ -74,6 +75,14 @@ BUILD_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
 # queued behind a final would defeat "the preview sharpens while you look at it".
 # A refine peaks far below a final (REFINE_MAX_PIXELS), so one extra slot is safe.
 PROOF_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
+# Base-layer cache: ~90% of a proof is the terrain layer, and most style knobs cannot
+# change it (see docs/superpowers/plans/2026-07-26-base-layer-cache.md). Bounded by
+# BYTES because an entry swings ~20x between a 96 dpi draft and a 200 dpi High-relief
+# refine. Wired into the two PROOF paths only: a final renders at a different dpi so it
+# could never hit, and a 39 MP entry would evict everything the studio depends on.
+# TECOPA_BASE_CACHE_MB=0 disables it.
+BASE_CACHE = basecache.BaseCache(
+    int(float(os.environ.get("TECOPA_BASE_CACHE_MB", basecache.DEFAULT_MB)) * 1_000_000))
 PREP_PYTHON = os.environ.get("TECOPA_PREP_PYTHON", ".venv-prep/bin/python")
 PREP_SCRIPT = os.environ.get("TECOPA_PREP_SCRIPT", "region_prep.py")
 LABELS_SCRIPT = os.environ.get("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py")
@@ -1027,7 +1036,7 @@ async def proof(session_id: str = Form(...),
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=_proof_dpi(spec), region_dir=region.dir,
-                               watermark=True, cfg=region.cfg)
+                               watermark=True, cfg=region.cfg, base_cache=BASE_CACHE)
     except SpecError as e:
         log.info("event=proof.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
@@ -1053,13 +1062,13 @@ async def proof(session_id: str = Form(...),
 
 # ---- progressive proof: the refine pass ----
 
-def _render_refine_to_blob(spec, region_dir, key, cfg=None):
+def _render_refine_to_blob(spec, region_dir, key, cfg=None, base_cache=None):
     """The refine worker: re-rasterize the stamped spec at _refine_dpi with the same
     watermark + bleed-band crop as the sync draft, so the sharp image is a drop-in
     replacement for the draft the client is already showing. Runs on PROOF_QUEUE."""
     dpi = _refine_dpi(spec)
     img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
-                           watermark=True, cfg=cfg)
+                           watermark=True, cfg=cfg, base_cache=base_cache)
     if spec.bleed_in:
         b = round(spec.bleed_in * dpi)
         w, h = img.size
@@ -1080,7 +1089,8 @@ async def proof_refine(session_id: str = Form(...)):
     if dpi <= _proof_dpi(spec) * 1.2:
         return {"skip": True, "dpi": _proof_dpi(spec)}
     key = f"{session_id}/proof_refine.png"
-    jid = PROOF_QUEUE.submit(_render_refine_to_blob, spec, region.dir, key, region.cfg)
+    jid = PROOF_QUEUE.submit(_render_refine_to_blob, spec, region.dir, key, region.cfg,
+                             BASE_CACHE)
     log.info("event=proof.refine.submit session=%s dpi=%.0f jid=%s", session_id, dpi, jid)
     return {"skip": False, "job": jid, "dpi": dpi}
 
