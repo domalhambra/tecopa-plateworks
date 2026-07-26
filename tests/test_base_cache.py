@@ -310,3 +310,29 @@ def test_a_failing_render_is_not_cached():
         with pytest.raises(OffDemError):
             render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache)
     assert cache.stats()["entries"] == 0
+
+
+# ---- the endpoints -----------------------------------------------------------------
+
+def test_the_proof_endpoint_reuses_the_terrain_across_a_style_knob():
+    """End to end: two proofs of the same composition differing only in route ink must
+    paint the terrain once."""
+    from tests.test_main import _client, _upload, _crop
+    from app import main as main_mod
+    main_mod.BASE_CACHE.clear()
+    before = main_mod.BASE_CACHE.stats()["hits"]
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0),
+            "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert c.post("/api/proof", data={**data, "track_color": "#b24c2b"}).status_code == 200
+    assert main_mod.BASE_CACHE.stats()["hits"] > before
+
+
+def test_the_final_path_does_not_use_the_cache():
+    """A final renders at 300 dpi -- a different key, so it could never hit -- and a
+    39 MP entry would evict everything the proof loop depends on."""
+    import inspect
+    from app import main as main_mod
+    src = inspect.getsource(main_mod._render_to_blob)
+    assert "base_cache" not in src
