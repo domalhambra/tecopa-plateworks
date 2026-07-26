@@ -76,3 +76,13 @@ def test_clear_empties_the_store():
     c.clear()
     assert c.get("k") is None
     assert c.stats()["bytes"] == 0
+
+
+def test_luminance_matches_the_inline_expression():
+    """_paint_base used to compute this inline. It is now shared with the cache-hit
+    path, and the two must be the same expression or a hit would light markers
+    differently from a cold render."""
+    from app import render
+    rgb = np.random.default_rng(0).integers(0, 256, (40, 30, 3), dtype=np.uint8)
+    want = (0.2126 * rgb[..., 0] + 0.7152 * rgb[..., 1] + 0.0722 * rgb[..., 2]) / 255.0
+    assert np.array_equal(render._luminance(rgb), want)

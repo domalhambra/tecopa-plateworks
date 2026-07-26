@@ -1882,6 +1882,14 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
 # app/timelapse.py reuses the same three stages so a film's last frame is pixel-equal
 # to the still poster.
 
+def _luminance(rgb):
+    """The marker-contrast luminance plane of a painted sheet (Rec. 709 weights). ONE
+    definition, because it is now computed in two places: at the end of a cold
+    _paint_base, and again from a CACHED base. It is a pure function of the pixels, so
+    recomputing on a cache hit is byte-identical -- and far cheaper than storing a
+    float64 plane ~2.7x the size of the uint8 sheet it derives from."""
+    return (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
+
 def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
                 hydro=None, labels=None, trim=None):
     """The static layers UNDER the route -- relief, contours, hydro, geography labels --
@@ -1998,7 +2006,7 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         himg = _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx,
                             trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
-    lum = (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
+    lum = _luminance(rgb)
     return rgb, lum, ctx
 
 def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
