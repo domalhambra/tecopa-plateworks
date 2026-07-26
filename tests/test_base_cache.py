@@ -70,6 +70,26 @@ def test_a_zero_budget_disables_the_cache_entirely():
     assert c.stats()["entries"] == 0
 
 
+def test_the_default_budget_holds_both_proof_tiers_of_one_composition():
+    """The budget has to be sized against the PAIR, not the biggest single entry.
+
+    A knob drag renders the composition twice -- the sync 96 dpi draft and the queued
+    200 dpi refine -- and both must stay resident or each evicts the other and the drag
+    hits nothing. Measured on an 18x24 High-relief sheet of lassen_ca, the worst case
+    this plate can carry. The original 256 MB default admitted the 254 MB refine on its
+    own and looked fine, while actually scoring 0 hits out of 4 on a three-position
+    drag; nothing failed, it was just silently slow. Hence a test rather than a comment.
+    """
+    draft, refine = 59 * 1_000_000, 254 * 1_000_000
+    c = basecache.BaseCache(basecache.DEFAULT_MB * 1_000_000)
+    c.put("refine", "R", refine)
+    c.put("draft", "D", draft)
+    assert c.get("refine") == "R" and c.get("draft") == "D", (
+        f"DEFAULT_MB={basecache.DEFAULT_MB} cannot hold a "
+        f"{(draft + refine) // 1_000_000} MB draft+refine pair, so a knob drag on a "
+        f"High-relief 18x24 thrashes and the cache buys nothing")
+
+
 def test_clear_empties_the_store():
     c = basecache.BaseCache(1000)
     c.put("k", "v", 10)

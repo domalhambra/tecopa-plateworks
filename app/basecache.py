@@ -3,16 +3,17 @@
 
 The studio is a live design tool: every knob in the appearance sidebar stales the
 proof, and a proof is a full render from the DEM up. But ~90% of that render is
-`render._paint_base` -- the terrain layer -- and most knobs cannot change it. Measured
-on an 18x24 sheet: the base is 7.99s of an 8.80s draft (96 dpi) and 25.9s of the ~200
-dpi refine, while the route and the sheet furniture together are under 10%.
+`render._paint_terrain` -- the terrain layer -- and most knobs cannot change it.
+Measured on an 18x24 sheet: caching it takes a knob drag from 6.4s to 0.9s at 96 dpi
+and from 26.6s to 5.3s at 200 dpi, so the progressive draft+refine pair a single knob
+costs drops from ~33s to ~6s.
 
 This module is only the STORE. What may be reused, and when, is `render.base_cache_key`
 -- deliberately kept next to the painter whose inputs it describes.
 
-Bounded by BYTES, not entry count: an entry swings ~20x between a 96 dpi draft (~12 MB)
-and a 200 dpi refine of a High-relief sheet (~280 MB, because the plan-oblique context
-carries a padded elevation and winner buffer).
+Bounded by BYTES, not entry count: an entry swings ~20x between a 96 dpi draft and a
+200 dpi refine of a High-relief sheet, because the plan-oblique context carries a
+padded elevation and winner buffer several times the size of the sheet itself.
 
 Process-local on purpose, the same posture as jobs.ThreadJobQueue. A shared or
 cross-process cache would first have to upgrade render._plate_fingerprint from an mtime
@@ -25,7 +26,26 @@ from collections import OrderedDict
 
 log = logging.getLogger("tecopa.basecache")
 
-DEFAULT_MB = 256
+# Measured on an 18x24 of lassen_ca -- the size this is actually for -- at the two dpis
+# the progressive proof renders, which BOTH have to be resident for a knob drag to be
+# fast (the sync 96 dpi draft, then the queued 200 dpi refine of the same composition):
+#
+#              96 dpi draft   200 dpi refine
+#   plain          16 MB            69 MB     <-  85 MB for the pair
+#   High relief    59 MB           254 MB     <- 312 MB for the pair
+#
+# The first default was 256 MB, chosen against an estimate of a single ~280 MB entry.
+# That was the wrong quantity to size against, and the effect was severe rather than
+# marginal: the High-relief refine entry fits on its own, so nothing looked broken, but
+# it leaves no room for its own 96 dpi draft. The two tiers then evict each other every
+# single step and the drag gets NOTHING. Measured over a three-position drag of one
+# route-ink knob: 0 hits out of 4 possible at 256 MB, 4 of 4 at 512 MB -- 101s against
+# 47s for the same work.
+#
+# 512 MB clears the 312 MB pair with room for a second composition's draft, and stays
+# modest next to the ~2.2 GB the 200 dpi High-relief render itself peaks at, so it does
+# not change the app's memory class. TECOPA_BASE_CACHE_MB=0 still disables it outright.
+DEFAULT_MB = 512
 
 
 class BaseCache:
