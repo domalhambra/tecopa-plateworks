@@ -960,9 +960,55 @@ git commit -m "Classify the base-cache render tests as slow and map the module"
 
 ---
 
+# Phase 1 validation — what real-size measurement found
+
+Run on an 18×24 of `lassen_ca` (synthetic DEM, 4-core container) before starting
+Phase 2, because the plan gates on it. Two corrections came out of it.
+
+**The zoom cap decides which sheets can be measured at all.** 18×24 at 200 dpi is
+3600 px wide, and the 10 m/px data floor means the crop cannot be narrower than 36 km.
+24×36 High relief is not renderable on this plate in *any* position — the oblique band
+runs off the south edge. So the 18×24 High-relief refine is `lassen_ca`'s practical
+worst case, not a mid-point.
+
+**The budget was sized against the wrong quantity.** The concern going in was that a
+~280 MB entry would be refused outright by the 256 MB default. It is not: the entry
+measured 236 MB (Phase 1, RGB) / 254 MB (Phase 2, RGBA) and admits fine. The real
+failure is quieter. A knob drag renders the composition *twice* — the sync 96 dpi draft
+and the queued 200 dpi refine — and the pair needs 312 MB. At 256 MB the two tiers
+evict each other every step: a three-position drag scored **0 hits out of 4**, 101 s,
+against 4/4 and 47 s at 512 MB. Nothing errored; the cache just silently stopped paying
+for itself. Default raised to 512 MB in `bd5cf76`, with a test on the pair.
+
+Speedups actually measured (quiet box, Phase 2, route-ink knob):
+
+| | cold | knob | |
+|---|---|---|---|
+| 96 dpi draft, plain | 5.50 s | 0.80 s | 6.8× |
+| 96 dpi draft, High relief | 6.35 s | 0.91 s | 7.0× |
+| 200 dpi refine, plain | 21.5 s | 4.68 s | 4.6× |
+| 200 dpi refine, High relief | 26.6 s | 5.31 s | 5.0× |
+
+So the full progressive pair a single knob costs goes ~33 s → ~6 s. The refine's 4.6×
+is well short of the ~17× the base-share table implies, because after caching, the
+route ink is what is left: profiling a warm 200 dpi knob puts 4.4 s of 5.4 s in
+`_paint_journey` → `_ink_tracks` → `_composite_ink_layer`. **That is the next
+optimisation target**, and it is a different one — for a knob that is not route ink,
+re-inking the identical route is pure waste.
+
+Still outstanding, and only doable on the Mac: the by-eye half of this gate — that the
+proof still predicts the print on a *real* DEM — and re-running the orphan drill
+against real plates.
+
+---
+
 # Phase 2 — move the cut point before labels
 
-Only start this once Phase 1 has run in real use. It deletes
+**Landed** in `54b5e09` (the split) and `b3357a6` (the cache change). One finding
+changed the design: see Task 8 below — the cache stores **RGBA**, because the alpha at
+the cut point is *not* uniformly 255.
+
+It deletes
 `BASE_KEY_MASK_UNLABELLED` entirely: with labels drawn *after* the cached unit, the
 furniture and track fields stop being base inputs, so every non-terrain knob hits the
 cache whether place names are on or off.
@@ -989,6 +1035,20 @@ touching the cache. **One thing to check explicitly:** `_paint_terrain` returns 
 `_apply_labels` draws onto it; if the cache stores RGB to halve the entry, assert in a
 test that the alpha channel is uniformly 255 at that point, or store RGBA.
 
+> **Measured: alpha is NOT uniformly 255, so the cache stores RGBA.** `_draw_hydro`
+> fills lakes with `WATER_FILL + (235,)`, and `ImageDraw.polygon` writes that alpha into
+> the destination — every lake interior sits at 235. That alone would be harmless, since
+> `.convert("RGB")` merely drops the band, but `_draw_glyph_rotated` composites curved
+> labels with `img.alpha_composite`, which *reads* destination alpha. A curved name
+> crossing a lake would land on different pixels if the alpha were rebuilt as opaque.
+> Storing three channels would have been wrong, not just lossy — and it would have
+> looked correct on every test case without a curved label over water. The saving is
+> 25% (4 bytes → 3), not the half the note assumes.
+>
+> Byte-identity of the split itself was proved by A/B against the pre-refactor engine in
+> a worktree — 12 poster digests plus `_paint_base`'s own `(rgb, lum, ctx.elev)` returns,
+> all 15 matching.
+
 ## Task 9: Cache the terrain, redraw labels per request
 
 `_base_layer` caches `(terrain_rgb, ctx)` and on every call — hit or miss — runs
@@ -1004,6 +1064,14 @@ changes — the case Phase 1 cannot serve.
 
 Expected effect after Phase 2: the ~1.5 s knob response applies to all 25 non-terrain
 knobs, labels on or off.
+
+**Delivered.** `labels` and `label_place` turned out to be maskable too — the label
+pass is now outside the cached unit, so even toggling place names reuses the terrain it
+was already showing, which the plan did not anticipate. Task 10's tests went further
+than described in one respect: the enumerating key test can only prove the mask is
+self-*consistent*, so a second test perturbs every masked field and asserts
+`_paint_terrain` comes back byte-identical. That is the one that could actually catch a
+wrong mask entry.
 
 ---
 

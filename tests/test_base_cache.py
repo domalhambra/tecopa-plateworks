@@ -70,6 +70,26 @@ def test_a_zero_budget_disables_the_cache_entirely():
     assert c.stats()["entries"] == 0
 
 
+def test_the_default_budget_holds_both_proof_tiers_of_one_composition():
+    """The budget has to be sized against the PAIR, not the biggest single entry.
+
+    A knob drag renders the composition twice -- the sync 96 dpi draft and the queued
+    200 dpi refine -- and both must stay resident or each evicts the other and the drag
+    hits nothing. Measured on an 18x24 High-relief sheet of lassen_ca, the worst case
+    this plate can carry. The original 256 MB default admitted the 254 MB refine on its
+    own and looked fine, while actually scoring 0 hits out of 4 on a three-position
+    drag; nothing failed, it was just silently slow. Hence a test rather than a comment.
+    """
+    draft, refine = 59 * 1_000_000, 254 * 1_000_000
+    c = basecache.BaseCache(basecache.DEFAULT_MB * 1_000_000)
+    c.put("refine", "R", refine)
+    c.put("draft", "D", draft)
+    assert c.get("refine") == "R" and c.get("draft") == "D", (
+        f"DEFAULT_MB={basecache.DEFAULT_MB} cannot hold a "
+        f"{(draft + refine) // 1_000_000} MB draft+refine pair, so a knob drag on a "
+        f"High-relief 18x24 thrashes and the cache buys nothing")
+
+
 def test_clear_empties_the_store():
     c = basecache.BaseCache(1000)
     c.put("k", "v", 10)
@@ -197,21 +217,81 @@ def test_every_unmasked_spec_field_changes_the_key():
             assert _key(alt) == key, f"{f.name} is masked but still changed the key"
         else:
             assert _key(alt) != key, (
-                f"{f.name} is not masked, so it may reach _paint_base -- it MUST be in "
-                f"the key, or added to a mask list with a reason")
+                f"{f.name} is not masked, so it may reach _paint_terrain -- it MUST be "
+                f"in the key, or added to the mask with a reason")
 
 
-def test_the_unlabelled_mask_applies_only_when_place_names_are_off():
-    """With labels on, _draw_labels runs INSIDE _paint_base: _label_keepout measures the
-    cartouche/compass/profile stack (and, at profile_rev 2, the title and label point
-    sizes through _title_block_metrics), and smart placement rasterizes the route as an
-    obstacle. So the furniture and track fields reach the base -- but only then."""
+def test_the_furniture_and_track_fields_never_key_the_terrain():
+    """Phase 2: labels are drawn AFTER the cached unit, so the sheet furniture, the
+    track geometry and the place-name switches stop being terrain inputs -- with place
+    names ON as much as off. This replaces the conditional BASE_KEY_MASK_UNLABELLED,
+    which existed only because _draw_labels used to run inside the cached region."""
     from app import render
-    off = _live_spec(labels=False)
-    on = _live_spec(labels=True)
-    for name in render.BASE_KEY_MASK_UNLABELLED:
-        assert _key(_perturb(off, name)) == _key(off), f"{name} keyed with labels off"
-        assert _key(_perturb(on, name)) != _key(on), f"{name} not keyed with labels on"
+    assert not hasattr(render, "BASE_KEY_MASK_UNLABELLED"), (
+        "the conditional mask is gone -- fold any new entry into BASE_KEY_MASK_ALWAYS")
+    for name in ("title_text", "title_pt", "label_pt", "credit_text", "edition",
+                 "compass", "furniture_scale", "profile", "profile_height_in",
+                 "profile_rev", "tracks", "track_days", "track_width_pt",
+                 "labels", "label_place"):
+        assert name in render.BASE_KEY_MASK_ALWAYS, f"{name} should be masked outright"
+        for spec in (_live_spec(labels=False), _live_spec(labels=True)):
+            assert _key(_perturb(spec, name)) == _key(spec), (
+                f"{name} still keys the terrain (labels={spec.labels})")
+
+
+@pytest.mark.parametrize("name", sorted(_MASK_TERRAIN_CASES := {
+    "furniture": {"labels": True, "label_place": "smart", "profile": True,
+                  "profile_rev": 2, "compass": True, "contours": True},
+    "oblique": {"labels": True, "label_place": "smart", "oblique": 0.5,
+                "profile": True, "profile_rev": 2, "compass": True},
+}))
+def test_every_masked_field_leaves_the_terrain_byte_identical(name):
+    """The mask's real safety claim, tested directly against the painter.
+
+    `test_every_unmasked_spec_field_changes_the_key` only proves the mask is
+    self-consistent -- it would happily pass with a WRONG entry in the mask. This one
+    proves each entry is correct: perturb it, repaint the terrain, and the pixels (and
+    the oblique context) must not move. A wrong mask entry is a stale poster, so the
+    claim deserves a test that can actually catch one."""
+    from app import render
+    spec = _live_spec(**_MASK_TERRAIN_CASES[name])
+    want_img, want_ctx, _ = render._paint_terrain(spec, 96, REGION_DIR, _cfg())
+    want = np.asarray(want_img)
+    for field in render.BASE_KEY_MASK_ALWAYS:
+        got_img, got_ctx, _ = render._paint_terrain(_perturb(spec, field), 96,
+                                                    REGION_DIR, _cfg())
+        assert np.array_equal(np.asarray(got_img), want), (
+            f"{field} is masked but MOVES THE TERRAIN -- the cache would serve a stale "
+            f"base for it. Remove it from BASE_KEY_MASK_ALWAYS.")
+        assert (want_ctx is None) == (got_ctx is None)
+        if want_ctx is not None:
+            assert np.array_equal(got_ctx.elev, want_ctx.elev)
+
+
+def test_the_terrain_is_cached_with_its_alpha_intact():
+    """_paint_terrain hands back RGBA and _apply_labels draws onto it, so the cache
+    must store four channels -- storing RGB to save 25% would be WRONG, not merely
+    lossy. _draw_hydro fills lakes at 235 alpha (so the lakebed relief ghosts through),
+    and _draw_glyph_rotated composites curved labels with img.alpha_composite, which
+    reads that destination alpha. Rebuilding it as opaque would move the pixels of any
+    curved name crossing a lake.
+
+    Both halves are asserted: that sub-255 alpha really is reachable (otherwise this
+    test would pass vacuously the day hydro stops being translucent), and that what
+    the cache stores preserves it."""
+    from app import basecache, render
+    spec = _live_spec(labels=False)
+    himg, _, _ = render._paint_terrain(spec, 96, REGION_DIR, _cfg())
+    alpha = np.asarray(himg)[..., 3]
+    assert himg.mode == "RGBA"
+    assert alpha.min() < 255, (
+        "no translucent pixels in this terrain -- the alpha-preservation claim below "
+        "is untested. Pick a crop with a lake, or re-derive whether RGB is now safe.")
+    cache = basecache.BaseCache(400_000_000)
+    render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache)
+    terrain, _ = next(iter(cache._entries.values()))
+    assert terrain.shape[2] == 4, "the cache dropped the alpha channel"
+    assert np.array_equal(terrain, np.asarray(himg))
 
 
 def test_dpi_and_plate_are_part_of_the_key():
@@ -269,6 +349,40 @@ def test_a_route_knob_hits_the_cache_and_a_terrain_knob_misses_it():
     assert cache.stats()["hits"] == 1, "a terrain knob must NOT reuse it"
 
 
+@pytest.mark.parametrize("field,value", [
+    ("track_width_pt", 3.5),        # smart placement used the route as an obstacle
+    ("title_text", "A DIFFERENT TITLE"),   # the keep-out measured the cartouche
+    ("compass", False),
+    ("profile", False),
+    ("furniture_scale", 1.2),
+    ("edition", 2),
+    ("labels", False),              # the place-name switch itself
+    ("label_place", "anchor"),
+])
+def test_phase2_serves_the_knobs_phase1_could_not(field, value):
+    """The point of moving the cut before labels: with place names ON and smart
+    placement, changing the furniture or the route must now REUSE the terrain and still
+    produce exactly what a cold render produces.
+
+    Both halves matter. A hit alone would pass vacuously if the knob did nothing, so
+    this also asserts the picture actually changed -- the knob is live, and the cache
+    served it correctly anyway."""
+    from app import basecache, render
+    spec = _live_spec(labels=True, label_place="smart", contours=True, profile=True,
+                      profile_rev=2, compass=True)
+    alt = dataclasses.replace(spec, **{field: value})
+    cache = basecache.BaseCache(400_000_000)
+    first = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR,
+                                        base_cache=cache))
+    warm = np.asarray(render.rasterize(alt, 96, region_dir=REGION_DIR,
+                                       base_cache=cache))
+    assert cache.stats()["hits"] == 1, f"{field} should reuse the cached terrain"
+    cold = np.asarray(render.rasterize(alt, 96, region_dir=REGION_DIR))
+    assert np.array_equal(warm, cold), f"{field} served a stale sheet"
+    assert not np.array_equal(first, warm), (
+        f"{field} changed nothing, so the hit above proves nothing")
+
+
 def test_the_cached_arrays_are_read_only():
     """A tripwire, not a guarantee: nothing writes to the base today (_ink_tracks
     copies to float, the vector painters build their own images), so freezing costs
@@ -296,7 +410,7 @@ def test_a_disabled_cache_is_the_pre_cache_path():
 
 
 def test_a_failing_render_is_not_cached():
-    """The off-DEM guard lives inside _paint_base. A hit implies it passed for exactly
+    """The off-DEM guard lives inside _paint_terrain. A hit implies it passed for exactly
     this key (it reads only crop + plate + oblique band), and a failure must re-raise
     every time rather than being remembered."""
     from app import basecache, render
