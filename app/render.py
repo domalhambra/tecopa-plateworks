@@ -2244,7 +2244,12 @@ def base_cache_key(spec, dpi, region_dir, cfg):
     if not spec.labels:
         for name in BASE_KEY_MASK_UNLABELLED:
             payload.pop(name, None)
-    blob = json.dumps([payload, os.path.abspath(region_dir), float(dpi),
+    # cfg is in the key, not just the file fingerprint. rasterize takes cfg as an
+    # OVERRIDE (scripts/render_lightsweep.py renders a turntable as
+    # {**cfg, "light_azimuth": az}), so the same spec + dpi + plate can legitimately
+    # paint different terrain. region.json is small and pure JSON, so keying on it
+    # costs nothing and the override can never collide.
+    blob = json.dumps([payload, os.path.abspath(region_dir), float(dpi), cfg,
                        _plate_fingerprint(region_dir, cfg)],
                       sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -2279,7 +2284,14 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
     A render that RAISES (the off-DEM guard) is never cached -- and need not be, since
     the guard reads only crop + plate + oblique band, all of which are in the key, so a
     hit already implies it passed."""
-    if base_cache is None or not base_cache.enabled:
+    # Explicit hydro/labels are plate data the caller pre-loaded (the wallpaper bundle
+    # reads them once for a dozen device sheets). They are NOT in the key -- only the
+    # plate's files are -- so a caller could hand us data that differs from what is on
+    # disk and the key could not tell. Nothing does that today and neither proof path
+    # passes them; refusing to cache keeps it that way by construction rather than by
+    # convention. Same direction as the mask: an unclassified input costs a miss.
+    if (base_cache is None or not base_cache.enabled
+            or hydro is not None or labels is not None):
         return _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
                            trim=trim)
     key = base_cache_key(paint, dpi, region_dir, cfg)

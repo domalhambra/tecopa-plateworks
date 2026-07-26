@@ -312,6 +312,33 @@ def test_a_failing_render_is_not_cached():
     assert cache.stats()["entries"] == 0
 
 
+def test_an_overridden_cfg_is_part_of_the_key():
+    """rasterize takes cfg as an OVERRIDE -- scripts/render_lightsweep.py renders a
+    turntable as {**cfg, "light_azimuth": az}, same spec and dpi and plate every frame.
+    If cfg were outside the key, that whole sweep would collapse onto one cached
+    terrain."""
+    s = _live_spec()
+    from app import render
+    a = render.base_cache_key(s, 96, REGION_DIR, _cfg())
+    b = render.base_cache_key(s, 96, REGION_DIR, {**_cfg(), "light_azimuth": 123.0})
+    assert a != b
+
+
+def test_caller_supplied_plate_data_bypasses_the_cache():
+    """hydro/labels passed in are plate data the caller pre-loaded (the wallpaper
+    bundle). Only the plate's FILES are in the key, so data handed in cannot be
+    verified against it -- refuse to cache rather than risk a base keyed on a plate it
+    was not painted from."""
+    from app import basecache, render
+    spec = _live_spec(labels=False)
+    cache = basecache.BaseCache(400_000_000)
+    a = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR, base_cache=cache,
+                                    hydro=render._load_hydro(REGION_DIR)))
+    assert cache.stats()["entries"] == 0
+    b = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR))
+    assert np.array_equal(a, b)
+
+
 # ---- the endpoints -----------------------------------------------------------------
 
 def test_the_proof_endpoint_reuses_the_terrain_across_a_style_knob():
