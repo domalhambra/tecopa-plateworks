@@ -83,6 +83,15 @@ PROOF_QUEUE = jobs.ThreadJobQueue(ttl_seconds=TTL_SECONDS, max_concurrency=1)
 # TECOPA_BASE_CACHE_MB=0 disables it.
 BASE_CACHE = basecache.BaseCache(
     int(float(os.environ.get("TECOPA_BASE_CACHE_MB", basecache.DEFAULT_MB)) * 1_000_000))
+# Route-ink cache: with the terrain cached, the inked route is what is left -- 89% of a
+# warm knob at 18x24/200 dpi -- and 20 of the 26 knobs the base cache serves cannot
+# change it either (docs/superpowers/plans/2026-07-27-route-ink-cache.md). Wired into
+# the same two PROOF paths, for the same reasons. Its entries are ~50x smaller than the
+# base cache's because a route ribbon is non-zero on ~1% of a sheet and the layer is
+# stored on that support, hence the much smaller default budget.
+# TECOPA_INK_CACHE_MB=0 disables it.
+INK_CACHE = basecache.BaseCache(
+    int(float(os.environ.get("TECOPA_INK_CACHE_MB", basecache.INK_DEFAULT_MB)) * 1_000_000))
 PREP_PYTHON = os.environ.get("TECOPA_PREP_PYTHON", ".venv-prep/bin/python")
 PREP_SCRIPT = os.environ.get("TECOPA_PREP_SCRIPT", "region_prep.py")
 LABELS_SCRIPT = os.environ.get("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py")
@@ -1036,7 +1045,8 @@ async def proof(session_id: str = Form(...),
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=_proof_dpi(spec), region_dir=region.dir,
-                               watermark=True, cfg=region.cfg, base_cache=BASE_CACHE)
+                               watermark=True, cfg=region.cfg, base_cache=BASE_CACHE,
+                               ink_cache=INK_CACHE)
     except SpecError as e:
         log.info("event=proof.reject session=%s reason=%s", session_id, e)
         raise HTTPException(422, str(e))
@@ -1062,13 +1072,15 @@ async def proof(session_id: str = Form(...),
 
 # ---- progressive proof: the refine pass ----
 
-def _render_refine_to_blob(spec, region_dir, key, cfg=None, base_cache=None):
+def _render_refine_to_blob(spec, region_dir, key, cfg=None, base_cache=None,
+                           ink_cache=None):
     """The refine worker: re-rasterize the stamped spec at _refine_dpi with the same
     watermark + bleed-band crop as the sync draft, so the sharp image is a drop-in
     replacement for the draft the client is already showing. Runs on PROOF_QUEUE."""
     dpi = _refine_dpi(spec)
     img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
-                           watermark=True, cfg=cfg, base_cache=base_cache)
+                           watermark=True, cfg=cfg, base_cache=base_cache,
+                           ink_cache=ink_cache)
     if spec.bleed_in:
         b = round(spec.bleed_in * dpi)
         w, h = img.size
@@ -1090,7 +1102,7 @@ async def proof_refine(session_id: str = Form(...)):
         return {"skip": True, "dpi": _proof_dpi(spec)}
     key = f"{session_id}/proof_refine.png"
     jid = PROOF_QUEUE.submit(_render_refine_to_blob, spec, region.dir, key, region.cfg,
-                             BASE_CACHE)
+                             BASE_CACHE, INK_CACHE)
     log.info("event=proof.refine.submit session=%s dpi=%.0f jid=%s", session_id, dpi, jid)
     return {"skip": False, "job": jid, "dpi": dpi}
 
