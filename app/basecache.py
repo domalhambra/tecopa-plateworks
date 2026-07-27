@@ -8,8 +8,12 @@ Measured on an 18x24 sheet: caching it takes a knob drag from 6.4s to 0.9s at 96
 and from 26.6s to 5.3s at 200 dpi, so the progressive draft+refine pair a single knob
 costs drops from ~33s to ~6s.
 
-This module is only the STORE. What may be reused, and when, is `render.base_cache_key`
--- deliberately kept next to the painter whose inputs it describes.
+This module is only the STORE, and it now backs two layers of the proof loop: the
+painted terrain (`render.base_cache_key`) and, above it, the inked route
+(`render.ink_cache_key`). What may be reused, and when, lives with each key --
+deliberately kept next to the painter whose inputs it describes. The two run as
+separate instances with separate budgets because their entries differ by ~50x in size
+and nothing is gained by making them compete for one.
 
 Bounded by BYTES, not entry count: an entry swings ~20x between a 96 dpi draft and a
 200 dpi refine of a High-relief sheet, because the plan-oblique context carries a
@@ -47,6 +51,34 @@ log = logging.getLogger("tecopa.basecache")
 # not change the app's memory class. TECOPA_BASE_CACHE_MB=0 still disables it outright.
 DEFAULT_MB = 512
 
+# The route-ink cache's budget (render.ink_cache_key), which the same store backs.
+#
+# The quantity that sizes THIS one is the journey count, not the sheet. A weave
+# composites one strand per journey and the entry is the sum over strands, so it grows
+# with the chronicle -- and a chronicle of a life outdoors is the product's whole
+# premise. Measured on the same 18x24 of lassen_ca, weave on:
+#
+#   journeys   96 dpi draft   200 dpi refine   PAIR     (dense would be)
+#          1        0.4 MB           2.2 MB    2.6 MB       255 MB
+#          3        1.4 MB           6.7 MB    8.1 MB       765 MB
+#         10        4.6 MB          22.4 MB     27 MB      2552 MB
+#         25       11.6 MB          56.7 MB     68 MB      6378 MB
+#         50       23.2 MB         113.1 MB    136 MB     12757 MB
+#
+# The dense column is why the layer is stored on its support at all: at 50 journeys the
+# packed form is ~1% of it, which is the difference between a cacheable weave and an
+# uncacheable one. (After the feather blur a route ribbon is non-zero on ~1% of the
+# sheet; see render._ink_pack.)
+#
+# Sized against the draft+refine PAIR, never the largest single entry -- the lesson from
+# the budget above, where admitting the big entry alone scored zero hits out of four on
+# a knob drag while looking perfectly healthy. 256 MB covers a 50-journey chronicle's
+# pair with room for a second composition. It is ~linear in strands from there, so the
+# pair passes the budget somewhere past ~90 journeys at 200 dpi; that entry is refused
+# rather than thrashed, and the refusal is logged (event=basecache.refuse) so it shows
+# up as a diagnosis instead of unexplained slowness. TECOPA_INK_CACHE_MB=0 disables it.
+INK_DEFAULT_MB = 256
+
 
 class BaseCache:
     """An LRU on a byte budget. Thread-safe: the synchronous /api/proof request thread
@@ -82,7 +114,15 @@ class BaseCache:
     def put(self, key: str, entry, nbytes: int) -> None:
         # An entry bigger than the whole budget is not admitted at all: taking it would
         # evict everything else and then be evicted itself on the very next put.
-        if not self.enabled or nbytes > self.max_bytes:
+        if not self.enabled:
+            return
+        if nbytes > self.max_bytes:
+            # Logged rather than silent: a refusal means every render of this
+            # composition pays full price, and the cache looks healthy while buying
+            # nothing -- the same failure mode as an undersized budget, which took a
+            # measurement to find the first time.
+            log.info("event=basecache.refuse bytes=%d max_bytes=%d", nbytes,
+                     self.max_bytes)
             return
         with self._lock:
             if key in self._entries:

@@ -114,7 +114,7 @@ Gotchas already paid for:
 | `app/spec.py` | the `CompositionSpec` contract + zoom-cap validation |
 | `app/relief.py` | pure-numpy relief passes — **the tuning surface** |
 | `app/render.py` | paint relief + water + tracks + markers + labels in physical units |
-| `app/basecache.py` | the proof loop's terrain cache — what may be reused is `render.base_cache_key` |
+| `app/basecache.py` | the proof loop's byte-budgeted LRU, backing two layers — what may be reused is `render.base_cache_key` (terrain) and `render.ink_cache_key` (route ink) |
 | `app/provenance.py` | the manifest; `spec_from_manifest` is the one untrusted door |
 | `app/solar.py` | NOAA/Meeus solar position for Journey Light |
 | `app/timelapse.py`, `app/wallpaper.py`, `app/mockups.py` | the film, device/social presets, marketing renders |

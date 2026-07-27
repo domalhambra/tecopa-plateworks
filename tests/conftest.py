@@ -155,6 +155,17 @@ _SLOW_TESTS = {
         "test_every_masked_field_leaves_the_terrain_byte_identical",
         "test_the_terrain_is_cached_with_its_alpha_intact",
     },
+    "test_ink_cache": {
+        "test_every_masked_field_leaves_the_ink_byte_identical",
+        "test_the_route_fields_left_in_the_key_really_do_move_the_ink",
+        "test_a_cache_hit_is_pixel_identical_to_a_cold_render",
+        "test_a_furniture_or_symbol_knob_reuses_the_route",
+        "test_a_hit_under_a_changed_masked_field_still_matches_a_cold_render",
+        "test_a_route_or_terrain_knob_does_not_reuse_the_route",
+        "test_a_disabled_cache_is_the_pre_cache_path",
+        "test_a_time_lapse_prefix_is_never_cached",
+        "test_the_proof_endpoint_reuses_the_route_across_a_furniture_knob",
+    },
     "test_main": {
         "test_async_final_via_job_queue", "test_final_blob_seam_srgb_and_dpi",
         "test_proof_then_final_happy_path", "test_async_final_pdf_via_job_queue",

@@ -764,11 +764,91 @@ def _oblique_warp_coverage(cov_pad, ctx):
             vis = np.maximum(vis, ghost)
     return vis
 
-def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None,
-                         pts=None):
-    """Composite ONE set of journey `groups` onto the float image `img` (0..1) as a
-    cased, inked, grained route, and return the new float image. This is the single
-    definition of the casing -> ink math: `_ink_tracks` calls it once for the whole
+@dataclass
+class _InkLayer:
+    """The rasters of ONE cased-and-inked strand, computed WITHOUT looking at the sheet.
+
+    This is the route-ink cache's seam (docs/superpowers/plans/2026-07-27-route-ink-cache.md).
+    Everything here is a pure function of the route, the crop, the dpi and the oblique
+    context -- never of the terrain pixels or the place names painted under it -- so one
+    layer serves any base, and the 20 spec fields in `INK_KEY_MASK_ALWAYS` can be
+    perturbed without rebuilding it.
+
+    Three things are deliberately NOT folded in, because keeping them on the composite
+    side is what makes their knobs cache hits rather than misses:
+      - `spec.track_halo` scales `cas`; only whether it is ZERO changes this raster;
+      - `spec.track_max_darken` clips `op`;
+      - the terminus pins (`marker_diameter_in`) are outside `_ink_tracks` entirely.
+    """
+    shape: tuple                 # (out_h, out_w) of the sheet these rasters cover
+    cas: object                  # casing coverage, pre-halo-multiply; None when halo == 0
+    op: object                   # ink opacity, pre-darken-clip
+    gf: object                   # paper grain over the line
+    ink: object                  # per-pixel ink colour field, or None for the flat swatch
+
+
+def _ink_pack(layer):
+    """Compress a layer onto its SUPPORT for the cache: flat indices plus the values
+    there, instead of four dense planes that are ~99% zeros.
+
+    Measured on an 18x24 at 200 dpi, a route ribbon is non-zero on ~1% of the sheet
+    after the feather blur, so this is ~50x smaller -- the difference between a cache
+    that costs a few MB per composition and one that costs a few hundred.
+
+    `cas` and `op` round-trip exactly; that is what the support is defined from.
+    `gf` and the colour field do NOT -- off the support they come back as 0 rather than
+    their original values -- and that is sound rather than lucky: both are only ever
+    multiplied by an `op` that `gaussian_filter`'s finite support makes exactly 0.0
+    there, and `x * 1.0 + c * 0.0 == x` in float32. The COMPOSITE is byte-identical
+    even though two of the arrays are not, which is why the test asserts on the
+    composite. Packing is only ever applied to what goes INTO the cache: the uncached
+    path (every caller but the two proof endpoints) never pays for it."""
+    support = layer.op != 0
+    if layer.cas is not None:
+        support |= layer.cas != 0
+    idx = np.flatnonzero(support).astype(np.int32)   # < 2^31 px by the MAX_OUTPUT ceiling
+    idx.flags.writeable = False
+
+    def take(a):
+        if a is None:
+            return None
+        v = a.reshape(-1, a.shape[2])[idx] if a.ndim == 3 else a.reshape(-1)[idx]
+        v.flags.writeable = False    # the _freeze tripwire; see _ink_unpack
+        return v
+
+    return (layer.shape, idx, take(layer.cas), take(layer.op), take(layer.gf),
+            take(layer.ink))
+
+
+def _ink_unpack(packed):
+    """A packed layer back to dense rasters. Scatters into FRESH arrays every time, so
+    a cached layer is never handed out by reference and the composite can treat what it
+    gets as its own."""
+    shape, idx, cas, op, gf, ink = packed
+    h, w = shape
+
+    def dense(v):
+        if v is None:
+            return None
+        if v.ndim == 2:
+            out = np.zeros((h * w, v.shape[1]), v.dtype)
+            out[idx] = v
+            return out.reshape(h, w, v.shape[1])
+        out = np.zeros(h * w, v.dtype)
+        out[idx] = v
+        return out.reshape(h, w)
+
+    return _InkLayer(shape, dense(cas), dense(op), dense(gf), dense(ink))
+
+
+def _ink_pack_bytes(packed):
+    """What one packed layer costs the budget."""
+    return int(sum(a.nbytes for a in packed[1:] if a is not None))
+
+
+def _ink_layer(spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None, pts=None):
+    """Build the `_InkLayer` for ONE set of journey `groups`. This is the single
+    definition of the casing -> ink math: `_ink_layers` calls it once for the whole
     route (the summed still/film path) or once per journey in date order (the weave),
     so the two paths can never drift as worn-width / track-coloring / oblique evolve.
 
@@ -776,7 +856,12 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     the worn (desire-path widening) terms are exactly zero and both worn rasterizations
     are skipped (a flagship final saves ~4 s and ~300 MB). A per-journey weave layer is
     therefore always a base-width strand -- repetition reads as stacked cased threads,
-    not one widened line."""
+    not one widened line.
+
+    The casing raster is built before the ink opacity, as it always was; only the BLEND
+    moved out (to `_composite_ink_layer`). Nothing here reads global RNG state -- `grain`
+    seeds its own generator -- so computing the two rasters back to back rather than
+    blending between them is byte-identical, not merely equivalent."""
     ink_w = max(1, round(_pt_to_px(spec.track_width_pt, dpi)))
     worn_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
     pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
@@ -790,6 +875,7 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     # 1) paper halo under the line (strength = the client's outline slider; 0 skips
     #    the halo work entirely), following the worn width where paths repeat.
     #    clip(cov)-1 at the halo width = presence of a 2nd+ journey -> the worn gate.
+    cas = None
     if spec.track_halo > 0:
         cas = np.clip(_coverage(spec, out_w, out_h, ink_w + 2 * pad, groups, ctx=ctx,
                                 pts=pts), 0, 1)
@@ -799,11 +885,6 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
             cas = np.maximum(cas, np.clip(cas_worn - 1, 0, 1))
             del cas_worn
         cas = gaussian_filter(cas, max(0.3, _pt_to_px(CASING_BLUR_PT, dpi)))
-        casing_op = (spec.track_halo * np.clip(cas, 0, 1))[..., None]
-        del cas
-        casing_col = np.array(TRACK_CASING, np.float32) / 255.0
-        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
-        del casing_op
 
     # 2) the line: base width at near-solid ink; repeat journeys widen it (saturating)
     op = 1.0 - np.exp(-INK_FREQ_K * visits_base)
@@ -814,18 +895,87 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
         op_worn = 1.0 - np.exp(-WORN_FREQ_K * np.clip(visits_worn - 1.0, 0.0, None))
         op = np.maximum(op, op_worn)
         del visits_worn, op_worn
-    op = np.clip(op, 0.0, spec.track_max_darken)
     gf = np.clip(grain((out_h, out_w), max(1.0, spec.grain_cell_in * dpi), INK_GRAIN, spec.seed), 0, 1)
-    op = (op * gf)[..., None]
-    # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
-    # toward gold would only darken the terrain to a muddy brown); grain in `op`
-    # keeps the paper texture so it still sits on the sheet rather than floating.
     # Journey Light track coloring: a per-pixel colour field (elevation/grade) replaces
     # the flat swatch, warped through the same winner buffer as the ink. None -> the
     # classic single-swatch composite, byte-identical.
+    ink_field = None
     if track_colors is not None and spec.track_color_by != "none":
         ink_field = _track_color_field(spec, track_colors, out_w, out_h, ink_w, ctx,
                                        pts=pts)
+    return _InkLayer((out_h, out_w), cas, op, gf, ink_field)
+
+
+def _ink_layers(spec, out_w, out_h, dpi, groups, ctx=None, track_colors=None):
+    """Every strand this route inks, in painting order: one layer per journey oldest ->
+    newest in weave mode, otherwise a single summed layer. One projection of the route
+    is shared by all of them (the ink, the halo, both worn widths, every weave strand).
+
+    A GENERATOR, and that is load-bearing rather than stylistic: in weave mode there is
+    one dense layer per journey and a chronicle can carry dozens, so yielding keeps the
+    peak at ONE dense layer -- exactly what it was before the seam existed. The cache
+    keeps the packed form instead, which is why it can afford to hold them all.
+
+    The list -- not the individual layer -- is the route-ink cache's unit, because it is
+    the whole of what `_ink_tracks` needs and what the key describes."""
+    dx, dy = (0.0, 0.0) if ctx is None else (float(ctx.pad_x), float(ctx.pad_top))
+    pts = _PolylineCache(spec.tracks, spec.crop, out_w, out_h, dx, dy)
+    if spec.track_weave and len(groups) >= 2:
+        strands = [[g] for g in _chrono_group_order(spec, groups)]
+    else:
+        strands = [groups]
+    for s in strands:
+        yield _ink_layer(spec, out_w, out_h, dpi, s, ctx=ctx, track_colors=track_colors,
+                         pts=pts)
+
+
+def _cached_ink_layers(spec, out_w, out_h, dpi, groups, ctx, track_colors, ink_cache,
+                       ink_key):
+    """`_ink_layers` through the cache when one is supplied. `ink_cache=None` -- every
+    caller except the two proof endpoints -- is the pre-cache path exactly, so
+    `timelapse`, `mockups`, the wallpaper bundle and the final are untouched by
+    construction.
+
+    On a miss each layer is packed as it is produced and yielded dense in the same
+    breath, so a cold render pays one gather per raster and never holds more than it
+    used to. A hit scatters each packed layer back on demand, in the same one-at-a-time
+    order."""
+    if ink_cache is None or not ink_cache.enabled or ink_key is None:
+        yield from _ink_layers(spec, out_w, out_h, dpi, groups, ctx=ctx,
+                               track_colors=track_colors)
+        return
+    packed = ink_cache.get(ink_key)
+    if packed is not None:
+        for p in packed:
+            yield _ink_unpack(p)
+        return
+    packed = []
+    for layer in _ink_layers(spec, out_w, out_h, dpi, groups, ctx=ctx,
+                             track_colors=track_colors):
+        packed.append(_ink_pack(layer))
+        yield layer
+    ink_cache.put(ink_key, packed, sum(_ink_pack_bytes(p) for p in packed))
+
+
+def _composite_ink_layer(img, spec, layer):
+    """Composite one `_InkLayer` onto the float image `img` (0..1) as a cased, inked,
+    grained route, and return the new float image. The ONLY half of the ink chain that
+    reads the sheet -- which is exactly why the other half is cacheable.
+
+    The three spec values read here (`track_halo`, `track_max_darken`, `track_rgb`) are
+    the ones held OUT of the layer on purpose; see `INK_KEY_MASK_ALWAYS`."""
+    if layer.cas is not None:
+        casing_op = (spec.track_halo * np.clip(layer.cas, 0, 1))[..., None]
+        casing_col = np.array(TRACK_CASING, np.float32) / 255.0
+        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+        del casing_op
+    op = np.clip(layer.op, 0.0, spec.track_max_darken)
+    op = (op * layer.gf)[..., None]
+    # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
+    # toward gold would only darken the terrain to a muddy brown); grain in `op`
+    # keeps the paper texture so it still sits on the sheet rather than floating.
+    ink_field = layer.ink
+    if ink_field is not None:
         img = img * (1 - op) + ink_field * op
     else:
         ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
@@ -833,7 +983,8 @@ def _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=None, track_c
     return img
 
 
-def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_colors=None):
+def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_colors=None,
+                ink_cache=None, ink_key=None):
     """Composite tracks as inked, cased lines that pick up the terrain texture and
     paper grain instead of floating on top. Visitation is expressed as WIDTH: any
     pass draws the base line near-solid; segments covered by 2+ distinct passes
@@ -855,18 +1006,16 @@ def _ink_tracks(rgb_u8, spec, out_w, out_h, dpi, groups=None, ctx=None, track_co
     stay SHEET-space -- the halo keeps its isotropic softness and the grain never
     shears, exactly as on a flat sheet."""
     img = rgb_u8.astype(np.float32) / 255.0
+    # A time-lapse prefix is a subset of the journeys that is NOT derivable from the
+    # spec, so it cannot be in the key. Refusing to cache it keeps that true by
+    # construction rather than by convention -- the `hydro is not None` precedent in
+    # `_base_layer`, and the same direction as the mask: an unclassified input costs a
+    # miss, never a wrong hit.
+    prefix = groups is not None
     groups = _journey_groups(spec) if groups is None else groups
-    # one projection of the route per call, shared by every coverage raster below (the
-    # ink, the halo, both worn widths -- and, in weave mode, by every journey layer).
-    dx, dy = (0.0, 0.0) if ctx is None else (float(ctx.pad_x), float(ctx.pad_top))
-    pts = _PolylineCache(spec.tracks, spec.crop, out_w, out_h, dx, dy)
-    if spec.track_weave and len(groups) >= 2:
-        for g in _chrono_group_order(spec, groups):
-            img = _composite_ink_layer(img, spec, out_w, out_h, dpi, [g], ctx=ctx,
-                                       track_colors=track_colors, pts=pts)
-    else:
-        img = _composite_ink_layer(img, spec, out_w, out_h, dpi, groups, ctx=ctx,
-                                   track_colors=track_colors, pts=pts)
+    for layer in _cached_ink_layers(spec, out_w, out_h, dpi, groups, ctx, track_colors,
+                                    None if prefix else ink_cache, ink_key):
+        img = _composite_ink_layer(img, spec, layer)
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
 def _draw_termini(img, spec, out_w, out_h, dpi, groups=None, ctx=None):
@@ -2041,14 +2190,14 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     return rgb, lum, ctx
 
 def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
-                   track_colors=None):
+                   track_colors=None, ink_cache=None, ink_key=None):
     """The route layer for the given journey groups (None = all): inked tracks + those
     journeys' terminus pins, over the base. Does NOT mutate base_rgb (_ink_tracks copies
     it), so a time-lapse can paint prefix after prefix onto one base. Returns RGBA.
     ctx (the plan-oblique warp) displaces the route with the standing terrain.
     track_colors (Journey Light): per-vertex ink colours for elevation/grade coloring."""
     rgb = _ink_tracks(base_rgb, spec, out_w, out_h, dpi, groups=groups, ctx=ctx,
-                      track_colors=track_colors)
+                      track_colors=track_colors, ink_cache=ink_cache, ink_key=ink_key)
     img = Image.fromarray(rgb, "RGB").convert("RGBA")
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
@@ -2289,6 +2438,54 @@ def base_cache_key(spec, dpi, region_dir, cfg):
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+# ---- the route-ink cache key (the store is app/basecache.py) -----------------------
+# Same construction as BASE_KEY_MASK_ALWAYS one layer up: derived by MASKING, never by
+# listing. A spec field added years from now stays in the key by default, so the worst
+# case is a cache MISS rather than a stale route inked under a fresh sheet.
+# tests/test_ink_cache.py enumerates the dataclass to enforce it, and -- because that
+# test can only prove the mask is self-CONSISTENT -- a second test perturbs every masked
+# field and asserts the painted layer does not move.
+#
+# The base key is folded in whole (see ink_cache_key), which covers the crop, the dpi,
+# the plate and the one that actually matters: the plan-oblique context, which every
+# coverage raster is warped through and which is a pure function of the terrain.
+INK_KEY_MASK_ALWAYS = (
+    # point symbols, photo frames, the sheet frame -- _paint_overlays, above the route
+    "marker_ring", "photo_frame_style", "photo_box_in", "keyline", "hotspots",
+    # the terminus pins DO read marker_diameter_in, but _draw_termini draws over the
+    # inked sheet rather than into the layer, so it is outside the cached unit
+    "marker_diameter_in",
+    # place names and the sheet furniture: painted under or over the route, never into
+    # it (_apply_labels already runs outside the base cache's unit too)
+    "labels", "label_place",
+    "title_text", "title_pt", "label_pt", "credit_text", "edition",
+    "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    # scalars applied at COMPOSITE time, deliberately not folded into the layer -- this
+    # is what makes two of the appearance sliders hits instead of misses:
+    #   casing_op = track_halo * clip(cas)      op = clip(op_raw, 0, track_max_darken)
+    # track_halo's VALUE is therefore a hit; zero is not, because it skips building the
+    # casing raster at all, so the key carries the boolean below.
+    "track_halo", "track_max_darken",
+)
+# Left in the key on purpose: track_rgb, track_color_by, track_weave, tracks,
+# track_days, track_width_pt. track_rgb is the one worth explaining -- under
+# track_color_by != "none" it is _track_color_field's swatch background AND its
+# off-DEM fallback, so it genuinely reaches the layer. Masking it only when colouring
+# is off would reintroduce exactly the conditional mask Phase 2 of the base-layer cache
+# dissolved, and for one discrete swatch picker rather than a dragged slider.
+
+def ink_cache_key(spec, dpi, region_dir, cfg):
+    """A stable digest of everything `_ink_layers` can see for this (spec, dpi, plate).
+    `spec` is the PAINT spec (post-bleed), because that is what it receives."""
+    payload = serialize.spec_to_json(spec)
+    for name in INK_KEY_MASK_ALWAYS:
+        payload.pop(name, None)
+    blob = json.dumps([payload, base_cache_key(spec, dpi, region_dir, cfg),
+                       bool(spec.track_halo > 0)],
+                      sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
 def _entry_bytes(rgb, ctx):
     """What one cached terrain costs. The plan-oblique context is the swing factor: its
     padded elevation and winner buffers are several times the trimmed sheet. Measured
@@ -2362,7 +2559,7 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
               watermark: bool = False, hydro=None, cfg=None, labels=None,
-              base_cache=None) -> Image.Image:
+              base_cache=None, ink_cache=None) -> Image.Image:
     spec.validate(dpi)
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
@@ -2375,7 +2572,12 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
     track_colors = _track_color_arrays(paint, region_dir, cfg)
     profile = _profile_data(paint, region_dir, cfg)
+    # The ink key is built from the PAINT spec (post-bleed), like the base key, because
+    # that is the spec the ink layer is painted from.
+    ink_key = (ink_cache_key(paint, dpi, region_dir, cfg)
+               if ink_cache is not None and ink_cache.enabled else None)
     img = _paint_journey(base_rgb, paint, out_w, out_h, dpi, groups=None, ctx=ctx,
-                         track_colors=track_colors)  # all journeys
+                         track_colors=track_colors, ink_cache=ink_cache,
+                         ink_key=ink_key)  # all journeys
     return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
                            profile=profile, paint=paint, trim=trim)
