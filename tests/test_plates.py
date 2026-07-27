@@ -22,10 +22,12 @@ DOS_EPOCH = (1980, 1, 1, 0, 0, 0)
 
 
 def _region_copy(tmp_path, rid="lassen_ca"):
-    """Copy the built lassen region into a tmp regions root. The copy carries the
-    conftest synthetic DEM whose bytes do NOT match the sha256 the committed
-    sources.json records for the real 3DEP raster -- exactly the drift the pack gate
-    must catch (and --resync must repair in the zip's copy only)."""
+    """Copy the built lassen region into a tmp regions root.
+
+    Whether the copied DEM matches the sha256 sources.json records depends on the HOST:
+    it does not on CI or a fresh clone (the conftest synthetic DEM), and it does on a
+    machine with the real 3DEP raster restored. Tests that need drift must construct it
+    -- see _drift_one_asset -- rather than inherit it from the environment."""
     root = tmp_path / "regions"
     root.mkdir(exist_ok=True)
     dst = root / rid
@@ -38,6 +40,19 @@ def _region_copy(tmp_path, rid="lassen_ca"):
             with open(dst / name, "w") as f:
                 json.dump(d, f, indent=2)
     return str(root)
+
+
+def _drift_one_asset(root, rid="lassen_ca", name="dem.tif"):
+    """Make one asset's bytes disagree with the sha256 sources.json records for it.
+
+    CONSTRUCTED, never inherited. The drift test used to rely on the ambient DEM being
+    the conftest synthetic one, whose hash never matches the committed sources.json --
+    true on CI and on a fresh clone, false the moment someone restores the real 3DEP
+    raster, and then the gate has nothing to catch and the test fails for being right.
+    The gate is pure byte hashing (pack_region._sha256_file), so appending is enough and
+    leaves the GeoTIFF readable for the tests that go on to open it."""
+    with open(os.path.join(root, rid, name), "ab") as f:
+        f.write(b"\0")
 
 
 def _sha256(path):
@@ -72,7 +87,8 @@ def test_pack_twice_is_byte_identical_sorted_and_dos_dated(tmp_path):
 
 
 def test_drift_gate_refuses_by_default_naming_the_asset(tmp_path):
-    root = _region_copy(tmp_path)     # synthetic DEM != recorded hash -> drifted
+    root = _region_copy(tmp_path)
+    _drift_one_asset(root)            # constructed, so this holds on a real plate too
     with pytest.raises(DriftError) as ei:
         pack_region("lassen_ca", regions_root=root, out_dir=str(tmp_path / "out"))
     msg = str(ei.value)
