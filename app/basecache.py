@@ -51,21 +51,33 @@ log = logging.getLogger("tecopa.basecache")
 # not change the app's memory class. TECOPA_BASE_CACHE_MB=0 still disables it outright.
 DEFAULT_MB = 512
 
-# The route-ink cache's budget (render.ink_cache_key), which the same store backs. Its
-# entries are ~50x smaller than the terrain's for a structural reason: after the feather
-# blur a route ribbon is non-zero on ~1% of the sheet, so a layer is stored on that
-# support rather than as four dense planes. Measured on the same 18x24 of lassen_ca,
-# three journeys:
+# The route-ink cache's budget (render.ink_cache_key), which the same store backs.
 #
-#              96 dpi draft   200 dpi refine
-#   plain           <1 MB           ~3 MB
-#   colour field    ~1 MB           ~6 MB
+# The quantity that sizes THIS one is the journey count, not the sheet. A weave
+# composites one strand per journey and the entry is the sum over strands, so it grows
+# with the chronicle -- and a chronicle of a life outdoors is the product's whole
+# premise. Measured on the same 18x24 of lassen_ca, weave on:
 #
-# Sized against the draft+refine PAIR like the budget above -- the lesson there was that
-# a budget which admits the big entry alone but not the pair scores zero hits on a knob
-# drag while looking perfectly healthy. 64 MB holds many compositions' pairs over, so a
-# drag that revisits an earlier position still hits. TECOPA_INK_CACHE_MB=0 disables it.
-INK_DEFAULT_MB = 64
+#   journeys   96 dpi draft   200 dpi refine   PAIR     (dense would be)
+#          1        0.4 MB           2.2 MB    2.6 MB       255 MB
+#          3        1.4 MB           6.7 MB    8.1 MB       765 MB
+#         10        4.6 MB          22.4 MB     27 MB      2552 MB
+#         25       11.6 MB          56.7 MB     68 MB      6378 MB
+#         50       23.2 MB         113.1 MB    136 MB     12757 MB
+#
+# The dense column is why the layer is stored on its support at all: at 50 journeys the
+# packed form is ~1% of it, which is the difference between a cacheable weave and an
+# uncacheable one. (After the feather blur a route ribbon is non-zero on ~1% of the
+# sheet; see render._ink_pack.)
+#
+# Sized against the draft+refine PAIR, never the largest single entry -- the lesson from
+# the budget above, where admitting the big entry alone scored zero hits out of four on
+# a knob drag while looking perfectly healthy. 256 MB covers a 50-journey chronicle's
+# pair with room for a second composition. It is ~linear in strands from there, so the
+# pair passes the budget somewhere past ~90 journeys at 200 dpi; that entry is refused
+# rather than thrashed, and the refusal is logged (event=basecache.refuse) so it shows
+# up as a diagnosis instead of unexplained slowness. TECOPA_INK_CACHE_MB=0 disables it.
+INK_DEFAULT_MB = 256
 
 
 class BaseCache:

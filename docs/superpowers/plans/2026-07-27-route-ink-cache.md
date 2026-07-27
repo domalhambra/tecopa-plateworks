@@ -152,6 +152,50 @@ refuses an oversized entry, and the refusal is logged rather than silent.
 
 ---
 
+---
+
+# Validation — what real-size measurement found
+
+Run on an 18×24 of `lassen_ca` (synthetic DEM, 4-core container), three journeys, weave
+on. Absolute seconds are container-slow; the ratios transfer.
+
+| | cold | furniture knob | halo slider | width slider |
+|---|---|---|---|---|
+| plain, 96 dpi | 7.41 s | 1.63 s (4.5×) | 1.32 s (5.6×) | 2.05 s (3.6×) |
+| plain, 200 dpi | 47.74 s | 7.72 s (6.2×) | 7.53 s (6.3×) | 17.00 s (2.8×) |
+| High relief, 96 dpi | 10.24 s | 1.41 s (7.3×) | 1.44 s (7.1×) | 2.84 s (3.6×) |
+| High relief, 200 dpi | 52.58 s | 9.97 s (5.3×) | 8.95 s (5.9×) | 19.35 s (2.7×) |
+
+The width slider is the control: it is a route knob, so the terrain still hits and the
+ink still misses, and its speedup is what the base cache alone already bought. The gap
+between it and the furniture knob — 17.0 s → 7.7 s at 200 dpi — is this change.
+
+**The budget had to be sized against the journey count, not the sheet.** This is the
+same shape of mistake the base cache made once, found the same way. A weave stores one
+strand per journey, so the entry grows with the chronicle:
+
+| journeys | 96 dpi draft | 200 dpi refine | pair | dense would be |
+|---|---|---|---|---|
+| 1 | 0.4 MB | 2.2 MB | 2.6 MB | 255 MB |
+| 3 | 1.4 MB | 6.7 MB | 8.1 MB | 765 MB |
+| 10 | 4.6 MB | 22.4 MB | 27 MB | 2552 MB |
+| 25 | 11.6 MB | 56.7 MB | **68 MB** | 6378 MB |
+| 50 | 23.2 MB | 113.1 MB | **136 MB** | 12757 MB |
+
+The first default, 64 MB, was picked from the 3-journey case and would have **refused a
+25-journey chronicle outright** — the cache present, healthy-looking, and buying
+nothing. Raised to 256 MB, which covers a 50-journey pair with room for a second
+composition; past roughly 90 journeys at 200 dpi the pair exceeds it and the entry is
+refused rather than thrashed, which now logs `event=basecache.refuse`.
+
+The dense column is also the justification for the support-indexed storage in one
+number: at 50 journeys the packed form is ~1% of the dense one, which is the difference
+between a cacheable weave and an uncacheable one.
+
+Still outstanding, and only doable on the Mac: the by-eye half — that the proof still
+predicts the print on a *real* DEM — and re-running the orphan drill against real
+plates, which has not happened since the base-layer cache landed in `fb634b2`.
+
 ## Not built here — the next lever
 
 The blends themselves are the remaining cost, and they too are ~99% wasted: a full-sheet

@@ -320,16 +320,34 @@ def test_the_final_path_does_not_use_the_cache():
     assert "ink_cache" not in inspect.getsource(main_mod._render_to_blob)
 
 
-def test_the_default_budget_holds_both_proof_tiers_of_one_composition():
+def test_the_default_budget_holds_a_long_chronicle_at_both_proof_tiers():
     """Sized against the PAIR, not the biggest entry -- the base cache's 0-hits-out-of-4
     lesson. A knob drag renders the composition twice (the sync 96 dpi draft and the
-    queued 200 dpi refine) and both must stay resident or each evicts the other."""
+    queued 200 dpi refine) and both must stay resident or each evicts the other.
+
+    The quantity that sizes THIS cache is the journey count, not the sheet: a weave
+    stores one strand per journey. Measured on an 18x24 of lassen_ca with 50 journeys,
+    which is an ordinary size for the thing this product is for -- a first pass at
+    64 MB would have refused a 25-journey chronicle outright and bought nothing, which
+    is exactly the failure the base cache already paid for once."""
     from app import main as main_mod
-    draft, refine = 2 * 1_000_000, 12 * 1_000_000
+    draft, refine = 23 * 1_000_000, 114 * 1_000_000        # 50 journeys, measured
     c = basecache.BaseCache(main_mod.INK_CACHE.max_bytes)
     c.put("refine", "R", refine)
     c.put("draft", "D", draft)
-    assert c.get("refine") == "R" and c.get("draft") == "D"
+    assert c.get("refine") == "R" and c.get("draft") == "D", (
+        f"INK_DEFAULT_MB={basecache.INK_DEFAULT_MB} cannot hold a "
+        f"{(draft + refine) // 1_000_000} MB draft+refine pair, so a knob drag on a "
+        f"50-journey chronicle thrashes and the cache buys nothing")
+
+
+def test_an_oversized_entry_is_refused_rather_than_thrashed():
+    """Past the budget the entry is not admitted at all -- taking it would evict
+    everything else and then be evicted itself. That is the right behaviour, but it is
+    also invisible from the outside (renders are simply slow), so it is logged."""
+    c = basecache.BaseCache(10)
+    c.put("huge", "H", 1000)
+    assert c.get("huge") is None and c.stats()["entries"] == 0
 
 
 def test_the_proof_endpoint_reuses_the_route_across_a_furniture_knob():
