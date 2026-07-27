@@ -62,7 +62,7 @@ A poster printed today must reprint byte-identically after any future upgrade. T
 ```bash
 source .venv/bin/activate                 # Python 3.14
 pip install -r requirements-lock.txt      # pinned set — what CI installs
-pytest -q                                 # ~640 tests; renders real posters/films, ~22 min
+pytest -q                                 # 815 tests; renders real posters/films, ~14 min
 uvicorn app.main:app --reload             # http://127.0.0.1:8000
 ```
 
@@ -74,11 +74,32 @@ uvicorn app.main:app --reload             # http://127.0.0.1:8000
 
 ## Known local failures (green in CI, red on this Mac)
 
-Verified 2026-07-21 against `d24a009`. Confirm any new failure against a clean checkout before chasing it — most of these are the host, not the code.
+Re-verified 2026-07-27 against `5c22096`, on the restored real `lassen_ca` plate: **6 failed, 803 passed, 6 skipped**, and all six are the font item below. Confirm any new failure against a clean checkout before chasing it — most of these are the host, not the code.
 
-- ~~`test_readyz_ok_with_hydrated_regions`, `test_orphan_drill` — the real 188 MB `lassen_ca` DEM had drifted 1860 m from `region.json`.~~ **Fixed in `3e2b5e7` (2026-07-21), which lands *after* the `d24a009` this list was verified against.** The DEM was not drifting in the usual sense — it was simply left behind from the June 29 build when the plate was rebuilt on July 3. Rebuilt from the parameters in `sources.json`; all six assets verify, `dem.tif` matches `region.json` to 0.0 m, and the drill passed against the real 191 MB DEM. Two consequences worth keeping straight: the plate is a *new version*, not a restoration (`region_prep` round-numbers the extent now, and upstream NHD went 116 → 109 lakes), and the drill has **not** been re-run on real terrain since the base-layer cache landed in `fb634b2`. Do that before any release — CI only ever runs it against a synthetic DEM. Note also what the drill does and does not cover: its byte-identical assertion is on `/api/final`, which takes no `base_cache`, so a stale base cannot reach a reprint by construction. The drill guards the *painter*, not the cache.
+A warning the 07-27 run earned: two tests were coupled to the local plate being *wrong*, and both went red the moment the real DEM was restored — the pack-gate drift test inherited its drift from the ambient synthetic DEM instead of constructing it, and `label_place` turned out inert on real terrain at 13 pt type. Both fixed (`c81ca51`, `5c22096`). If a test only passes on a synthetic plate, it is testing the host.
+
+- **The `lassen_ca` DEM goes orphan on a pull — this recurs, it is not a past incident.**
+  `regions/*/dem.tif` is gitignored, every other plate asset is committed. A plate rebuilt
+  in a cloud container therefore ships its small assets to `main` and leaves the DEM
+  behind, and the next pull here pairs a NEW `region.json` with the OLD local DEM.
+  Happened on 2026-07-21 (`3e2b5e7`), and again on 2026-07-27 when pulling
+  `a6a93c2 → 5a0094e` re-orphaned it at 509.83 m drift. **After any pull touching
+  `regions/`, run `regions.discover()` → `readiness()` before trusting a render.**
+  To repair, call `region_prep.build_dem_cog` directly (with `plan_build`) rather than
+  `region_prep.main` — main refetches NHD/NLCD too, and upstream drift turns a
+  restoration into a new *plate version* (NHD already went 116 → 109 lakes once). Then
+  check the sha256 against `sources.json`; a match proves the exact plate is back. Done
+  2026-07-27: `20cec75c…`, 192,087,365 B, drift 0.0 m, every committed asset untouched.
+- **`ready: True` does not mean real terrain.** `tests/conftest.py` hydrates a tiny
+  synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
+  match their own bounds exactly. Only `lassen_ca` has real 10 m terrain on this Mac; the
+  other four are synthetic. Check the tag, not the flag, before judging a poster by eye.
+- ~~the orphan drill has not run on real terrain since `fb634b2`~~ — **done 2026-07-27**,
+  and it passed with all three proof-loop optimizations stacked on it (base-layer cache,
+  route-ink cache, support-restricted composite). `pytest -m serial` is exactly this one
+  test. Still re-run it before any release: CI only ever sees a synthetic DEM.
 - Six label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it.
-- `test_mp4_twin_is_tagged_bt709` — no `colr` box. Not version drift: `imageio-ffmpeg` is pinned at 0.6.0 and that exact version is installed. The bundled ffmpeg **binary** is platform-specific.
+- `test_mp4_twin_is_tagged_bt709` — no `colr` box when it runs. Not version drift: the bundled ffmpeg **binary** is platform-specific. As of 2026-07-27 it does not run here at all — `imageio_ffmpeg` is not installed in `.venv`, so this and two sibling MP4 tests SKIP. Install `-r requirements-share.txt` to see it (and `pandas geopandas` for the region-prep tests) if you want to match CI.
 
 ## macOS app
 
