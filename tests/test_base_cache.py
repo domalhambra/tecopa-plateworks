@@ -349,6 +349,18 @@ def test_a_route_knob_hits_the_cache_and_a_terrain_knob_misses_it():
     assert cache.stats()["hits"] == 1, "a terrain knob must NOT reuse it"
 
 
+# Some knobs are inert on the DEFAULT composition, which would make the "the knob is
+# live" half of the assertion below pass vacuously -- so the case gets a composition
+# where it bites, rather than the assertion getting weakened.
+_PHASE2_SPEC_EXTRAS = {
+    # At 13 pt the 29 place names inside this crop never collide, so smart placement
+    # resolves every one of them to its anchor and label_place moves nothing. (Verified:
+    # 0 px at 13 pt, 1175 px at 26 pt.) Nothing is wrong with smart placement; the knob
+    # simply has no work to do until the type is big enough to overlap.
+    "label_place": {"label_pt": 26.0},
+}
+
+
 @pytest.mark.parametrize("field,value", [
     ("track_width_pt", 3.5),        # smart placement used the route as an obstacle
     ("title_text", "A DIFFERENT TITLE"),   # the keep-out measured the cartouche
@@ -369,7 +381,8 @@ def test_phase2_serves_the_knobs_phase1_could_not(field, value):
     served it correctly anyway."""
     from app import basecache, render
     spec = _live_spec(labels=True, label_place="smart", contours=True, profile=True,
-                      profile_rev=2, compass=True)
+                      profile_rev=2, compass=True,
+                      **_PHASE2_SPEC_EXTRAS.get(field, {}))
     alt = dataclasses.replace(spec, **{field: value})
     cache = basecache.BaseCache(400_000_000)
     first = np.asarray(render.rasterize(spec, 96, region_dir=REGION_DIR,
