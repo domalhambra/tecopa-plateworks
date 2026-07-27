@@ -13,6 +13,7 @@ outside the plate, values exactly on a ramp stop, NaN and infinity. They are che
 and they are the reason the rewrites can be trusted; do not replace them with a
 "looks about right" tolerance.
 """
+import dataclasses
 import json
 import os
 
@@ -22,6 +23,7 @@ import rasterio
 
 from app import density, render
 from app.ingest import Track
+from app.spec import CompositionSpec
 
 REGION_DIR = "regions/lassen_ca"
 
@@ -226,3 +228,167 @@ def test_font_cache_follows_the_env_override(monkeypatch):
     plain = render._font(30)
     monkeypatch.setenv("TECOPA_FONT", "DejaVuSans.ttf")
     assert render._font(30) is not plain
+
+
+# --------------------------------------------------------------------------
+# 6. _composite_ink_layer -- the two alpha blends, restricted to the ink support
+# --------------------------------------------------------------------------
+# The blends used to run over the whole sheet for a raster that is non-zero on ~1% of
+# it. Restricting them to the support is byte-identical by the same float argument the
+# sparse packing already rests on: where `op` is 0 the blend is `img*1.0 + col*0.0`,
+# which IS `img` in float32, and gaussian_filter's finite support makes `op` exactly 0.0
+# off the ribbon. These tests keep the DENSE blend inline, verbatim, and assert the
+# restricted one agrees -- the same shape as the four rewrites above.
+
+def _dense_composite(img, spec, layer):
+    """`_composite_ink_layer` as it stood before the support restriction, verbatim."""
+    if layer.cas is not None:
+        casing_op = (spec.track_halo * np.clip(layer.cas, 0, 1))[..., None]
+        casing_col = np.array(render.TRACK_CASING, np.float32) / 255.0
+        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
+    op = np.clip(layer.op, 0.0, spec.track_max_darken)
+    op = (op * layer.gf)[..., None]
+    if layer.ink is not None:
+        img = img * (1 - op) + layer.ink * op
+    else:
+        ink = np.array(spec.track_rgb, np.float32) / 255.0
+        img = img * (1 - op) + ink[None, None, :] * op
+    return img
+
+
+_COMP_DPI = 96
+
+
+def _comp_spec(n_journeys=3, **kw):
+    """Three dated journeys that CROSS. One journey makes the weave and the worn-width
+    terms inert, so a claim about them would pass vacuously."""
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
+    crop = (cx - 13500, cy - 18000, cx + 13500, cy + 18000)
+    d = dict(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+             print_w_in=9, print_h_in=12, native_resolution_m=10,
+             tracks=[], track_days=[], hotspots=[], seed=7)
+    d.update(kw)
+    s = CompositionSpec(**d)
+    x0, y0, x1, y1 = s.crop
+    tracks, days = [], []
+    for i in range(n_journeys):
+        y = y0 + (y1 - y0) * (i + 1) / (n_journeys + 1)
+        tracks.append(np.array([[x0 + 1500, y], [x1 - 1500, y + (y1 - y0) * 0.10]]))
+        days.append(f"2026-0{i + 1}-01")
+    cxm = (x0 + x1) / 2
+    tracks.append(np.array([[cxm - 1000, y0 + 1500], [cxm + 1000, y1 - 1500]]))
+    days.append(days[0])
+    return dataclasses.replace(s, tracks=tracks, track_days=days)
+
+
+def _comp_layers(spec):
+    colors = render._track_color_arrays(spec, REGION_DIR, _cfg())
+    return list(render._ink_layers(spec, *spec.pixel_size(_COMP_DPI), _COMP_DPI,
+                                   render._journey_groups(spec), track_colors=colors))
+
+
+def _sheet(spec, seed=3):
+    """A non-uniform float32 sheet in 0..1, so an off-support write cannot hide in a
+    flat field the way it would against a constant background."""
+    w, h = spec.pixel_size(_COMP_DPI)
+    rng = np.random.default_rng(seed)
+    return rng.random((h, w, 3), dtype=np.float32)
+
+
+_COMP_CASES = {
+    "plain": {},
+    "no_halo": {"track_halo": 0.0},
+    "halo_full": {"track_halo": 0.9},        # the STYLE_BOUNDS ceiling, not past it
+    "colour_field": {"track_color_by": "elevation"},
+    "weave": {"track_weave": True},
+    "weave_colour": {"track_weave": True, "track_color_by": "elevation"},
+    "low_darken": {"track_max_darken": 0.35},
+    "single_journey": {"n_journeys": 1},
+}
+
+
+@pytest.mark.parametrize("case", list(_COMP_CASES), ids=list(_COMP_CASES))
+def test_the_dense_composite_changes_nothing_off_the_ink_support(case):
+    """The claim the whole restriction rests on, asserted on the OLD code: off the
+    support the dense blend is an exact no-op, not merely a small one. If this ever
+    fails, restricting the composite is unsound and needs a revision, not a merge."""
+    spec = _comp_spec(**_COMP_CASES[case])
+    for layer in _comp_layers(spec):
+        img = _sheet(spec)
+        out = _dense_composite(img.copy(), spec, layer)
+        off = np.ones(layer.op.shape, bool)
+        off.reshape(-1)[render._ink_support(layer)] = False
+        assert np.array_equal(out[off], img[off]), (
+            f"{case}: the dense blend moved {int((out[off] != img[off]).any(-1).sum())} "
+            f"pixels that are off the ink support")
+
+
+@pytest.mark.parametrize("case", list(_COMP_CASES), ids=list(_COMP_CASES))
+def test_support_restricted_composite_is_byte_identical_to_the_dense_blend(case):
+    """Bit-for-bit, not close: this is the forever-contract on the most exacting
+    painter in the engine."""
+    spec = _comp_spec(**_COMP_CASES[case])
+    for layer in _comp_layers(spec):
+        img = _sheet(spec)
+        want = _dense_composite(img.copy(), spec, layer)
+        got = render._composite_ink_layer(img.copy(), spec, layer)
+        assert got.dtype == want.dtype
+        assert np.array_equal(got, want), f"{case}: the composite moved"
+
+
+def test_the_composite_and_the_packing_share_one_support_definition():
+    """Two definitions of "the support" that could drift is the bug this forecloses:
+    the packing drops `gf` and the colour field off ITS support, and the composite is
+    only sound there if it blends over exactly the same pixels."""
+    spec = _comp_spec(track_color_by="elevation")
+    for layer in _comp_layers(spec):
+        packed_idx = render._ink_pack(layer)[1]
+        assert np.array_equal(render._ink_support(layer), packed_idx)
+
+
+def test_inking_tracks_still_does_not_mutate_the_base_sheet():
+    """`_ink_tracks` copies to float before compositing, and a time-lapse inks many
+    journey prefixes onto ONE base -- so the base must survive being inked."""
+    spec = _comp_spec()
+    w, h = spec.pixel_size(_COMP_DPI)
+    base = (np.random.default_rng(11).random((h, w, 3)) * 255).astype(np.uint8)
+    before = base.copy()
+    render._ink_tracks(base, spec, w, h, _COMP_DPI)
+    assert np.array_equal(base, before)
+
+
+def test_the_composite_writes_through_a_non_contiguous_sheet():
+    """The scatter reaches `img` only if `reshape(-1, 3)` is a VIEW. On a non-contiguous
+    sheet reshape silently COPIES, and without the guard every drop of ink would land in
+    the copy and be thrown away -- a blank route, not a crash."""
+    spec = _comp_spec()
+    layer = _comp_layers(spec)[0]
+    w, h = spec.pixel_size(_COMP_DPI)
+    # a C-contiguous parent sliced down a channel-padded axis: the classic accidental view
+    parent = np.random.default_rng(5).random((h, w, 4), dtype=np.float32)
+    sheet = parent[:, :, :3]
+    assert not sheet.flags.c_contiguous
+    want = _dense_composite(np.ascontiguousarray(sheet), spec, layer)
+    got = render._composite_ink_layer(sheet, spec, layer)
+    assert np.array_equal(got, want)
+    # and the ink actually landed -- otherwise "identical to the dense blend" could be
+    # satisfied by a layer that inks nothing at all
+    assert not np.array_equal(got, sheet)
+
+
+def test_the_composite_is_a_no_op_for_a_layer_with_no_inked_pixels():
+    """A spec whose route inks nothing (no tracks at all) has an empty support. The
+    blends are skipped outright, and the sheet must come back untouched rather than
+    scaled or zeroed."""
+    spec = dataclasses.replace(_comp_spec(), tracks=[], track_days=[])
+    w, h = spec.pixel_size(_COMP_DPI)
+    layers = _comp_layers(spec)
+    assert layers, "expected one summed layer even with no tracks"
+    for layer in layers:
+        assert render._ink_support(layer).size == 0
+        img = _sheet(spec)
+        before = img.copy()
+        out = render._composite_ink_layer(img, spec, layer)
+        assert np.array_equal(out, before)

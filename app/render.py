@@ -787,6 +787,23 @@ class _InkLayer:
     ink: object                  # per-pixel ink colour field, or None for the flat swatch
 
 
+def _ink_support(layer):
+    """Flat indices of the pixels this layer can change: where the ink opacity or the
+    casing coverage is non-zero. On an 18x24 at 200 dpi that is ~1% of the sheet, since
+    a route ribbon only covers the ground it was walked on.
+
+    ONE definition, deliberately, because two consumers depend on it agreeing:
+    `_ink_pack` drops `gf` and the colour field off this support, and
+    `_composite_ink_layer` is only sound in doing so if it blends over exactly the same
+    pixels. A second, drifting definition of "the support" is the bug this forecloses."""
+    support = layer.op != 0
+    if layer.cas is not None:
+        support |= layer.cas != 0
+    idx = np.flatnonzero(support).astype(np.int32)   # < 2^31 px by the MAX_OUTPUT ceiling
+    idx.flags.writeable = False
+    return idx
+
+
 def _ink_pack(layer):
     """Compress a layer onto its SUPPORT for the cache: flat indices plus the values
     there, instead of four dense planes that are ~99% zeros.
@@ -803,11 +820,7 @@ def _ink_pack(layer):
     even though two of the arrays are not, which is why the test asserts on the
     composite. Packing is only ever applied to what goes INTO the cache: the uncached
     path (every caller but the two proof endpoints) never pays for it."""
-    support = layer.op != 0
-    if layer.cas is not None:
-        support |= layer.cas != 0
-    idx = np.flatnonzero(support).astype(np.int32)   # < 2^31 px by the MAX_OUTPUT ceiling
-    idx.flags.writeable = False
+    idx = _ink_support(layer)
 
     def take(a):
         if a is None:
@@ -963,23 +976,44 @@ def _composite_ink_layer(img, spec, layer):
     reads the sheet -- which is exactly why the other half is cacheable.
 
     The three spec values read here (`track_halo`, `track_max_darken`, `track_rgb`) are
-    the ones held OUT of the layer on purpose; see `INK_KEY_MASK_ALWAYS`."""
+    the ones held OUT of the layer on purpose; see `INK_KEY_MASK_ALWAYS`.
+
+    Both blends run on the ink SUPPORT (~1% of the sheet), not the whole sheet, and that
+    is byte-identical rather than merely close: off the support `op` is exactly 0.0 --
+    `gaussian_filter` has finite support -- so the blend there is `img * 1.0 + col * 0.0`,
+    which IS `img` in float32. It is the same argument `_ink_pack` already rests on, and
+    it shares `_ink_support` with it so the two cannot disagree. The full-sheet form
+    spent ~99% of two alpha blends proving that x * 1 + c * 0 == x, on the one path that
+    the FINAL pays for as well as the proof.
+
+    Composites IN PLACE and returns the same array. `_ink_tracks` owns `img` (it copies
+    to float32 before the first layer), and a weave hands the same sheet through one call
+    per journey, so there is nothing here to copy defensively."""
+    idx = _ink_support(layer)
+    if idx.size == 0:                     # a spec with no inked pixels: nothing to do
+        return img
+    # reshape must be a VIEW for the scatter below to reach `img`; on a non-contiguous
+    # array it would silently copy and the ink would go nowhere.
+    if not img.flags.c_contiguous:
+        img = np.ascontiguousarray(img)
+    flat = img.reshape(-1, img.shape[2])
+    sub = flat[idx]
     if layer.cas is not None:
-        casing_op = (spec.track_halo * np.clip(layer.cas, 0, 1))[..., None]
+        casing_op = (spec.track_halo * np.clip(layer.cas.reshape(-1)[idx], 0, 1))[:, None]
         casing_col = np.array(TRACK_CASING, np.float32) / 255.0
-        img = img * (1 - casing_op) + casing_col[None, None, :] * casing_op
-        del casing_op
-    op = np.clip(layer.op, 0.0, spec.track_max_darken)
-    op = (op * layer.gf)[..., None]
+        sub = sub * (1 - casing_op) + casing_col[None, :] * casing_op
+    op = np.clip(layer.op.reshape(-1)[idx], 0.0, spec.track_max_darken)
+    op = (op * layer.gf.reshape(-1)[idx])[:, None]
     # alpha-blend toward the gold so the hue reads true and pronounced (a multiply
     # toward gold would only darken the terrain to a muddy brown); grain in `op`
     # keeps the paper texture so it still sits on the sheet rather than floating.
     ink_field = layer.ink
     if ink_field is not None:
-        img = img * (1 - op) + ink_field * op
+        sub = sub * (1 - op) + ink_field.reshape(-1, ink_field.shape[2])[idx] * op
     else:
         ink = np.array(spec.track_rgb, np.float32) / 255.0   # client's swatch; TRACK_INK default
-        img = img * (1 - op) + ink[None, None, :] * op
+        sub = sub * (1 - op) + ink[None, :] * op
+    flat[idx] = sub
     return img
 
 
