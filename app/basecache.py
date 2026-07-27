@@ -70,13 +70,31 @@ DEFAULT_MB = 512
 # uncacheable one. (After the feather blur a route ribbon is non-zero on ~1% of the
 # sheet; see render._ink_pack.)
 #
+# Every row above is a SYNTHETIC journey -- a straight line across the sheet. A real GPX
+# track wanders, so it inks more of the sheet per journey. Re-measured 2026-07-27 on a
+# real onX track (105.9 km, 271 verts after simplify) over the real susanville_reno
+# plate, same 18x24 at 200 dpi:
+#
+#   journeys   96 dpi draft   200 dpi refine   PAIR      support
+#          1        0.7 MB           3.2 MB    3.8 MB      1.15%
+#          3        2.0 MB           9.5 MB   11.5 MB      1.15%
+#         10        6.6 MB          31.8 MB   38.3 MB      1.15%
+#
+# 3.83 MB per journey against the 2.72 MB the synthetic rows imply -- 41% more. So the
+# ceiling is nearer **~66 journeys** than the ~90 estimated below, and it scales with
+# track LENGTH, not just count: a 106 km day costs more than a 5 km walk. Treat ~66 as
+# the number for long tracks and re-measure if the refusals start appearing early.
+# (Caveat: the multi-journey rows repeat that one real track at an offset, so the
+# geometry is real but the variety is not. A true multi-year set is still unmeasured.)
+#
 # Sized against the draft+refine PAIR, never the largest single entry -- the lesson from
 # the budget above, where admitting the big entry alone scored zero hits out of four on
 # a knob drag while looking perfectly healthy. 256 MB covers a 50-journey chronicle's
 # pair with room for a second composition. It is ~linear in strands from there, so the
-# pair passes the budget somewhere past ~90 journeys at 200 dpi; that entry is refused
-# rather than thrashed, and the refusal is logged (event=basecache.refuse) so it shows
-# up as a diagnosis instead of unexplained slowness. TECOPA_INK_CACHE_MB=0 disables it.
+# pair passes the budget somewhere past ~90 SYNTHETIC journeys at 200 dpi (~66 real ones,
+# above); that entry is refused rather than thrashed, and the refusal is logged
+# (event=basecache.refuse) so it shows up as a diagnosis instead of unexplained
+# slowness. TECOPA_INK_CACHE_MB=0 disables it.
 INK_DEFAULT_MB = 256
 
 
