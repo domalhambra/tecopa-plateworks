@@ -127,6 +127,43 @@ def test_reading_direction_flips_leftward_spines():
     xs = [cx for _, cx, _, _ in glyphs]
     assert xs[-1] > xs[0], "leftward spine should have been flipped to read +x"
 
+def test_reading_direction_reads_the_glyph_span_not_the_whole_spine():
+    # The real DIAMOND MOUNTAINS failure. The text occupies only the middle of a long
+    # spine; sampling the whole spine at 25%/75% lands on the backward-splayed arms and
+    # flips a label whose own stretch already reads left-to-right. Decide on the glyphs.
+    import math
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (600, 200)))
+    font = render._font(22)
+    # a zigzag: long leftward arm, rightward middle (where the text lands), long leftward arm
+    poly = [(500, 0), (100, 0), (100, 40), (500, 40), (500, 80), (100, 80)]
+    glyphs, _ = render._curved_plan(d, poly, "RANGE", font, 3, 2, 10)
+    xs = [cx for _, cx, _, _ in glyphs]
+    mean_cos = sum(math.cos(a) for _, _, _, a in glyphs) / len(glyphs)
+    assert mean_cos > 0, f"glyphs render upside down: mean cos {mean_cos:+.3f}"
+    assert xs[-1] > xs[0], "text must advance left-to-right along its own stretch"
+
+def test_near_vertical_spine_reads_top_to_bottom():
+    # BALD HILLS: a near-vertical spine leaves cos ~ 0, so the leftward test can't decide.
+    # Convention for a rotated map label is top-to-bottom (head tilted right), never
+    # bottom-to-top, whichever way the digitised spine happens to run.
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (200, 500)))
+    font = render._font(22)
+    glyphs, _ = render._curved_plan(d, [(100, 440), (100, 40)], "RANGE", font, 3, 2, 10)
+    ys = [cy for _, _, cy, _ in glyphs]
+    assert ys[-1] > ys[0], f"upward spine should read top-to-bottom: {ys}"
+
+def test_hairpin_spine_falls_back_to_a_straight_label():
+    # BALD HILLS: the spine doubles back inside the glyph span, so half the name runs
+    # one way and half the other -- unreadable however it's flipped. No reading direction
+    # rescues a hairpin; the caller's straight centered label is the only right answer.
+    from PIL import Image, ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (600, 300)))
+    font = render._font(22)
+    poly = [(100, 100), (400, 100), (400, 140), (100, 140)]      # out and back
+    assert render._curved_plan(d, poly, "RANGE", font, 3, 2, 10) is None
+
 def test_diagonal_range_is_dpi_stable():
     # the gating risk: rotated-glyph curved labels must still downscale faithfully.
     cfg = _cfg(); bx = cfg["bounds"]

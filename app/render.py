@@ -115,6 +115,11 @@ GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet ed
 GEO_CURVE_KINDS = {"range", "valley"}
 GEO_PATH_SMOOTH_M = 1200.0            # spine-smoothing window in GROUND metres (dpi-stable)
 GEO_MIN_PATH_IN = 1.1                 # min in-frame spine length (inches) to bother curving
+GEO_CURVE_VERTICAL_COS = 0.09         # |mean glyph cos| under this reads as vertical (~5 deg),
+                                      # where left-vs-right can't decide the reading direction
+GEO_CURVE_MAX_BEND = _m.radians(60)   # a glyph turning further than this from the name's own
+                                      # direction means the spine doubles back through the
+                                      # label -> decline the curve, set it straight instead
 # Smart label placement (v1.10, spec.label_place == "smart"): a ranked ring of candidate
 # offsets (Imhof/Maplex convention) so a colliding name tries alternative slots instead of
 # dropping; the drawn route as a placement obstacle so a name never crosses the journey it
@@ -1785,8 +1790,9 @@ def _point_at(poly, cum, s):
 def _curved_plan(d, poly, text, font, tracking, halo, min_len):
     """Lay `text` along `poly` (px), centered on the spine midpoint. Returns
     (glyphs, bbox) where glyphs is [(ch, cx, cy, angle_rad)] anchored at each glyph
-    CENTRE, or None when the spine is shorter than the text or than min_len -- the caller
-    then falls back to a straight centered label, so nothing ever crams or hairpins."""
+    CENTRE, or None when the spine is shorter than the text or than min_len, or when it
+    doubles back through the name -- the caller then falls back to a straight centered
+    label, so nothing ever crams or hairpins."""
     cum = _arclen(poly); L = cum[-1]
     if L < min_len:
         return None
@@ -1794,22 +1800,45 @@ def _curved_plan(d, poly, text, font, tracking, halo, min_len):
     T = sum(advances) - tracking                       # drop the trailing track
     if T > L:
         return None
-    # reading direction: if the spine mostly points left, reverse it so text is upright
-    _, _, a0 = _point_at(poly, cum, L * 0.25)
-    _, _, a1 = _point_at(poly, cum, L * 0.75)
-    if _m.cos(a0) + _m.cos(a1) < 0:
-        poly = poly[::-1]; cum = _arclen(poly)
     ascent, descent = font.getmetrics(); th = ascent + descent
-    s = (L - T) / 2.0
-    glyphs = []; minx = miny = 1e18; maxx = maxy = -1e18
-    for ch, adv in zip(text, advances):
-        gw = adv - tracking
-        cx, cy, ang = _point_at(poly, cum, s + gw / 2.0)
-        glyphs.append((ch, cx, cy, ang))
-        r = th / 2 + gw / 2 + halo                     # conservative per-glyph footprint
+
+    def lay(poly, cum):
+        s = (cum[-1] - T) / 2.0
+        out = []
+        for ch, adv in zip(text, advances):
+            gw = adv - tracking
+            cx, cy, ang = _point_at(poly, cum, s + gw / 2.0)
+            out.append((ch, cx, cy, ang))
+            s += adv
+        return out
+
+    # Reading direction, decided on the stretch the GLYPHS occupy rather than on the whole
+    # spine. Sampling the spine at 25%/75% reads the arms of a long feature, which can point
+    # backward while the middle -- where the centered text actually sits -- reads fine; that
+    # flipped DIAMOND MOUNTAINS upside down. Near-vertical the x-component decides nothing,
+    # so fall back to the rotated-label convention: top-to-bottom, head tilted right.
+    glyphs = lay(poly, cum)
+    n = len(glyphs)
+    mean_cos = sum(_m.cos(g[3]) for g in glyphs) / n
+    mean_sin = sum(_m.sin(g[3]) for g in glyphs) / n
+    # A spine that doubles back inside the glyph span (BALD HILLS sits on a hairpin) sets
+    # half the name against the other half -- no reading direction rescues that, so decline
+    # the curve and let the caller set a straight label. Measured on the real plate, the
+    # margin is wide: DIAMOND MOUNTAINS bends 0.0 deg across its name, BALD HILLS 134 deg.
+    mean_ang = _m.atan2(mean_sin, mean_cos)
+    if max(abs((g[3] - mean_ang + _m.pi) % (2 * _m.pi) - _m.pi)
+           for g in glyphs) > GEO_CURVE_MAX_BEND:
+        return None
+    vertical = abs(mean_cos) < GEO_CURVE_VERTICAL_COS
+    if (mean_sin < 0) if vertical else (mean_cos < 0):
+        poly = poly[::-1]; cum = _arclen(poly)
+        glyphs = lay(poly, cum)
+
+    minx = miny = 1e18; maxx = maxy = -1e18
+    for (ch, cx, cy, _), adv in zip(glyphs, advances):
+        r = th / 2 + (adv - tracking) / 2 + halo       # conservative per-glyph footprint
         minx = min(minx, cx - r); maxx = max(maxx, cx + r)
         miny = min(miny, cy - r); maxy = max(maxy, cy + r)
-        s += adv
     return glyphs, (round(minx), round(miny), round(maxx), round(maxy))
 
 def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo):
