@@ -18,3 +18,20 @@ def test_an_unbound_role_is_the_very_same_font_object(monkeypatch):
 def test_an_unknown_role_is_refused():
     with pytest.raises(ValueError):
         render._font(24, "cartouche")      # not in TYPE_ROLES -- a typo, not a feature
+
+
+def test_a_bound_role_wins_over_the_sheet_wide_face(monkeypatch):
+    # Bind to names with different RESOLUTIONS, not different installed files: this host
+    # has Georgia but no DejaVu, CI the reverse, so the portable pair is "a real name"
+    # vs "a name that falls through to the default chain".
+    monkeypatch.delenv("TECOPA_FONT", raising=False)
+    monkeypatch.setenv("TECOPA_FONT_POINT", "Georgia.ttf")
+    monkeypatch.setenv("TECOPA_FONT_AREA", "ThisFaceDoesNotExist.ttf")   # -> fallback chain
+    assert render._font(24, "point") is not render._font(24, "area")
+
+
+def test_rebinding_a_role_is_not_served_from_the_cache(monkeypatch):
+    monkeypatch.setenv("TECOPA_FONT_POINT", "Georgia.ttf")
+    first = render._font(24, "point")
+    monkeypatch.setenv("TECOPA_FONT_POINT", "AlsoNotAFace.ttf")
+    assert render._font(24, "point") is not first
