@@ -1127,10 +1127,13 @@ def _font(size, role="body"):
     The env bindings are read on every call, so rebinding a role takes effect on the
     next one. Roles bound to the same face share one cache entry -- and therefore one
     FT_Face, which is why the cache is thread-local (see the note above)."""
+    return _font_at(_role_face(role), size)
+
+def _font_at(face, size):
     cache = getattr(_font_local, "fonts", None)
     if cache is None:
         cache = _font_local.fonts = {}
-    key = (_role_face(role), size)
+    key = (face, size)
     font = cache.get(key)
     if font is None:
         if len(cache) >= _FONT_CACHE_MAX:      # a render uses a dozen sizes; this is
@@ -1145,6 +1148,37 @@ def _role_face(role):
         raise ValueError(f"unknown type role {role!r}; expected one of {TYPE_ROLES}")
     return (os.environ.get(f"TECOPA_FONT_{role.upper()}")
             or os.environ.get("TECOPA_FONT") or "")
+
+def _role_case(role):
+    """Casing for the caps register under this role's binding. "upper" (default): the
+    free chain has no small caps, so an area name is set ALL CAPS. "mixed": the operator
+    bound a caps/small-caps face (Advocate draws small caps from its LOWERCASE positions
+    and exposes no smcp), so the name must keep its own case for the register to appear.
+    Face-dependent, so it rides with the binding as TECOPA_FONT_<ROLE>_CASE rather than
+    living in the kind table."""
+    v = (os.environ.get(f"TECOPA_FONT_{role.upper()}_CASE") or "upper").lower()
+    if v not in ("upper", "mixed"):
+        raise ValueError(f"TECOPA_FONT_{role.upper()}_CASE must be 'upper' or 'mixed', got {v!r}")
+    return v
+
+_NORM_PROBE_PX = 100     # metric probe size; the scale is a ratio, so any size works
+
+def _size_scale(role, caps):
+    """Perceived-size correction for a bound face: cap-height governs the caps register,
+    x-height governs text sizes (typography-standards.md), and point size alone is not
+    comparable across families -- Hermes Maia's x-height is 0.538 em against Georgia's
+    0.481, an 11.9% difference at equal nominal size. The reference is the DEFAULT
+    chain's own metric, so an unbound role scales by exactly 1.0 on every host, and a
+    bound face sets at the perceived size of the face it replaces. Clamped: a metric
+    probe gone wrong must never scale a label to invisible or absurd."""
+    bound = _role_face(role)
+    if not bound:
+        return 1.0
+    ch = "H" if caps else "x"
+    def metric(face):
+        l, t, r, b = _font_at(face, _NORM_PROBE_PX).getbbox(ch)
+        return max(1, b - t)
+    return min(1.4, max(0.7, metric("") / metric(bound)))
 
 def _load_font(override, size):
     # TECOPA_FONT lets the operator drop in a licensed display face (a real
@@ -1461,7 +1495,7 @@ def _title_block_metrics(spec, d, dpi):
     # the data credit (stamped on the spec at proof time -- never read from region
     # data here): a third row of tracked caps under the stats, smaller and quieter.
     credit = spec.credit_text.strip().upper()
-    t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi)))
+    t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi) * _size_scale("title", caps=True)))
     s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, fdpi)))
     c_size = max(7, round(_pt_to_px(spec.label_pt * 0.62, fdpi)))
     title_font = _font(t_size, "title")    # the cartouche's display line; the rest of
@@ -2023,9 +2057,12 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         if len(placed) >= cap:
             break
         pt_size, caps, _, role = GEO_KINDS[kind]
-        text = name.upper() if caps else name
-        tracking = _pt_to_px(pt_size, dpi) * GEO_TRACKING_EM if caps else 0
-        font = _font(max(9, round(_pt_to_px(pt_size, dpi))), role)
+        # casing follows the binding (small-caps faces want lowercase); tracking follows
+        # the REGISTER -- an area name stays letterspaced in either casing.
+        text = name.upper() if caps and _role_case(role) == "upper" else name
+        px = _pt_to_px(pt_size, dpi) * _size_scale(role, caps)
+        tracking = px * GEO_TRACKING_EM if caps else 0
+        font = _font(max(9, round(px)), role)
 
         # curved along the spine for a long-enough linear landform; else straight.
         if kind in GEO_CURVE_KINDS and path and len(path) >= 2:
