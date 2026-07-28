@@ -51,3 +51,6 @@ assets/
 *.ttf
 *.woff
 *.woff2
+
+# Local Netlify folder
+.netlify
