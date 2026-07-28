@@ -331,11 +331,13 @@ def _caption_font(px: int):
     # The engine's OWN font chain (render._font), replicated here so the placard reads
     # in the same face as the poster's cartouche beside it -- and carries the glyphs the
     # cartouche does (the edition line's em-dash; Pillow's bundled face renders it as
-    # tofu). Same cross-host caveat the engine itself accepts and documents: the face
-    # follows TECOPA_FONT / the installed serif, byte-identical within a host (the
-    # farm's own machine), and no worse cross-host than the poster it stages. Kept a
-    # local copy of the chain so still-mode stays a bare Pillow+numpy dependency.
-    names = [os.environ["TECOPA_FONT"]] if os.environ.get("TECOPA_FONT") else []
+    # tofu). The cartouche sets in the TITLE role, so the role binding is consulted
+    # first, then the sheet-wide face -- the same resolution order as render._role_face,
+    # mirrored rather than imported so still-mode stays a bare Pillow+numpy dependency.
+    # Same cross-host caveat the engine itself accepts and documents: byte-identical
+    # within a host (the farm's own machine), no worse cross-host than the poster.
+    names = [n for n in (os.environ.get("TECOPA_FONT_TITLE"),
+                         os.environ.get("TECOPA_FONT")) if n]
     names += ["Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"]
     for name in names:
         try:

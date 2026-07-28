@@ -168,9 +168,27 @@ Release ritual, in two lines: pack the real-DEM plates (`scripts/pack_region.py`
 publish the zips as release assets and commit `plates/index.json`; then run the orphan
 drill against a fresh clone before announcing anything.
 
-**Fonts:** the cartouche tries Georgia from the host system but the repo/package never
-bundles `Georgia.ttf` (proprietary face); `TECOPA_FONT` is the seam for a licensed
-face, and a packaged build ships a redistributable SIL-OFL serif as its default.
+**Fonts:** the engine ships no licensed face — it tries Georgia from the host system,
+then DejaVu, and the repo/package never bundles either a proprietary face or the MB
+Type library. Type is set by **role**, and each role binds to a file the operator has
+a licence for:
+
+| Env var | Role | Sets |
+|---|---|---|
+| `TECOPA_FONT_TITLE` | title | the cartouche's display line |
+| `TECOPA_FONT_POINT` | point | peaks, passes (roman point labels) |
+| `TECOPA_FONT_AREA` | area | ranges, playas, valleys (tracked caps register) |
+| `TECOPA_FONT_WATER` | water | lakes, rivers (italic hydrography) |
+| `TECOPA_FONT` | body + fallback | everything else, and any unbound role |
+
+`TECOPA_FONT_AREA_CASE=mixed` switches the area register from ALL CAPS to the name's
+own case — set it when binding a caps/small-caps face (such as Advocate), whose
+lowercase positions draw small caps. A bound face is automatically sized so its
+register metric (cap-height for caps, x-height for text) matches the default chain's,
+so a binding never silently changes the sheet's perceived type size.
+
+The bindings are operator state, not part of the file: a poster rendered on a host
+with different bindings will look different.
 
 ## Wallpapers ("a screen is a sheet with a known ppi")
 
