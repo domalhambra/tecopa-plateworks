@@ -35,3 +35,19 @@ def test_rebinding_a_role_is_not_served_from_the_cache(monkeypatch):
     first = render._font(24, "point")
     monkeypatch.setenv("TECOPA_FONT_POINT", "AlsoNotAFace.ttf")
     assert render._font(24, "point") is not first
+
+
+def test_each_label_kind_asks_for_its_own_role(monkeypatch):
+    # Routing, not pixels: a summit must request "point", a range "area", the
+    # cartouche "title". _spec(labels=True) puts a range and a summit in crop and
+    # sets title_text, so all three are reachable. (water is not -- _labels_for
+    # passes no lakes -- and that is fine; hydro routing shares the same code path.)
+    from tests.test_labels import _spec, _labels_for
+    asked = []
+    real = render._font
+    monkeypatch.setattr(render, "_font",
+                        lambda size, role="body": (asked.append(role), real(size, role))[1])
+    spec = _spec(labels=True)
+    render.rasterize(spec, dpi=96, region_dir="regions/lassen_ca",
+                     hydro={"lakes": [], "rivers": []}, labels=_labels_for(spec))
+    assert {"point", "area", "title"} <= set(asked)

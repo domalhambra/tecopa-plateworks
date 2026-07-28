@@ -94,17 +94,19 @@ GEO_LABEL_INK = (46, 38, 30)          # warm dark umber, the map-ink family
 GEO_LABEL_HALO = (244, 238, 225)      # paper, drawn as a knockout halo behind the ink
 GEO_HALO_PT = 1.1                     # halo stroke, points
 GEO_TRACKING_EM = 0.18                # tracked-caps letterspacing for area names
-# per-kind (point size in pt, ALL-CAPS tracked?, keep-rank). Rank orders both the
-# collision pass and, with the density cap, which names survive on a busy sheet.
+# per-kind (point size in pt, ALL-CAPS tracked?, keep-rank, type role). Rank orders both
+# the collision pass and, with the density cap, which names survive on a busy sheet. The
+# role picks the face through _font(size, role) -- the cartographic registers: point
+# features roman, area features tracked caps, hydrography italic (typography-standards).
 GEO_KINDS = {
-    "range":   (12.5, True,  100),    # the headline: a range name in wide tracked caps
-    "summit":  (7.6,  False, 85),     # peaks are the iconic terrain -> above the meadows
-    "lake":    (7.0,  False, 66),
-    "gap":     (7.0,  False, 60),     # passes / saddles
-    "flat":    (10.0, True,  52),     # playa / desert (reads big on the NV/UT sheets)
-    "basin":   (9.0,  True,  50),
-    "valley":  (6.8,  False, 44),     # incl. Colorado's many "... Park" meadows
-    "river":   (6.8,  False, 40),
+    "range":   (12.5, True,  100, "area"),   # the headline: a range name in wide tracked caps
+    "summit":  (7.6,  False, 85,  "point"),  # peaks are the iconic terrain -> above the meadows
+    "lake":    (7.0,  False, 66,  "water"),
+    "gap":     (7.0,  False, 60,  "point"),  # passes / saddles
+    "flat":    (10.0, True,  52,  "area"),   # playa / desert (reads big on the NV/UT sheets)
+    "basin":   (9.0,  True,  50,  "area"),
+    "valley":  (6.8,  False, 44,  "area"),   # incl. Colorado's many "... Park" meadows
+    "river":   (6.8,  False, 40,  "water"),
 }
 GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 sq inch
 GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
@@ -1462,8 +1464,8 @@ def _title_block_metrics(spec, d, dpi):
     t_size = max(12, round(_pt_to_px(spec.title_pt, fdpi)))
     s_size = max(8, round(_pt_to_px(spec.label_pt * 0.85, fdpi)))
     c_size = max(7, round(_pt_to_px(spec.label_pt * 0.62, fdpi)))
-    title_font = _font(t_size)
-    stats_font = _font(s_size)
+    title_font = _font(t_size, "title")    # the cartouche's display line; the rest of
+    stats_font = _font(s_size)             # the furniture stays on the body face
     credit_font = _font(c_size)
     bar_font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.7, fdpi))))
     # track off the requested size, not font.size (the bitmap fallback has none)
@@ -2020,10 +2022,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     for rank, kind, name, (ax, ay), path in cands:
         if len(placed) >= cap:
             break
-        pt_size, caps, _ = GEO_KINDS[kind]
+        pt_size, caps, _, role = GEO_KINDS[kind]
         text = name.upper() if caps else name
         tracking = _pt_to_px(pt_size, dpi) * GEO_TRACKING_EM if caps else 0
-        font = _font(max(9, round(_pt_to_px(pt_size, dpi))))
+        font = _font(max(9, round(_pt_to_px(pt_size, dpi))), role)
 
         # curved along the spine for a long-enough linear landform; else straight.
         if kind in GEO_CURVE_KINDS and path and len(path) >= 2:
