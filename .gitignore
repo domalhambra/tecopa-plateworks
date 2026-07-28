@@ -34,3 +34,20 @@ assets/
 
 # built macOS launcher app (scripts/macos/build_app.sh)
 /dist/
+
+# ---- Licensed fonts: never commit, this repo is PUBLIC ----
+# MB Type licence paragraph 7 forbids storing the fonts in a location reachable
+# by non-licensed users, naming "a source repository" explicitly. This repo is
+# public and AGPL, which compounds it: copyleft obligates granting recipients
+# the right to redistribute the whole work, and that right cannot be granted
+# over these faces.
+#
+# The design already handles this. TECOPA_FONT (app/render.py) is an
+# operator-side override that points at a licensed face on Dom's own machine,
+# with a freely-redistributable default in the shipped path. These patterns
+# exist so the rule is enforced rather than remembered -- git history is
+# permanent, and a font committed once is exposed forever.
+*.otf
+*.ttf
+*.woff
+*.woff2
