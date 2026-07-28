@@ -996,8 +996,7 @@ async def proof(session_id: str = Form(...),
                 sun_azimuth_deg: Optional[float] = Form(None),
                 sun_altitude_deg: Optional[float] = Form(None),
                 golden_strength: float = Form(0.7), profile: bool = Form(False),
-                profile_height_in: float = Form(0.9), profile_rev: int = Form(2),
-                relief_rev: int = Form(2),
+                profile_height_in: float = Form(0.9),
                 track_color_by: str = Form("none"),
                 label_place: str = Form("smart"), track_weave: bool = Form(True),
                 output: str = Form("print"), wallpaper_preset: str = Form(""),
@@ -1012,16 +1011,10 @@ async def proof(session_id: str = Form(...),
              "oblique": oblique,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
-             "profile_height_in": profile_height_in, "profile_rev": profile_rev,
-             # relief_rev (v1.13): NEW proofs get the float32 + pyramid-blur chain; the
-             # spec/manifest omit it at 1 so a poster printed on the old chain reprints
-             # byte-identically (see app/spec.RELIEF_REVS).
-             "relief_rev": relief_rev,
+             "profile_height_in": profile_height_in,
              "bleed_in": bleed, "track_color_by": track_color_by,
-             # smart label placement + chronological weave (v1.10) + profile_rev (v1.12):
-             # NEW posters default to the enhanced look (the Form defaults above), while the
-             # spec/manifest still omit these at their pre-feature default so OLD posters
-             # reprint byte-identically.
+             # smart label placement + chronological weave (v1.10): NEW posters default
+             # to the enhanced look (the Form defaults above).
              "label_place": label_place, "track_weave": track_weave}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
@@ -1511,19 +1504,21 @@ def _file_pack_version(manifest) -> str | None:
         return pv
     return None
 
-def _manifest_region_or_422(spec, verb: str, manifest=None):
+def _manifest_region_or_422(spec, verb: str, manifest=None, allow_plate_mismatch=False):
     """The built region a manifest names, or a 422: a poster whose region isn't built on
     THIS server can't be reprinted/continued here. `verb` ("reprinted"/"continued") fills
     the message. When the manifest carries a region_pack block AND this server's plate
-    is hash-manifested, the plate is VERIFIED against this server's own
+    is hash-manifested, the plate is checked against this server's own
     (region_pack_block, with the FILE's labels toggle so both sides hash the same asset
-    set): a rebuilt plate would reprint the poster *differently*, silently -- honest
-    refusal over silent wrongness. A manifest without the block (pre-pack poster, or
-    manifest=None) skips verification, and so does a server plate without sources.json
-    (MANIFEST.md's `absent` semantics: a hand-built plate stays printable) -- soft
-    forever-compat, same stance as every other additive manifest key. Availability and
-    plate identity are per-server capability checks, so they live here rather than in
-    provenance.spec_from_manifest (which only hardens the untrusted spec itself)."""
+    set): a rebuilt plate reprints the poster *differently*. The mismatch is surfaced --
+    the operator needs to know the terrain moved -- but it is a WARNING with an explicit
+    override, not a refusal: with the forever-contract retired the goal is "reprint it
+    for the customer easily", and USGS re-flying 3DEP should not block a reorder. Pass
+    allow_plate_mismatch=True to proceed on the current plate. A manifest without the
+    block skips the check, and so does a server plate without sources.json (a hand-built
+    plate stays printable). Availability and plate identity are per-server capability
+    checks, so they live here rather than in provenance.spec_from_manifest (which only
+    hardens the untrusted spec itself)."""
     file_pv = _file_pack_version(manifest)
     region = REGIONS.get(spec.region_id)
     if region is None:
@@ -1534,13 +1529,19 @@ def _manifest_region_or_422(spec, verb: str, manifest=None):
         server = provenance.region_pack_block(region.dir, labels=spec.labels,
                                               biome=spec.biome)
         if server is not None and server["pack_version"] != file_pv:
-            # "reprinted" -> "reprint", "continued" -> "continue" (rstrip would eat
-            # continue's own trailing e); an unknown future verb reads as-is.
-            base = {"reprinted": "reprint", "continued": "continue"}.get(verb, verb)
-            raise HTTPException(
-                422, f"this poster was painted on the {spec.region_id} plate {file_pv}; "
-                     f"this server has {server['pack_version']} — "
-                     f"install the original plate to {base} it exactly.")
+            if allow_plate_mismatch:
+                log.warning("event=plate.mismatch.overridden region=%s file=%s server=%s",
+                            spec.region_id, file_pv, server["pack_version"])
+            else:
+                # "reprinted" -> "reprint", "continued" -> "continue" (rstrip would eat
+                # continue's own trailing e); an unknown future verb reads as-is.
+                base = {"reprinted": "reprint", "continued": "continue"}.get(verb, verb)
+                raise HTTPException(
+                    422, f"this poster was painted on the {spec.region_id} plate {file_pv}; "
+                         f"this server has {server['pack_version']}. The terrain has "
+                         f"changed, so the {base} will not match the original exactly. "
+                         f"Resubmit with allow_plate_mismatch=true to {base} it on the "
+                         f"current plate, or install the original plate for an exact one.")
     return region
 
 @app.post("/api/reprint/inspect")
@@ -1595,6 +1596,7 @@ async def reprint_inspect(file: UploadFile = File(...)):
 
 @app.post("/api/reprint")
 async def reprint(file: UploadFile = File(...), format: str = Form("png"),
+                  allow_plate_mismatch: bool = Form(False),
                   embed_spec: bool = Form(True)):
     """Re-render a Tecopa Plateworks PNG at print resolution from the file alone. Stateless:
     the spec rides the file, so no session or DB row is needed -- a printed poster is
@@ -1613,7 +1615,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     _require_format(fmt, spec)                       # a wallpaper reprints as PNG only
     # plate verification runs HERE, before the animated/still branch: a mismatched
     # film must refuse up front, never enqueue a render against the wrong terrain.
-    region = _manifest_region_or_422(spec, "reprinted", manifest)
+    region = _manifest_region_or_422(spec, "reprinted", manifest,
+                                     allow_plate_mismatch=allow_plate_mismatch)
     # an animated file re-renders the FILM (the file promises "the file is the artwork",
     # so honor it for films too). A film render is slow -> through the queue, returning a
     # job like the other async paths, not a synchronous stream. Stills keep today's
@@ -1708,7 +1711,8 @@ def _match_wallpaper_preset(spec):
     return None
 
 @app.post("/api/continue")
-async def continue_poster(file: UploadFile = File(...)):
+async def continue_poster(file: UploadFile = File(...),
+                          allow_plate_mismatch: bool = Form(False)):
     """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
     live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
     extends the lineage chain, and returns the /api/upload response shape plus prefill
@@ -1725,7 +1729,8 @@ async def continue_poster(file: UploadFile = File(...)):
         spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
     except SpecError as e:
         raise HTTPException(422, str(e))
-    region = _manifest_region_or_422(spec, "continued", manifest)
+    region = _manifest_region_or_422(spec, "continued", manifest,
+                                     allow_plate_mismatch=allow_plate_mismatch)
 
     # rebuild live Track objects from the spec (tracks ride the spec, exactly the
     # property reprint relies on). track_days is parallel to tracks; normalize its
@@ -1798,13 +1803,6 @@ async def continue_poster(file: UploadFile = File(...)):
                   "lightMode": spec.light_mode, "sunAzimuth": spec.sun_azimuth_deg,
                   "sunAltitude": spec.sun_altitude_deg, "golden": spec.golden_strength,
                   "profile": spec.profile, "profileHeight": spec.profile_height_in,
-                  # profile_rev restore: a pre-rev-2 poster continues as rev 1 -- its
-                  # strip layout is the poster's own, not the current server default.
-                  "profileRev": spec.profile_rev,
-                  # relief_rev restore: a poster printed on the shipped chain continues
-                  # on it -- the edition must look like its predecessor, not like the
-                  # current server default.
-                  "reliefRev": spec.relief_rev,
                   # bleed restore: a continued print keeps its trim + bleed exactly
                   # (print_w_in/print_h_in above are the TRIM size; bleed rides separately).
                   "bleed": spec.bleed_in,

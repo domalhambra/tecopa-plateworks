@@ -1,5 +1,12 @@
 # The Tecopa Plateworks manifest — schema v1
 
+> **Status (2026-07-27): internal format documentation.** This document was previously
+> published and maintained as a CC0-1.0 public specification. The CC0 dedication on
+> previously published versions stands and cannot be revoked, but the document is no
+> longer maintained as a contract for third-party implementers — the format may change
+> with the engine, and `engine_version` in each file records which build wrote it. See
+> `docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`.
+
 The file is the artwork. Every Tecopa Plateworks final (PNG poster, wallpaper, APNG
 time-lapse) carries its complete recipe in **one compressed zTXt chunk**, keyword
 `trailprint`, whose payload is compact JSON with sorted keys (byte-stable for a given
@@ -8,31 +15,28 @@ Plateworks code required:
 
     python -c "from PIL import Image; import sys; print(Image.open(sys.argv[1]).text['trailprint'])" poster.png
 
-The manifest is a **forever-contract**: a poster printed today must still reprint,
-byte-identically, after any future engine upgrade. Everything below is normative;
-the frozen fixtures in `tests/fixtures/manifest_*.json` are the reference examples
-and never change.
+A poster reprints **from the file alone**: the manifest carries the whole recipe.
+Reprints are byte-identical within one engine build (determinism); across builds the
+render may drift, and the file's `engine_version` records which build painted it.
+The fixtures in `tests/fixtures/manifest_*.json` are sample old-format files used to
+test read-tolerance — they are no longer a frozen contract.
 
-Beside the manifest rides one **plain tEXt chunk**, keyword `trailprint-note` — a
-human-readable resurrection note (ASCII, uncompressed, so `strings poster.png` finds
-it): what the file is, that the PNG is the save file, where the engine lives and its
-license, the plate id + `pack_version` it was painted on, and how to reproduce it.
-It is a pure function of the manifest (byte-stable, reprint-identical) and is
-informative, not normative — readers must parse the zTXt manifest, never the note.
-Share copies (`embed_spec=false`) carry neither chunk.
+Files written before 2026-07-27 also carry a plain tEXt chunk, keyword
+`trailprint-note` (a human-readable "resurrection note"). The engine no longer writes
+it; readers must not depend on it and should parse only the zTXt manifest. Share
+copies (`embed_spec=false`) carry no manifest chunk at all.
 
-**Frozen chunk keywords.** The zTXt/tEXt chunk keywords remain `trailprint` and
-`trailprint-note` **forever** — they are frozen v1 format keywords. They predate the
-Tecopa Plateworks rename and every poster ever printed carries them; renaming the
-keywords would orphan those files. Readers and writers must use these exact keywords
-regardless of the engine's current name.
+**Frozen chunk keyword.** The zTXt chunk keyword remains `trailprint` **forever** — it
+predates the Tecopa Plateworks rename and every poster ever printed carries it;
+renaming it would orphan those files.
 
 ## Top-level keys
 
 | key                | always? | meaning |
 |--------------------|---------|---------|
-| `manifest_version` | yes     | `1`, forever (see "The additive contract") |
+| `manifest_version` | yes     | `1` (see "Schema evolution") |
 | `engine`           | yes     | `"tecopa-plateworks"` — names the producing engine. Files written before 2026-07-19 carry `"trailprint"` and files from the brief 2026-07 "Printworks" naming carry `"tecopa-printworks"` (both former names of this engine); readers MUST treat all three values as this engine |
+| `engine_version`   | since 2026-07-27 | the build that wrote the file (git commit, or a packaged build's version). Absent in older files. Informational: records drift, gates nothing |
 | `region_id`        | yes     | the terrain plate id, e.g. `"lassen_ca"` (duplicates `spec.region_id` for cheap inspection) |
 | `spec`             | yes     | the full CompositionSpec — the entire picture recipe (below) |
 | `sources`          | yes     | GPX provenance records (below); may be `[]` |
@@ -143,9 +147,10 @@ Semantics on reprint/continue:
 
 - **match** — the server's plate hashes to the same `pack_version`: a faithful
   reprint; the pixels come from the same terrain.
-- **mismatch** — USGS re-flies 3DEP, plates get rebuilt; a rebuilt plate would
-  reprint an old poster *differently*, silently. The server refuses with an honest
-  422 naming both plate ids instead. Honest refusal over silent wrongness.
+- **mismatch** — USGS re-flies 3DEP, plates get rebuilt; a rebuilt plate reprints an
+  old poster *differently*. The server surfaces this honestly (a 422 naming both
+  plate ids) and proceeds only on an explicit `allow_plate_mismatch=true` — the
+  operator decides, with eyes open.
 - **absent** — a pre-pack poster (or a hand-built plate with no `sources.json`):
   verification is skipped, the file prints, and a reprint truthfully re-stamps the
   block from the current server's plate.
@@ -153,18 +158,18 @@ Semantics on reprint/continue:
 Hashes, not URLs, identify a plate: URLs rot, mirrors move, but the bytes hash the
 same everywhere. Any archive holding the named assets can reconstitute the plate.
 
-## The additive contract
+## Schema evolution
 
-`manifest_version` stays `1`. Schema evolution is purely additive, and every added
-key is **omitted when absent** — a pre-feature manifest is byte-for-byte unchanged
-by new engine builds. Readers must therefore:
+`manifest_version` stays `1`. Since 2026-07-27 the writer emits **every** spec field
+(older files omitted fields at their defaults — the retired byte-identity discipline).
+Readers must therefore:
 
 - tolerate unknown top-level and `spec` keys (ignore them), and
 - tolerate missing optional keys (apply the documented defaults),
 
 mirroring the engine's own two-way drift rule (`serialize.spec_from_json`): unknown
-spec fields are dropped, missing ones take dataclass defaults. A reader written
-against this document today reads every past and future v1 file.
+spec fields are dropped, missing ones take dataclass defaults. That read-tolerance is
+the promise that remains: any old file opens.
 
 ## Privacy
 
@@ -175,9 +180,8 @@ coordinates, no photos, no provenance. Choose per file.
 
 ## License
 
-This document and the Tecopa Plateworks manifest format it specifies are dedicated to the
-public domain under **CC0-1.0** (see `docs/superpowers/plans/2026-07-12-strategy-and-license.md`).
-Anyone may implement a manifest reader, inspector, or renderer — commercially or
-otherwise, with or without attribution — without touching the AGPL-licensed engine.
-Even if the engine rots, the file format is free to reimplement: the deepest layer
-of the never-orphaned promise.
+Previously published versions of this document were dedicated to the public domain
+under **CC0-1.0** (see `docs/superpowers/plans/2026-07-12-strategy-and-license.md`);
+that dedication stands for those versions and cannot be revoked. As of 2026-07-27 the
+document is maintained as internal engine documentation, not a public specification
+(see the status note at the top).

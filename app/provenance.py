@@ -35,8 +35,6 @@ from app.spec import CompositionSpec, SpecError
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword -- FROZEN v1 format keyword: it
                                    # predates the Tecopa Plateworks rename and every existing
                                    # poster carries it; renaming would orphan those files.
-NOTE_KEY = "trailprint-note"       # the plain-tEXt resurrection note beside it -- frozen v1
-                                   # keyword for the same reason as MANIFEST_KEY.
 MANIFEST_VERSION = 1
 ENGINE = "tecopa-plateworks"
 # Manifests written by earlier engine names carry "trailprint" (pre 2026-07-19) or
@@ -44,9 +42,27 @@ ENGINE = "tecopa-plateworks"
 # (docs/MANIFEST.md). Nothing in this module gates on the engine value.
 LEGACY_ENGINES = ("trailprint", "tecopa-printworks")
 ENGINE_URL = "https://github.com/domalhambra/tecopa-plateworks"
-# Must track the repo's real name, not a redirect. GitHub 301s a renamed repo only
-# until someone reuses the old name -- and this string is the pointer a stranger
-# follows to resurrect a poster years from now, so it cannot rest on that.
+# Must track the repo's real name, not a redirect.
+
+def _engine_version() -> str:
+    """The build identity stamped into every manifest. With the forever-contract
+    retired (docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md),
+    cross-build drift is RECORDED rather than prevented: when a reprint stops matching,
+    the file says which build painted it. TECOPA_ENGINE_VERSION overrides for packaged
+    builds; otherwise the git commit of the running checkout; "unknown" headless."""
+    v = os.environ.get("TECOPA_ENGINE_VERSION")
+    if v:
+        return v
+    try:
+        import subprocess
+        return subprocess.run(
+            ["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+             "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=5, check=True).stdout.strip() or "unknown"
+    except Exception:
+        return "unknown"
+
+ENGINE_VERSION = _engine_version()
 
 
 class ManifestError(SpecError):
@@ -106,6 +122,7 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
     m = {
         "manifest_version": MANIFEST_VERSION,
         "engine": ENGINE,
+        "engine_version": ENGINE_VERSION,
         "region_id": spec.region_id,
         "spec": serialize.spec_to_json(spec),
         "sources": list(sources or []),
@@ -203,48 +220,15 @@ def _manifest_str(manifest: dict) -> str:
     return json.dumps(manifest, separators=(",", ":"), sort_keys=True)
 
 
-def resurrection_note(manifest: dict) -> str:
-    """The human-readable twin of the zTXt manifest: a few plain sentences a 2035
-    finder running strings(1) can read without any PNG tooling, telling them what the
-    file is and how to bring it back. A PURE function of the manifest (no clock, no
-    env, no machine state) -- finals are byte-compared in the determinism suite, so
-    the note must round-trip identically through a reprint. Plain ASCII on purpose:
-    tEXt is latin-1, and ASCII survives every dump tool. The plate line resolves the
-    region the way /api/reprint does (spec.region_id first) and quotes pack_version
-    only in the one shape a real derivation produces (12 lowercase hex -- the same
-    predicate as main's verify gate), so a crafted manifest can never ride arbitrary
-    bytes, or non-latin-1 ones, into the chunk."""
-    spec_d = manifest.get("spec")
-    spec_d = spec_d if isinstance(spec_d, dict) else {}
-    rid = spec_d.get("region_id") or manifest.get("region_id")
-    if not (isinstance(rid, str) and rid and all(c in "abcdefghijklmnopqrstuvwxyz0123456789_"
-                                                 for c in rid)):
-        rid = "unknown"                       # region ids are [a-z0-9_]+ as minted
-    rp = manifest.get("region_pack")
-    pv = rp.get("pack_version") if isinstance(rp, dict) else None
-    if not (isinstance(pv, str) and len(pv) == 12 and all(c in "0123456789abcdef" for c in pv)):
-        pv = None                             # pre-pack file (or a crafted value): no version
-    plate = f"{rid} {pv}" if pv else rid
-    return "\n".join([
-        "This PNG is a Tecopa Plateworks self-describing poster and its own save file.",
-        'Its full render recipe and route data live in this file\'s compressed zTXt chunk "trailprint"',
-        "(JSON; schema: docs/MANIFEST.md in the engine repo, CC0-1.0).",
-        f"Engine: AGPL-3.0-or-later -- {ENGINE_URL}",
-        f"Painted on terrain plate {plate}. Terrain data is US-federal public domain (USGS 3DEP/NHD/NLCD/GNIS).",
-        "To reproduce: install the engine and the named plate, then POST this file to /api/reprint.",
-    ])
-
-
 def manifest_pnginfo(manifest: dict) -> PngInfo:
-    """A PngInfo carrying the manifest as a compressed zTXt chunk PLUS the plain-tEXt
-    resurrection note, to hand straight to Image.save(pnginfo=...). Embedding at
-    encode time avoids a lossless re-encode. Every manifest-carrying deliverable
-    (finals, reprints, wallpapers, films) flows through here, so the note ships with
-    zero call-site changes; share copies (embed_spec=false) pass manifest=None to the
-    encoders and skip pnginfo entirely -- no manifest, no note."""
+    """A PngInfo carrying the manifest as a compressed zTXt chunk, to hand straight to
+    Image.save(pnginfo=...). Embedding at encode time avoids a lossless re-encode.
+    Share copies (embed_spec=false) pass manifest=None to the encoders and skip
+    pnginfo entirely -- no manifest. (The plain-tEXt resurrection note that used to
+    ride beside the manifest was retired with the forever-contract; files already
+    printed keep theirs, and readers never depended on it.)"""
     info = PngInfo()
     info.add_text(MANIFEST_KEY, _manifest_str(manifest), zip=True)
-    info.add_text(NOTE_KEY, resurrection_note(manifest))     # plain tEXt: strings(1)-readable
     return info
 
 

@@ -131,7 +131,7 @@ _hydrate_regions()
 # every push to main (each merge). Rather than scatter markers across ~20 files, classify here
 # from `--durations` (on in pytest.ini) so the whole policy is auditable and updatable in
 # one place. Threshold: a test costing >5s of render is "slow". Re-derive after adding
-# heavy tests: `python -m pytest -n auto -m "not serial" --durations=0`.
+# heavy tests: `python -m pytest -n auto --durations=0`.
 import pytest  # noqa: E402
 
 # Modules that are render-bound end to end — every test renders, so mark the whole file.
@@ -198,20 +198,6 @@ _SLOW_TESTS = {
     "test_mockups": {
         "test_lightsweep_starts_home_and_counts", "test_portrait_and_landscape_fit",
         "test_sizes_exact_and_jpeg_magic", "test_two_runs_byte_equal",
-    },
-    "test_profile_rev": {
-        "test_new_proofs_stamp_rev_2_and_the_field_is_enum_gated",
-        "test_rev1_render_unchanged_by_the_refactor",
-        "test_rev2_labels_feet_and_render_differs_from_rev1",
-    },
-    "test_relief_rev": {
-        # these two render the same spec at 96 AND 300 dpi to prove the pyramid blur
-        # didn't leak the render resolution into the picture -- the full-res half is
-        # what makes them slow, and it is the whole point of the test
-        "test_rev_2_proof_is_a_faithful_scale_of_the_final",
-        "test_the_two_revs_agree_on_dpi_stability",
-        "test_rev_1_renders_deterministically",
-        "test_rev_2_renders_deterministically",
     },
     "test_journey_light": {
         "test_journey_light_film_deterministic_and_moves",

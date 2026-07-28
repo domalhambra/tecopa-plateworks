@@ -128,11 +128,6 @@ export const CONTROLS = [
   { id: 'oblique', path: 'style.oblique', section: 'style', panel: 'Terrain', label: 'High relief',
     hint: 'plan-oblique stand-up terrain', type: 'slider', min: 0, max: 1, step: 0.05, default: 0,
     fmt: f2, affectsProof: true, keywords: ['oblique', 'high relief', '3d', 'stand up', 'tilt'] },
-  { id: 'reliefRev', path: 'style.reliefRev', section: 'style', panel: 'Terrain',
-    label: 'Relief engine', type: 'select', default: null, advanced: true, affectsProof: true,
-    options: [{ value: 2, label: 'Rev 2 (current)' }, { value: 1, label: 'Rev 1 (legacy)' }],
-    help: 'Which relief chain paints the terrain. Rev 2 is the current one; Rev 1 reproduces posters printed before it, pixel for pixel.',
-    keywords: ['relief rev', 'engine', 'legacy', 'reprint'] },
 
   { id: 'marker', path: 'style.marker', section: 'style', panel: 'Markers', label: 'Marker size',
     type: 'slider', min: 0.1, max: 0.5, step: 0.01, default: 0.24, fmt: inch, affectsProof: true,
@@ -184,13 +179,6 @@ export const CONTROLS = [
     affectsProof: true, visibleWhen: (s) => s.style.profile,
     help: 'Height of the elevation strip, in inches.',
     keywords: ['profile height', 'strip'] },
-  { id: 'profileRev', path: 'style.profileRev', section: 'layers', panel: 'Elevation profile',
-    label: 'Profile layout', type: 'select', default: null, advanced: true, affectsProof: true,
-    options: [{ value: 2, label: 'Rev 2 (corrected)' }, { value: 1, label: 'Rev 1 (legacy)' }],
-    // this help line used to sit in the lightMode entry below, where a second `help`
-    // key shadowed it -- so the profile-rev row had no help and nothing looked wrong
-    help: 'Layout revision of the strip. Rev 2 is corrected; Rev 1 matches older posters.',
-    visibleWhen: (s) => s.style.profile, keywords: ['profile rev', 'layout', 'legacy'] },
 
   // ===== LIGHT (Journey Light) =====
   { id: 'lightMode', path: 'style.lightMode', section: 'light', panel: 'Journey Light', label: 'Journey light',

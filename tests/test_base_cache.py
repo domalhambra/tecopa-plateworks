@@ -159,7 +159,7 @@ def _live_spec(**kw):
              title_text="GOLDEN", credit_text="USGS 3DEP", seed=7,
              contours=True, compass=True, biome=True, labels=True,
              label_place="smart", track_weave=True, track_color_by="elevation",
-             profile=True, profile_rev=2, relief_rev=2, oblique=0.4,
+             profile=True, oblique=0.4,
              light_mode="journey", top_clear_frac=0.1, bottom_clear_frac=0.1)
     d.update(kw)
     return CompositionSpec(**d)
@@ -231,7 +231,7 @@ def test_the_furniture_and_track_fields_never_key_the_terrain():
         "the conditional mask is gone -- fold any new entry into BASE_KEY_MASK_ALWAYS")
     for name in ("title_text", "title_pt", "label_pt", "credit_text", "edition",
                  "compass", "furniture_scale", "profile", "profile_height_in",
-                 "profile_rev", "tracks", "track_days", "track_width_pt",
+                 "tracks", "track_days", "track_width_pt",
                  "labels", "label_place"):
         assert name in render.BASE_KEY_MASK_ALWAYS, f"{name} should be masked outright"
         for spec in (_live_spec(labels=False), _live_spec(labels=True)):
@@ -241,9 +241,9 @@ def test_the_furniture_and_track_fields_never_key_the_terrain():
 
 @pytest.mark.parametrize("name", sorted(_MASK_TERRAIN_CASES := {
     "furniture": {"labels": True, "label_place": "smart", "profile": True,
-                  "profile_rev": 2, "compass": True, "contours": True},
+                  "compass": True, "contours": True},
     "oblique": {"labels": True, "label_place": "smart", "oblique": 0.5,
-                "profile": True, "profile_rev": 2, "compass": True},
+                "profile": True, "compass": True},
 }))
 def test_every_masked_field_leaves_the_terrain_byte_identical(name):
     """The mask's real safety claim, tested directly against the painter.
@@ -381,7 +381,7 @@ def test_phase2_serves_the_knobs_phase1_could_not(field, value):
     served it correctly anyway."""
     from app import basecache, render
     spec = _live_spec(labels=True, label_place="smart", contours=True, profile=True,
-                      profile_rev=2, compass=True,
+                      compass=True,
                       **_PHASE2_SPEC_EXTRAS.get(field, {}))
     alt = dataclasses.replace(spec, **{field: value})
     cache = basecache.BaseCache(400_000_000)

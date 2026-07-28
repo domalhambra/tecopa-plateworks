@@ -124,7 +124,7 @@ proof and final place the same names (invariant 1). Rebuild after adding a regio
 Every PNG final embeds a provenance manifest in one compressed `zTXt` chunk (see
 `app/provenance.py`): the full `CompositionSpec`, the sha256 of each source GPX, the
 engine name, and the manifest schema version. (No engine *version* rides the file —
-byte-identical reprints across upgrades rest entirely on the additive-defaults
+reprints across upgrades used to rest entirely on the additive-defaults
 discipline: every new spec/animation key is omitted at its pre-feature default, for
 encoders as much as the painter.) That makes the file **stateless-reprintable** —
 `POST /api/reprint` re-renders any Tecopa Plateworks PNG at print resolution from the file
@@ -139,34 +139,31 @@ without rendering. Same spec → pixel-identical reprint (invariants 1 + 3).
   a hotspot photo only if its real path stays inside the uploads dir (else drops it),
   and `spec.validate` re-enforces aspect / the 120 MP ceiling / the zoom cap before any
   pixels are made — a crafted PNG can neither read server files nor request a gigapixel.
-- **Forever-contract:** `tests/fixtures/manifest_v1.json` freezes the v1 schema; a
-  poster a user printed today must still reprint after future upgrades.
+- **Versioned drift, not frozen bytes:** every manifest carries `engine_version`
+  (the build that painted it). The old cross-build byte-identity contract was retired
+  on 2026-07-27 (`docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`);
+  a reprint on a newer build may differ, and the file records why.
 
-## Reprint forever, honestly
+## Reprint from the file alone
 
-"Reprint it in 2035" is a mechanism, not a slogan. The chain, link by link:
+The PNG carries its whole recipe, and the press can always reprint or continue it:
 
 1. **The file names its terrain.** The manifest's `region_pack` block records the
-   plate's identity by content hash — which assets, which bytes — so a rebuilt plate
-   can never silently repaint an old poster differently.
+   plate's identity by content hash — which assets, which bytes. A mismatch (USGS
+   re-flew the terrain, the plate was rebuilt) is surfaced honestly, and the reprint
+   proceeds on an explicit `allow_plate_mismatch=true`.
 2. **Plates are artifacts, not a laptop's state.** `scripts/pack_region.py` packs a
    built region into a deterministic `<id>-<hash>.trailplate.zip` (pack twice →
    byte-identical), and `python -m app.plates install` fetches, hash-verifies every
    asset, and atomically places it under `regions/`; `python -m app.plates verify`
    checks a poster PNG against the installed plate.
-3. **The right to run is granted, not assumed.** The engine is AGPL-3.0-or-later; the
-   manifest schema is documented in `docs/MANIFEST.md` under CC0-1.0, so anyone may
-   implement a reader or renderer without touching AGPL code.
-4. **The claim is tested, not asserted.** The orphan drill
-   (`tests/test_orphan_drill.py`) packs a plate, installs it into a *fresh, empty*
-   regions root, and reprints a golden poster **byte-identically** — and it runs in CI
-   on every push to `main` and every pull request (against a synthetic-DEM plate
-   packed at test time). No machinery gates a tag on it yet, so the release ritual
-   below runs the drill by hand, against the real plates, before anything ships.
+3. **Old files always open.** `serialize.spec_from_json` tolerates drift both ways:
+   unknown fields are dropped, missing ones take defaults. A manifest written years
+   ago loads today; the render it gets is today's engine, and `engine_version` in the
+   file says what it was originally painted with.
 
 Release ritual, in two lines: pack the real-DEM plates (`scripts/pack_region.py`),
-publish the zips as release assets and commit `plates/index.json`; then run the orphan
-drill against a fresh clone before announcing anything.
+publish the zips as release assets and commit `plates/index.json`.
 
 **Fonts:** the engine ships no licensed face — it tries Georgia from the host system,
 then DejaVu, and the repo/package never bundles either a proprietary face or the MB
@@ -235,7 +232,7 @@ waypoint pins**, a DEM-sampled **elevation profile**, and **elevation/grade trac
 coloring** (all reprint-safe). And the film learns a new motion: `light_motion` on
 `/api/timelapse/submit` renders a **Journey Light film** — a WebP/MP4 share twin where the
 line grows *time-true* (the pen breathing with the real hike) while the sun travels with
-it. Every knob defaults to the archival look, so existing posters render byte-identically.
+it. Every knob defaults to the archival look, so an untouched poster keeps its look.
 
 ## Invariants
 

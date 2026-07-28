@@ -49,18 +49,16 @@ jobs:
       # Two axes:
       #   -n auto     fan the run across every runner core (pytest-xdist).
       #   slow        heavy full-res render tests -> excluded from the fast PR tier.
-      #   serial      mutate the shared regions/ tree -> must run alone (never under -n).
       #
       # A pull_request runs only the FAST, parallel-safe tier for minutes-fast feedback.
-      # A push to main (i.e. every merge) runs EVERYTHING -- the parallel bucket first,
-      # then the serial bucket on its own -- so the slow render tests that PRs skip always
-      # run when code actually lands. The job name stays "test" for both, so a
-      # required-status-check named "test" needs no reconfiguration.
+      # A push to main (i.e. every merge) runs EVERYTHING, so the slow render tests
+      # that PRs skip always run when code actually lands. The job name stays "test",
+      # so a required-status-check named "test" needs no reconfiguration. (The serial
+      # tier died with the orphan drill -- nothing mutates the shared regions/ tree.)
       - name: Run tests
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python -m pytest -n auto -m "not slow and not serial"
+            python -m pytest -n auto -m "not slow"
           else
-            python -m pytest -n auto -m "not serial"
-            python -m pytest -m "serial"
+            python -m pytest -n auto
           fi

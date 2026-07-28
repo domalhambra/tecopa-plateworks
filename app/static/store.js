@@ -68,11 +68,6 @@ export const state = {
     golden: 0.7,          // warm/cool golden-hour grade amount (journey mode)
     profile: false,       // DEM-sampled elevation-profile furniture
     profileHeight: 0.9,
-    profileRev: null,     // strip layout rev; null = omit -> server default (2, corrected
-                          // strip). A continued poster sets this to its own stored rev.
-    reliefRev: null,      // relief-chain rev; null = omit -> server default (2). A
-                          // continued poster sets its own, so an edition looks like
-                          // its predecessor rather than the current engine.
     bleedIn: 0,           // print-shop bleed (inches); 0 = none. Print-only; a continued
                           // poster restores its own value.
     trackColorBy: 'none', // 'none' | 'elevation' | 'grade' -- DEM-derived track ramp

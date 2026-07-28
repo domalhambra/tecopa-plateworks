@@ -1,5 +1,14 @@
 # Tecopa Plateworks scope — the chronicle, not the poster
 
+> **Amendment, 2026-07-27:** the cross-build byte-identity promise woven through this
+> document ("reprints byte-identically forever", the frozen fixtures, the revision
+> gates) was retired — see
+> `docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`. What
+> stands: every file still carries its whole recipe, any old file still opens
+> (read-tolerance), reprints are byte-identical *within* one engine build, and
+> `engine_version` in the manifest records drift across builds. Read the promises
+> below through that lens; the body text is kept as the historical design record.
+
 Tecopa Plateworks began as "a poster maker and a digital visualization of track files."
 Measured against that goal, three later features look like scope creep: time-lapse
 films, photos pinned to markers, and living editions. This document restates the goal

@@ -228,7 +228,7 @@ def verify_poster(png_path: str, root: str = "regions") -> int:
     rid = spec_d.get("region_id") or manifest.get("region_id")
     # the manifest is UNTRUSTED and rid is about to become a filesystem path: gate it
     # on the minted-id charset (same door as install's namelist check and the
-    # resurrection note) so a crafted "../"/absolute id can't steer reads -- and the
+    # manifest surfaces) so a crafted "../"/absolute id can't steer reads -- and the
     # hash-prefix verdict lines -- outside --root.
     if not (isinstance(rid, str) and _ID_RE.fullmatch(rid)):
         print(f"manifest names region id {rid!r}, which is not a valid region id "

@@ -148,7 +148,7 @@ def test_the_terrain_knobs_reach_the_ink_key_through_the_base_key():
     and it is the safe direction anyway (a terrain knob is a base miss, so the render is
     slow regardless of what the ink cache does)."""
     s = _spec()
-    for field in ("shadow_strength", "relief_rev", "oblique", "contours"):
+    for field in ("shadow_strength", "oblique", "contours"):
         assert _key(_perturb(s, field)) != _key(s), f"{field} must reach the ink key"
     assert _key(s, dpi=96) != _key(s, dpi=200)
 

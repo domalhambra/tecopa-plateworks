@@ -407,11 +407,11 @@ def test_oblique_flat_crop_degenerates_to_the_flat_sheet(tmp_path):
 
 # ---- the spec/manifest contract ----
 
-def test_spec_to_json_omits_the_default_oblique():
+def test_spec_to_json_emits_the_default_oblique():
     from app.serialize import spec_to_json, spec_from_json
     spec = _center_spec()
     d = spec_to_json(spec)
-    assert "oblique" not in d, "default oblique must be omitted (forever-contract)"
+    assert d["oblique"] == 0.0    # always emitted since the forever-contract retirement
     assert spec_from_json(d).oblique == 0.0
     d2 = spec_to_json(dataclasses.replace(spec, oblique=0.7))
     assert d2["oblique"] == 0.7

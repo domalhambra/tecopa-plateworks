@@ -11,7 +11,7 @@ outward-facing twin.
 
 Everything the app does is a *consequence* of that sentence: the poster is how the
 artifact looks, the film is the artifact in motion, the wallpaper is the artifact on
-your phone, editions are how it grows, reprint-forever is why it's safe to invest in.
+your phone, editions are how it grows, the file-as-record is why it's safe to invest in.
 
 ## The message ladder
 
@@ -41,7 +41,7 @@ Never say the left column in public. Always say the right column.
 |---|---|
 | Provenance manifest in a zTXt chunk | "The poster is the save file." |
 | Deterministic render, spec-driven | "The proof you approve is *pixel-for-pixel* the print you receive." |
-| `/api/reprint`, frozen-fixture forever-contract | "Lose everything but the file? Reprint it in 2035. We promise." |
+| `/api/reprint` — the file carries its whole recipe | "The poster is its own record. Send it back, we reprint it." |
 | Living editions + lineage | "Year two doesn't need a new poster. It needs Edition 2." |
 | Embedded photos in the manifest | "Pin a photo to the summit. It travels *inside* the file." |
 | Wallpaper ppi math | "A wallpaper cut to your exact screen — your 2.6 pt trail is 2.6 pt on glass." |
@@ -70,7 +70,7 @@ by the ream. Money attaches to the poster, the paper, the ritual, and the making
 | **The Print** | lab-fulfilled paper on the wall — the durable margin |
 | **Edition N+1** | continue last year's poster — the repeat ritual, priced below the first |
 | **Plate commission** | the making of an uncovered region; the plate itself still publishes free |
-| **Plates** | **$0, forever** — the trust layer behind "Reprint Forever"; say so on the pricing page |
+| **Plates** | **$0, forever** — the file must always be able to name and fetch its terrain; say so on the pricing page |
 
 Plates stay free because the promise requires it (the file must always be able to name —
 and fetch — its terrain) and because CC0 public-domain packs make a paywall legal
@@ -125,15 +125,16 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
    by the app itself.
 4. **The magic trick section:** Edition 1 beside Edition 3 of the same poster,
    lineage cartouche zoomed. Headline: "The poster is the save file."
-5. **Trust block:** "The proof is the print" (determinism) · "Reprint forever"
-   (frozen contract) · "Private by default" (local, share-copy toggle, no account).
+5. **Trust block:** "The proof is the print" (determinism) · "The poster is the
+   save file" (the recipe rides the PNG) · "Private by default" (local, share-copy
+   toggle, no account).
 6. **Region gallery:** the four plates with real sample posters, plus "Request — or
    commission — the next plate": requests are the demand signal, commissions are the
    demand signal *with a credit card*.
 7. **FAQ that converts honesty into trust:** *Why only these regions?* (we refuse to
    print terrain we don't have real elevation data for) · *What if you disappear?*
-   (the file names its plate — hash-published, AGPL engine, byte-identical reprint
-   proven in CI) · *Strava?* (export GPX; direct import if people ask).
+   (the file names its plate and carries its recipe — hash-published plates, AGPL
+   engine) · *Strava?* (export GPX; direct import if people ask).
 
 ## Channels & launch sequence
 
@@ -141,7 +142,7 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
   plates: 3 posters with photos/markers, 2 films, 2 phone wallpapers, 1 three-edition
   lineage set. These feed everything below.
 - **Phase 1 — the nerd launch.** Show HN / lobste.rs, pitching pillar 2 ("posters
-  that carry their own recipe and reprint themselves forever"). Validates the
+  that carry their own recipe inside the PNG"). Validates the
   architecture story and stress-tests the message. Pair with a technical blog post —
   "We embed the whole poster recipe in a PNG chunk" — which doubles as durable SEO.
 - **Phase 2 — the trail launch.** r/ultrarunning, r/trailrunning, r/Strava, r/hiking
@@ -162,7 +163,10 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
   Year-Film** (or "the Film").
 - `POST /api/continue`: **"Continue a poster"** in UI copy; **Living Editions** as
   the brand concept.
-- The reprint promise: **"Reprint Forever."**
+- The reprint service: **"Continue or reprint from the file alone."** (The old
+  "Reprint Forever" byte-identity promise was retired 2026-07-27 — see
+  `docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`; never
+  reintroduce it in copy without reinstating its tests.)
 - The share toggle: **"Share copy (routes removed)."**
 - Regions: **plates** ("the Lassen plate") — evokes printmaking, matches the craft.
 - The PNG itself: **the save file** (the wall print is the performance; the PNG is the score).

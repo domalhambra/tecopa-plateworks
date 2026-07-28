@@ -16,7 +16,7 @@ This is a **commercial** property (concierge press: prints, editions, plate comm
 
 ## Naming
 
-The product is **Tecopa Plateworks**. Several layers carry different names on purpose; collapsing them breaks either the brand or the forever-contract.
+The product is **Tecopa Plateworks**. Several layers carry different names on purpose; collapsing them breaks either the brand or old files' readability.
 
 | Layer | Value | Rule |
 |---|---|---|
@@ -24,15 +24,15 @@ The product is **Tecopa Plateworks**. Several layers carry different names on pu
 | Folder | `Badwater Trails/` | Pre-rebrand, deliberately not renamed on disk. |
 | GitHub repo | `domalhambra/tecopa-plateworks` | Renamed 2026-07-21. The old `badwatertrails` name survives only as a 301. |
 | `ENGINE` | `"tecopa-plateworks"` | Stamped into every manifest, **never read back** — `LEGACY_ENGINES` records the old values and nothing gates on any of them. |
-| `ENGINE_URL` | the repo URL | Must be the repo's **real** name, never a redirect: it's the pointer a stranger follows to resurrect a poster years from now, and GitHub frees a renamed repo's old name for reuse. |
-| `MANIFEST_KEY` / `NOTE_KEY` | `"trailprint"` / `"trailprint-note"` | **Frozen v1 format keywords.** Changing either orphans every poster ever printed. Never touch — these are the genuinely frozen ones. |
+| `ENGINE_URL` | the repo URL | Must be the repo's **real** name, never a redirect — GitHub frees a renamed repo's old name for reuse. |
+| `MANIFEST_KEY` | `"trailprint"` | **Frozen v1 format keyword.** Changing it orphans every poster ever printed — the one genuinely frozen name. (`NOTE_KEY` / the resurrection note retired 2026-07-27; files already printed keep theirs.) |
 | Env vars, `localStorage`, bundle id, download prefix | `TECOPA_*`, `'tecopa'`, `guide.badwater.tecopa`, `tecopa_<region>` | Name-neutral by design. A rebrand touches none of them, so no saved preference is orphaned and macOS never sees a new app. |
 
 **Type roles.** The sheet sets type by role — `body`, `point`, `area`, `water`, `title` (`render.TYPE_ROLES`) — and the operator binds faces per role via `TECOPA_FONT_<ROLE>` (see README's font table). Faces are operator-side because MB Type is licensed and this repo is public (`.gitignore` blocks `*.otf`/`*.ttf`/`*.woff*` — commit `39ad08c`, never weaken it). Bound faces are auto-normalised on register metrics; `TECOPA_FONT_AREA_CASE=mixed` is required when binding a small-caps face like Advocate. The bindings ride in no manifest: a render on a host with different bindings looks different, by design.
 
 **Naming history:** `trailprint` → `tecopa-printworks` (2026-07-19 to 07-21, an accidental name) → `tecopa-plateworks`. `docs/MANIFEST.md` requires readers to accept all three and not reject an unrecognized fourth. Dated files under `docs/superpowers/` keep their original wording as historical record — if you port UI copy out of one, substitute the current name.
 
-**Before renaming again, know the cost:** the resurrection note is a pure function of the manifest *plus these constants*, so changing `ENGINE` or `ENGINE_URL` means a poster printed before the change and reprinted after gets different note bytes. Within a version everything stays byte-identical (the orphan drill proves it), but cross-version note identity is already broken by the two renames above. That was acceptable pre-launch. Once posters are in customers' hands it isn't — treat these two constants as frozen from first sale.
+**Before renaming again:** `ENGINE` and `ENGINE_URL` ride in every manifest as provenance. Renaming changes what new files record — harmless now that cross-build byte-identity is retired, but the strings in files already printed are permanent, so readers must keep accepting every historical value.
 
 ## Architecture — the one seam
 
@@ -49,22 +49,23 @@ The front end is a **single-window studio** (no wizard, no gated section rail �
 5. **Registration is correctness.** Prove the coordinate chain before tuning aesthetics. `app/geo.py` is the single source of truth for coordinate conversions.
 6. **The zoom cap.** Never request finer ground detail than the data holds. `CompositionSpec.validate(dpi)` enforces it at the *final* dpi. A 422 on a large print of a small plate is the invariant working, not a bug.
 
-## The forever-contract (the hardest rule here)
+## Versioned drift (the forever-contract is retired)
 
-A poster printed today must reprint byte-identically after any future upgrade. That rests entirely on **additive defaults**: every new spec or animation key must be omitted at its pre-feature default — for encoders as much as for the painter. No engine *version* rides the file, so discipline is the only mechanism.
+The old rule — a poster printed today must reprint byte-identically after any future upgrade — was **retired on 2026-07-27** (`docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`). What replaced it:
 
-- `MANIFEST_VERSION` stays **1**. New blocks are purely additive.
-- A change that **moves pixels on the existing chain** (a dtype, a cheaper filter, a retuned constant) can't be additive — it rides a **revision**, like `profile_rev` and `relief_rev`: old default, omitted from the manifest at that default, new proofs stamp the current rev, a continued edition restores its predecessor's. `docs/relief-passes.md` has the recipe; `tests/test_relief_rev.py` the test shape.
-- The frozen `manifest_*_v1.json` fixtures in `tests/fixtures/` (base, animation, photo, edition, wallpaper, oblique, region_pack) are the executable form of the promise. If a change makes one fail, the change is wrong until proven otherwise.
-- **One door for untrusted manifests:** `provenance.spec_from_manifest` is the single place a crafted PNG becomes a render-ready spec (parse → drop non-embedded photos → bound geometry → validate). Any new file-consuming verb funnels through it and inherits the hardening. Don't re-derive the guard chain at a new call site.
-- The **orphan drill** (`tests/test_orphan_drill.py`) packs a plate, installs it into an empty regions root, and reprints a golden poster byte-identically. It runs in CI — but only against a *synthetic* DEM. Before any release, run it by hand against the real plates.
+- **`engine_version` rides every manifest** (`provenance.ENGINE_VERSION`: the git commit, or `TECOPA_ENGINE_VERSION` in packaged builds). Cross-build drift is recorded, not prevented — when a reprint stops matching, the file says which build painted it. **No new revs, ever**; a pixel-moving improvement just ships.
+- **Determinism (invariant 3) is unchanged and still load-bearing**: same spec + seed + build → identical image. That is what makes the proof predict the print and a same-day reorder trustworthy. Do not confuse the retired *cross-build* promise with this *within-build* one.
+- **Read-tolerance is the promise that remains**: `serialize.spec_from_json` drops unknown fields and defaults missing ones, so any old file opens. `spec_to_json` always emits every field — the omit-at-default dance is gone; never reintroduce it.
+- **One door for untrusted manifests:** `provenance.spec_from_manifest` is the single place a crafted PNG becomes a render-ready spec (parse → drop non-embedded photos → bound geometry → validate). Any new file-consuming verb funnels through it and inherits the hardening. This guards against hostile files, not drift — it survives the retirement untouched.
+- **A plate mismatch warns, it does not refuse**: `/api/reprint` and `/api/continue` surface a rebuilt plate honestly and proceed on `allow_plate_mismatch=true`. A customer reorder is never blocked because USGS re-flew the terrain.
+- `MANIFEST_VERSION` stays **1** and `docs/MANIFEST.md` is now an **internal** format doc (the CC0 dedication on previously published versions stands and cannot be revoked).
 
 ## Build & test
 
 ```bash
 source .venv/bin/activate                 # Python 3.14
 pip install -r requirements-lock.txt      # pinned set — what CI installs
-pytest -q                                 # 815 tests; renders real posters/films, ~14 min
+pytest -q                                 # ~716 tests; renders real posters/films, ~13 min
 uvicorn app.main:app --reload             # http://127.0.0.1:8000
 ```
 
@@ -96,10 +97,8 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
   synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
   match their own bounds exactly. Only `lassen_ca` has real 10 m terrain on this Mac; the
   other four are synthetic. Check the tag, not the flag, before judging a poster by eye.
-- ~~the orphan drill has not run on real terrain since `fb634b2`~~ — **done 2026-07-27**,
-  and it passed with all three proof-loop optimizations stacked on it (base-layer cache,
-  route-ink cache, support-restricted composite). `pytest -m serial` is exactly this one
-  test. Still re-run it before any release: CI only ever sees a synthetic DEM.
+- ~~the orphan drill~~ — deleted 2026-07-27 with the forever-contract (its last run on
+  real terrain, 2026-07-27, passed). The `serial` pytest tier died with it.
 - Six label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it.
 - `test_mp4_twin_is_tagged_bt709` — no `colr` box when it runs. Not version drift: the bundled ffmpeg **binary** is platform-specific. As of 2026-07-27 it does not run here at all — `imageio_ffmpeg` is not installed in `.venv`, so this and two sibling MP4 tests SKIP. Install `-r requirements-share.txt` to see it (and `pandas geopandas` for the region-prep tests) if you want to match CI.
 

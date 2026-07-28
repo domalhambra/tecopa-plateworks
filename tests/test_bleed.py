@@ -20,8 +20,28 @@ from PIL import Image, ImageDraw
 
 from app import render, serialize
 from app.spec import CompositionSpec, SpecError, OffDemError, BLEED_MAX_IN
-# _cfg/_spec: the same helpers as tests/test_profile_rev.py
-from tests.test_profile_rev import _cfg, _spec
+# _cfg/_spec: local copies of the shared spec helpers (formerly in test_profile_rev)
+REGION_DIR = "regions/lassen_ca"
+
+def _cfg():
+    return json.load(open(os.path.join(REGION_DIR, "region.json")))
+
+def _spec(print_w_in=9, print_h_in=12, **kw):
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
+    gw = 27000.0
+    gh = gw * print_h_in / print_w_in          # crop aspect == print aspect
+    crop = (cx - gw / 2, cy - gh / 2, cx + gw / 2, cy + gh / 2)
+    xs = np.linspace(cx - gw * 0.3, cx + gw * 0.3, 40)
+    ys = np.linspace(cy - gh * 0.3, cy + gh * 0.3, 40)
+    base = dict(region_id="lassen_ca", crs=cfg["crs"], crop=crop,
+                print_w_in=print_w_in, print_h_in=print_h_in,
+                native_resolution_m=10,
+                tracks=[np.column_stack([xs, ys])], hotspots=[],
+                track_days=["2023-07-15"], seed=7)
+    base.update(kw)
+    return CompositionSpec(**base)
 
 REGION_DIR = "regions/lassen_ca"
 
@@ -57,8 +77,8 @@ def test_canvas_is_trim_plus_bleed_and_cap_is_trim_judged():
 
 # ---- Task B2: manifest omission ----
 
-def test_manifest_omits_bleed_at_zero_and_round_trips():
-    assert "bleed_in" not in serialize.spec_to_json(_spec())
+def test_manifest_emits_bleed_and_round_trips():
+    assert serialize.spec_to_json(_spec())["bleed_in"] == 0
     j = serialize.spec_to_json(_spec(bleed_in=0.125))
     assert j["bleed_in"] == 0.125
     assert serialize.spec_from_json(j).bleed_in == 0.125
@@ -149,8 +169,7 @@ def test_full_bleed_render_keeps_furniture_off_the_bleed_band():
     """End to end: on a bleed render, the outer band (everything past the trim box)
     contains terrain only -- no keyline ink. The keyline is the darkest furniture;
     assert the band is free of its ink color while the trim ring contains it."""
-    s = _spec(bleed_in=0.125, title_text="LASSEN TRAVERSE", profile=True,
-              profile_rev=2)
+    s = _spec(bleed_in=0.125, title_text="LASSEN TRAVERSE", profile=True)
     img = np.asarray(render.rasterize(s, 96, REGION_DIR).convert("RGB"))
     bpx = round(0.125 * 96)
     kl = round(render.KEYLINE_INSET_IN * 96)

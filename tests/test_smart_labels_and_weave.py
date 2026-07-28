@@ -161,9 +161,9 @@ def test_smart_labels_are_dpi_stable():
 
 
 # --------------------------------------------------------------- serialize + validate + forever
-def test_spec_to_json_omits_the_defaults():
+def test_spec_to_json_emits_the_defaults():
     d = serialize.spec_to_json(_spec([H]))
-    assert "label_place" not in d and "track_weave" not in d
+    assert d["label_place"] == "anchor" and d["track_weave"] is False
     d2 = serialize.spec_to_json(_spec([H], label_place="smart", track_weave=True))
     assert d2["label_place"] == "smart" and d2["track_weave"] is True
 
@@ -180,6 +180,8 @@ def test_validate_rejects_a_bad_label_place():
 
 
 def test_pre_feature_manifest_loads_with_the_defaults():
+    # the fixture is a genuinely old manifest: it OMITS these keys, and read-tolerance
+    # (the promise the retirement kept) must fill the defaults on load.
     m = json.load(open("tests/fixtures/manifest_v1.json"))
     assert "label_place" not in m["spec"] and "track_weave" not in m["spec"]
     s = serialize.spec_from_json(m["spec"])

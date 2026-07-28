@@ -87,28 +87,6 @@ TRACK_COLOR_MODES = ("none", "elevation", "grade")
 # Smart label placement (v1.10): "anchor" is the pre-feature centered-drop; "smart" tries
 # a ranked ring of offsets, treats the route as an obstacle, and draws leader lines.
 LABEL_PLACE_MODES = ("anchor", "smart")
-# Profile revision (v1.12): rev 1 is the strip as shipped -- layout inset borrowed
-# from the DEM-read margin constant (proportional to the sheet, the one furniture
-# not in physical units) with metre labels and an overpaint risk against the
-# cartouche stack at high furniture_scale (red-team 2026-07-17 §5). Rev 2 is the
-# corrected painter: physical inset, stacked clear of the MEASURED cartouche +
-# compass, feet labels (the cartouche speaks MI). The manifest has no engine
-# version, so the rev is the gate: default 1, omitted from the manifest at 1 --
-# every pre-feature manifest re-stamps byte-identically; new proofs stamp 2 (the
-# label_place / track_weave pattern).
-PROFILE_REVS = (1, 2)
-# Relief revision (v1.13): rev 1 is the relief chain exactly as shipped -- the light
-# plane and every RGB stage carried in float64 (an accident of np.radians returning a
-# float64 scalar, on float32 terrain), and every blur computed at full working
-# resolution however wide its kernel. Rev 2 pins the chain to float32 and computes the
-# WIDE blurs (sky occlusion, valley depth, the multiscale texture octaves) on a
-# decimated pyramid, which is what the same low-pass costs everywhere else in
-# cartography. It is materially cheaper in both time and peak memory and the picture is
-# the same picture -- but it is not the same BYTES, and no engine version rides the
-# file, so the rev is the gate: default 1, omitted from the manifest at 1, so every
-# poster printed before this reprints byte-identically. New proofs stamp 2 (the
-# profile_rev / label_place / track_weave pattern).
-RELIEF_REVS = (1, 2)
 # Style-slider bounds: the UI's sliders stay inside these, and validate() refuses
 # anything outside them so a hand-rolled API call can't render something absurd.
 STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
@@ -237,8 +215,6 @@ class CompositionSpec:
     # byte-identical, and both keys omitted from the manifest at the default.
     profile: bool = False
     profile_height_in: float = 0.9           # ignored when profile=False
-    profile_rev: int = 1                      # strip layout revision; see PROFILE_REVS
-    relief_rev: int = 1                       # relief-chain revision; see RELIEF_REVS
     # Track coloring (v1.9): "none" -> the flat track_rgb ink (byte-identical). "elevation"
     # / "grade" color each segment by a DEM-derived scalar ramp -- reprint-safe, no
     # per-point data. Omitted from the manifest at "none".
@@ -331,15 +307,6 @@ class CompositionSpec:
             raise SpecError(f"track_color_by must be one of {TRACK_COLOR_MODES}")
         if self.label_place not in LABEL_PLACE_MODES:
             raise SpecError(f"label_place must be one of {LABEL_PLACE_MODES}")
-        # profile revision: a strict enum member. bool is an int subclass and
-        # True == 1 is in PROFILE_REVS, so exclude bools explicitly (the edition
-        # precedent) -- a crafted manifest can carry True/1.5/"2".
-        if isinstance(self.profile_rev, bool) or self.profile_rev not in PROFILE_REVS:
-            raise SpecError(f"profile_rev must be one of {PROFILE_REVS}")
-        # relief revision: the same strict enum, same reason (a crafted manifest can
-        # carry True/1.5/"2", and bool is an int subclass with True == 1 in RELIEF_REVS)
-        if isinstance(self.relief_rev, bool) or self.relief_rev not in RELIEF_REVS:
-            raise SpecError(f"relief_rev must be one of {RELIEF_REVS}")
         # edition: a bounded int (living editions). A crafted manifest could carry a
         # float, a bool, or a gigantic value; reject anything outside 1..EDITION_MAX
         # with an honest 422 (bool is an int subclass, so exclude it explicitly).

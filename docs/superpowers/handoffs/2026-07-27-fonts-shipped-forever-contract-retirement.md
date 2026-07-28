@@ -1,5 +1,10 @@
 # Handoff — 2026-07-27: type roles shipped, forever-contract retirement pending
 
+> **Superseded same day:** the retirement spec was implemented in the same Mac session
+> that wrote this handoff (see the commits following `8acd37c` on `main`). "The next
+> job" below is done; the verification caveat was also resolved by the post-retirement
+> full-suite run. Kept as written per the handoff convention — historical record.
+
 **From:** Mac session (fonts + curved-label fix + retirement decision)
 **State of `main`:** `78e705b`, pushed. Workspace repo at `b69f3ea` (typography doc updated).
 

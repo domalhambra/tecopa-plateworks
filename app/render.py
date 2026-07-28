@@ -1996,7 +1996,7 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
         # the band's bottom twin (v1.11): phone home-indicator / lock-screen quick
         # controls, a Reel's caption + action zone. Same contract as the clock band.
         keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
-    if spec.profile and getattr(spec, "profile_rev", 1) >= 2:
+    if spec.profile:
         keepout.append(_profile_rect(spec, d, (tx0, ty0, tx1, ty1), dpi))
     return keepout
 
@@ -2228,11 +2228,7 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
         sun_azimuth=spec.sun_azimuth_deg if journey else None,
         sun_altitude=spec.sun_altitude_deg if journey else None,
         golden=spec.golden_strength if journey else 0.0,
-        extras=_relief_extras(spec),
-        # relief-chain revision: 1 is the shipped chain (every poster printed before
-        # v1.13 carries it, so it reprints byte-identically); 2 is the float32 +
-        # pyramid-blur chain new proofs stamp. See app/spec.RELIEF_REVS.
-        rev=getattr(spec, "relief_rev", 1))
+        extras=_relief_extras(spec))
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).
@@ -2356,11 +2352,6 @@ def _profile_rect(spec, d, trim, dpi):
     tw, th = tx1 - tx0, ty1 - ty0
     fs = _furniture_scale(spec)
     ph = max(1, round(spec.profile_height_in * dpi * fs))
-    if getattr(spec, "profile_rev", 1) < 2:
-        pw = min(tw - 2 * round(tw * MARGIN_FRAC), round(ph * 3.4))
-        inset = round(th * MARGIN_FRAC) + round(0.01 * th)
-        x0, y1 = tx0 + inset, ty1 - inset
-        return x0, y1 - ph, x0 + pw, y1
     fdpi = dpi * fs
     inset = round(PROFILE_INSET_IN * fdpi)
     gap = round(PROFILE_GAP_IN * fdpi)
@@ -2409,14 +2400,10 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=None):
     d.line([(px[si], py[si]), (px[si], ay0)], fill=GEO_LABEL_INK + (140,),
            width=max(1, round(dpi / 300)))
     fnt = _font(max(8, round(ph * 0.16)))
-    # rev 2 labels feet: the cartouche speaks MI (render.NICE_MILES), and a mixed-
-    # units sheet was the red-team's recorded product gap. Rev 1 keeps metres -- its
-    # pixels are the pre-feature contract.
-    if getattr(spec, "profile_rev", 1) >= 2:
-        top_lbl = f"{round(emax * 3.28084):,} ft"
-        bot_lbl = f"{round(emin * 3.28084):,} ft"
-    else:
-        top_lbl, bot_lbl = f"{round(emax):,} m", f"{round(emin):,} m"
+    # feet, not metres: the cartouche speaks MI (render.NICE_MILES), and a mixed-
+    # units sheet was the red-team's recorded product gap.
+    top_lbl = f"{round(emax * 3.28084):,} ft"
+    bot_lbl = f"{round(emin * 3.28084):,} ft"
     d.text((ax0, ay0 - round(ph * 0.02)), top_lbl, font=fnt,
            fill=GEO_LABEL_INK + (255,))
     d.text((ax0, ay1 - round(ph * 0.20)), bot_lbl, font=fnt,
@@ -2518,7 +2505,7 @@ def _plate_fingerprint(region_dir, cfg):
 # The old BASE_KEY_MASK_UNLABELLED is folded in here. It existed because `_draw_labels`
 # used to run INSIDE the cached unit, which dragged the whole sheet furniture into the
 # terrain's identity: `_label_keepout` measures the bottom-left stack, and at
-# profile_rev 2 that reaches _profile_rect -> _furniture_stack_top ->
+# the profile strip that reaches _profile_rect -> _furniture_stack_top ->
 # _title_block_metrics, so the title/label point sizes, the credit line and the edition
 # were terrain inputs; under smart placement the drawn route was a placement obstacle,
 # so the track geometry was too. Labels are now drawn by `_apply_labels` AFTER the
@@ -2534,7 +2521,7 @@ BASE_KEY_MASK_ALWAYS = (
     "labels", "label_place",
     # sheet furniture -- read only by the label keep-out and by _paint_overlays
     "title_text", "title_pt", "label_pt", "credit_text", "edition",
-    "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    "compass", "furniture_scale", "profile", "profile_height_in",
     # track geometry -- reached the base only as a smart-label obstacle
     "tracks", "track_days", "track_width_pt",
 )
@@ -2577,7 +2564,7 @@ INK_KEY_MASK_ALWAYS = (
     # it (_apply_labels already runs outside the base cache's unit too)
     "labels", "label_place",
     "title_text", "title_pt", "label_pt", "credit_text", "edition",
-    "compass", "furniture_scale", "profile", "profile_height_in", "profile_rev",
+    "compass", "furniture_scale", "profile", "profile_height_in",
     # scalars applied at COMPOSITE time, deliberately not folded into the layer -- this
     # is what makes two of the appearance sliders hits instead of misses:
     #   casing_op = track_halo * clip(cas)      op = clip(op_raw, 0, track_max_darken)

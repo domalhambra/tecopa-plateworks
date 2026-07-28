@@ -95,26 +95,24 @@ paid for*. Reach for these before computing your own:
   (`None` when the shadow knob is off — check before using)
 - `frame.res_m`, `frame.px(metres)` — the resolution, and the ground→pixel conversion
 - `frame.seed` — the only legal source of randomness
-- `frame.rev` — the relief-chain revision (see below); pass it to `relief._blur`
 
-**Wide blurs go through `relief._blur(array, sigma_px, frame.rev)`, not
-`gaussian_filter`.** scipy's kernel is O(σ) taps per pixel per axis, and cartographic
-radii are wide — the sky-occlusion pass reaches 3200 ground metres. Under rev 2 `_blur`
-computes anything wider than `BLUR_PYRAMID_SIGMA_PX` on a decimated pyramid whose grid
-lands on a *fixed ground resolution*, so it stays DPI-stable (invariant 1) while
-costing a fraction of the exact filter.
+**Wide blurs go through `relief._blur(array, sigma_px)`, not `gaussian_filter`.**
+scipy's kernel is O(σ) taps per pixel per axis, and cartographic radii are wide — the
+sky-occlusion pass reaches 3200 ground metres. `_blur` computes anything wider than
+`BLUR_PYRAMID_SIGMA_PX` on a decimated pyramid whose grid lands on a *fixed ground
+resolution*, so it stays DPI-stable (invariant 1) while costing a fraction of the
+exact filter.
 
-## When a change is not additive
+## When a change moves pixels on the existing chain
 
-Everything above assumes the new pass is *off* at its default. A change to the existing
-chain — a different dtype, a cheaper filter, a retuned constant — cannot be, because it
-moves pixels on posters that are already printed. Those ride a **revision**, not a knob:
-`relief_rev` (`app/spec.RELIEF_REVS`) is the precedent. Rev 1 is the chain as shipped,
-new proofs stamp the current rev, the field is omitted from the manifest at 1 so every
-older file reprints unchanged, and a continued edition restores its predecessor's rev
-so it still looks like the poster it succeeds. `tests/test_relief_rev.py` is the shape
-of the tests a new rev needs: the old rev still renders what it rendered, the new one
-is bounded against it per pixel, and the new one is still a faithful proof→final scale.
+A different dtype, a cheaper filter, a retuned constant — these change posters already
+printed when they are re-rendered. Under the retired forever-contract they needed a
+revision gate; since 2026-07-27 (`docs/superpowers/specs/2026-07-27-retire-the-forever-
+contract-design.md`) they simply ship: `engine_version` in the manifest records which
+build painted a file, and drift is recorded rather than prevented. What such a change
+still owes: determinism within the build (invariant 3), DPI-stability (a faithful
+proof→final scale), and an honest bounded-difference check against the previous chain
+so the change is a decision, not an accident.
 
 ## The four rules a pass must keep
 

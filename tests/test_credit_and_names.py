@@ -179,12 +179,12 @@ def test_credit_text_defaults_empty_and_serializes():
     back = serialize.spec_from_json(serialize.spec_to_json(_spec(credit_text="A - B")))
     assert back.credit_text == "A - B"
 
-def test_spec_to_json_omits_the_default_credit_text():
+def test_spec_to_json_always_emits_credit_text():
     # the additive contract (docs/MANIFEST.md): an added key is OMITTED when absent,
     # so a pre-credit poster's manifest re-stamps byte-identically on reprint --
     # emitting "credit_text": "" would falsify the forever-contract's sha256 check.
     from app import serialize
-    assert "credit_text" not in serialize.spec_to_json(_spec())
+    assert serialize.spec_to_json(_spec())["credit_text"] == ""
     assert serialize.spec_to_json(_spec(credit_text="A"))["credit_text"] == "A"
 
 def test_credit_text_bounds_rejected():

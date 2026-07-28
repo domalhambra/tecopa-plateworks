@@ -293,7 +293,6 @@ function applyPrefill(p) {
     terrain: s.terrain ?? state.style.terrain, shadow: s.shadow ?? state.style.shadow, oblique: s.oblique ?? 0,
     lightMode: s.lightMode || 'archival', sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7, profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
-    profileRev: s.profileRev ?? 1, reliefRev: s.reliefRev ?? 1,
     bleedIn: s.bleed ?? 0, trackColorBy: s.trackColorBy || 'none',
     labelPlace: s.labelPlace || 'anchor', trackWeave: !!s.trackWeave,
   });
