@@ -1103,6 +1103,13 @@ PHOTO_FRAME = (243, 237, 223)       # cream mat around a pinned photo
 PHOTO_EDGE = (54, 40, 30)           # thin dark keyline + connector stem
 # -------------------------------------------------------------------
 
+# ---- typographic roles -------------------------------------------------------------
+# One face per role rather than one face for the sheet: a poster has no chrome, no prose
+# and no code, so the web roles do not transfer (00_Resources/typography-standards.md).
+# A role is a NAME, not a file -- the faces are licensed and this repo is public, so the
+# operator binds them (TECOPA_FONT_<ROLE>) and the committed default is the free chain.
+TYPE_ROLES = ("body", "point", "area", "water", "title")
+
 # Font cache. Every label, every glyph-halo pass and every film frame asks for the
 # same handful of sizes, and each ask re-opened and re-parsed the TTF (a label-dense
 # sheet ~40 times, a 40-frame film ~40x that). The cache is THREAD-LOCAL on purpose:
@@ -1113,20 +1120,29 @@ PHOTO_EDGE = (54, 40, 30)           # thin dark keyline + connector stem
 _FONT_CACHE_MAX = 256
 _font_local = threading.local()
 
-def _font(size):
-    """The sheet's type face at `size` px, memoized per thread on (face, size).
-    TECOPA_FONT is part of the key, so pointing it at another face still takes
-    effect on the next call."""
+def _font(size, role="body"):
+    """The face for `role` at `size` px, memoized per thread on (bound face, size).
+    The env bindings are read on every call, so rebinding a role takes effect on the
+    next one. Roles bound to the same face share one cache entry -- and therefore one
+    FT_Face, which is why the cache is thread-local (see the note above)."""
     cache = getattr(_font_local, "fonts", None)
     if cache is None:
         cache = _font_local.fonts = {}
-    key = (os.environ.get("TECOPA_FONT") or "", size)
+    key = (_role_face(role), size)
     font = cache.get(key)
     if font is None:
         if len(cache) >= _FONT_CACHE_MAX:      # a render uses a dozen sizes; this is
             cache.clear()                      # a leak bound, not a working set
         font = cache[key] = _load_font(*key)
     return font
+
+def _role_face(role):
+    """The operator's binding for `role`: the role-specific env var, else the sheet-wide
+    TECOPA_FONT, else "" -- the committed Georgia/DejaVu chain in `_load_font`."""
+    if role not in TYPE_ROLES:
+        raise ValueError(f"unknown type role {role!r}; expected one of {TYPE_ROLES}")
+    return (os.environ.get(f"TECOPA_FONT_{role.upper()}")
+            or os.environ.get("TECOPA_FONT") or "")
 
 def _load_font(override, size):
     # TECOPA_FONT lets the operator drop in a licensed display face (a real
