@@ -114,3 +114,45 @@ def test_soft_light_composes_with_depth_instead_of_double_applying(terrain):
     # and knob=0.0 with depth on is byte-identical (enabled gate)
     assert np.array_equal(base, _render(terrain, depth=1.0,
                                         extras={"soft_light": 0.0}))
+
+
+def test_haze_sinks_low_ground_toward_the_haze_colour(terrain):
+    plain = _render(terrain)
+    hazed = _render(terrain, extras={"haze": 1.0})
+    assert not np.array_equal(plain, hazed)
+    assert np.array_equal(hazed, _render(terrain, extras={"haze": 1.0}))
+    norm = (terrain - 1200.0) / 900.0
+    low, high = norm < 0.15, norm > 0.85
+    d = hazed.astype(int) - plain.astype(int)
+    moved = np.abs(d).sum(axis=2)
+    assert moved[low].mean() > 4 * max(moved[high].mean(), 0.25)
+    # low ground moves TOWARD the cool haze: blue rises relative to red
+    assert d[..., 2][low].mean() > d[..., 0][low].mean()
+
+
+def test_both_knobs_are_dpi_stable(terrain):
+    """One spec, painted at many sizes: the same ground at half the resolution must
+    show the same effect (MAD of the upsampled coarse render vs fine, bounded like
+    the engine's other proof-vs-final gates)."""
+    from scipy.ndimage import zoom
+
+    def _up(a, shape):
+        return zoom(a.astype("float32"),
+                    (shape[0] / a.shape[0], shape[1] / a.shape[1], 1.0),
+                    order=1)[:shape[0], :shape[1]]
+
+    knobs = {"soft_light": 0.6, "haze": 0.5}
+    coarse_elev = zoom(terrain, 0.5, order=1)
+    fine = shaded_relief(terrain, res_m=30.0, elev_min=1200.0, elev_max=2100.0,
+                         extras=knobs)
+    coarse = shaded_relief(coarse_elev, res_m=60.0, elev_min=1200.0,
+                           elev_max=2100.0, extras=knobs)
+    mad = np.abs(_up(coarse, fine.shape) - fine.astype("float32")).mean()
+    # the same measurement with the knobs off: the baseline dpi drift the shipped
+    # look already carries, which the knobs may not meaningfully add to
+    plain_fine = shaded_relief(terrain, res_m=30.0, elev_min=1200.0, elev_max=2100.0)
+    plain_coarse = shaded_relief(coarse_elev, res_m=60.0, elev_min=1200.0,
+                                 elev_max=2100.0)
+    mad0 = np.abs(_up(plain_coarse, plain_fine.shape)
+                  - plain_fine.astype("float32")).mean()
+    assert mad < mad0 + 2.0        # the knobs add no MORE dpi drift than the base look
