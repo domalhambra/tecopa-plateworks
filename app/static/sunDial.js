@@ -28,9 +28,9 @@ export function mount(hostEl) {
       <circle class="dial-sun" r="9"></circle>
     </svg>
     <div class="dial-readout">
-      <button type="button" class="dial-axis" id="dialAz" role="slider"
+      <button type="button" class="dial-axis" id="c_sunAzimuth" role="slider"
         aria-label="Sun azimuth" aria-valuemin="${AZ_MIN}" aria-valuemax="${AZ_MAX}"></button>
-      <button type="button" class="dial-axis" id="dialAlt" role="slider"
+      <button type="button" class="dial-axis" id="c_sunAltitude" role="slider"
         aria-label="Sun altitude" aria-valuemin="${ALT_MIN}" aria-valuemax="${ALT_MAX}"></button>
       <div class="dial-hour" id="dialHour"></div>
     </div>`;
@@ -59,8 +59,8 @@ export function mount(hostEl) {
   svg.addEventListener('pointermove', (e) => { if (dragging) commit(toValues(e.clientX, e.clientY)); });
   window.addEventListener('pointerup', () => { dragging = false; });
 
-  wireAxis(host.querySelector('#dialAz'), () => resolved().az, (v) => commit({ az: (v + 360) % 360, alt: resolved().alt }), 5);
-  wireAxis(host.querySelector('#dialAlt'), () => resolved().alt, (v) => commit({ az: resolved().az, alt: clamp(v, ALT_MIN, ALT_MAX) }), 2);
+  wireAxis(host.querySelector('#c_sunAzimuth'), () => resolved().az, (v) => commit({ az: (v + 360) % 360, alt: resolved().alt }), 5);
+  wireAxis(host.querySelector('#c_sunAltitude'), () => resolved().alt, (v) => commit({ az: resolved().az, alt: clamp(v, ALT_MIN, ALT_MAX) }), 2);
 
   subscribe((path) => { if (path === null || path === 'style.lightMode' || String(path).startsWith('style.sun')) reflect(); });
   reflect();
@@ -101,7 +101,7 @@ function reflect() {
   sun.setAttribute('cx', px.toFixed(1)); sun.setAttribute('cy', py.toFixed(1));
   const glow = host.querySelector('.dial-glow');
   glow.setAttribute('d', `M ${CX} ${CY} L ${px.toFixed(1)} ${py.toFixed(1)}`);
-  const azEl = host.querySelector('#dialAz'), altEl = host.querySelector('#dialAlt');
+  const azEl = host.querySelector('#c_sunAzimuth'), altEl = host.querySelector('#c_sunAltitude');
   azEl.textContent = `Bearing ${az}°`; azEl.setAttribute('aria-valuenow', az); azEl.setAttribute('aria-valuetext', `${az} degrees`);
   altEl.textContent = `Height ${alt}°`; altEl.setAttribute('aria-valuenow', alt); altEl.setAttribute('aria-valuetext', `${alt} degrees`);
   const hourEl = host.querySelector('#dialHour');

@@ -6,6 +6,7 @@
 import { CONTROLS } from './controls.js';
 import { CURATED } from './presets.js';
 import * as presets from './presets.js';
+import { state } from './store.js';
 import { $ } from './ui.js';
 
 let items = [];
@@ -32,11 +33,15 @@ export function initPalette({ setTarget, setView, jumpToControl, actions }) {
   for (const a of actions) items.push({ label: a.label, hint: 'action', keys: [a.label], run: a.run });
   // presets
   for (const p of CURATED) items.push({ label: `Apply preset: ${p.name}`, hint: 'preset', keys: [p.name, 'preset'], run: () => presets.apply(p.snap, p.name) });
-  // controls -> expand their group and focus them (switching target if needed)
+  // controls -> expand their group and focus them (switching target if needed). A
+  // control whose visibleWhen is false right now is skipped at filter time — offering
+  // a jump to a row that isn't on screen (Sun azimuth in archival light, Profile
+  // height with the profile off) would land the reader nowhere.
   for (const c of CONTROLS) {
     items.push({
       label: c.label, hint: SECTION_LABEL[c.section] || c.section,
       keys: [c.label, ...(c.keywords || []), c.section, ...(c.help ? [c.help] : [])],
+      visible: () => !c.visibleWhen || c.visibleWhen(state),
       run: () => jumpToControl(c),
     });
   }
@@ -54,8 +59,9 @@ export function open() {
 
 function refilter() {
   const q = input.value.trim().toLowerCase();
-  filtered = !q ? items.slice(0, 40)
-    : items.filter((it) => it.keys.some((k) => String(k).toLowerCase().includes(q))).slice(0, 40);
+  const live = items.filter((it) => !it.visible || it.visible());
+  filtered = !q ? live.slice(0, 40)
+    : live.filter((it) => it.keys.some((k) => String(k).toLowerCase().includes(q))).slice(0, 40);
   active = 0;
   render();
 }

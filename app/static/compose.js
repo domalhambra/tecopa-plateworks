@@ -205,6 +205,9 @@ export async function doUpload(fileList) {
     markers.render($('markerList'), (msg) => toast(msg, 'info'));
     hooks.onLoaded && hooks.onLoaded('upload');
     enterCompose();
+    // the starter frame is seeded — warm the Preview unasked (the summary toast below
+    // lands over the working-toast and tells the operator it's happening)
+    const primed = proof.primeFirstProof();
     const boundary = [];
     if (j.dropped_points) boundary.push(`${j.dropped_points} point${j.dropped_points === 1 ? '' : 's'} outside the plate's map projection — dropped`);
     if (j.journeys_outside_plate) boundary.push(`${j.journeys_outside_plate} of ${j.tracks.length} journeys extend beyond the plate and won't fully appear`);
@@ -223,7 +226,8 @@ export async function doUpload(fileList) {
       if (parts.length) notes.push(`${parts.join(', ')} — skipped`);
       notes.push(...boundary);
       const dupNote = notes.length ? ` (${notes.join('; ')})` : '';
-      toast(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — frame it, then render a proof.`, 'ok');
+      toast(`${state.tracks.length} track(s) across ${state.files.length} file(s)${dupNote} — ${
+        primed ? 'the proof is rendering itself.' : 'frame it, then render a proof.'}`, 'ok');
     }
   } catch (e) {
     // GPX-first: "no built plate covers these tracks" is the COMMON case, not an error.
@@ -270,6 +274,7 @@ export async function continueFromPoster(file) {
     markers.render($('markerList'), (msg) => toast(msg, 'info'));
     hooks.onLoaded && hooks.onLoaded('continue');
     enterCompose();
+    proof.primeFirstProof();   // the restored recipe proofs itself; Preview shows last year's look
     const echo = [`Edition ${state.edition}`, j.name, j.year_span].filter(Boolean).join(' · ');
     showHint(`${echo} — ready to add this year. Drop this year's GPX, then reframe and render.`);
     toast(`${echo} — ${state.tracks.length} track(s) restored, ready to add this year.`, 'ok');

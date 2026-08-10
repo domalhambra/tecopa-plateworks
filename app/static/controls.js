@@ -53,6 +53,7 @@ export const GROUPS = {
   'Pacing': 'How fast the film inks your journeys, and how long it rests.',
   'Output': 'The film container and whether its sun travels.',
   'File': 'What the exported file carries.',
+  'Fine-tuning': 'The last few points of polish. The defaults already suit most plates.',
 };
 
 // --- the registry -------------------------------------------------------------------
@@ -62,7 +63,9 @@ export const GROUPS = {
 //          (distinct from `hint`, the terse label suffix)
 // geometry: writes the sheet/crop, so it routes through the reframe helper (which stales
 //           the proof) instead of a plain setField — the inspector defers to the section.
-// advanced: hidden from the primary panel; reachable via the "All options" drawer/palette.
+// advanced: finishing controls, kept out of the primary rows — rendered inside the
+//           section's collapsed "Fine-tuning" disclosure (and searchable in the palette),
+//           so the sidebar leads with the choices that matter and hides none.
 export const CONTROLS = [
   // ===== COMPOSE (page setup) =====
   { id: 'output', path: 'output', section: 'compose', panel: 'Page', label: 'Output',
@@ -104,6 +107,7 @@ export const CONTROLS = [
     keywords: ['width', 'thickness', 'line', 'stroke'] },
   { id: 'halo', path: 'style.halo', section: 'style', panel: 'Route', label: 'Track outline',
     type: 'slider', min: 0, max: 0.9, step: 0.05, default: 0.7, fmt: f2, affectsProof: true,
+    advanced: true,
     help: 'A paper-colored casing around the route so it stays readable over dark terrain.',
     keywords: ['halo', 'outline', 'paper', 'casing'] },
   { id: 'trackColorBy', path: 'style.trackColorBy', section: 'style', panel: 'Route', label: 'Color track by',
@@ -135,15 +139,17 @@ export const CONTROLS = [
     keywords: ['haze', 'atmosphere', 'aerial perspective', 'depth', 'fog'] },
   { id: 'oblique', path: 'style.oblique', section: 'style', panel: 'Terrain', label: 'High relief',
     hint: 'plan-oblique stand-up terrain', type: 'slider', min: 0, max: 1, step: 0.05, default: 0,
-    fmt: f2, affectsProof: true, keywords: ['oblique', 'high relief', '3d', 'stand up', 'tilt'] },
+    fmt: f2, affectsProof: true,
+    help: 'Tilts the terrain up out of the sheet so ridges stand like a raised-relief model.',
+    keywords: ['oblique', 'high relief', '3d', 'stand up', 'tilt'] },
 
   { id: 'marker', path: 'style.marker', section: 'style', panel: 'Markers', label: 'Marker size',
     type: 'slider', min: 0.1, max: 0.5, step: 0.01, default: 0.24, fmt: inch, affectsProof: true,
-    help: 'Tilts the terrain up out of the sheet so ridges stand like a raised-relief model.',
     help: 'Diameter of the gold place dots, in inches on the sheet.',
     keywords: ['marker', 'dot', 'size', 'poi'] },
   { id: 'ring', path: 'style.ring', section: 'style', panel: 'Markers', label: 'Marker outline',
     type: 'slider', min: 0, max: 0.25, step: 0.01, default: 0.09, fmt: f2, affectsProof: true,
+    advanced: true,
     help: 'The outline ring around each place dot, as a fraction of its size.',
     keywords: ['marker', 'ring', 'outline'] },
   { id: 'photoStyle', path: 'style.photoStyle', section: 'style', panel: 'Markers', label: 'Photo frame',
@@ -154,19 +160,22 @@ export const CONTROLS = [
     keywords: ['photo', 'frame', 'mat', 'polaroid', 'keyline'] },
   { id: 'furniture', path: 'style.furniture', section: 'style', panel: 'Markers', label: 'Legend & compass size',
     type: 'slider', min: 0.6, max: 1.6, step: 0.05, default: 1.0, fmt: mult, affectsProof: true,
+    advanced: true,
     help: 'Scales the legend, compass, and cartouche together relative to their automatic size.',
     keywords: ['furniture', 'legend', 'compass', 'cartouche', 'scale'] },
 
   // ===== LAYERS (named geography + strips) =====
   { id: 'contours', path: 'contours', section: 'layers', panel: 'Cartography', label: 'Contour lines',
-    type: 'toggle', default: false, affectsProof: true, keywords: ['contour', 'elevation lines'] },
-  { id: 'compass', path: 'compass', section: 'layers', panel: 'Cartography', label: 'Compass rose',
-    type: 'toggle', default: true, affectsProof: true,
-    visibleWhen: (s) => s.output !== 'wallpaper', keywords: ['compass', 'rose', 'north'] },
-  { id: 'biome', path: 'biome', section: 'layers', panel: 'Cartography', label: 'Biome color',
     type: 'toggle', default: false, affectsProof: true,
     help: 'Elevation contour lines traced from the USGS terrain model.',
+    keywords: ['contour', 'elevation lines'] },
+  { id: 'compass', path: 'compass', section: 'layers', panel: 'Cartography', label: 'Compass rose',
+    type: 'toggle', default: true, affectsProof: true,
+    visibleWhen: (s) => s.output !== 'wallpaper',
     help: 'A compass rose above the title block.',
+    keywords: ['compass', 'rose', 'north'] },
+  { id: 'biome', path: 'biome', section: 'layers', panel: 'Cartography', label: 'Biome color',
+    type: 'toggle', default: false, affectsProof: true,
     help: 'Tint the land by what grows there (USGS land cover): forest green, desert sage.',
     keywords: ['biome', 'land cover', 'nlcd', 'vegetation', 'color'] },
   { id: 'labels', path: 'labels', section: 'layers', panel: 'Cartography', label: 'Place names',
@@ -211,7 +220,7 @@ export const CONTROLS = [
     keywords: ['altitude', 'sun height', 'elevation angle'] },
   { id: 'golden', path: 'style.golden', section: 'light', panel: 'Journey Light', label: 'Golden-hour grade',
     type: 'slider', min: 0, max: 1, step: 0.05, default: 0.7, fmt: pct, affectsProof: true,
-    visibleWhen: (s) => s.style.lightMode === 'journey',
+    advanced: true, visibleWhen: (s) => s.style.lightMode === 'journey',
     help: 'How strongly the warm/cool golden-hour color grade is applied in journey light.',
     keywords: ['golden', 'warm', 'cool', 'grade', 'tint'] },
 
@@ -226,15 +235,17 @@ export const CONTROLS = [
     keywords: ['step', 'speed', 'pace', 'frame hold'] },
   { id: 'tlHoldMs', path: 'tlHoldMs', section: 'films', panel: 'Pacing', label: 'Final hold',
     type: 'slider', min: 40, max: 10000, step: 100, default: 2500, fmt: (v) => `${(v / 1000).toFixed(1)} s`,
-    affectsProof: false, keywords: ['hold', 'final frame', 'pause'] },
+    affectsProof: false,
+    help: 'How long the finished poster holds before the film loops.',
+    keywords: ['hold', 'final frame', 'pause'] },
   { id: 'tlLeaderMs', path: 'tlLeaderMs', section: 'films', panel: 'Pacing', label: 'Opening hold',
     type: 'slider', min: 0, max: 5000, step: 100, default: 700, fmt: (v) => `${(v / 1000).toFixed(1)} s`,
-    affectsProof: false, keywords: ['leader', 'opening', 'intro'] },
+    affectsProof: false,
+    help: 'How long the empty terrain holds before the first journey appears.',
+    keywords: ['leader', 'opening', 'intro'] },
   { id: 'tlFormat', path: 'tlFormat', section: 'films', panel: 'Output', label: 'Film format',
     type: 'segmented', default: 'apng', affectsProof: false,
     options: [{ value: 'apng', label: 'APNG' }, { value: 'webp', label: 'WebP' }, { value: 'mp4', label: 'MP4' }],
-    help: 'How long the finished poster holds before the film loops.',
-    help: 'How long the empty terrain holds before the first journey appears.',
     help: 'APNG is archival and reprints from itself; WebP and MP4 are share copies for feeds.',
     keywords: ['apng', 'webp', 'mp4', 'video', 'format'] },
   { id: 'lightMotion', path: 'lightMotion', section: 'films', panel: 'Output', label: 'Light motion',

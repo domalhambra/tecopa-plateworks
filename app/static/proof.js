@@ -89,9 +89,21 @@ export function scheduleAutoProof() {
   }, SETTLE_MS);
 }
 
+// The first proof used to wait for a click: tracks landed, the frame was seeded, and
+// nothing rendered until the operator found "Render proof". Once tracks are on the map
+// there is nothing left to ask, so prime one background proof (stay=true keeps the
+// operator on the map; the Preview is simply warm when they look). Respects the Live
+// proof toggle, and every renderProof guard (no crop, infeasible size) still applies.
+export function primeFirstProof() {
+  if (state.hasSpec || !state.autoProof) return false;
+  renderProof({ auto: true, stay: true });
+  return true;   // kicked off (renderProof's own guards may still quietly decline)
+}
+
 // Render a proof; on success stamps the server spec, shows it in the center, and (unless
 // this was the very first proof) pushes the prior proof into the history filmstrip.
-export async function renderProof({ auto = false } = {}) {
+// stay=true renders without stealing the view (the primed first proof).
+export async function renderProof({ auto = false, stay = false } = {}) {
   if (proofInFlight) { if (auto) coalesced = true; return false; }
   if (state.output === 'wallpaper' && state.wpPreset === 'custom' && !activePreset()) {
     if (!auto) toast('Enter the custom device’s width, height and ppi first', 'error');
@@ -102,7 +114,7 @@ export async function renderProof({ auto = false } = {}) {
   if (!ov) { if (!auto) toast('Draw a frame first', 'error'); return false; }
   proofInFlight = true;
   refreshProofUI();
-  toast(auto ? 'Re-proofing…' : 'Rendering proof…', 'working');
+  toast(stay ? 'Proofing your look…' : auto ? 'Re-proofing…' : 'Rendering proof…', 'working');
   try {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
       { title: state.title, contours: state.contours, compass: state.compass,
@@ -115,10 +127,11 @@ export async function renderProof({ auto = false } = {}) {
     state.hasSpec = true; state.proofStale = false;
     state.lastFinal = null;
     const da = $('downloadAgain'); if (da) da.hidden = true;
-    hooks.onProofed && hooks.onProofed();
+    hooks.onProofed && hooks.onProofed(stay);
     refreshProofUI();
     startRefine();
-    toast('Proof ready — accept to render the full-resolution final', 'ok');
+    toast(stay ? 'Proof ready — see Preview, or keep framing'
+      : 'Proof ready — accept to render the full-resolution final', 'ok');
     return true;
   } catch (e) {
     handleProofError(e);

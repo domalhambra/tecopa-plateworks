@@ -110,6 +110,9 @@ details.insp-group > summary.insp-head::after {
 }
 details.insp-group:not([open]) > summary.insp-head::after { content: '▸'; }
 details.insp-group:not([open]) > summary.insp-head { margin-bottom: 0; }
+/* the collapsed Fine-tuning disclosure: present, quiet, deliberately second fiddle */
+details.insp-advanced > summary.insp-head .insp-title { color: color-mix(in srgb, var(--text-3) 72%, transparent); }
+details.insp-advanced[open] > summary.insp-head .insp-title { color: var(--text-3); }
 
 /* the "controls apply once tracks land" hint card */
 .insp-hint-card {
