@@ -84,15 +84,28 @@ function refreshStage() {
 }
 
 // Palette / deep-link helper: land on the target that owns a control, then focus it.
+// Registry-rendered rows carry the canonical c_<id>; the page-setup and export
+// controls are static index.html fields, so they resolve through this map instead —
+// without it, every "jump to Print size / Orientation / …" was a silent no-op.
+const STATIC_CONTROL_TARGETS = {
+  output: 'outputField', size: 'size', orientation: 'orientField', bleed: 'bleed',
+  title: 'titleInput', finalFormat: 'formatField', embedSpec: 'embedSpecChk',
+};
 export function jumpToControl(c) {
   if (c.section === 'films') { if (state.target !== 'film') setTarget('film'); }
   else if (state.target === 'film' || state.target === 'social') {
     setTarget(state.output === 'wallpaper' ? 'wallpaper' : 'poster');
   }
   setTimeout(() => {
-    const el = $(`c_${c.id}`);
+    let el = $(`c_${c.id}`) || $(STATIC_CONTROL_TARGETS[c.id] || '');
     if (!el) return;
-    const group = el.closest('details'); if (group) group.open = true;
+    // a field wrapper isn't focusable — hand focus to its live face
+    if (!/^(INPUT|SELECT|BUTTON|TEXTAREA)$/.test(el.tagName)) {
+      el = el.querySelector('.segmented .on') || el.querySelector('input, select, button') || el;
+    }
+    // open every enclosing disclosure (a Fine-tuning group nests inside none today,
+    // but ancestors are cheap to walk and this can never strand a control again)
+    for (let d = el.closest('details'); d; d = d.parentElement && d.parentElement.closest('details')) d.open = true;
     el.scrollIntoView({ block: 'center' });
     el.focus();
   }, 60);
@@ -161,12 +174,13 @@ function buildPanels() {
   inspector.buildSectionPanel('style', $('styleHost'));
   inspector.buildSectionPanel('layers', $('layersHost'));
 
-  // Light: the registry controls, then the sun dial in its own group
+  // Light: the registry controls, then the sun dial in its own group — slotted BEFORE
+  // the section's collapsed Fine-tuning disclosure so polish stays last in the column
   const lightHost = $('lightHost');
   inspector.buildSectionPanel('light', lightHost);
   const dialGroup = document.createElement('details'); dialGroup.className = 'insp-group'; dialGroup.open = true;
   dialGroup.innerHTML = '<summary class="insp-head"><span class="insp-title">Sun position</span></summary><div id="sunDialHost"></div>';
-  lightHost.appendChild(dialGroup);
+  lightHost.insertBefore(dialGroup, lightHost.querySelector('details.insp-advanced'));
   sunDial.mount($('sunDialHost'));
 
   // Film pacing rides the right sidebar when the Film target is active; the film
@@ -247,7 +261,10 @@ function wireShell() {
   for (const b of document.querySelectorAll('.target-item')) b.onclick = () => setTarget(b.dataset.target);
   $('viewMapBtn').onclick = () => setView('map');
   $('viewPreviewBtn').onclick = () => setView('preview');
-  $('noTracksHintClose').onclick = () => { state.hintDismissed = true; $('noTracksHint').hidden = true; };
+  $('noTracksHintClose').onclick = () => {
+    state.hintDismissed = true; savePref('hintDismissed', true); $('noTracksHint').hidden = true;
+  };
+  if (loadPrefs().hintDismissed) state.hintDismissed = true;   // dismissed once = dismissed for good
   $('shortcutsClose').onclick = () => $('shortcutsDialog').close();
 
   // keyboard: Cmd/Ctrl+K palette; ? shortcuts; 1..4 targets; M/P map or preview
@@ -271,11 +288,15 @@ function wireShell() {
     // The creation modal is open: surface dropzones are inert under showModal(), but a drop
     // onto the dialog itself still bubbles here. Ignore it so nothing uploads behind the modal.
     if ($('buildDialog').open) return;
-    const f = e.dataTransfer && e.dataTransfer.files[0];
-    if (!f) return;
+    const files = e.dataTransfer ? Array.from(e.dataTransfer.files) : [];
+    if (!files.length) return;
     e.preventDefault();
-    if (/\.png$/i.test(f.name)) library.openPoster(f);
-    else if (/\.(gpx|kml|kmz)$/i.test(f.name)) compose.doUpload([f]);
+    // a poster PNG wins a mixed drop (reopening is a deliberate, single-file act);
+    // otherwise EVERY track file uploads — taking only files[0] silently lost the rest
+    const png = files.find((f) => /\.png$/i.test(f.name));
+    const tracks = files.filter((f) => /\.(gpx|kml|kmz)$/i.test(f.name));
+    if (png) library.openPoster(png);
+    else if (tracks.length) compose.doUpload(tracks);
   });
 }
 
@@ -296,7 +317,9 @@ function initAll() {
   wireShell();
   statusbar.initStatusbar({ onReproof: () => proof.renderProof() });
   proof.initProof({
-    onProofed: () => { setView('preview'); refreshShell(); },
+    // stay=true is a background proof (the primed first proof after an upload): warm
+    // the Preview without yanking the operator off the map they're framing on.
+    onProofed: (stay) => { if (!stay) setView('preview'); refreshShell(); },
     onSnapshotApplied: () => {},
     onUiRefresh: () => statusbar.refreshProof(),
   });

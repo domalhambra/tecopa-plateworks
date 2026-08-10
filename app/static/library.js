@@ -7,7 +7,7 @@
 import { state } from './store.js';
 import * as api from './api.js';
 import * as compose from './compose.js';
-import { $, toast, saveBlob, escapeHtml } from './ui.js';
+import { $, toast, saveBlob, escapeHtml, announce } from './ui.js';
 
 let hooks = {};
 let pendingFile = null;         // the poster being inspected (kept for continue/reprint)
@@ -62,7 +62,9 @@ export async function openPoster(file) {
   try {
     const info = await api.inspectPoster(file);
     renderProvenance(info);
-    toast('', 'info');
+    // the card lives in the left sidebar (visible from every surface) — say where to look
+    toast('Poster read — its card is in the left sidebar.', 'ok');
+    announce('Poster read; provenance card updated');
   } catch (e) {
     // not a Tecopa Plateworks PNG / no manifest (a share copy) — say so honestly.
     renderNoManifest(e.message);
@@ -97,6 +99,7 @@ function renderProvenance(info) {
     </div>`;
   $('pvContinue').onclick = () => { if (pendingFile) { hooks.goCompose && hooks.goCompose(); compose.continueFromPoster(pendingFile); } };
   $('pvReprint').onclick = () => reprintPending();
+  card.scrollIntoView({ block: 'nearest' });
 }
 
 function renderNoManifest(msg) {

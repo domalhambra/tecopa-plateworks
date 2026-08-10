@@ -13,6 +13,9 @@
       if (p.theme) document.documentElement.setAttribute('data-color-scheme', p.theme);
     } catch (e) { /* private mode */ }
   </script>
+  <!-- inline favicon (a gold plate, cream ridge): no extra request, and no 404 console
+       error on every session — the studio ships no favicon.ico -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%23d69e3a'/%3E%3Cpath d='M3 11.5 6.5 6l2.3 3 1.7-2.2L13 11.5z' fill='%23f3eddf'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="tokens.css">
   <link rel="stylesheet" href="base.css">
   <link rel="stylesheet" href="shell.css">
@@ -191,7 +194,9 @@
                 <button id="continuePosterRegion" class="ghost" type="button">Open a poster…</button>
                 <span class="poster-drop-hint">or drag a poster PNG anywhere</span>
               </div>
-              <div id="provenanceCard" class="provenance-card" hidden></div>
+              <!-- the provenance card lives ONCE, in the project sidebar, where it stays
+                   visible from every surface — this section used to carry a duplicate
+                   #provenanceCard that getElementById never resolved (dead markup) -->
             </div>
           </div>
         </section>

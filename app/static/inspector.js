@@ -111,8 +111,10 @@ function hint(c) { return c.hint ? ` <span class="ctl-hint">· ${c.hint}</span>`
 
 // Every control explains itself: a small ? toggle reveals one plain sentence INLINE
 // below the row (not a hover tooltip — works for touch and keyboard, and stays put
-// while the reader adjusts the control). Exported so static rows (page setup, film
-// target) get the identical affordance.
+// while the reader adjusts the control). The same sentence also rides the toggle as a
+// native title, so a mouse gets it on hover without a click. Exported so static rows
+// (page setup, film target) get the identical affordance.
+let helpSeq = 0;
 export function attachHelp(row, help) {
   if (!help) return row;
   const btn = document.createElement('button');
@@ -120,11 +122,14 @@ export function attachHelp(row, help) {
   btn.className = 'ctl-help';
   btn.setAttribute('aria-label', 'What is this?');
   btn.setAttribute('aria-expanded', 'false');
+  btn.title = help;
   btn.textContent = '?';
   const text = document.createElement('p');
   text.className = 'ctl-help-text';
+  text.id = `ctlHelp_${++helpSeq}`;
   text.textContent = help;
   text.hidden = true;
+  btn.setAttribute('aria-controls', text.id);
   btn.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     text.hidden = !text.hidden;
@@ -150,44 +155,60 @@ function register(c, wrap, reflect) {
 // Build a whole section's inspector panel, grouped by the controls' `panel`, as
 // collapsible <details> groups (all open by default — collapsing is a reading aid, not
 // a hiding place). `panels` restricts to named groups so a section can split across
-// hosts (film pacing right, film output left). Skips advanced-only controls (they
-// surface in the command palette / all-options search).
-export function buildSectionPanel(section, host, { includeAdvanced = false, panels = null } = {}) {
+// hosts (film pacing right, film output left). Advanced controls render too — gathered
+// into ONE collapsed "Fine-tuning" group at the host's end, so the primary rows stay
+// short but nothing is reachable only through the palette.
+const RENDERABLE = ['slider', 'toggle', 'toggleMap', 'select', 'segmented', 'swatch'];
+export function buildSectionPanel(section, host, { panels = null } = {}) {
   host.innerHTML = '';
+  const inPanels = (c) => !panels || panels.includes(c.panel);
   for (const panel of panelsOf(section)) {
     if (panels && !panels.includes(panel)) continue;
-    const items = forSection(section).filter((c) => c.panel === panel && (includeAdvanced || !c.advanced));
-    const usable = items.filter((c) => ['slider', 'toggle', 'toggleMap', 'select', 'segmented', 'swatch'].includes(c.type));
+    const usable = forSection(section).filter((c) =>
+      c.panel === panel && !c.advanced && RENDERABLE.includes(c.type));
     if (!usable.length) continue;
-    const group = document.createElement('details');
-    group.className = 'insp-group';
-    group.open = true;
-    const head = document.createElement('summary');
-    head.className = 'insp-head';
-    head.innerHTML = `<span class="insp-title">${panel}</span>`;
-    group.appendChild(head);
-    if (GROUPS[panel]) {
-      const desc = document.createElement('p');
-      desc.className = 'insp-desc';
-      desc.textContent = GROUPS[panel];
-      group.appendChild(desc);
-    }
-    for (const c of usable) {
-      const el = renderControl(c);
-      if (el) group.appendChild(el);
-    }
-    host.appendChild(group);
+    host.appendChild(buildGroup(panel, GROUPS[panel], usable, true));
+  }
+  const fine = forSection(section).filter((c) =>
+    inPanels(c) && c.advanced && RENDERABLE.includes(c.type));
+  if (fine.length) {
+    host.appendChild(buildGroup('Fine-tuning', GROUPS['Fine-tuning'], fine, false));
   }
   reflectVisibility();
 }
 
+function buildGroup(title, desc, controls, open) {
+  const group = document.createElement('details');
+  group.className = 'insp-group' + (open ? '' : ' insp-advanced');
+  group.open = open;
+  const head = document.createElement('summary');
+  head.className = 'insp-head';
+  head.innerHTML = `<span class="insp-title">${title}</span>`;
+  group.appendChild(head);
+  if (desc) {
+    const p = document.createElement('p');
+    p.className = 'insp-desc';
+    p.textContent = desc;
+    group.appendChild(p);
+  }
+  for (const c of controls) {
+    const el = renderControl(c);
+    if (el) group.appendChild(el);
+  }
+  return group;
+}
+
 // Recompute which controls are visible (visibleWhen predicates) — cheap, run after any
 // edit so dependent rows (smart labels under Place names, sun controls under Journey
-// Light, profile height under the profile toggle) appear/disappear live.
+// Light, profile height under the profile toggle) appear/disappear live. A Fine-tuning
+// group whose every row is hidden hides with them (no empty disclosure to open).
 export function reflectVisibility() {
   for (const r of rendered) {
     const vw = r.control.visibleWhen;
     r.container.hidden = vw ? !vw(state) : false;
+  }
+  for (const g of document.querySelectorAll('details.insp-advanced')) {
+    g.hidden = !g.querySelector('.ctl:not([hidden]), .switch-row:not([hidden]), .field:not([hidden]), .swatch-row:not([hidden])');
   }
 }
 
