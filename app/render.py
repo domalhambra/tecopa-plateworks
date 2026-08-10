@@ -2686,3 +2686,9 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
                          ink_key=ink_key)  # all journeys
     return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
                            profile=profile, paint=paint, trim=trim)
+
+
+# The shipped relief-pass module registers on import. Imported HERE, at the bottom,
+# because looks.py needs this module's relief_extra -- by this line the module object
+# is fully populated, so the circular import resolves cleanly and deterministically.
+from . import looks  # noqa: E402,F401

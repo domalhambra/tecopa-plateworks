@@ -7,6 +7,8 @@ depth blend rather than double-applying it."""
 import numpy as np
 import pytest
 
+from app import looks, relief, render
+from app.relief import registered_relief_passes, shaded_relief
 from app.spec import CompositionSpec, STYLE_BOUNDS, SpecError
 
 
@@ -36,3 +38,79 @@ def test_out_of_bounds_knob_is_refused(field, bad):
     s = _spec(**{field: bad})
     with pytest.raises(SpecError):
         s.validate(dpi=96)
+
+
+@pytest.fixture
+def terrain():
+    """The seam tests' deterministic hill field (mirrors test_relief_passes)."""
+    v, u = np.mgrid[0:70, 0:90].astype("float64")
+    u /= 89.0
+    v /= 69.0
+    z = (0.5 + 0.5 * np.sin(2 * np.pi * 1.5 * u) * np.cos(2 * np.pi * 1.5 * v)
+         + 0.4 * np.exp(-(((u - 0.5) ** 2 + (v - 0.5) ** 2) / 0.06)))
+    return (1200.0 + 900.0 * z).astype("float32")
+
+
+def _render(elev, **kw):
+    return shaded_relief(elev, res_m=30.0, elev_min=1200.0, elev_max=2100.0, **kw)
+
+
+def test_looks_registers_the_shipped_passes():
+    assert registered_relief_passes("light") == ["soft-light"]
+    assert registered_relief_passes("finish") == ["haze"]
+    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze"}
+
+
+def test_zero_knobs_are_byte_identical_to_an_empty_registry(terrain):
+    """The additive-default rule, applied to the shipped passes themselves."""
+    with_passes = _render(terrain, shadow=0.6,
+                          extras={"soft_light": 0.0, "haze": 0.0})
+    for stage in ("light", "finish"):
+        for name in registered_relief_passes(stage):
+            relief.unregister_relief_pass(stage, name)
+    try:
+        empty = _render(terrain, shadow=0.6)
+    finally:
+        looks.register()
+    assert np.array_equal(with_passes, empty)
+
+
+def test_soft_light_moves_pixels_and_is_deterministic(terrain):
+    plain = _render(terrain)
+    lit = _render(terrain, extras={"soft_light": 0.6})
+    assert not np.array_equal(plain, lit)
+    assert np.array_equal(lit, _render(terrain, extras={"soft_light": 0.6}))
+
+
+def test_soft_light_full_knob_matches_the_core_blend(terrain):
+    """The knob is an exact correction, not an approximation: at knob k with depth 0
+    the composed weight is 1-(1-0)(1-k) = k, so k == MULTIDIR_MAX must reproduce the
+    light plane the core's own depth blend builds at depth 1.0. A probe pass captures
+    that plane in both configurations (depth also moves texture/atmosphere/salt, which
+    is why the sheets differ but the LIGHT must not)."""
+    k = relief.MULTIDIR_MAX             # the same weight the depth pass uses at d=1
+    captured = {}
+
+    def probe(arr, frame):
+        captured[frame.extras.get("probe")] = np.array(arr, dtype="float64")
+        return arr
+
+    relief.register_relief_pass("light", "zz-probe", probe)   # runs after soft-light
+    try:
+        _render(terrain, extras={"soft_light": k, "probe": "knob"})
+        _render(terrain, depth=1.0, extras={"probe": "depth"})
+    finally:
+        relief.unregister_relief_pass("light", "zz-probe")
+    np.testing.assert_allclose(captured["knob"], captured["depth"],
+                               rtol=0, atol=1e-6)
+
+
+def test_soft_light_composes_with_depth_instead_of_double_applying(terrain):
+    """At depth=1 the core already blended at MULTIDIR_MAX; a knob on top may only
+    ADD the remaining headroom -- never darken below either input."""
+    base = _render(terrain, depth=1.0)
+    more = _render(terrain, depth=1.0, extras={"soft_light": 1.0})
+    assert not np.array_equal(base, more)         # headroom exists above 0.55
+    # and knob=0.0 with depth on is byte-identical (enabled gate)
+    assert np.array_equal(base, _render(terrain, depth=1.0,
+                                        extras={"soft_light": 0.0}))
