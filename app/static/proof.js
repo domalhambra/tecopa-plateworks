@@ -89,29 +89,46 @@ export function scheduleAutoProof() {
   }, SETTLE_MS);
 }
 
+// Every SYNCHRONOUS reason renderProof would decline, as one predicate. Declared once
+// so the two callers can't drift: renderProof branches on it for its per-case message,
+// and primeFirstProof consults it to answer honestly whether a proof is actually
+// coming (the upload toast quotes that answer). Returns null when a proof can run.
+function proofBlockedReason() {
+  if (proofInFlight) return 'in-flight';
+  if (state.output === 'wallpaper' && state.wpPreset === 'custom' && !activePreset()) return 'no-device';
+  if (canvas.sizeInfeasibleForRegion()) return 'infeasible';
+  if (!cropForProof()) return 'no-crop';
+  return null;
+}
+
 // The first proof used to wait for a click: tracks landed, the frame was seeded, and
 // nothing rendered until the operator found "Render proof". Once tracks are on the map
 // there is nothing left to ask, so prime one background proof (stay=true keeps the
 // operator on the map; the Preview is simply warm when they look). Respects the Live
-// proof toggle, and every renderProof guard (no crop, infeasible size) still applies.
+// proof toggle. Returns whether a proof is REALLY starting -- it used to return true
+// unconditionally, so the upload toast promised "the proof is rendering itself" even
+// when the guards below silently declined (an infeasible sheet, no crop yet).
 export function primeFirstProof() {
   if (state.hasSpec || !state.autoProof) return false;
+  if (proofBlockedReason()) return false;
   renderProof({ auto: true, stay: true });
-  return true;   // kicked off (renderProof's own guards may still quietly decline)
+  return true;
 }
 
 // Render a proof; on success stamps the server spec, shows it in the center, and (unless
 // this was the very first proof) pushes the prior proof into the history filmstrip.
 // stay=true renders without stealing the view (the primed first proof).
 export async function renderProof({ auto = false, stay = false } = {}) {
-  if (proofInFlight) { if (auto) coalesced = true; return false; }
-  if (state.output === 'wallpaper' && state.wpPreset === 'custom' && !activePreset()) {
+  // one decision, four messages: the predicate above owns WHETHER, this owns WHY
+  const blocked = proofBlockedReason();
+  if (blocked === 'in-flight') { if (auto) coalesced = true; return false; }
+  if (blocked === 'no-device') {
     if (!auto) toast('Enter the custom device’s width, height and ppi first', 'error');
     return false;
   }
-  if (canvas.sizeInfeasibleForRegion()) { hooks.onFeasibility && hooks.onFeasibility(); return false; }
+  if (blocked === 'infeasible') { hooks.onFeasibility && hooks.onFeasibility(); return false; }
+  if (blocked === 'no-crop') { if (!auto) toast('Draw a frame first', 'error'); return false; }
   const ov = cropForProof();
-  if (!ov) { if (!auto) toast('Draw a frame first', 'error'); return false; }
   proofInFlight = true;
   refreshProofUI();
   toast(stay ? 'Proofing your look…' : auto ? 'Re-proofing…' : 'Rendering proof…', 'working');
