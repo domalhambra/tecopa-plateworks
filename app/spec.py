@@ -99,7 +99,10 @@ STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 "sun_azimuth_deg": (0.0, 360.0), "sun_altitude_deg": (8.0, 80.0),
                 "golden_strength": (0.0, 1.0),
                 # elevation-profile furniture height (inches); 0 with profile=False is the no-op
-                "profile_height_in": (0.0, 2.5)}
+                "profile_height_in": (0.0, 2.5),
+                # Looks (v1.13): soft multi-directional light + atmospheric haze --
+                # the depth pass's own techniques, exposed as deliberate knobs.
+                "soft_light": (0.0, 1.0), "haze_strength": (0.0, 1.0)}
 
 @dataclass
 class CompositionSpec:
@@ -231,6 +234,16 @@ class CompositionSpec:
     # cross (an honest over/under weave, newest on top). A no-op with < 2 journeys. Omitted
     # from the manifest at False, so pre-feature manifests re-stamp byte-identically.
     track_weave: bool = False
+    # Looks (v1.13): the two depth-pass techniques exposed as deliberate knobs, via
+    # the relief extension seam (app/looks.py -- shaded_relief is untouched).
+    # soft_light blends flanking lights around the principal azimuth (USGS MDOW)
+    # so ridges running parallel to the sun still model; haze_strength sinks low
+    # ground into the cool Imhof atmosphere. Both default 0.0 = strict no-op, so
+    # every pre-feature manifest reprints byte-identically (read-tolerance fills
+    # the missing fields); the SUBTLE-ON defaults for new posters live client-side
+    # (store.js), the labelPlace precedent.
+    soft_light: float = 0.0
+    haze_strength: float = 0.0
 
     def pixel_size(self, dpi: int) -> tuple:
         # the DELIVERED canvas: trim + 2*bleed per axis (bleed 0 -> the classic sheet)

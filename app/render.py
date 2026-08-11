@@ -2157,10 +2157,74 @@ def _luminance(rgb):
     float64 plane ~2.7x the size of the uint8 sheet it derives from."""
     return (0.2126*rgb[...,0] + 0.7152*rgb[...,1] + 0.0722*rgb[...,2]) / 255.0
 
+def terrain_window(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict):
+    """`(elev_f32, res_m, shape)` -- the padded elevation window `_paint_terrain` will
+    paint this (spec, dpi, plate) from, and the ground resolution it will paint it at.
+
+    Exposed so an outside renderer (scripts/hero_plate.py drives Blender Cycles) can
+    displace the SAME ground the engine would have shaded, and hand the result back
+    through `rasterize(terrain_override=...)`. Registration is then true by
+    construction rather than by calibration: both sides read one window, sized by one
+    expression. The oblique south band is deliberately not included -- an override
+    render is a flat sheet (the CLI refuses `oblique > 0`), so the window here is the
+    symmetric-margin one.
+
+    The spec is run through `sheet_geometry` first, so a caller holding the USER spec
+    gets the window the PAINT spec will actually read; it is idempotent, so passing an
+    already-painted spec changes nothing. `elev` is NaN-repaired exactly as
+    `shaded_relief` repairs it, so what comes back is the terrain, not the file."""
+    paint, _trim = sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
+    elev, _pad_x, _pad_top, _pad_bot, gpp = _read_window(
+        region_dir, cfg, paint.crop, out_w, out_h)
+    elev = _fill_nan(elev.astype("float32"))
+    return elev, gpp, elev.shape
+
+
+def _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey, override):
+    """The shaded relief for this window -- or a caller's own pixels in its place.
+
+    `override=None` is the default and the entire shipped path: the `shaded_relief`
+    call below is character-for-character the one that lived inline in
+    `_paint_terrain`, so no poster can move. An override is CHECKED, not trusted: a
+    mis-sized plane would slide the whole sheet off its ground silently, and a
+    non-uint8 one would break every painter downstream that assumes 0..255."""
+    if override is not None:
+        ov = np.asarray(override)
+        if ov.dtype != np.uint8:
+            raise ValueError(f"terrain_override must be uint8, got {ov.dtype}")
+        if ov.ndim != 3 or ov.shape[2] != 3 or ov.shape[:2] != elev.shape:
+            raise ValueError(
+                f"terrain_override must be {elev.shape + (3,)} to register with this "
+                f"crop at {dpi} dpi, got {ov.shape}")
+        return ov
+    return shaded_relief(
+        elev, res_m=gpp,
+        elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
+        azimuth=cfg["light_azimuth"], altitude=cfg["light_altitude"],
+        z_factor=cfg["z_factor"], seed=spec.seed,
+        grain_cell_px=max(1.0, spec.grain_cell_in * dpi),
+        grain_strength=spec.grain_strength,
+        # physical (ground-metre) blur radii -> identical relief at any DPI
+        texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
+        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
+        biome=biome, depth=_terrain_depth(spec),
+        shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec),
+        sun_azimuth=spec.sun_azimuth_deg if journey else None,
+        sun_altitude=spec.sun_altitude_deg if journey else None,
+        golden=spec.golden_strength if journey else 0.0,
+        extras=_relief_extras(spec))
+
+
 def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
-                   hydro=None):
+                   hydro=None, terrain_override=None):
     """Everything UNDER the place names: the off-DEM guard, relief, contours, the
     plan-oblique warp, and the water.
+
+    `terrain_override` (default None -- nothing changes) replaces the shaded relief
+    with a caller's own uint8 RGB pixels on the SAME padded window `terrain_window`
+    reports, so hydro, contours, ink, labels and furniture paint over it exactly as
+    they would over the engine's own relief.
 
     Split out of `_paint_base` so the base cache can store the sheet *before* labels
     are drawn. Labels are only 2-3% of the base, but they read the sheet furniture
@@ -2213,22 +2277,8 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     # golden terrain simply drapes into the oblique view. archival -> None/0 -> the call is
     # byte-identical to pre-feature.
     journey = spec.light_mode == "journey"
-    rgb = shaded_relief(
-        elev, res_m=gpp,
-        elev_min=cfg["elevation_min"], elev_max=cfg["elevation_max"],
-        azimuth=cfg["light_azimuth"], altitude=cfg["light_altitude"],
-        z_factor=cfg["z_factor"], seed=spec.seed,
-        grain_cell_px=max(1.0, spec.grain_cell_in * dpi),
-        grain_strength=spec.grain_strength,
-        # physical (ground-metre) blur radii -> identical relief at any DPI
-        texture_radius_px=max(1.0, TEXTURE_RADIUS_M / gpp),
-        valley_radius_px=max(1.0, VALLEY_RADIUS_M / gpp),
-        biome=biome, depth=_terrain_depth(spec),
-        shadow=spec.shadow_strength, shadow_res_m=_shadow_res_m(spec),
-        sun_azimuth=spec.sun_azimuth_deg if journey else None,
-        sun_altitude=spec.sun_altitude_deg if journey else None,
-        golden=spec.golden_strength if journey else 0.0,
-        extras=_relief_extras(spec))
+    rgb = _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey,
+                              terrain_override)
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).
@@ -2288,7 +2338,7 @@ def _apply_labels(himg, spec: CompositionSpec, dpi: int, region_dir: str,
     return _draw_labels(himg, labels, hydro, spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
 
 def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
-                hydro=None, labels=None, trim=None):
+                hydro=None, labels=None, trim=None, terrain_override=None):
     """The static layers UNDER the route -- relief, contours, hydro, geography labels --
     plus the luminance plane the markers key on. Identical for every frame of a
     time-lapse, so it is painted once. Raises the off-DEM guard (invariant 5) before
@@ -2296,7 +2346,8 @@ def _paint_base(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
 
     Now a composition of `_paint_terrain` + `_apply_labels`; this is the uncached
     reference path, and the cache's job is to be byte-identical to it."""
-    himg, ctx, hydro = _paint_terrain(spec, dpi, region_dir, cfg, hydro=hydro)
+    himg, ctx, hydro = _paint_terrain(spec, dpi, region_dir, cfg, hydro=hydro,
+                                      terrain_override=terrain_override)
     himg = _apply_labels(himg, spec, dpi, region_dir, hydro=hydro, labels=labels,
                          ctx=ctx, trim=trim)
     rgb = np.asarray(himg.convert("RGB"))
@@ -2613,7 +2664,8 @@ def _freeze(rgb, ctx):
         ctx.elev.flags.writeable = False
         ctx.winner.flags.writeable = False
 
-def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
+def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache,
+                terrain_override=None):
     """`_paint_base` through the cache when one is supplied. `base_cache=None` -- every
     caller except the two proof endpoints -- is the pre-cache path, unchanged.
 
@@ -2637,10 +2689,15 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
     # disk and the key could not tell. Nothing does that today and neither proof path
     # passes them; refusing to cache keeps it that way by construction rather than by
     # convention. Same direction as the mask: an unclassified input costs a miss.
+    #
+    # A `terrain_override` is the same argument taken further: the caller's pixels are
+    # not in the key and never could be, so an override render is neither served from
+    # the cache nor written to it.
     if (base_cache is None or not base_cache.enabled
-            or hydro is not None or labels is not None):
+            or hydro is not None or labels is not None
+            or terrain_override is not None):
         return _paint_base(paint, dpi, region_dir, cfg, hydro=hydro, labels=labels,
-                           trim=trim)
+                           trim=trim, terrain_override=terrain_override)
     key = base_cache_key(paint, dpi, region_dir, cfg)
     hit = base_cache.get(key)
     if hit is not None:
@@ -2664,7 +2721,12 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache):
 
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
               watermark: bool = False, hydro=None, cfg=None, labels=None,
-              base_cache=None, ink_cache=None) -> Image.Image:
+              base_cache=None, ink_cache=None,
+              terrain_override=None) -> Image.Image:
+    """`terrain_override` (default None -- the shipped path, unchanged) paints the
+    sheet's water, route, markers, labels and furniture over a caller's own terrain
+    instead of the engine's relief. It must be the uint8 RGB plane sized by
+    `terrain_window(spec, dpi, region_dir, cfg)`; see scripts/hero_plate.py."""
     spec.validate(dpi)
     if cfg is None:                        # callers holding regions.Region pass .cfg
         with open(os.path.join(region_dir, "region.json")) as f:
@@ -2673,7 +2735,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
     paint, trim = sheet_geometry(spec, dpi)
     out_w, out_h = paint.pixel_size(dpi)
     base_rgb, lum, ctx = _base_layer(paint, dpi, region_dir, cfg, hydro=hydro,
-                                     labels=labels, trim=trim, base_cache=base_cache)
+                                     labels=labels, trim=trim, base_cache=base_cache,
+                                     terrain_override=terrain_override)
     # Journey Light DEM-derived layers (None unless the knob is on -> classic path):
     track_colors = _track_color_arrays(paint, region_dir, cfg)
     profile = _profile_data(paint, region_dir, cfg)
@@ -2686,3 +2749,9 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
                          ink_key=ink_key)  # all journeys
     return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
                            profile=profile, paint=paint, trim=trim)
+
+
+# The shipped relief-pass module registers on import. Imported HERE, at the bottom,
+# because looks.py needs this module's relief_extra -- by this line the module object
+# is fully populated, so the circular import resolves cleanly and deterministically.
+from . import looks  # noqa: E402,F401

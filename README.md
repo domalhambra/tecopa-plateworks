@@ -234,6 +234,59 @@ coloring** (all reprint-safe). And the film learns a new motion: `light_motion` 
 line grows *time-true* (the pen breathing with the real hike) while the sun travels with
 it. Every knob defaults to the archival look, so an untouched poster keeps its look.
 
+## The two Looks knobs (Terrain panel)
+
+**Soft light** and **Atmospheric haze** are the two techniques the terrain-depth ramp
+already used, promoted to deliberate sliders. Soft light blends flanking lights around
+the sun (USGS MDOW), so a ridge running *with* the light still models instead of going
+flat; haze sinks the low ground toward a cool atmosphere (Imhof aerial perspective), so
+the sheet reads deeper front to back. The depth ramp only reached for either at
+corridor scale — most posters are county scale, where both sat at zero.
+
+They ride the spec, so the proof predicts the print and a reprint reproduces them
+exactly. Both ship through the relief extension seam (`app/looks.py`,
+`docs/relief-passes.md`) rather than by editing the composition chain. The **server**
+default is 0 for both, so every poster printed before they existed reprints untouched
+and a continued poster restores its own stored values; the **studio** starts a new
+poster at a subtle 35% / 15%, and the Archival preset puts them back to plain.
+
+## Hero plates (Blender)
+
+An operator-only CLI that performs a finished poster's terrain through **Blender
+Cycles** — real ray-traced sun, real cast shadows with a penumbra, real displaced
+geometry — and then lets the engine paint its own water, route, markers, labels and
+furniture over the result. For a press image or a commissioned plate, not an app
+feature.
+
+```bash
+source .venv/bin/activate
+python scripts/hero_plate.py poster.png --samples 512
+# writes poster_hero.png
+```
+
+Blender is a free, separate install ([blender.org/download](https://blender.org/download),
+4.2 LTS or newer). The CLI finds it via `--blender /path`, `TECOPA_BLENDER`, or `PATH`,
+and says so plainly if it cannot. Other flags: `--z` vertical exaggeration, `--dpi`
+(default is the print final), `--out`, `--allow-plate-mismatch` (the same override
+`/api/reprint` takes when the plate has been rebuilt under the file).
+
+Expect **minutes on Apple Silicon (Metal), possibly hours on CPU** at 512 samples and
+print resolution. Start at `--samples 128` to check the framing.
+
+What it honestly is:
+
+- **Not deterministic.** Cycles is a sampler; two runs differ. That is why this is a
+  CLI and not a knob in the studio — invariant 3 is a promise the engine keeps, and a
+  hero plate is a performance rather than a record.
+- **Not the archival record.** The output carries the **source manifest unchanged**, so
+  the hero file still reprints its archival edition through `/api/reprint`. The save
+  file is still the save file.
+- **Registration-true by construction.** Both sides read one window
+  (`render.terrain_window`), so the route lands on the same ground it always did —
+  flip between the two files and nothing shifts.
+- **v1 renders the flat trim sheet only.** Wallpapers, bleed, and High relief (oblique)
+  are refused with a reason rather than rendered wrongly.
+
 ## Invariants
 
 1. One spec, painted at many sizes — never compute the picture twice.

@@ -514,6 +514,28 @@ def hypsometric(elev, elev_min, elev_max, norm=None):
     rgb /= 255.0
     return rgb
 
+def base_colour(elev, elev_min, elev_max, norm=None, biome=None):
+    """The sheet's UNLIT colour: the hypsometric ramp with the biome tint mixed in.
+    Hoisted verbatim out of `shaded_relief`'s "color" block -- same expressions, same
+    order, so the composed sheet is bit-identical -- because an outside renderer that
+    supplies its own light (scripts/hero_plate.py drapes this over a Cycles render)
+    needs exactly this plane, and a second copy of the mix would drift from the first.
+
+    biome: optional (tint01, weight01) from render._biome_layers, aligned to `elev`."""
+    if norm is None:
+        norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
+    base = hypsometric(elev, elev_min, elev_max, norm=norm)
+    if biome is not None:
+        tint, weight = biome
+        base_lum = base.mean(axis=2, keepdims=True)
+        tint_lum = tint.mean(axis=2, keepdims=True) + 1e-6
+        matched = np.clip(tint * (base_lum / tint_lum), 0, 1)    # hue only; keep light
+        fade = np.clip((ALPINE_FADE_END - norm) /
+                       (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
+        w3 = (weight * BIOME_MIX * fade)[..., None]
+        base = base * (1 - w3) + matched * w3
+    return base
+
 def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
     # high-pass: sharpen ridges and drainages (a cheap stand-in for true texture shading)
     blur = _blur(elev, radius_px)
@@ -577,16 +599,7 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
                         shadow=shadow, golden=golden, sun_azimuth=sun_azimuth,
                         sun_altitude=sun_altitude, extras=dict(extras or {}))
     # `norm` is the identical expression hypsometric would recompute -- hand it over.
-    base = hypsometric(elev, elev_min, elev_max, norm=norm)        # color
-    if biome is not None:
-        tint, weight = biome
-        base_lum = base.mean(axis=2, keepdims=True)
-        tint_lum = tint.mean(axis=2, keepdims=True) + 1e-6
-        matched = np.clip(tint * (base_lum / tint_lum), 0, 1)    # hue only; keep light
-        fade = np.clip((ALPINE_FADE_END - norm) /
-                       (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
-        w3 = (weight * BIOME_MIX * fade)[..., None]
-        base = base * (1 - w3) + matched * w3
+    base = base_colour(elev, elev_min, elev_max, norm=norm, biome=biome)   # color
     base = _run_stage("color", base, frame)          # no-op with an empty registry
     # one slope/aspect pass serves the archival light, the multidirectional blend, and
     # the Journey Light sun -- they differ only in bearing (see slope_aspect). The

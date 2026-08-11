@@ -13,11 +13,16 @@ export const CURATED = [
   { id: 'archival', name: 'Archival', snap: {
     'style.lightMode': 'archival', 'style.golden': 0.7, 'style.oblique': 0.0,
     'style.shadow': 0.5, 'style.terrain': 1.0, 'style.trackColorBy': 'none',
+    // Archival is the reset-look, so it pins the Looks knobs back to the server's
+    // own no-op — the plain sheet every pre-feature poster prints as.
+    'style.softLight': 0, 'style.haze': 0,
     'biome': false, 'contours': false, 'labels': false } },
   { id: 'golden', name: 'Golden Hour', snap: {
-    'style.lightMode': 'journey', 'style.golden': 0.9, 'style.shadow': 0.7, 'style.terrain': 1.1 } },
+    'style.lightMode': 'journey', 'style.golden': 0.9, 'style.shadow': 0.7, 'style.terrain': 1.1,
+    'style.haze': 0.2 } },
   { id: 'highrelief', name: 'High Relief', snap: {
-    'style.oblique': 0.8, 'style.shadow': 0.8, 'style.terrain': 1.3, 'style.halo': 0.8 } },
+    'style.oblique': 0.8, 'style.shadow': 0.8, 'style.terrain': 1.3, 'style.halo': 0.8,
+    'style.softLight': 0.4 } },
   { id: 'storybook', name: 'Storybook', snap: {
     'biome': true, 'labels': true, 'style.labelPlace': 'smart', 'style.trackColorBy': 'elevation',
     'contours': true } },

@@ -101,6 +101,7 @@ export async function proof(sessionId, cropOv, printW, printH,
     photo_style: style.photoStyle, furniture_scale: style.furniture,
     terrain_depth: style.terrain, shadow_strength: style.shadow,
     oblique: style.oblique,
+    soft_light: style.softLight, haze_strength: style.haze,
     // Journey Light: light_mode + the sun (hour from the scrubber, or explicit az/alt on
     // the continue-restore path), the golden grade, the elevation profile, and coloring.
     light_mode: style.lightMode || 'archival',

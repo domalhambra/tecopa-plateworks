@@ -62,8 +62,24 @@ kind of registry on the front end — one entry gives the inspector row, the com
 palette, preset diffing, "reset to default", and the proof-staling rule. Mirror the
 `STYLE_BOUNDS` range and the spec default so the client and the server agree.
 
-So end to end, a new technique is: a spec field, a manifest omission at its default, a
-`@relief_extra` reader, a `register_relief_pass` call, and one `CONTROLS` entry.
+So end to end, a new technique is: a spec field, a `@relief_extra` reader, a
+`register_relief_pass` call, and one `CONTROLS` entry.
+
+> **Two corrections since this was written.** The *manifest omission* step above is
+> retired: `serialize.spec_to_json` now emits **every** field, so there is nothing to
+> omit at a default — read-tolerance (`spec_from_json` drops unknowns and defaults
+> missing fields) is what keeps old files opening, and it needs no cooperation from a
+> new pass. What still binds is the pre-feature default itself: the `enabled` predicate
+> must be false there, so the pass never runs (rule 3 below).
+>
+> And the registry no longer ships **empty**. `app/looks.py` (v1.13) is the seam's first
+> shipped module, and it is the worked example this document describes in the
+> hypothetical: two spec knobs (`soft_light`, `haze_strength`), two `@relief_extra`
+> readers, a `"light"` pass that re-blends the hillshade toward the MDOW
+> multi-directional light as an exact multiplicative correction, and a `"finish"` pass
+> that sinks low ground into the cool Imhof haze. Both are gated at 0.0, so the shipped
+> registry is still a strict no-op at the spec defaults. Read it alongside this page —
+> it is shorter than the explanation.
 
 ## The stages
 
@@ -131,9 +147,11 @@ bug even if the sheet looks good.
 
 ## Verifying it
 
-`tests/test_relief_passes.py` covers the seam itself: the registry ships empty, an
-empty registry is byte-identical, a registered no-op changes nothing, each stage
-reaches the picture, and the frame carries what it promises. For a new pass, add:
+`tests/test_relief_passes.py` covers the seam itself: it pins exactly what ships, tests
+the mechanics against an emptied registry (an empty registry is byte-identical, a
+registered no-op changes nothing, each stage reaches the picture, the frame carries what
+it promises), and restores the shipped passes afterwards. `tests/test_looks.py` covers
+the shipped module, and is the template for a new one. For a new pass, add:
 
 - a byte-identity test at the pre-feature default (the whole point of rule 3);
 - a proof-vs-final MAD test if the pass draws anything with a size (rule 1) — see

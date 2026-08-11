@@ -296,6 +296,9 @@ function applyPrefill(p) {
     marker: s.marker ?? state.style.marker, ring: s.ring ?? state.style.ring,
     photoStyle: s.photoStyle || 'mat', furniture: s.furniture ?? state.style.furniture,
     terrain: s.terrain ?? state.style.terrain, shadow: s.shadow ?? state.style.shadow, oblique: s.oblique ?? 0,
+    // Looks: `?? 0`, NOT the store default — a pre-feature poster restores the plain
+    // look it was actually printed with, not the subtle-on look a new poster starts at.
+    softLight: s.softLight ?? 0, haze: s.haze ?? 0,
     lightMode: s.lightMode || 'archival', sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7, profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
     bleedIn: s.bleed ?? 0, trackColorBy: s.trackColorBy || 'none',

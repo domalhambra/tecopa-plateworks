@@ -14,10 +14,15 @@ Two things are under test, and the first matters more than the second:
 import numpy as np
 import pytest
 
-from app import relief
+from app import looks, relief
 from app.relief import (ReliefFrame, RELIEF_STAGES, register_relief_pass,
                         registered_relief_passes, shaded_relief,
                         unregister_relief_pass)
+
+# What the seam ships with, now that app/looks.py registers the first real passes
+# (v1.13). Their zero-knob no-op is held by tests/test_looks.py; pinning the exact
+# set here means a stray registration -- or a lost one -- fails loudly.
+SHIPPED = {"color": [], "light": ["soft-light"], "finish": ["haze"], "grade": []}
 
 
 @pytest.fixture
@@ -33,23 +38,31 @@ def terrain():
 
 @pytest.fixture
 def clean_registry():
-    """Every test restores the empty shipped registry, pass or fail."""
-    before = registered_relief_passes()
-    assert all(not v for v in before.values()), "the registry must ship empty"
+    """Each test runs against an EMPTY registry (the seam's mechanics are what is
+    under test here, not the passes that happen to ship), then the shipped looks
+    passes are restored, pass or fail."""
+    for stage, names in registered_relief_passes().items():
+        for name in names:
+            unregister_relief_pass(stage, name)
     yield
     for stage, names in registered_relief_passes().items():
         for name in names:
             unregister_relief_pass(stage, name)
+    looks.register()
 
 
 def _render(elev, **kw):
     return shaded_relief(elev, res_m=30.0, elev_min=1200.0, elev_max=2100.0, **kw)
 
 
-def test_registry_ships_empty():
-    # The default state IS the contract: no pass, no pixel change, nothing to review
-    # in a diff of a shipped poster.
-    assert registered_relief_passes() == {s: [] for s in RELIEF_STAGES}
+def test_registry_ships_the_looks_passes():
+    # The shipped state is no longer empty: app/looks.py (v1.13) registers the
+    # soft-light and haze passes on import. The contract they inherit is the one the
+    # empty registry used to state directly -- no pass may move a pixel at its
+    # pre-feature default -- and tests/test_looks.py holds that line for both. THIS
+    # test pins exactly what ships.
+    assert registered_relief_passes() == SHIPPED
+    assert set(SHIPPED) == set(RELIEF_STAGES)
 
 
 def test_empty_registry_is_byte_identical(terrain, clean_registry):
@@ -175,9 +188,14 @@ def test_a_pass_may_write_in_place(terrain, clean_registry):
     assert out.mean() < 120         # visibly darkened, no exception from the writes
 
 
-def test_render_extras_registry_ships_empty_and_stays_no_op():
-    """render.relief_extra is the spec-side half of the seam: empty by default, so
-    _paint_base passes extras=None and the shaded_relief call is the pre-seam one."""
+def test_render_extras_registry_carries_the_looks_knobs():
+    """render.relief_extra is the spec-side half of the seam: it ships with exactly
+    the two looks readers, and they surface the spec's own values."""
     from app import render
-    assert render.RELIEF_EXTRAS == {}
-    assert render._relief_extras(object()) is None
+    from app.spec import CompositionSpec
+    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze"}
+    s = CompositionSpec(region_id="x", crs="EPSG:32610",
+                        crop=(0, 0, 100, 100), print_w_in=18, print_h_in=24,
+                        native_resolution_m=10.0, tracks=[], hotspots=[],
+                        soft_light=0.4, haze_strength=0.2)
+    assert render._relief_extras(s) == {"soft_light": 0.4, "haze": 0.2}

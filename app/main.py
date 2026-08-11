@@ -992,6 +992,10 @@ async def proof(session_id: str = Form(...),
                 marker_ring: float = Form(0.09), photo_style: str = Form("mat"),
                 furniture_scale: float = Form(1.0), terrain_depth: float = Form(1.0),
                 shadow_strength: float = Form(0.5), oblique: float = Form(0.0),
+                # Looks (v1.13): the server default is the strict no-op, so a client
+                # that never sends them -- and every pre-feature file -- stays plain.
+                # New posters start subtle-on from the CLIENT (store.js).
+                soft_light: float = Form(0.0), haze_strength: float = Form(0.0),
                 light_mode: str = Form("archival"), sun_hour: Optional[float] = Form(None),
                 sun_azimuth_deg: Optional[float] = Form(None),
                 sun_altitude_deg: Optional[float] = Form(None),
@@ -1009,6 +1013,7 @@ async def proof(session_id: str = Form(...),
              "photo_frame_style": photo_style, "furniture_scale": furniture_scale,
              "terrain_depth": terrain_depth, "shadow_strength": shadow_strength,
              "oblique": oblique,
+             "soft_light": soft_light, "haze_strength": haze_strength,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
              "profile_height_in": profile_height_in,
@@ -1797,6 +1802,9 @@ async def continue_poster(file: UploadFile = File(...),
                   "ring": spec.marker_ring, "photoStyle": spec.photo_frame_style,
                   "furniture": spec.furniture_scale, "terrain": spec.terrain_depth,
                   "shadow": spec.shadow_strength, "oblique": spec.oblique,
+                  # Looks restore: a continued poster comes back with exactly the
+                  # light it was printed with -- a pre-feature file restores 0/0.
+                  "softLight": spec.soft_light, "haze": spec.haze_strength,
                   # Journey Light restore: the resurrected file carries the RESOLVED sun
                   # (not the timestamps), so the edition keeps its light via explicit
                   # az/alt at re-proof; profile + coloring restore straight from the spec.

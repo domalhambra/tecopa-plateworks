@@ -61,6 +61,11 @@ export const state = {
     terrain: 1.0,         // multiplier on the scale-keyed terrain-depth pass
     shadow: 0.5,          // cast-shadow + sky-occlusion strength ("Blender relief")
     oblique: 0.0,         // High relief: plan-oblique stand-up terrain; 0 = flat sheet
+    // Looks (v1.13): the MDOW blend and the Imhof haze, as deliberate knobs. SUBTLE-ON
+    // for NEW posters only — the server default is 0, so an old file stays plain and a
+    // continued poster restores its own stored values (the labelPlace precedent).
+    softLight: 0.35,      // flanking-light blend weight around the principal azimuth
+    haze: 0.15,           // how far the low ground sinks into the cool atmosphere
     // Journey Light (v1.9): the poster lit by the hike's own sun.
     lightMode: 'archival', // 'archival' (region light) | 'journey' (the journey's sun)
     sunHour: null,        // time-of-day scrubber (local solar hour); null = summit light
@@ -147,6 +152,7 @@ const SNAPSHOT_PATHS = [
   'title', 'contours', 'compass', 'biome', 'labels',
   'style.width', 'style.halo', 'style.color', 'style.marker', 'style.ring',
   'style.photoStyle', 'style.furniture', 'style.terrain', 'style.shadow', 'style.oblique',
+  'style.softLight', 'style.haze',
   'style.lightMode', 'style.sunHour', 'style.golden', 'style.profile', 'style.profileHeight',
   'style.trackColorBy', 'style.labelPlace', 'style.trackWeave',
 ];
