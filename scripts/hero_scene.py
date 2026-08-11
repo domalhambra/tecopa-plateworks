@@ -26,6 +26,12 @@ with open(args[0]) as f:
 
 scene = bpy.context.scene
 scene.render.engine = "CYCLES"
+# Adaptive subdivision (the plane below) is a Cycles EXPERIMENTAL feature: without
+# this line `use_adaptive_subdivision` is accepted and then silently ignored, the
+# displacement gets only the SUBSURF modifier's default levels, and the plate renders
+# essentially FLAT -- the whole point of the hero plate (real geometry casting real
+# shadows) lost with no error anywhere. Set before the object is built.
+scene.cycles.feature_set = "EXPERIMENTAL"
 scene.cycles.samples = side["samples"]
 scene.cycles.use_denoising = True
 scene.render.resolution_x, scene.render.resolution_y = side["resolution"]
@@ -48,7 +54,10 @@ bpy.ops.object.transform_apply(scale=True)
 
 mat = bpy.data.materials.new("plate")
 mat.use_nodes = True
-mat.cycles.displacement_method = "DISPLACEMENT"
+# Blender 4.1 moved this off the cycles add-on namespace onto the material itself.
+# `mat.cycles.displacement_method` is an AttributeError on every version at or above
+# our enforced 4.2 LTS floor, i.e. the render would die before it started.
+mat.displacement_method = "DISPLACEMENT"
 nt = mat.node_tree
 bsdf = nt.nodes["Principled BSDF"]
 bsdf.inputs["Roughness"].default_value = 1.0      # matte paper, not wet rock
@@ -72,10 +81,13 @@ nt.links.new(disp.outputs["Displacement"],
 plane.data.materials.append(mat)
 
 # Adaptive subdivision gives the displacement real geometry (and therefore real cast
-# shadows) at whatever density the camera actually resolves.
+# shadows) at whatever density the camera actually resolves. It is inert unless
+# scene.cycles.feature_set is EXPERIMENTAL (set at the top) -- the two lines are one
+# feature, and separating them silently flattens the plate.
 sub = plane.modifiers.new("subdiv", "SUBSURF")
-sub.subdivision_type = "SIMPLE"
+sub.subdivision_type = "SIMPLE"          # the plane is a grid, not a surface to smooth
 plane.cycles.use_adaptive_subdivision = True
+plane.cycles.dicing_rate = 1.0           # one micropolygon per rendered pixel
 
 sun = bpy.data.objects.new("sun", bpy.data.lights.new("sun", "SUN"))
 bpy.context.collection.objects.link(sun)

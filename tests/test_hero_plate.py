@@ -237,8 +237,42 @@ def test_cli_refuses_what_v1_does_not_do():
                 _spec_for(bleed_in=0.125),
                 _spec_for(oblique=0.5)):
         with pytest.raises(HeroError):
-            check_supported(bad)
-    check_supported(_spec_for())            # a plain print sails through
+            check_supported(bad, 96)
+    check_supported(_spec_for(), 96)        # a plain print sails through
+
+
+def test_cli_refuses_a_dpi_the_spec_cannot_hold_before_rendering():
+    """The zoom cap lives inside rasterize(), which runs AFTER Cycles -- so at hero
+    render times an unacceptable --dpi would cost hours before failing. check_supported
+    asks the spec the same question up front, and says so in the CLI's own voice."""
+    from scripts.hero_plate import check_supported, HeroError
+    with pytest.raises(HeroError) as e:
+        check_supported(_spec_for(), 1200)     # far past this crop's data floor
+    assert "1200 dpi" in str(e.value)
+
+
+def test_journey_light_without_a_resolved_sun_is_refused():
+    """A hand-edited manifest can claim journey light and carry no sun; float(None)
+    is a bare TypeError, which is not how this CLI refuses anything else."""
+    from scripts.hero_plate import sun_angles, HeroError
+    cfg = _cfg()
+    with pytest.raises(HeroError) as e:
+        sun_angles(_spec_for(light_mode="journey", sun_azimuth_deg=None), cfg)
+    assert "sun" in str(e.value).lower()
+    # the well-formed journey spec still resolves
+    assert sun_angles(_spec_for(light_mode="journey", sun_azimuth_deg=140.0,
+                                sun_altitude_deg=22.0), cfg) == (140.0, 22.0)
+
+
+def test_heightmap_uses_no_deprecated_pillow_call(tmp_path):
+    """Pillow removes the `mode=` data-type argument in 13.0 (2026-10-15). Warnings
+    are errors here so the deadline can't arrive as a surprise breakage."""
+    import warnings
+    from scripts.hero_plate import write_heightmap
+    elev = np.linspace(1200.0, 2100.0, 30 * 40, dtype="float32").reshape(30, 40)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        write_heightmap(str(tmp_path / "h.png"), elev)
 
 
 def test_find_blender_reports_the_install_path_honestly(monkeypatch, tmp_path):
@@ -276,3 +310,41 @@ def test_scene_script_parses_and_imports_nothing_from_the_app():
             imported.add(node.module.split(".")[0])
     assert "app" not in imported and not any(m.startswith("app") for m in imported)
     assert imported <= {"bpy", "json", "sys", "math", "os"}, imported
+
+
+def test_scene_script_uses_the_material_api_our_blender_floor_actually_has():
+    """No Blender in CI, so the two ways this script can die silently are checked as
+    text -- both of them shipped once and neither is reachable by any other test.
+
+    1. Blender 4.1 moved displacement_method off the cycles add-on namespace onto the
+       material. `mat.cycles.displacement_method` is an AttributeError on every
+       version at or above the CLI's enforced 4.2 LTS floor: the render never starts.
+    2. Adaptive subdivision is ignored unless the scene's feature_set is EXPERIMENTAL.
+       Without it the displacement gets only the SUBSURF defaults and the plate
+       renders essentially flat -- no error, just a wasted render."""
+    import ast
+
+    def dotted(node):
+        parts = []
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if not isinstance(node, ast.Name):
+            return ""
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+
+    # ASSIGNED ATTRIBUTES, not raw text: the source comments name the broken API on
+    # purpose (that is the bug worth explaining), so a substring check would fail on
+    # its own documentation.
+    tree = ast.parse(open("scripts/hero_scene.py").read())
+    assigned = {dotted(t) for n in ast.walk(tree) if isinstance(n, ast.Assign)
+                for t in n.targets}
+    assigned.discard("")
+    assert "mat.cycles.displacement_method" not in assigned, \
+        "removed in Blender 4.1 -- assign the native mat.displacement_method"
+    assert "mat.displacement_method" in assigned
+    adaptive = [a for a in assigned if a.endswith("use_adaptive_subdivision")]
+    if adaptive:
+        assert any(a.endswith("cycles.feature_set") for a in assigned), \
+            "adaptive subdivision is inert unless the scene opts into EXPERIMENTAL"
