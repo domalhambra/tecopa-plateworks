@@ -53,20 +53,39 @@ def _soft_light(light, frame):
     w_new = 1.0 - (1.0 - w_cur) * (1.0 - k)         # compose, never subtract
     if w_new <= w_cur:
         return light
-    hs1 = shade_from(slope, aspect, frame.azimuth, frame.altitude) ** HILLSHADE_GAMMA
+    # Every plane below is a full render window -- 155 MB apiece on an 18x24 at 300 dpi
+    # -- and this pass is default-on (0.35) for new posters, so it composites in place
+    # like the rest of the engine. The naive form
+    #     f_cur = hs1 * (1 - w_cur) + hsm * w_cur      # 3 transient planes
+    #     f_new = hs1 * (1 - w_new) + hsm * w_new      # 3 more, with hs1/hsm still live
+    # peaked at six; consuming hs1/hsm for f_new (they are ours, and dead after it)
+    # holds it to four. Every IEEE operation and its order is unchanged -- a*x + b*y
+    # computed into a's buffer is the same addition of the same two products -- so the
+    # correction stays float-for-float the blend the core would have built itself
+    # (test_soft_light_full_knob_matches_the_core_blend holds that line).
+    hs1 = shade_from(slope, aspect, frame.azimuth, frame.altitude)
+    np.power(hs1, HILLSHADE_GAMMA, out=hs1)         # ours since shade_from clipped
     hsm = relief.multidirectional_hillshade(
         frame.elev, frame.res_m, frame.azimuth, frame.altitude, frame.z_factor,
-        terrain=(slope, aspect)) ** HILLSHADE_GAMMA
-    # Both f() constructions mirror the core's own operation order exactly (see
-    # shaded_relief: light *= (1 - SHADOW_FLOOR); light += SHADOW_FLOOR), so the
-    # correction is float-for-float the blend the core would have built itself.
-    f_cur = hs1 * (1.0 - w_cur) + hsm * w_cur
+        terrain=(slope, aspect))
+    np.power(hsm, HILLSHADE_GAMMA, out=hsm)
+    # f_cur: the light the core actually built, from a scratch buffer + one temporary
+    f_cur = hs1 * (1.0 - w_cur)
+    tmp = hsm * w_cur
+    f_cur += tmp
+    del tmp
     f_cur *= (1.0 - SHADOW_FLOOR)
     f_cur += SHADOW_FLOOR
-    f_new = hs1 * (1.0 - w_new) + hsm * w_new
+    # f_new: the same construction, consuming hs1 and hsm rather than reading them
+    hs1 *= (1.0 - w_new)
+    hsm *= w_new
+    hs1 += hsm
+    del hsm
+    f_new = hs1
     f_new *= (1.0 - SHADOW_FLOOR)
     f_new += SHADOW_FLOOR
     f_new /= f_cur                                  # the exact correction, in place
+    del f_cur
     light *= f_new
     if frame.shadow > 0:                            # restore the core's floor clamp
         np.maximum(light, CAST_LIGHT_FLOOR, out=light)
