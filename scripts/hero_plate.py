@@ -37,7 +37,7 @@ import numpy as np
 from PIL import Image
 
 from app import provenance, regions, relief, render
-from app.spec import FINAL_DPI
+from app.spec import FINAL_DPI, SpecError
 
 BLENDER_MIN = (4, 2)
 SUN_ANGULAR_SIZE_DEG = 3.0      # ~6x the real sun: soft, readable penumbra
@@ -49,13 +49,20 @@ class HeroError(SystemExit):
 
 # ---- what v1 honestly does, and what it refuses -----------------------------------
 
-def check_supported(spec):
+def check_supported(spec, dpi=FINAL_DPI):
     if spec.output_kind != "print":
         raise HeroError("hero plates are prints; render the poster spec, not a wallpaper")
     if spec.bleed_in > 0:
         raise HeroError("hero v1 renders the trim sheet only -- re-export without bleed")
     if spec.oblique > 0:
         raise HeroError("hero v1 renders the flat sheet; High relief (oblique) is its own projection")
+    # The zoom cap and the output ceiling are enforced inside rasterize() -- which
+    # runs AFTER Cycles. At hero render times that is hours of work thrown away on a
+    # --dpi the spec was never going to accept, so ask the spec the same question now.
+    try:
+        spec.validate(dpi)
+    except SpecError as e:
+        raise HeroError(f"this poster can't be rendered at {dpi} dpi: {e}")
 
 
 def find_blender(cli_path):
@@ -83,7 +90,15 @@ def sun_angles(spec, cfg):
     Cycles performance is the same sun the archival edition shows. Journey Light rides
     the spec; archival rides the plate, exactly as `_paint_terrain` reads them."""
     if spec.light_mode == "journey":
-        return float(spec.sun_azimuth_deg), float(spec.sun_altitude_deg)
+        az, alt = spec.sun_azimuth_deg, spec.sun_altitude_deg
+        # A hand-edited or crafted manifest can say "journey" and carry no resolved
+        # sun; float(None) is a bare TypeError traceback, which is not how this CLI
+        # refuses anything else.
+        if not (isinstance(az, (int, float)) and isinstance(alt, (int, float))
+                and not isinstance(az, bool) and not isinstance(alt, bool)):
+            raise HeroError("this poster claims Journey Light but carries no resolved "
+                            "sun, so there is no light to perform it under.")
+        return float(az), float(alt)
     return float(cfg.get("light_azimuth", 315.0)), float(cfg.get("light_altitude", 45.0))
 
 
@@ -141,7 +156,10 @@ def write_heightmap(path, elev):
     lo, hi = float(np.nanmin(elev)), float(np.nanmax(elev))
     norm = (elev.astype("float64") - lo) / max(1e-9, hi - lo)
     q = np.clip(np.rint(norm * 65535.0), 0, 65535).astype("uint16")
-    Image.fromarray(q, mode="I;16").save(path)
+    # No `mode=` argument: Pillow deprecated passing one to convert data types and
+    # removes it in 13.0 (2026-10-15). A uint16 array already infers "I;16", so the
+    # inference IS the contract now (tests/test_hero_plate.py fails on the warning).
+    Image.fromarray(q).save(path)
     return lo, hi
 
 
@@ -154,7 +172,12 @@ def write_color_texture(path, spec, dpi, region_dir, cfg, shape):
     all of the light. Nothing here shades: no hillshade, no texture, no tonal curve,
     no grain. Those are the engine's way of faking the light Cycles actually traces."""
     elev, res_m, shp = render.terrain_window(spec, dpi, region_dir, cfg)
-    assert tuple(shp) == tuple(shape)
+    # Not an assert: `python -O` strips those, and this is the check that keeps the
+    # colour texture on the same grid as the heightmap. Two windows that disagree
+    # would drape the palette a few pixels off the terrain it belongs to.
+    if tuple(shp) != tuple(shape):
+        raise HeroError(f"the colour texture's window {tuple(shp)} doesn't match the "
+                        f"heightmap's {tuple(shape)} -- they would not register.")
     biome = (render._biome_layers(region_dir, cfg, spec.crop,
                                   _window_pads(spec, dpi), shp, dpi)
              if spec.biome else None)
@@ -232,7 +255,7 @@ def main(argv=None):
     blender = find_blender(a.blender)
     spec, manifest, region_dir, cfg = read_poster(
         a.poster, allow_plate_mismatch=a.allow_plate_mismatch)
-    check_supported(spec)
+    check_supported(spec, a.dpi)
 
     with tempfile.TemporaryDirectory(prefix="tecopa-hero-") as td:
         elev, res_m, shape = render.terrain_window(spec, a.dpi, region_dir, cfg)
