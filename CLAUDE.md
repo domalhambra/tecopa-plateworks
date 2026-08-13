@@ -44,7 +44,7 @@ The front end is a **single-window studio** (no wizard, no gated section rail �
 
 1. **One spec, painted at many sizes.** Never compute the picture twice.
 2. **Physical units (points / inches), never pixels,** for anything visual. This bug class has bitten more than once: a pixel-sized element looks bold in the proof and vanishes in the final.
-3. **Determinism.** Same spec + seed → identical image. Grain and jitter are seeded.
+3. **Determinism.** Same spec + seed → identical image. Grain and jitter are seeded. Note that the four heavy relief passes run **concurrently** (`relief._fan_out`, 2026-08-13) — this does not weaken the invariant: results merge in submission order and each task combines its own pass with the same expressions in the same order, so the sheet is bit-identical however the threads interleave. `TECOPA_RELIEF_WORKERS=1` forces the old serial call order, which is what the test pins.
 4. **One projection throughout.** DEM, overview, tracks, crop, hydro all in the region CRS metres; tracks arrive lon/lat and are reprojected first.
 5. **Registration is correctness.** Prove the coordinate chain before tuning aesthetics. `app/geo.py` is the single source of truth for coordinate conversions.
 6. **The zoom cap.** Never request finer ground detail than the data holds. `CompositionSpec.validate(dpi)` enforces it at the *final* dpi. A 422 on a large print of a small plate is the invariant working, not a bug.
@@ -65,19 +65,19 @@ The old rule — a poster printed today must reprint byte-identically after any 
 ```bash
 source .venv/bin/activate                 # Python 3.14
 pip install -r requirements-lock.txt      # pinned set — what CI installs
-pytest -q                                 # ~716 tests; renders real posters/films, ~13 min
+pytest -q                                 # ~793 tests; renders real posters/films, ~10 min
 uvicorn app.main:app --reload             # http://127.0.0.1:8000
 ```
 
-- `requirements.txt` core · `-dev` test stack · `-lock` pinned (determinism/CI) · `-regionprep` the heavy offline build stack · `-share` imageio-ffmpeg for MP4 twins. To match CI exactly, add `pandas geopandas` and `-r requirements-share.txt` on top of the lock — CI installs them deliberately outside the lock so the region-prep and MP4 tests run instead of skipping.
+- `requirements.txt` core · `-dev` test stack · `-lock` pinned (determinism/CI) · `-regionprep` the heavy offline build stack · `-share` imageio-ffmpeg for MP4 twins. To match CI exactly, add `pandas geopandas` and `-r requirements-share.txt` on top of the lock — CI installs them deliberately outside the lock so the region-prep and MP4 tests run instead of skipping. **`pandas` + `geopandas` are already installed here** (3.0.3 / 1.1.4), so the region-prep and hydro tests do run on this Mac; `imageio-ffmpeg` is still absent, which is the whole of the 6 skips (verified 2026-08-13).
 - `.venv-prep` is a **separate** venv for `region_prep.py`, spawned as a subprocess by in-app region builds. Without it, `/api/regions/plan` returns `prep_ready: false` and the UI shows the setup command instead of a Build button. Override with `TECOPA_PREP_PYTHON`.
-- **The venvs are interpreter-bound — check that first when Python breaks.** Both were originally built against the python.org 3.14 framework, which is no longer on this Mac; the live interpreter is Homebrew's `/opt/homebrew/bin/python3.14`. A dead venv reads as `no such file or directory` running `.venv/bin/python` even though `ls` lists it — the symlink resolves to a missing target. Rebuild with `python3.14 -m venv --clear .venv`.
+- **The venvs are interpreter-bound — check that first when Python breaks.** A dead venv reads as `no such file or directory` running `.venv/bin/python` even though `ls` lists it — the symlink resolves to a missing target. Rebuild with `python3.14 -m venv --clear .venv`. As of 2026-08-13 `.venv` is healthy and bound to the **python.org framework** build (`.venv/bin/python` → `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14`, Python 3.14.2) — that framework had gone missing once, which is what this bullet was originally written about, and it is present again. Homebrew's `/opt/homebrew/bin/python3.14` is the other candidate; check which one the symlink actually resolves to rather than assuming either.
 - Real 3DEP DEMs are gitignored; `tests/conftest.py` hydrates a tiny synthetic DEM per region so the suite runs on a fresh clone. **A synthetic DEM is useless for judging a poster by eye** — rebuild the real one first.
 - There is **no JS test runner.** For front-end work: `node --check` each edited module, cross-reference every `$('id')` against the HTML, then drive the real UI in a browser (synthetic `DragEvent` + `DataTransfer` works; click coordinates in headless don't).
 
 ## Known local failures (green in CI, red on this Mac)
 
-Re-verified 2026-07-27 against `5c22096`, on the restored real `lassen_ca` plate: **6 failed, 803 passed, 6 skipped**, and all six are the font item below. Confirm any new failure against a clean checkout before chasing it — most of these are the host, not the code.
+Re-verified 2026-08-13 against `c76a0c5`, on the real `lassen_ca` plate: **7 failed, 780 passed, 6 skipped** in 10:21, and all seven are the font item below. Confirm any new failure against a clean checkout before chasing it — most of these are the host, not the code. **Compare the failure set, not the totals** — the 07-27 run recorded 815 tests against 793 here, and that delta has not been explained; the named failures are the stable signal.
 
 A warning the 07-27 run earned: two tests were coupled to the local plate being *wrong*, and both went red the moment the real DEM was restored — the pack-gate drift test inherited its drift from the ambient synthetic DEM instead of constructing it, and `label_place` turned out inert on real terrain at 13 pt type. Both fixed (`c81ca51`, `5c22096`). If a test only passes on a synthetic plate, it is testing the host.
 
@@ -95,12 +95,25 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
   2026-07-27: `20cec75c…`, 192,087,365 B, drift 0.0 m, every committed asset untouched.
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` hydrates a tiny
   synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
-  match their own bounds exactly. Only `lassen_ca` has real 10 m terrain on this Mac; the
-  other four are synthetic. Check the tag, not the flag, before judging a poster by eye.
+  match their own bounds exactly. Check the tag, not the flag, before judging a poster by
+  eye. As of 2026-08-13 **two** plates carry real terrain here — `lassen_ca`
+  (192.1 MB, 6200×7719) and `susanville_reno` (257.2 MB, 6459×9977, `synthetic=0`) —
+  while `elko_bonneville`, `rifle_aspen` and `tushar_beaver_ut` are the 240×300 synthetic
+  stand-ins. `susanville_reno` was still synthetic in the 07-27 record; it is not now.
 - ~~the orphan drill~~ — deleted 2026-07-27 with the forever-contract (its last run on
   real terrain, 2026-07-27, passed). The `serial` pytest tier died with it.
-- Six label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it.
-- `test_mp4_twin_is_tagged_bt709` — no `colr` box when it runs. Not version drift: the bundled ffmpeg **binary** is platform-specific. As of 2026-07-27 it does not run here at all — `imageio_ffmpeg` is not installed in `.venv`, so this and two sibling MP4 tests SKIP. Install `-r requirements-share.txt` to see it (and `pandas geopandas` for the region-prep tests) if you want to match CI.
+- **Seven** label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it. The exact set as of 2026-08-13, so a future run can diff against it rather than re-derive it:
+  ```
+  test_base_cache.py::test_phase2_serves_the_knobs_phase1_could_not[label_place-anchor]
+  test_bleed.py::test_full_bleed_render_keeps_furniture_off_the_bleed_band
+  test_labels.py::test_label_placement_is_a_faithful_scale_across_dpi
+  test_labels.py::test_diagonal_range_is_dpi_stable
+  test_oblique.py::test_oblique_proof_is_a_faithful_scale_of_final
+  test_oblique.py::test_oblique_summit_marker_stays_glued
+  test_smart_labels_and_weave.py::test_smart_labels_are_dpi_stable
+  ```
+  The `label_place-anchor` case is the seventh and arrived with the 2026-08-10 pull; it was confirmed pre-existing by re-running all seven against `c44415c` with `app/relief.py` reverted, where they fail identically.
+- `test_mp4_twin_is_tagged_bt709` — no `colr` box when it runs. Not version drift: the bundled ffmpeg **binary** is platform-specific. It still does not run here — `imageio_ffmpeg` is not installed in `.venv`, and that single missing package is **all 6 skips**: three in `test_timelapse.py` / `test_output_fitness.py` and three `importorskip`s in `test_mockups.py`. Install `-r requirements-share.txt` to see them (verified 2026-08-13).
 
 ## macOS app
 
