@@ -35,14 +35,15 @@ COIN_PX      = 900         # square canvas (1080 social crops keep headroom)
 COIN_STEP_MS = 90          # ~4.3 s per revolution -- "slowly rotating"
 TILT_DEG     = -16.0       # top tips back a touch so the relief reads obliquely
 FILL         = 0.74        # plate diameter as a fraction of the canvas
+SUPERSAMPLE  = 2           # raster at 2x and box down: hard rim edges need the AA
 
-AMBIENT   = 0.30
+AMBIENT   = 0.34
 KEY_DIR   = (-0.42, 0.52, 0.74)      # upper-left, in front -- the key light
 SPEC_POW  = 42.0
 SPEC_GAIN = 0.16
 SPOT_XY   = (-0.06, -0.14)           # spotlight pool center, canvas fractions off-center
 SPOT_R    = 0.62                     # pool radius, canvas fraction
-SPOT_FLOOR = 0.52                    # light level far outside the pool
+SPOT_FLOOR = 0.62                    # light level far outside the pool
 BG_RGB    = (17, 20, 13)             # the landing page's studio dark (--ground family)
 BG_GLOW   = (16, 15, 10)             # additive pool glow behind the plate
 BACK_RGB  = (46, 44, 38)             # the plate's plain back and rim faces
@@ -80,6 +81,7 @@ def render_coin_frames(img: Image.Image, n_frames: int = COIN_FRAMES,
                        px: int = COIN_PX) -> list:
     """One full turn of the plate, z-buffered and lit. Returns PIL RGB frames that
     loop seamlessly (frame n would equal frame 0)."""
+    out_px, px = px, px * SUPERSAMPLE
     positions, normals, uvs, indices, top_count = plate_mesh(img)
     P0 = positions.astype(np.float64)
     P0[:, 2] -= (DISC_THICKNESS + DISPLACE_MAX) / 2.0        # spin about the mid-plane
@@ -143,9 +145,14 @@ def render_coin_frames(img: Image.Image, n_frames: int = COIN_FRAMES,
             if textured[i0]:
                 u = w0 * UV[i0, 0] + w1 * UV[i1, 0] + w2 * UV[i2, 0]
                 v = w0 * UV[i0, 1] + w1 * UV[i1, 1] + w2 * UV[i2, 1]
-                ti = np.clip((u * (TEXTURE_PX - 1)).round().astype(np.int64), 0, TEXTURE_PX - 1)
-                tj = np.clip((v * (TEXTURE_PX - 1)).round().astype(np.int64), 0, TEXTURE_PX - 1)
-                base = tex[tj, ti]
+                # bilinear sample: nearest-neighbour minification bands the face
+                fx = np.clip(u * (TEXTURE_PX - 1), 0, TEXTURE_PX - 1)
+                fy = np.clip(v * (TEXTURE_PX - 1), 0, TEXTURE_PX - 1)
+                x0i = np.clip(fx.astype(np.int64), 0, TEXTURE_PX - 2)
+                y0i = np.clip(fy.astype(np.int64), 0, TEXTURE_PX - 2)
+                ax = (fx - x0i)[..., None]; ay = (fy - y0i)[..., None]
+                base = ((tex[y0i, x0i] * (1 - ax) + tex[y0i, x0i + 1] * ax) * (1 - ay)
+                        + (tex[y0i + 1, x0i] * (1 - ax) + tex[y0i + 1, x0i + 1] * ax) * ay)
             else:
                 base = np.broadcast_to(np.asarray(BACK_RGB, dtype=np.float64),
                                        n.shape).copy()
@@ -155,7 +162,10 @@ def render_coin_frames(img: Image.Image, n_frames: int = COIN_FRAMES,
             patch[hit] = lit[hit]
             zwin[hit] = depth[hit]
 
-        frames.append(Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8), "RGB"))
+        frame = Image.fromarray(np.clip(canvas, 0, 255).astype(np.uint8), "RGB")
+        if SUPERSAMPLE > 1:
+            frame = frame.resize((out_px, out_px), Image.LANCZOS)
+        frames.append(frame)
     return frames
 
 
