@@ -136,6 +136,16 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
    (the file names its plate and carries its recipe — hash-published plates, AGPL
    engine) · *Strava?* (export GPX; direct import if people ask).
 
+## Hierarchy correction (2026-08-13)
+
+"The poster is the save file" is an architecture story, and architecture stories
+don't sell posters — beauty does. On any customer-facing surface the order is:
+**design and craft first** (composed like a fine map, real terrain, considered
+type, the 1:1 detail crop as proof), the growing-artifact ritual second, and the
+file-as-record LAST — as a trust answer in the FAQ and the trust block, where it
+resolves doubt instead of leading the pitch. Pillar 2 leads only in the nerd
+channels (Show HN, the technical blog post), never on the landing page.
+
 ## The funnel, honestly (added 2026-08-13)
 
 A landing page cannot close a sale for a service performed on someone's computer —
