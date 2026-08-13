@@ -1,5 +1,6 @@
 # tests/test_relief.py
 import numpy as np
+from app import relief
 from app.relief import (shaded_relief, hillshade, _fill_nan,
                         multidirectional_hillshade, cast_shadow_mask,
                         sky_occlusion, _shadow_terms)
@@ -204,3 +205,20 @@ def test_hillshade_comes_from_requested_azimuth():
     e = hillshade(east_facing, 30.0, azimuth=90, altitude=45).mean()
     w = hillshade(west_facing, 30.0, azimuth=90, altitude=45).mean()
     assert e > w
+
+def test_concurrent_relief_passes_do_not_move_a_pixel(monkeypatch):
+    # The independent passes (texture, valley, the ray-marched shadow, the
+    # slope/aspect lights) are pure functions of one elevation window, so they run
+    # concurrently. Concurrency is a scheduling change ONLY: each task combines its
+    # own result with the same expressions in the same order, and the tasks are
+    # merged in submission order, so the sheet must be bit-identical to the serial
+    # one (invariant 3). Every optional block is on, so all four tasks are exercised.
+    elev = synthetic_terrain()
+    kw = dict(res_m=30.0, elev_min=1000, elev_max=2000, azimuth=315, altitude=45,
+              z_factor=1.0, seed=7, depth=1.0, shadow=0.8,
+              sun_azimuth=200.0, sun_altitude=30.0, golden=0.9)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS", 1)
+    serial = shaded_relief(elev, **kw)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS", 4)
+    parallel = shaded_relief(elev, **kw)
+    assert np.array_equal(serial, parallel)

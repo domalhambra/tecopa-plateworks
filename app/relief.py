@@ -1,9 +1,33 @@
 # app/relief.py
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 import math as _m
+import os
 import numpy as np
 from scipy.ndimage import gaussian_filter, distance_transform_edt, rotate, zoom
+
+# How many relief passes may run at once. The four heavy passes below (the
+# slope/aspect lights, the texture high-pass, the valley field, and the ray-marched
+# cast shadow + sky occlusion) are pure functions of ONE elevation window, so they
+# can run at the same time. Threads rather than processes: scipy.ndimage and numpy
+# release the GIL for their inner loops, so threads get real parallelism without
+# copying a 60 MP window per worker. 1 = serial, and the serial path is the same call
+# order this file had before the fan-out existed.
+RELIEF_WORKERS = int(os.environ.get("TECOPA_RELIEF_WORKERS") or 0) or min(4, os.cpu_count() or 1)
+
+def _fan_out(tasks):
+    """Run zero-argument `tasks` concurrently, returning results in SUBMISSION order.
+
+    Order is the whole contract: each task combines its own pass with the same
+    expressions in the same order as the serial chain, and the caller then merges the
+    returned list positionally, so the composed sheet is bit-identical no matter which
+    task finishes first (invariant 3). A task that raises propagates on `.result()`,
+    exactly as the inline call it replaced would have."""
+    if RELIEF_WORKERS <= 1 or len(tasks) <= 1:
+        return [t() for t in tasks]
+    with ThreadPoolExecutor(max_workers=min(RELIEF_WORKERS, len(tasks))) as ex:
+        return [f.result() for f in [ex.submit(t) for t in tasks]]
 
 # ---- tuning surface: edit these by eye against the reference maps ----
 HYPSO_STOPS = [
@@ -601,26 +625,56 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     # `norm` is the identical expression hypsometric would recompute -- hand it over.
     base = base_colour(elev, elev_min, elev_max, norm=norm, biome=biome)   # color
     base = _run_stage("color", base, frame)          # no-op with an empty registry
-    # one slope/aspect pass serves the archival light, the multidirectional blend, and
-    # the Journey Light sun -- they differ only in bearing (see slope_aspect). The
-    # frame shares it, so a registered pass never pays for a second gradient.
-    terrain = frame.terrain()
-    hs = hillshade(elev, res_m, azimuth, altitude, z_factor,
-                   terrain=terrain) ** HILLSHADE_GAMMA
-    tex = texture_pass(elev, texture_radius_px)
-    val = valley_pass(elev, valley_radius_px)
+    # The heavy passes below are pure functions of this one elevation window, so they
+    # are fanned out (see _fan_out) instead of run one after another. Each closure
+    # folds in its own depth-pass companion with the same expressions in the same
+    # order as the serial chain did, and `_fan_out` returns them in submission order,
+    # so the composed sheet is bit-identical whichever finishes first (invariant 3).
+    s = float(np.clip(shadow, 0.0, 1.0))
 
-    # terrain depth: at depth 0 these blocks are skipped, so hs/tex are untouched and
-    # the output is identical to the single-light relief (invariant 1, existing tests).
-    if depth > 0:
-        d = float(np.clip(depth, 0.0, 1.5))
-        w = MULTIDIR_MAX * min(d, 1.0)
-        hs_multi = multidirectional_hillshade(
-            elev, res_m, azimuth, altitude, z_factor,
-            terrain=terrain) ** HILLSHADE_GAMMA
-        hs = hs * (1.0 - w) + hs_multi * w
-        tex_ms = multiscale_texture(elev, texture_radius_px)
-        tex = np.clip(tex + TEXTURE_DEPTH_MAX * d * (tex_ms - 0.5), 0, 1)
+    def _light_task():
+        # one slope/aspect pass serves the archival light, the multidirectional blend,
+        # and the Journey Light sun -- they differ only in bearing (see slope_aspect).
+        # The frame shares it, so a registered pass never pays for a second gradient.
+        # This is the ONLY task that touches frame.terrain(), so its lazy cache is
+        # never raced.
+        hs = hillshade(elev, res_m, azimuth, altitude, z_factor,
+                       terrain=frame.terrain()) ** HILLSHADE_GAMMA
+        # terrain depth: at depth 0 this is skipped, so hs is untouched and the output
+        # is identical to the single-light relief (invariant 1, existing tests).
+        if depth > 0:
+            d = float(np.clip(depth, 0.0, 1.5))
+            w = MULTIDIR_MAX * min(d, 1.0)
+            hs_multi = multidirectional_hillshade(
+                elev, res_m, azimuth, altitude, z_factor,
+                terrain=frame.terrain()) ** HILLSHADE_GAMMA
+            hs = hs * (1.0 - w) + hs_multi * w
+        return hs
+
+    def _texture_task():
+        tex = texture_pass(elev, texture_radius_px)
+        if depth > 0:
+            d = float(np.clip(depth, 0.0, 1.5))
+            tex_ms = multiscale_texture(elev, texture_radius_px)
+            tex = np.clip(tex + TEXTURE_DEPTH_MAX * d * (tex_ms - 0.5), 0, 1)
+        return tex
+
+    def _valley_task():
+        return valley_pass(elev, valley_radius_px)
+
+    def _shadow_task():
+        # cast shadows + sky occlusion: at shadow 0 nothing is marched at all (strict
+        # no-op, like the depth pass). Journey Light: the cast shadows follow the
+        # journey sun when one is set; the form shading above stays on the archival
+        # light (legibility). None -> archival, so an archival render is byte-identical.
+        if s <= 0:
+            return None
+        cast_az = azimuth if sun_azimuth is None else float(sun_azimuth)
+        cast_alt = altitude if sun_altitude is None else float(sun_altitude)
+        return _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
+
+    hs, tex, val, shadow_terms = _fan_out(
+        [_light_task, _texture_task, _valley_task, _shadow_task])
 
     # `hs` is ours (** built it), so the tonal remap runs in place. Addition and
     # multiplication are commutative in IEEE, so this is bit-identical to
@@ -633,17 +687,12 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     light *= sink                                                # sink the valleys
     del sink
 
-    # cast shadows + sky occlusion: at shadow 0 this block is skipped entirely
-    # (strict no-op, like the depth pass); shadows darken with an absolute floor so
-    # they stay luminous, then fill with cool skylight rather than going grey-black.
-    s = float(np.clip(shadow, 0.0, 1.0))
+    # cast shadows + sky occlusion (marched in _shadow_task above): at shadow 0 there
+    # is nothing to apply, so this block is skipped entirely (strict no-op, like the
+    # depth pass); shadows darken with an absolute floor so they stay luminous, then
+    # fill with cool skylight rather than going grey-black.
     if s > 0:
-        # Journey Light: the cast shadows follow the journey sun when one is set; the
-        # form shading above stays on the archival light (legibility). None -> archival,
-        # so an archival render is byte-identical.
-        cast_az = azimuth if sun_azimuth is None else float(sun_azimuth)
-        cast_alt = altitude if sun_altitude is None else float(sun_altitude)
-        cast, ao = _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
+        cast, ao = shadow_terms
         frame.cast, frame.ao = cast, ao          # the ray-march, shared with passes
         light *= (1.0 - CAST_DARKEN * s * cast)
         light *= (1.0 - AO_MAX * s * ao)
@@ -666,8 +715,11 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     # no-op unless a journey sun + golden strength are set (archival stays byte-identical).
     if golden > 0 and sun_azimuth is not None:
         g = float(np.clip(golden, 0.0, 1.0))
+        # frame.terrain() is the SAME cached slope/aspect the light task already built
+        # (it is the only caller, and the fan-out has joined by here), so this is the
+        # identical gradient the pre-fan-out local `terrain` handed over.
         hs_sun = np.clip(hillshade(elev, res_m, float(sun_azimuth), float(sun_altitude),
-                                   z_factor, terrain=terrain), 0.0, 1.0)
+                                   z_factor, terrain=frame.terrain()), 0.0, 1.0)
         lit = hs_sun ** GOLDEN_LIT_GAMMA
         shade = 1.0 - hs_sun
         if s > 0:                       # a cast-shadowed face isn't really sunlit
