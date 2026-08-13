@@ -385,9 +385,8 @@ def test_a_playa_is_drawn_as_pale_ground_never_as_water():
     assert dist(on) > dist(off)
 
 
-def test_the_stipple_is_deterministic_and_ground_sized():
-    """Seeded from spec.seed like the paper grain, and its cell is a GROUND size, so
-    the same pan carries the same speckle on a proof and on a final."""
+def test_the_stipple_is_deterministic():
+    """Seeded from spec.seed like the paper grain."""
     cfg = _cfg(PLAYA_REGION)
     a = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION, cfg=cfg))
     b = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION, cfg=cfg))
@@ -395,6 +394,106 @@ def test_the_stipple_is_deterministic_and_ground_sized():
     c = np.asarray(render.rasterize(_playa_spec(dry_lakes=True, seed=99), 150,
                                     PLAYA_REGION, cfg=cfg))
     assert not np.array_equal(a, c), "the stipple must follow the spec's seed"
+
+
+def _speck_paper_positions(spec, dpi, pts_pt, sheet_in=12.0):
+    """Ask `_speck_dots` about the same PAPER positions at a given dpi."""
+    out = round(sheet_in * dpi)
+    xs = np.asarray([p[0] for p in pts_pt], float) * dpi / 72.0
+    ys = np.asarray([p[1] for p in pts_pt], float) * dpi / 72.0
+    return render._speck_dots(xs, ys, spec, out, out, dpi)
+
+
+def test_the_stipple_lands_on_the_same_paper_at_any_dpi():
+    """The proof must predict the print: a dot sits at a place on the SHEET, and asking
+    about that same place at 150 and at 300 dpi has to give the same answer. This holds
+    because floor(px / cell_px) is identically floor(pt / cell_pt) -- dpi divides out."""
+    spec = _playa_spec(dry_lakes=True)
+    rng = np.random.default_rng(4)
+    # sample paper positions off the cell boundaries, where float rounding is not the
+    # thing under test (a point exactly on a cell seam may legitimately tip either way)
+    cell = render.PLAYA_SPECK_CELL_PT
+    cells = rng.integers(0, 200, size=(4000, 2))
+    pts = [(ix * cell + 0.5 * cell, iy * cell + 0.5 * cell) for ix, iy in cells]
+    pts = [(x + rng.uniform(-0.3, 0.3) * cell, y + rng.uniform(-0.3, 0.3) * cell)
+           for x, y in pts]
+    lo = _speck_paper_positions(spec, 150, pts)
+    hi = _speck_paper_positions(spec, 300, pts)
+    agree = (lo == hi).mean()
+    assert agree > 0.99, f"proof and final disagree on {(1-agree)*100:.1f}% of the sheet"
+    assert 0.05 < hi.mean() < 0.5, "sampled coverage should be a stipple, not blank/solid"
+
+
+def test_the_stipple_grain_does_not_move_with_the_crop_scale():
+    """The defect a 300 dpi final finally exposed, pinned on the quantity that actually
+    moved. The cell used to be 70 GROUND metres: dpi-stable (the old test checked
+    exactly that) but not SCALE-stable, printing at 0.59 mm on the tightest crop the
+    zoom cap allows and 0.06 mm on a corridor-scale plate.
+
+    Coverage is the wrong thing to measure -- the old code filled whole cells, so the
+    inked FRACTION stayed ~0.16 at every scale while the marks themselves swung 6x in
+    area. What has to hold is the printed grain: how many separate marks per unit of
+    paper, and how big each one is."""
+    cfg = _cfg(PLAYA_REGION)
+    def _area(p):
+        c = np.asarray(p["coords"], float)
+        x, y = c[:, 0], c[:, 1]
+        return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+    biggest = max(render._load_playa(PLAYA_REGION)["playas"], key=_area)
+    bc = np.asarray(biggest["coords"], float)
+    pan_x, pan_y = bc[:, 0].mean(), bc[:, 1].mean()
+    w, s, e, n = cfg["bounds"]
+    fracs = []
+    for span in (12000.0, 30000.0):                 # 2.5x apart in ground scale
+        cx = min(max(pan_x, w + span / 2), e - span / 2)
+        cy = min(max(pan_y, s + span / 2), n - span / 2)
+        spec = _playa_spec(dry_lakes=True,
+                           crop=(cx - span / 2, cy - span / 2, cx + span / 2, cy + span / 2))
+        out_w, out_h = spec.pixel_size(150)
+        from PIL import Image, ImageDraw
+        m = Image.new("1", (out_w, out_h), 0)
+        d = ImageDraw.Draw(m)
+        for pan in render._load_playa(PLAYA_REGION)["playas"]:
+            p = [render._crs_to_px_oblique(x, y, spec, out_w, out_h, None)
+                 for x, y, *_ in pan["coords"]]
+            if len(p) >= 3:
+                d.polygon(p, fill=1)
+        pan = np.asarray(m, dtype=bool)
+        py, px_ = np.nonzero(pan)
+        # the wider crop clamps away from the pan (it sits on the plate's east edge), so
+        # the sample shrinks -- a few thousand px is still hundreds of cells, and the
+        # tolerances below sit well clear of that sampling noise
+        assert len(py) > 3000, "need a decent patch of pan to measure the grain on"
+        ink = np.zeros_like(pan)
+        ink[py, px_] = render._speck_dots(px_, py, spec, out_w, out_h, 150)
+        from scipy.ndimage import label
+        lab, ndots = label(ink)          # NOT `n` -- that is the crop's north bound
+        area_px = float(pan.sum())
+        sizes = np.bincount(lab.ravel())[1:]
+        fracs.append((ndots / area_px, sizes.mean() if ndots else 0.0))
+    (n0, s0), (n1, s1) = fracs
+    assert n0 == pytest.approx(n1, rel=0.30), \
+        f"marks per unit paper moved with the crop scale: {n0:.5f} vs {n1:.5f}"
+    assert s0 == pytest.approx(s1, rel=0.30), \
+        f"printed mark size moved with the crop scale: {s0:.2f} vs {s1:.2f} px"
+
+
+def test_the_edge_ink_is_darker_than_both_sides_it_separates():
+    """Why the broken edge was invisible at 300 dpi even though it was being drawn: it
+    borrowed PLAYA_SPECK, which is picked to sit QUIETLY against the fill, and that put
+    it almost exactly midway between the pale pan and the ground around it. A boundary
+    line reads only if it is darker than what is on both sides of it."""
+    lum = lambda c: 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    ink = lum(render.PLAYA_EDGE_INK)
+    # the pan side: the fill as it actually composites, over mid-toned ground
+    ground = (140, 140, 110)
+    a = render.PLAYA_FILL_ALPHA
+    pan = tuple(g * (1 - a) + f * a for g, f in zip(ground, render.PLAYA_FILL))
+    assert ink < lum(pan) - 25, "edge does not read against the pan"
+    assert ink < lum(ground) - 15, "edge does not read against the ground"
+    # and the speck tone is NOT usable as edge ink -- this is the actual bug, pinned
+    assert not (lum(render.PLAYA_SPECK) < lum(ground) - 15), \
+        "PLAYA_SPECK now reads against the ground; re-check why the edge has its own ink"
 
 
 def test_the_pan_edge_is_broken_not_continuous():

@@ -115,12 +115,34 @@ PLAYA_FILL = (236, 231, 219)     # salt ground: warm, pale, a shade off the pape
 PLAYA_SPECK = (176, 166, 148)    # the speckle: dusty, low-contrast, never black
 PLAYA_FILL_ALPHA = 0.55          # let the pan's own relief read through the ground
 PLAYA_SPECK_ALPHA = 0.5
-PLAYA_SPECK_COVER = 0.16         # fraction of stipple cells that carry a speck
-PLAYA_SPECK_CELL_M = 70.0        # stipple cell in GROUND metres -> dpi-stable, like
-                                 # relief.MOTTLE_CELL_M and the paper grain
+PLAYA_SPECK_COVER = 0.30         # fraction of stipple cells that carry a dot
+# The stipple is a SCREEN, not a terrain texture: it stands for "salt ground", it does
+# not depict features 70 m apart. So its cell is a PAPER size (invariant 2), the way a
+# printed screen tint has a fixed ruling whatever the map's scale.
+#
+# It was a ground size (70 m) until a real 300 dpi final was finally looked at. Ground
+# anchoring is dpi-stable, which is what the tests checked, but it is not SCALE-stable:
+# the same 70 m cell prints at 0.59 mm on the tightest crop the zoom cap allows and at
+# 0.06 mm on a corridor-scale plate -- a 10x swing from coarse checkerboard to nothing.
+# A paper-anchored lattice is BOTH, because floor(x_px / cell_px) == floor(x_pt /
+# cell_pt) identically: the proof and the final put the same dots at the same places on
+# the sheet, and every crop reads at one density.
+#
+# relief.MOTTLE_CELL_M stays in ground metres and is NOT the precedent here -- it is a
+# 6% luminance wobble, invisible as blocks. A screen that is meant to be seen cannot
+# hide its lattice the same way, which is why these dots are round and jittered inside
+# their cells rather than filling them.
+PLAYA_SPECK_CELL_PT = 2.2        # stipple ruling, points (~0.78 mm on the sheet)
+PLAYA_SPECK_R_PT = 0.42          # dot radius, points -- a dot, never a filled cell
+PLAYA_SPECK_JITTER = 0.7         # how far a dot may wander inside its cell (0..1)
 PLAYA_EDGE_PT = 0.5              # broken edge weight, points
 PLAYA_DASH_PT = 3.0              # ink length of one dash, points
 PLAYA_GAP_PT = 2.4               # gap between dashes, points
+# The edge needs its OWN ink. It used to borrow PLAYA_SPECK, which is chosen to sit
+# quietly against the fill -- and that put it almost exactly midway between the pale pan
+# and the olive ground it separates, so at 300 dpi the broken edge read as an
+# antialiasing seam and vanished. A boundary line has to be darker than BOTH sides.
+PLAYA_EDGE_INK = (108, 100, 86)
 
 # ---- named geography (GNIS labels, v1.4): terrain names from labels.json (ranges,
 # summits, passes, valleys) + water names already in hydro.json, placed with priority
@@ -2213,12 +2235,40 @@ def _dash_polygon(d, pts, ink, width_px, dash_px, gap_px):
         carry = (carry + seg) % period
 
 
+def _speck_dots(px_x, px_y, spec, out_w, out_h, dpi):
+    """Which of these pixels fall inside a stipple dot. Returns a bool array the length
+    of the input, so the caller only ever pays for the pan's own pixels.
+
+    Each paper-space cell draws one round dot, jittered inside the cell, and keeps it
+    with probability PLAYA_SPECK_COVER. Jitter is what separates a stipple from a
+    checkerboard: on a bare lattice the eye reads the rows before it reads the texture.
+
+    The per-cell draw is sized from the SHEET, never from the pan's extent -- indexing a
+    pan-sized array would make cell (5,3)'s dot depend on how much of the pan happened
+    to be in frame, so the same sheet position would stipple differently on two crops."""
+    cell = max(1.0, _pt_to_px(PLAYA_SPECK_CELL_PT, dpi))
+    ix = np.floor(px_x / cell).astype(np.int32)
+    iy = np.floor(px_y / cell).astype(np.int32)
+    nx, ny = int(out_w // cell) + 2, int(out_h // cell) + 2
+    rng = np.random.default_rng(int(spec.seed) ^ 0x51A17)
+    jx, jy, keep = rng.random((3, ny, nx), dtype=np.float32)
+    # centre + jitter, in cells; PLAYA_SPECK_JITTER=0 would pin every dot mid-cell
+    off = 0.5 + (jx[iy, ix] - 0.5) * PLAYA_SPECK_JITTER
+    dx = (ix + off) * cell - px_x
+    off = 0.5 + (jy[iy, ix] - 0.5) * PLAYA_SPECK_JITTER
+    dy = (iy + off) * cell - px_y
+    r = max(0.5, _pt_to_px(PLAYA_SPECK_R_PT, dpi))
+    return (keep[iy, ix] < PLAYA_SPECK_COVER) & (dx * dx + dy * dy <= r * r)
+
+
 def _draw_playa(img, playa, spec, out_w, out_h, dpi, ctx=None):
     """Stipple the plate's dry lakes: a pale salt ground, a fine seeded speckle, and a
     broken edge. Never a fill and never blue -- a playa is ground, not water.
 
-    The speckle cell is a GROUND size (PLAYA_SPECK_CELL_M), so the same pan carries the
-    same speckle at a proof and at a final; the pattern is drawn from `spec.seed` like
+    The speckle is a PAPER-space screen (PLAYA_SPECK_CELL_PT), so the sheet reads at one
+    stipple density whatever the crop's scale, and the proof and the final put the same
+    dots in the same places -- the cell index floor(px / cell_px) is identically
+    floor(pt / cell_pt), so dpi drops out. The pattern is drawn from `spec.seed` like
     `relief.grain`, so it is deterministic. Composites over the selected pixels only,
     for the reason `_draw_lake_vignette` records."""
     rings = []
@@ -2236,22 +2286,14 @@ def _draw_playa(img, playa, spec, out_w, out_h, dpi, ctx=None):
     mask = np.asarray(full, dtype=bool)
     if not mask.any():
         return img
-    gpp = (spec.crop[2] - spec.crop[0]) / out_w
-    cell_px = max(1.0, PLAYA_SPECK_CELL_M / gpp)
-    # the speckle grid is ground-sized, so its SHAPE is dpi-independent -- the same
-    # cells land on the same ground whether this is a proof or a final
-    rng = np.random.default_rng(int(spec.seed) ^ 0x51A17)
-    sh = (max(1, round(out_h / cell_px)), max(1, round(out_w / cell_px)))
-    speck_small = rng.random(sh) < PLAYA_SPECK_COVER
-    ys = np.linspace(0, sh[0] - 1, out_h).astype(int)
-    xs = np.linspace(0, sh[1] - 1, out_w).astype(int)
-    speck = speck_small[np.ix_(ys, xs)] & mask
-
     rgba = img if img.mode == "RGBA" else img.convert("RGBA")
     arr = np.array(rgba)
-    for sel, colour, alpha in ((mask, PLAYA_FILL, PLAYA_FILL_ALPHA),
-                               (speck, PLAYA_SPECK, PLAYA_SPECK_ALPHA)):
-        if not sel.any():
+    pan_y, pan_x = np.nonzero(mask)          # the pan's pixels, and nothing else: every
+    speck = _speck_dots(pan_x, pan_y, spec, out_w, out_h, dpi)   # O(pan), not O(sheet)
+    for sel, colour, alpha in (((pan_y, pan_x), PLAYA_FILL, PLAYA_FILL_ALPHA),
+                               ((pan_y[speck], pan_x[speck]), PLAYA_SPECK,
+                                PLAYA_SPECK_ALPHA)):
+        if not len(sel[0]):
             continue
         px = arr[sel][:, :3].astype("float32")
         px *= (1.0 - alpha)
@@ -2262,7 +2304,7 @@ def _draw_playa(img, playa, spec, out_w, out_h, dpi, ctx=None):
     img = Image.fromarray(arr, "RGBA")
     d = ImageDraw.Draw(img, "RGBA")
     for pts in rings:
-        _dash_polygon(d, pts, PLAYA_SPECK + (255,),
+        _dash_polygon(d, pts, PLAYA_EDGE_INK + (255,),
                       max(1, round(_pt_to_px(PLAYA_EDGE_PT, dpi))),
                       _pt_to_px(PLAYA_DASH_PT, dpi), _pt_to_px(PLAYA_GAP_PT, dpi))
     return img
