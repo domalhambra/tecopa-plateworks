@@ -6,10 +6,11 @@ import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
-from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M, _fill_nan
+from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
+                        _fill_nan, _resize_to)
 from app import provenance, serialize
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
@@ -84,6 +85,25 @@ RIVER_COLOR = (92, 118, 126)
 RIVER_BASE_PT = 0.7             # width of an order-3 river, in points
 RIVER_STEP_PT = 0.5             # extra width per stream order above 3
 RIVER_MAX_PT = 3.0
+# ---- the lake depth vignette (spec.water_depth, v1.14) ----------------------------
+# Imhof's lake treatment: a pale littoral shelf at the shore grading to denser open
+# water. There is no bathymetry to read -- 3DEP returns the water SURFACE of a natural
+# lake, flat -- so the depth is synthesized from distance-to-shore, the standard
+# cartographic substitute. What it buys is SHAPE: the pale band traces every bay and
+# drowned ridge, which a flat chip of colour throws away.
+WATER_SHALLOW = (150, 174, 178)  # littoral shelf, paler and warmer than the open water
+WATER_DEEP = (70, 96, 112)       # open water: cooler and denser than the flat fill
+VIGNETTE_REACH_M = 900.0         # GROUND distance over which shelf -> deep completes
+VIGNETTE_GAMMA = 0.75            # < 1 holds the pale band tight against the shore
+# The distance transform runs on a decimated grid at this CONSTANT ground resolution.
+# Two reasons, and the second is the load-bearing one: a float64 EDT over a 300 dpi
+# 18x24 sheet (39 Mpx) is 311 MB, and -- because the grid is a fixed ground size rather
+# than a fixed pixel count -- the proof and the final measure distance on the SAME grid,
+# so the vignette is dpi-stable by construction. This is exactly the argument
+# `relief._blur` makes for wide kernels (decimate, work small, resample back): the
+# field is a smooth gradient over ~900 m, so it carries almost no information at the
+# sheet's own sampling rate.
+VIGNETTE_GRID_M = 40.0
 
 # ---- named geography (GNIS labels, v1.4): terrain names from labels.json (ranges,
 # summits, passes, valleys) + water names already in hydro.json, placed with priority
@@ -2116,20 +2136,126 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
             _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
     return img
 
-def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
-    """Composite baked water over the relief: lakes filled flat with a DPI-scaled
-    shoreline, rivers as order-weighted lines. All widths in physical units. Under
-    the plan-oblique warp every vertex displaces with its ground, so rivers drape
-    down their valleys and a lake's shoreline rides its (flat) surface as one piece."""
-    if not hydro:
+def _draw_lake_vignette(img, hydro, spec, out_w, out_h, ctx, depth):
+    """Composite the depth-graded lake body. `depth` (spec.water_depth) scales the
+    grade AWAY FROM the flat fill, so the knob interpolates WATER_FILL -> the graded
+    colour: at 0 the pixels are the flat fill exactly, which is what makes the knob a
+    strict no-op at its default (the caller skips this entirely, so that path is
+    literally untouched). The 235 alpha is unchanged, so the lakebed relief still
+    ghosts through at every setting.
+
+    Composites over the SELECTED PIXELS ONLY, never over full-sheet planes. Water is a
+    few percent of a sheet -- 2.9% on the plate this was measured against -- so the
+    obvious form (`graded = lerp(...)` shaped like the whole sheet, blended under a
+    full-sheet alpha) allocates gigabytes to paint almost nothing: 2216 MB and 23.7 s
+    on a 300 dpi 18x24. Selecting first makes every array N x 3 where N is the water
+    pixel count, which is the same lesson `looks._soft_light` carries about in-place
+    compositing, applied to a layer that is mostly empty. Measured after: 506 MB and
+    7.5 s on that sheet, and what remains is the sheet buffers any compositor pays
+    (the uint8 RGBA copy and the depth field), not the blend."""
+    mask, t = _lake_depth_field(hydro, spec, out_w, out_h, ctx)
+    n = int(mask.sum())
+    if not n:
         return img
-    d = ImageDraw.Draw(img, "RGBA")
-    sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
+    # already-RGBA is the only caller today; convert() would copy the sheet a second
+    # time for nothing on a plane this size
+    rgba = img if img.mode == "RGBA" else img.convert("RGBA")
+    arr = np.array(rgba)                         # one writable uint8 buffer
+    tv = t[mask].astype("float32")[:, None]      # (N, 1) -- the only field we keep
+    del t
+    shallow = np.array(WATER_SHALLOW, "float32")[None, :]
+    deep = np.array(WATER_DEEP, "float32")[None, :]
+    flat = np.array(WATER_FILL, "float32")[None, :]
+    graded = shallow * (1.0 - tv) + deep * tv    # (N, 3)
+    graded *= depth
+    graded += flat * (1.0 - depth)
+    a = 235.0 / 255.0                            # scalar: the mask already selected
+    px = arr[mask][:, :3].astype("float32")
+    px *= (1.0 - a)
+    px += graded * a
+    np.clip(px, 0, 255, out=px)
+    sel = arr[mask]
+    sel[:, :3] = px.astype("uint8")
+    arr[mask] = sel
+    return Image.fromarray(arr, "RGBA")
+
+
+def _lake_polygons_px(hydro, spec, out_w, out_h, ctx):
+    """Every lake ring as an output-pixel point list, warp-registered. One place, so
+    the fill, the depth field and the shoreline can never disagree about where a lake
+    is (they are drawn from this list in that order)."""
+    out = []
     for lake in hydro.get("lakes", []):
         # tolerate missing key + 3-tuple (z) coords, matching what the baker emits
         pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
                for x, y, *_ in (lake.get("coords") or [])]
         if len(pts) >= 3:
+            out.append(pts)
+    return out
+
+
+def _lake_depth_field(hydro, spec, out_w, out_h, ctx):
+    """`(mask, t)` for the sheet's lakes: `mask` is True on water, `t` is 0 at the
+    shoreline rising to 1 at VIGNETTE_REACH_M inside it -- the synthesized depth the
+    vignette grades along.
+
+    The distance transform runs on a grid decimated to VIGNETTE_GRID_M of GROUND, then
+    resamples up: bounded memory, and dpi-stable because both a proof and a final
+    measure on the same ground grid (see VIGNETTE_GRID_M). Under the plan-oblique warp
+    the mask is the warped one, so the shelf rides the standing terrain with its
+    lake."""
+    polys = _lake_polygons_px(hydro or {}, spec, out_w, out_h, ctx)
+    if not polys:
+        z = np.zeros((out_h, out_w), dtype="float32")
+        return z.astype(bool), z
+    gpp = (spec.crop[2] - spec.crop[0]) / out_w          # ground metres per output px
+    k = max(1.0, VIGNETTE_GRID_M / gpp)                  # decimation factor
+    sw, sh = max(2, int(round(out_w / k))), max(2, int(round(out_h / k)))
+    small = Image.new("1", (sw, sh), 0)
+    sd = ImageDraw.Draw(small)
+    for pts in polys:
+        sd.polygon([(x * sw / out_w, y * sh / out_h) for x, y in pts], fill=1)
+    m_small = np.asarray(small, dtype=bool)
+    if not m_small.any():                                # water thinner than one cell
+        z = np.zeros((out_h, out_w), dtype="float32")
+        return z.astype(bool), z
+    # distance in SMALL cells -> ground metres, via that grid's own resolution
+    grid_m = (spec.crop[2] - spec.crop[0]) / sw
+    t_small = (distance_transform_edt(m_small).astype("float32") * grid_m)
+    t_small /= VIGNETTE_REACH_M
+    np.clip(t_small, 0.0, 1.0, out=t_small)
+    t_small **= VIGNETTE_GAMMA
+    t = _resize_to(t_small, (out_h, out_w)).astype("float32")
+    np.clip(t, 0.0, 1.0, out=t)
+    # the MASK is drawn at full resolution: the shoreline is a crisp edge and must not
+    # inherit the decimated grid's staircase, even though the gradient inside may.
+    full = Image.new("1", (out_w, out_h), 0)
+    fd = ImageDraw.Draw(full)
+    for pts in polys:
+        fd.polygon(pts, fill=1)
+    mask = np.asarray(full, dtype=bool)
+    t *= mask
+    return mask, t
+
+
+def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
+    """Composite baked water over the relief: lakes filled (flat, or depth-graded when
+    spec.water_depth > 0), rivers as order-weighted lines. All widths in physical
+    units. Under the plan-oblique warp every vertex displaces with its ground, so
+    rivers drape down their valleys and a lake's shoreline rides its (flat) surface as
+    one piece."""
+    if not hydro:
+        return img
+    depth = float(np.clip(getattr(spec, "water_depth", 0.0), 0.0, 1.0))
+    if depth > 0:
+        img = _draw_lake_vignette(img, hydro, spec, out_w, out_h, ctx, depth)
+    d = ImageDraw.Draw(img, "RGBA")
+    sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
+    for pts in _lake_polygons_px(hydro, spec, out_w, out_h, ctx):
+        if depth > 0:
+            # the graded body is already composited; only the shoreline is left to ink
+            d.polygon(pts, fill=None, outline=WATER_SHORELINE + (255,), width=sw)
+        else:
             # 235 alpha, not opaque: a whisper of the lakebed relief ghosts through, so
             # lakes sit IN the toothy sheet instead of reading as flat vinyl stickers
             # (red-team beauty finding). The shoreline stays crisp at full ink.
