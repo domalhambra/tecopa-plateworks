@@ -63,6 +63,40 @@ Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, and every
   NEW form and notifications must be re-pointed at it. Submissions are the
   region-demand signal (and the commission lead list); enable email
   notifications in the Netlify site settings or they sit unread.
+- **Form detection is OFF by default on this site, and a correct deploy still
+  detects nothing.** Netlify ships newer sites with
+  `processing_settings.ignore_html_forms: true` (this site was created
+  2026-07-28). The deploy succeeds, the HTML is right, and the Forms tab stays
+  empty with no error anywhere. Turn it on, then **deploy again** — detection
+  only runs at deploy time, so flipping the setting does not retroactively scan
+  the published HTML:
+  ```
+  curl -X PATCH -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+    -H "Content-Type: application/json" \
+    -d '{"processing_settings":{"html":{"pretty_urls":true},"ignore_html_forms":false}}' \
+    https://api.netlify.com/api/v1/sites/1902a58d-74a9-4def-8b4e-d93793f81ac4
+  ```
+  Verify with `GET /sites/<id>/forms` (not the UI — it caches). Once detected,
+  the live HTML loses its `data-netlify` attribute: that is Netlify rewriting
+  the form, not a regression. Notifications are hooks:
+  `POST /api/v1/hooks` with `{site_id, form_id, type:"email",
+  event:"submission_created", data:{email}}`; list them with
+  `GET /api/v1/hooks?site_id=<id>` (the `/sites/<id>/hooks` path returns HTML).
+- **A billing block reads as an auth failure.** `netlify deploy` reports a bare
+  `JSONHTTPError: Forbidden`, even with `--debug`, when the real cause is
+  account credit exhaustion. `netlify status` succeeds and both
+  `GET /sites/<id>` and `GET /sites/<id>/deploys` return 200 — only the POST is
+  refused, which looks exactly like a token-scope problem. Get the real message
+  by calling the API yourself:
+  ```
+  curl -X POST -H "Authorization: Bearer $NETLIFY_AUTH_TOKEN" \
+    -H "Content-Type: application/json" -d '{"files":{}}' \
+    https://api.netlify.com/api/v1/sites/<site-id>/deploys
+  ```
+  → `403 "Account credit usage exceeded - new deploys are blocked until credits
+  are added"`. The block is account-wide, so every Netlify property fails at
+  once; if two sites break together, suspect billing before config. Fixing it
+  means adding credits — an operator action, not a technical one.
 - **The social coin videos** (`coin.webp` / `coin.mp4`, the farm's `coin`
   tier) are for posting, not for the page — the page's coins are the live
   GLBs. Don't add them to the deploy root; they'd be dead weight.
