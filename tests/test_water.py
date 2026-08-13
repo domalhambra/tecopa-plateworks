@@ -577,3 +577,39 @@ def test_the_studio_can_tell_which_plates_have_playa():
         "no plate has playa — this test would pass vacuously"
     assert not all(m["has_playa"] for m in (r.meta() for r in found.values())), \
         "every plate has playa — the hidden-toggle path would never be exercised"
+
+
+def test_the_water_reserve_can_never_dominate_a_small_sheet():
+    """The reserve is a guard against water starving; unbounded it became terrain
+    starving. The cap floors at 6 labels, and a flat river:2 + lake:2 took FOUR of those
+    six -- on a 9x12 sheet almost nothing but water was ever considered, and smart label
+    placement went inert because too few terrain names survived to collide.
+
+    So the reserve is bounded by GEO_FLOOR_MAX_SHARE of the cap, handed out one kind at
+    a time so a single kind cannot eat the allowance either."""
+    kinds = ["range", "summit", "lake", "river", "summit", "lake", "river", "valley"] * 6
+    cands = [(100 - i, k, f"{k}{i}", (0.0, 0.0), None) for i, k in enumerate(kinds)]
+    for cap in (6, 9, 12, 20, 51):
+        out = render._label_order(cands, cap)
+        # how many of the leading run are reserved water names
+        lead = 0
+        for c in out:
+            if c[1] in render.GEO_KIND_FLOOR and lead < sum(render.GEO_KIND_FLOOR.values()):
+                lead += 1
+            else:
+                break
+        assert lead <= max(1, int(cap * render.GEO_FLOOR_MAX_SHARE)), \
+            f"cap {cap}: reserve took {lead} slots, more than its share"
+        assert lead <= sum(render.GEO_KIND_FLOOR.values()), \
+            f"cap {cap}: reserve exceeded GEO_KIND_FLOOR itself"
+    # a big sheet still gets the full floor, or the reserve would be pointless
+    big = render._label_order(cands, 51)
+    assert [c[1] for c in big[:4]].count("lake") == 2
+    assert [c[1] for c in big[:4]].count("river") == 2
+    # ...and a small one still gets SOME water, or we are back to the starvation W3 fixed
+    small = render._label_order(cands, 6)
+    assert small[0][1] in render.GEO_KIND_FLOOR
+    # every candidate survives exactly once, whatever the cap
+    for cap in (6, 51):
+        assert sorted(c[2] for c in render._label_order(cands, cap)) == \
+               sorted(c[2] for c in cands)
