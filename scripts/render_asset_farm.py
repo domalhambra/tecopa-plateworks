@@ -24,6 +24,12 @@ produces, per region:
                         no manifest; needs the share extra)
   mockup_plate.glb      the orbitable plate for the landing page's <model-viewer> --
                         the poster's pixels on a relief-displaced disc
+  detail.png            a 1:1 crop of the poster at print resolution -- the landing
+                        page's "actual print pixels" proof (web pages downscale the
+                        poster into a blur; this is what the sheet really holds)
+  coin.webp / coin.mp4  the coin spin: the GLB's own plate mesh turning once under a
+                        spotlight, as a looping social video (mp4 needs the share
+                        extra) -- the feed-postable twin of the orbitable plate
   lightsweep.mp4        (--only lightsweep; slow) the turntable: the sun walks the
                         azimuth circle and only the land relights -- the terrain itself
                         reads as 3D
@@ -310,6 +316,47 @@ def _model(out_dir):
     return [out]
 
 
+def _detail(out_dir):
+    """The 1:1 detail crop: actual print pixels cut from the freshly rendered poster,
+    so the landing page can show what 300 dpi looks like instead of a downscaled blur.
+    Center crop -- the synth tracks converge there, so it lands on ink and labels."""
+    poster = os.path.join(out_dir, "poster.png")
+    if not os.path.exists(poster):
+        print(f"  ! no poster.png in {out_dir} — render the poster first (detail skipped)")
+        return []
+    img = Image.open(poster)
+    w, h = img.size
+    cw, ch = min(1400, w), min(1050, h)
+    x0, y0 = (w - cw) // 2, (h - ch) // 2
+    out = os.path.join(out_dir, "detail.png")
+    img.crop((x0, y0, x0 + cw, y0 + ch)).save(out, "PNG")
+    return [out]
+
+
+def _coin(out_dir):
+    """The coin spin: the plate (the GLB's own mesh) turning once under a spotlight,
+    as a looping social video. Restages poster.png like the model tier -- no DEM
+    needed. WebP always; MP4 twin when the share extra is installed."""
+    from scripts.render_coinspin import COIN_FRAMES, COIN_PX, coin_mp4, coin_webp
+    poster = os.path.join(out_dir, "poster.png")
+    if not os.path.exists(poster):
+        print(f"  ! no poster.png in {out_dir} — render the poster first (coin skipped)")
+        return []
+    img = Image.open(poster).convert("RGB")
+    n_frames = int(os.environ.get("TECOPA_COIN_FRAMES", COIN_FRAMES))
+    made = []
+    for name, encode in (("coin.webp", coin_webp), ("coin.mp4", coin_mp4)):
+        if name.endswith(".mp4") and not timelapse.MP4_AVAILABLE:
+            print("  ! coin.mp4 needs the share extra (pip install -r requirements-share.txt) — skipped")
+            continue
+        out = os.path.join(out_dir, name)
+        data = encode(img, n_frames, COIN_PX)   # encode fully before touching disk
+        with open(out, "wb") as f:
+            f.write(data)
+        made.append(out)
+    return made
+
+
 def _lightsweep(region, tracks, spots, out_dir):
     """The turntable: the composition re-rendered around the azimuth circle (the
     terrain itself reads as 3D -- only the light moves). Needs the DEM; minutes on
@@ -352,7 +399,7 @@ def main():
                     help="wallpaper preset ids")
     ap.add_argument("--only", nargs="*",
                     choices=["poster", "wallpapers", "film", "editions",
-                             "mockups", "lightsweep", "model"],
+                             "mockups", "lightsweep", "model", "detail", "coin"],
                     help="render only these deliverables (default: all but lightsweep)")
     ap.add_argument("--quick", action="store_true",
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
@@ -368,7 +415,7 @@ def main():
     # lightsweep re-renders ~60 frames per region (minutes on real DEMs), so it is
     # opt-in via --only; everything else ships by default
     want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions",
-                                             "mockups", "model"}
+                                             "mockups", "model", "detail", "coin"}
     if args.quick:
         # quick drops the slow renders -- unless they were EXPLICITLY asked for
         for slow in ("film", "lightsweep"):
@@ -381,9 +428,9 @@ def main():
         if region is None:
             print(f"! unknown region {rid!r} (built: {', '.join(regions)})"); continue
         print(f"\n=== {rid} — {region.name} ===")
-        # mockups + model stage already-rendered finals: they need no DEM and no
-        # tracks, so --only mockups works on any machine with yesterday's assets
-        needs_render = bool(want - {"mockups", "model"})
+        # mockups/model/detail/coin stage already-rendered finals: they need no DEM
+        # and no tracks, so --only mockups works on any machine with yesterday's assets
+        needs_render = bool(want - {"mockups", "model", "detail", "coin"})
         if needs_render and not _ensure_dem(region, args.synthetic_dem):
             continue
         out_dir = os.path.join(args.out, rid); os.makedirs(out_dir, exist_ok=True)
@@ -410,6 +457,12 @@ def main():
             if "model" in want:
                 for p in _model(out_dir):
                     print(f"  model       plate glb  {p}"); made.append(p)
+            if "detail" in want:
+                for p in _detail(out_dir):
+                    print(f"  detail      1:1 crop   {p}"); made.append(p)
+            if "coin" in want:
+                for p in _coin(out_dir):
+                    print(f"  coin        turntable  {p}"); made.append(p)
             if "lightsweep" in want:
                 for p in _lightsweep(region, tracks, spots, out_dir):
                     print(f"  lightsweep  {p}"); made.append(p)
