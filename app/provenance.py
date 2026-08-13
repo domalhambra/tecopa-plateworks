@@ -138,7 +138,8 @@ def build_manifest(spec: CompositionSpec, sources: list | None = None,
     return m
 
 
-def region_pack_block(region_dir, labels: bool = False, biome: bool = False) -> dict | None:
+def region_pack_block(region_dir, labels: bool = False, biome: bool = False,
+                      dry_lakes: bool = False) -> dict | None:
     """The plate's identity, for the manifest's `region_pack` block: the sha256 of each
     plate asset the RENDER reads, hashed from the bytes on disk -- never trusted from
     sources.json, whose recorded hashes can drift from the assets (a re-prep that
@@ -168,6 +169,12 @@ def region_pack_block(region_dir, labels: bool = False, biome: bool = False) -> 
         if name == "labels.json" and not labels:     # read only when labels are drawn
             continue
         if name == "landcover.tif" and not biome:    # read only when the tint is on
+            continue
+        if name == "playa.json" and not dry_lakes:   # read only when dry lakes draw
+            # Same pixel-honesty rule, and here it is what makes the feature shippable
+            # at all: baking playa onto an existing plate must not change the identity
+            # of posters that never draw it, or every poster ever printed would report
+            # a mismatch on reprint the day dry lakes landed.
             continue
         try:
             h = hashlib.sha256()

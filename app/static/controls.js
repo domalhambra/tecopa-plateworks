@@ -165,6 +165,15 @@ export const CONTROLS = [
     keywords: ['furniture', 'legend', 'compass', 'cartouche', 'scale'] },
 
   // ===== LAYERS (named geography + strips) =====
+  { id: 'waterDepth', path: 'style.waterDepth', section: 'layers', panel: 'Cartography', label: 'Lake depth',
+    hint: 'pale shore, deeper open water', type: 'slider', min: 0, max: 1, step: 0.05, default: 0.5,
+    fmt: pct, affectsProof: true,
+    help: 'Grades each lake from a pale shallow shore to deeper open water; 0 keeps the flat fill.',
+    keywords: ['water', 'lake', 'depth', 'shore', 'littoral', 'imhof', 'vignette'] },
+  { id: 'dryLakes', path: 'style.dryLakes', section: 'layers', panel: 'Cartography', label: 'Dry lakes',
+    hint: 'stipple playas as salt ground', type: 'toggle', default: false, affectsProof: true,
+    help: 'Draws the plate’s playas as speckled salt ground with a broken edge instead of water.',
+    keywords: ['playa', 'dry lake', 'salt', 'stipple', 'alkali', 'pan'] },
   { id: 'contours', path: 'contours', section: 'layers', panel: 'Cartography', label: 'Contour lines',
     type: 'toggle', default: false, affectsProof: true,
     help: 'Elevation contour lines traced from the USGS terrain model.',

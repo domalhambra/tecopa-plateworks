@@ -113,10 +113,50 @@ def _lines(geom):
     return []
 
 # NHD waterbody ftypes that are honestly "blue water" on a poster. Playa (361) is a
-# dry alkali flat most of the year (Honey Lake rendered as a ~234 km2 solid slab --
-# red-team's top beauty finding), and SwampMarsh (466) / Ice (378) mislead the same
-# way. LakePond (390) + Reservoir (436) stay.
+# dry alkali flat most of the year (red-team's top beauty finding: a basin plate came
+# back carrying hundreds of km2 of fictional water), and SwampMarsh (466) / Ice (378)
+# mislead the same way. LakePond (390) + Reservoir (436) stay.
+#
+# The finding named Honey Lake, which turns out to be the wrong example: NHD files it
+# as LakePond, so it is drawn blue today and nothing here changes that. The ftype that
+# actually costs is 361, and elko_bonneville is where it shows -- 139 pans, 874 km2 in
+# total, the largest a single 491 km2 sheet of Bonneville salt.
 WATER_FTYPES = {390, 436}
+# Playa (NHD ftype 361): a dry alkali flat, which is exactly why it is NOT in
+# WATER_FTYPES -- filling it blue paints a basin's salt as open water. It is still
+# real ground worth naming and drawing, just not as water, so it bakes to its OWN
+# sidecar (playa.json) rather than into hydro.json. Two reasons, and the second is the
+# one that decides it: a dry lake is a different cartographic object with a different
+# treatment (stipple, not fill), and hydro.json is hashed into the plate's identity, so
+# appending to it would make every poster ever printed report a plate mismatch on
+# reprint. A separate file that `region_pack_block` skips unless the sheet actually
+# draws it keeps existing plates byte-identical (the labels.json / landcover.tif
+# precedent).
+PLAYA_FTYPES = {361}
+
+def _is_playa_ftype(row):
+    v = row.get("ftype", row.get("FTYPE"))
+    if v is None:
+        return False
+    try:
+        return int(v) in PLAYA_FTYPES
+    except (TypeError, ValueError):
+        return str(v).strip().lower() == "playa"
+
+def bake_playa(waterbodies, dst_crs, simplify_m=30.0):
+    """Reproject/simplify the PLAYA waterbodies into a serializable dict in dst_crs
+    metres. Same shape as bake_hydro's lakes, so the renderer reads one geometry
+    format; `None`/empty in gives an empty (but valid) sidecar."""
+    out = []
+    if waterbodies is not None and len(waterbodies):
+        for _, row in waterbodies.to_crs(dst_crs).iterrows():
+            if not _is_playa_ftype(row):
+                continue
+            g = row.geometry.simplify(simplify_m)
+            for ring in _exterior_rings(g):
+                out.append({"coords": [[float(x), float(y)] for x, y, *_ in ring],
+                            "name": str(row.get("gnis_name") or "")})
+    return {"crs": dst_crs, "playas": out}
 
 def _is_water_ftype(row):
     v = row.get("ftype", row.get("FTYPE"))

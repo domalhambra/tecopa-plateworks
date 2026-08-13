@@ -996,6 +996,9 @@ async def proof(session_id: str = Form(...),
                 # that never sends them -- and every pre-feature file -- stays plain.
                 # New posters start subtle-on from the CLIENT (store.js).
                 soft_light: float = Form(0.0), haze_strength: float = Form(0.0),
+                # Water (v1.14): both default to the shipped look, so a client that
+                # never sends them -- and every pre-feature file -- stays unchanged.
+                water_depth: float = Form(0.0), dry_lakes: bool = Form(False),
                 light_mode: str = Form("archival"), sun_hour: Optional[float] = Form(None),
                 sun_azimuth_deg: Optional[float] = Form(None),
                 sun_altitude_deg: Optional[float] = Form(None),
@@ -1014,6 +1017,7 @@ async def proof(session_id: str = Form(...),
              "terrain_depth": terrain_depth, "shadow_strength": shadow_strength,
              "oblique": oblique,
              "soft_light": soft_light, "haze_strength": haze_strength,
+             "water_depth": water_depth, "dry_lakes": dry_lakes,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
              "profile_height_in": profile_height_in,
@@ -1153,7 +1157,8 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     key = f"{session_id}/{download_name(spec, fmt=fmt)}"
     # the file names its plate: hashed from the assets once per final, never cached.
     # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
-    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
+                                      dry_lakes=spec.dry_lakes)
     BLOBS.put(key, _encode_final(img, fmt,
                                  _final_manifest(spec, sources, embed_spec, lineage,
                                                  region_pack=rp), dpi=dpi))
@@ -1174,7 +1179,8 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     # embed photos NOW (sync), so the manifest built here and the worker's render below
     # paint the identical bytes -- the async final and its reprint stay pixel-identical.
     spec = _embed_photos(spec, spec.final_dpi())
-    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome)
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
+                                      dry_lakes=spec.dry_lakes)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir,
                        f"{session_id}/{download_name(spec, fmt=fmt)}", fmt,
                        _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
@@ -1239,7 +1245,8 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
                        f"{session_id}/{download_name(spec, '_wallpapers', 'zip')}",
                        region.cfg, sources, embed_spec,
                        lineage, provenance.region_pack_block(
-                           region.dir, labels=spec.labels, biome=spec.biome))
+                           region.dir, labels=spec.labels, biome=spec.biome,
+                           dry_lakes=spec.dry_lakes))
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
              session_id, region.id, len(items), len(skipped))
     return {"job": jid, "count": len(items), "skipped": skipped, "fitted": fitted}
@@ -1395,7 +1402,8 @@ async def timelapse_submit(session_id: str = Form(...),
                        target_dpi,
                        pacing, sources, embed_spec, lineage,
                        provenance.region_pack_block(region.dir, labels=tspec.labels,
-                                                    biome=tspec.biome), fmt,
+                                                    biome=tspec.biome,
+                                                    dry_lakes=tspec.dry_lakes), fmt,
                        light_motion, track_times, anchor,
                        # new films are flatten-safe (the complete poster as the APNG
                        # default image); the flag rides the manifest so the file
@@ -1532,7 +1540,8 @@ def _manifest_region_or_422(spec, verb: str, manifest=None, allow_plate_mismatch
                                  f"so this poster can't be {verb} here.{painted}")
     if file_pv:
         server = provenance.region_pack_block(region.dir, labels=spec.labels,
-                                              biome=spec.biome)
+                                              biome=spec.biome,
+                                              dry_lakes=spec.dry_lakes)
         if server is not None and server["pack_version"] != file_pv:
             if allow_plate_mismatch:
                 log.warning("event=plate.mismatch.overridden region=%s file=%s server=%s",
@@ -1572,7 +1581,8 @@ async def reprint_inspect(file: UploadFile = File(...)):
     else:
         server = provenance.region_pack_block(
             region.dir, labels=bool(spec_d.get("labels", False)),
-            biome=bool(spec_d.get("biome", False)))
+            biome=bool(spec_d.get("biome", False)),
+            dry_lakes=bool(spec_d.get("dry_lakes", False)))
         server_pv = server["pack_version"] if server else None
         if file_pv is None or server_pv is None:
             plate = "unverifiable"                # pre-pack file, or a hand-built plate
@@ -1643,7 +1653,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                            pacing, manifest.get("sources", []), embed_spec,
                            manifest.get("lineage", []),
                            provenance.region_pack_block(region.dir, labels=spec.labels,
-                                                        biome=spec.biome),
+                                                        biome=spec.biome,
+                                                        dry_lakes=spec.dry_lakes),
                            # the film's own encoding flag: a pre-v1.11 file carries
                            # none -> the legacy branch -> byte-identical reprint.
                            default_image=tl_default)
@@ -1672,7 +1683,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
                                         manifest.get("lineage", []),
                                         region_pack=provenance.region_pack_block(
                                             region.dir, labels=spec.labels,
-                                            biome=spec.biome)),
+                                            biome=spec.biome,
+                                            dry_lakes=spec.dry_lakes)),
                         dpi=spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
@@ -1805,6 +1817,9 @@ async def continue_poster(file: UploadFile = File(...),
                   # Looks restore: a continued poster comes back with exactly the
                   # light it was printed with -- a pre-feature file restores 0/0.
                   "softLight": spec.soft_light, "haze": spec.haze_strength,
+                  # Water restore: a continued poster comes back with the water it
+                  # was printed with; a pre-feature file restores flat + no playa.
+                  "waterDepth": spec.water_depth, "dryLakes": spec.dry_lakes,
                   # Journey Light restore: the resurrected file carries the RESOLVED sun
                   # (not the timestamps), so the edition keeps its light via explicit
                   # az/alt at re-proof; profile + coloring restore straight from the spec.

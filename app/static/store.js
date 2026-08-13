@@ -66,6 +66,11 @@ export const state = {
     // continued poster restores its own stored values (the labelPlace precedent).
     softLight: 0.35,      // flanking-light blend weight around the principal azimuth
     haze: 0.15,           // how far the low ground sinks into the cool atmosphere
+    // Water (v1.14). waterDepth is subtle-on for NEW posters like the Looks knobs;
+    // dryLakes stays OFF by default because it needs a plate that has been baked with
+    // scripts/bake_playa.py, and most plates carry no playa at all.
+    waterDepth: 0.5,      // pale littoral shelf -> deeper open water (Imhof)
+    dryLakes: false,      // stipple the plate's playa as salt ground, never as water
     // Journey Light (v1.9): the poster lit by the hike's own sun.
     lightMode: 'archival', // 'archival' (region light) | 'journey' (the journey's sun)
     sunHour: null,        // time-of-day scrubber (local solar hour); null = summit light
@@ -152,7 +157,7 @@ const SNAPSHOT_PATHS = [
   'title', 'contours', 'compass', 'biome', 'labels',
   'style.width', 'style.halo', 'style.color', 'style.marker', 'style.ring',
   'style.photoStyle', 'style.furniture', 'style.terrain', 'style.shadow', 'style.oblique',
-  'style.softLight', 'style.haze',
+  'style.softLight', 'style.haze', 'style.waterDepth', 'style.dryLakes',
   'style.lightMode', 'style.sunHour', 'style.golden', 'style.profile', 'style.profileHeight',
   'style.trackColorBy', 'style.labelPlace', 'style.trackWeave',
 ];

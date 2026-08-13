@@ -102,7 +102,9 @@ STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 "profile_height_in": (0.0, 2.5),
                 # Looks (v1.13): soft multi-directional light + atmospheric haze --
                 # the depth pass's own techniques, exposed as deliberate knobs.
-                "soft_light": (0.0, 1.0), "haze_strength": (0.0, 1.0)}
+                "soft_light": (0.0, 1.0), "haze_strength": (0.0, 1.0),
+                # Water (v1.14): the lake depth vignette (Imhof's littoral shelf).
+                "water_depth": (0.0, 1.0)}
 
 @dataclass
 class CompositionSpec:
@@ -244,6 +246,25 @@ class CompositionSpec:
     # (store.js), the labelPlace precedent.
     soft_light: float = 0.0
     haze_strength: float = 0.0
+    # Water (v1.14): the lake depth vignette. A lake is the one element on the sheet
+    # with no internal structure -- one flat chip of colour, which reads as a hole cut
+    # in the map rather than a surface. This grades it from a pale littoral shelf at
+    # the shore to denser open water (Imhof's lake treatment), which is what makes a
+    # lake's SHAPE legible: every bay and drowned ridge gets traced by the pale band.
+    # The depth is synthesized from distance-to-shore, NOT from soundings -- 3DEP
+    # returns the water SURFACE for a natural lake, so the DEM holds no bathymetry to
+    # read. 0.0 is the flat fill exactly, so every pre-feature poster reprints
+    # byte-identically (tests/test_water.py holds that line).
+    water_depth: float = 0.0
+    # Dry lakes (v1.14): draw the plate's playa -- alkali flats that are dry most of
+    # the year. NHD ftype 361 is deliberately NOT in the blue-water set (filling it
+    # drew Honey Lake as a 234 km2 solid slab), so it bakes to its own sidecar and gets
+    # its own treatment: a stippled salt-white pan, never a lake. Opt-in and default
+    # False, so a plate without playa.json -- and every pre-feature poster -- is
+    # untouched. The sidecar is excluded from the plate hash unless this is on, so
+    # baking dry lakes onto a plate cannot make existing posters report a mismatch
+    # (provenance.region_pack_block, the labels/landcover precedent).
+    dry_lakes: bool = False
 
     def pixel_size(self, dpi: int) -> tuple:
         # the DELIVERED canvas: trim + 2*bleed per axis (bleed 0 -> the classic sheet)

@@ -384,3 +384,24 @@ def test_verify_poster_pre_pack_and_region_missing(tmp_path, capsys):
     empty.mkdir()
     assert verify_poster(str(poster), root=str(empty)) == 1
     assert "not installed" in capsys.readouterr().out
+
+
+def test_the_installer_allowlist_covers_every_asset_a_pack_can_carry():
+    """pack_region packs exactly what sources.json's asset list names, and the installer
+    refuses any member outside ALLOWED_MEMBERS -- so registering a NEW plate asset
+    without adding it here mints packs that cannot be installed. That is exactly how
+    playa.json broke five plate tests the day it was baked; assert the coupling instead
+    of relying on someone remembering both files."""
+    from app import regions
+    from app.plates import ALLOWED_MEMBERS
+    missing = {}
+    for rid, region in regions.discover().items():
+        src_path = os.path.join(region.dir, "sources.json")
+        if not os.path.exists(src_path):
+            continue
+        with open(src_path) as f:
+            names = set(json.load(f).get("assets", {}))
+        if names - ALLOWED_MEMBERS:
+            missing[rid] = sorted(names - ALLOWED_MEMBERS)
+    assert not missing, (f"plate assets the installer would refuse: {missing} — "
+                         f"add them to app.plates.ALLOWED_MEMBERS")

@@ -250,6 +250,38 @@ default is 0 for both, so every poster printed before they existed reprints unto
 and a continued poster restores its own stored values; the **studio** starts a new
 poster at a subtle 35% / 15%, and the Archival preset puts them back to plain.
 
+## Water with character (Cartography panel)
+
+Three techniques, all reprint-safe and all in physical units:
+
+**Lake depth** grades a lake from a pale shallow shore to deeper open water — Imhof's
+littoral shelf. The depth is *synthesized* from distance-to-shore on a decimated
+distance transform, not read from soundings, so it is a cartographic convention rather
+than bathymetry. The knob interpolates away from the old flat fill, so `0` is the flat
+lake byte-for-byte. Server default `0`; the studio starts a new poster at 50%.
+
+**Tapered rivers** widen a reach along its own length instead of stepping at each
+confluence: `render._river_taper_pt` interpolates between the Strahler-order widths so a
+river thickens continuously downstream and joins its tributary without a seam. Always
+on — it replaced the stepped draw, which no knob preserved.
+
+**Dry lakes** (`Dry lakes` toggle) draw a plate's playas as speckled salt ground with a
+broken edge — never blue. NHD's Playa ftype (361) is deliberately *not* in
+`region_prep.WATER_FTYPES`: filled as water it puts 874 km² of fictional lake across
+`elko_bonneville`, half of it in one 491 km² sheet of Bonneville salt. The pans live in
+their own `regions/<id>/playa.json` sidecar, baked by
+
+```bash
+python scripts/bake_playa.py <region-id>
+```
+
+The sidecar is hashed into the plate's identity **only when the sheet actually draws
+it** (`provenance.region_pack_block(..., dry_lakes=True)`), the same pixel-honesty rule
+`labels.json` and `landcover.tif` follow — so baking playa onto a plate cannot make an
+already-printed poster report a mismatch on reprint. The stipple cell is a *ground* size
+and the pattern is seeded from `spec.seed`, so a proof and a final carry the same
+speckle. A plate with no playa renders identically whether the toggle is on or off.
+
 ## Hero plates (Blender)
 
 An operator-only CLI that performs a finished poster's terrain through **Blender

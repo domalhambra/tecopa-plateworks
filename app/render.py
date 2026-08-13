@@ -6,10 +6,11 @@ import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
-from app.relief import shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M, _fill_nan
+from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
+                        _fill_nan, _resize_to)
 from app import provenance, serialize
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
@@ -84,6 +85,42 @@ RIVER_COLOR = (92, 118, 126)
 RIVER_BASE_PT = 0.7             # width of an order-3 river, in points
 RIVER_STEP_PT = 0.5             # extra width per stream order above 3
 RIVER_MAX_PT = 3.0
+# ---- the lake depth vignette (spec.water_depth, v1.14) ----------------------------
+# Imhof's lake treatment: a pale littoral shelf at the shore grading to denser open
+# water. There is no bathymetry to read -- 3DEP returns the water SURFACE of a natural
+# lake, flat -- so the depth is synthesized from distance-to-shore, the standard
+# cartographic substitute. What it buys is SHAPE: the pale band traces every bay and
+# drowned ridge, which a flat chip of colour throws away.
+WATER_SHALLOW = (150, 174, 178)  # littoral shelf, paler and warmer than the open water
+WATER_DEEP = (70, 96, 112)       # open water: cooler and denser than the flat fill
+VIGNETTE_REACH_M = 900.0         # GROUND distance over which shelf -> deep completes
+VIGNETTE_GAMMA = 0.75            # < 1 holds the pale band tight against the shore
+# The distance transform runs on a decimated grid at this CONSTANT ground resolution.
+# Two reasons, and the second is the load-bearing one: a float64 EDT over a 300 dpi
+# 18x24 sheet (39 Mpx) is 311 MB, and -- because the grid is a fixed ground size rather
+# than a fixed pixel count -- the proof and the final measure distance on the SAME grid,
+# so the vignette is dpi-stable by construction. This is exactly the argument
+# `relief._blur` makes for wide kernels (decimate, work small, resample back): the
+# field is a smooth gradient over ~900 m, so it carries almost no information at the
+# sheet's own sampling rate.
+VIGNETTE_GRID_M = 40.0
+# ---- dry lakes (spec.dry_lakes, v1.14) --------------------------------------------
+# A playa is not water and must never be drawn as water -- filling NHD's ftype 361 blue
+# is what put 874 km2 of fictional lake across elko_bonneville, half of it in one
+# 491 km2 sheet of Bonneville salt. It is a dry alkali pan, and the
+# cartographic convention for one is a STIPPLE: a pale salt ground carrying a fine
+# speckle, edged with a broken line rather than a shoreline, so it reads as ground you
+# could walk on and not as a lake.
+PLAYA_FILL = (236, 231, 219)     # salt ground: warm, pale, a shade off the paper
+PLAYA_SPECK = (176, 166, 148)    # the speckle: dusty, low-contrast, never black
+PLAYA_FILL_ALPHA = 0.55          # let the pan's own relief read through the ground
+PLAYA_SPECK_ALPHA = 0.5
+PLAYA_SPECK_COVER = 0.16         # fraction of stipple cells that carry a speck
+PLAYA_SPECK_CELL_M = 70.0        # stipple cell in GROUND metres -> dpi-stable, like
+                                 # relief.MOTTLE_CELL_M and the paper grain
+PLAYA_EDGE_PT = 0.5              # broken edge weight, points
+PLAYA_DASH_PT = 3.0              # ink length of one dash, points
+PLAYA_GAP_PT = 2.4               # gap between dashes, points
 
 # ---- named geography (GNIS labels, v1.4): terrain names from labels.json (ranges,
 # summits, passes, valleys) + water names already in hydro.json, placed with priority
@@ -109,6 +146,15 @@ GEO_KINDS = {
     "river":   (6.8,  False, 40,  "water"),
 }
 GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 sq inch
+# Reserved slots per kind, considered BEFORE the strict rank order. Hydrography ranks
+# last on purpose (a creek should never outrank a range), but rank + a density cap is a
+# starvation rule, not a priority: on a name-dense sheet the cap was spent entirely on
+# summits, lakes and flats before a river was ever reached, so a plate carrying 30
+# distinct creek names drew none of them. Reserving a couple of slots is the standard
+# answer -- a label class gets its own small budget -- and it changes only WHO is
+# considered, never the ranking within either group. A reserved candidate still has to
+# clear collision and the sheet edge like any other; the floor buys a chance, not a slot.
+GEO_KIND_FLOOR = {"river": 2, "lake": 2}
 GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
 # Curved along-feature labels: a linear landform (range, valley) sets its name along its
 # own spine -- the NatGeo/USGS convention -- instead of a horizontal block at the
@@ -1740,6 +1786,11 @@ def _load_hydro(region_dir):
 def _load_labels(region_dir):
     return _load_region_json(region_dir, "labels.json")
 
+def _load_playa(region_dir):
+    """The plate's dry lakes, or None on a plate that has no playa.json (every
+    mountain plate, and every plate baked before the sidecar existed)."""
+    return _load_region_json(region_dir, "playa.json")
+
 def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
     """Build the ranked label candidates in output pixels, from the terrain names
     (labels.json) and the water names already in hydro.json. Each candidate is
@@ -1796,6 +1847,26 @@ def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
                 cands.append((GEO_KINDS["river"][2], "river", name, mid, None))
     cands.sort(key=lambda c: -c[0])
     return cands
+
+
+def _label_order(cands):
+    """The order the placer considers candidates in: each kind's GEO_KIND_FLOOR
+    reserve first (strongest of that kind first), then everything else by rank.
+
+    `cands` arrives rank-sorted from `_label_candidates`, so the reserve is taken by
+    scanning it once -- which is what keeps both groups internally ranked."""
+    if not GEO_KIND_FLOOR:
+        return list(cands)
+    room = dict(GEO_KIND_FLOOR)
+    reserved, rest = [], []
+    for c in cands:
+        kind = c[1]
+        if room.get(kind, 0) > 0:
+            room[kind] -= 1
+            reserved.append(c)
+        else:
+            rest.append(c)
+    return reserved + rest
 
 def _resample_path(poly, step_px, smooth_px):
     """Densify `poly` to ~step_px spacing, then moving-average smooth it over a
@@ -2053,7 +2124,7 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
                                 _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
 
-    for rank, kind, name, (ax, ay), path in cands:
+    for rank, kind, name, (ax, ay), path in _label_order(cands):
         if len(placed) >= cap:
             break
         pt_size, caps, _, role = GEO_KINDS[kind]
@@ -2116,32 +2187,272 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
             _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
     return img
 
-def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
-    """Composite baked water over the relief: lakes filled flat with a DPI-scaled
-    shoreline, rivers as order-weighted lines. All widths in physical units. Under
-    the plan-oblique warp every vertex displaces with its ground, so rivers drape
-    down their valleys and a lake's shoreline rides its (flat) surface as one piece."""
-    if not hydro:
+def _dash_polygon(d, pts, ink, width_px, dash_px, gap_px):
+    """Trace a closed ring with a broken line. The dash cycle is walked by ARC LENGTH,
+    so a dash is the same printed length wherever the ring bends -- the edge convention
+    for an intermittent feature, which is what says 'dry' before any colour does."""
+    ring = list(pts) + [pts[0]]
+    period = max(1e-6, dash_px + gap_px)
+    carry = 0.0                                   # distance into the cycle at the seam
+    for (x0, y0), (x1, y1) in zip(ring, ring[1:]):
+        seg = _m.hypot(x1 - x0, y1 - y0)
+        if seg <= 0:
+            continue
+        s = 0.0
+        while s < seg:
+            phase = (carry + s) % period
+            if phase < dash_px:                   # inside a dash: draw to its end
+                run = min(dash_px - phase, seg - s)
+                t0, t1 = s / seg, (s + run) / seg
+                d.line([(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0),
+                        (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)],
+                       fill=ink, width=width_px)
+                s += run
+            else:                                 # inside a gap: skip to the next dash
+                s += period - phase
+        carry = (carry + seg) % period
+
+
+def _draw_playa(img, playa, spec, out_w, out_h, dpi, ctx=None):
+    """Stipple the plate's dry lakes: a pale salt ground, a fine seeded speckle, and a
+    broken edge. Never a fill and never blue -- a playa is ground, not water.
+
+    The speckle cell is a GROUND size (PLAYA_SPECK_CELL_M), so the same pan carries the
+    same speckle at a proof and at a final; the pattern is drawn from `spec.seed` like
+    `relief.grain`, so it is deterministic. Composites over the selected pixels only,
+    for the reason `_draw_lake_vignette` records."""
+    rings = []
+    for pan in (playa or {}).get("playas", []):
+        pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
+               for x, y, *_ in (pan.get("coords") or [])]
+        if len(pts) >= 3:
+            rings.append(pts)
+    if not rings:
         return img
+    full = Image.new("1", (out_w, out_h), 0)
+    fd = ImageDraw.Draw(full)
+    for pts in rings:
+        fd.polygon(pts, fill=1)
+    mask = np.asarray(full, dtype=bool)
+    if not mask.any():
+        return img
+    gpp = (spec.crop[2] - spec.crop[0]) / out_w
+    cell_px = max(1.0, PLAYA_SPECK_CELL_M / gpp)
+    # the speckle grid is ground-sized, so its SHAPE is dpi-independent -- the same
+    # cells land on the same ground whether this is a proof or a final
+    rng = np.random.default_rng(int(spec.seed) ^ 0x51A17)
+    sh = (max(1, round(out_h / cell_px)), max(1, round(out_w / cell_px)))
+    speck_small = rng.random(sh) < PLAYA_SPECK_COVER
+    ys = np.linspace(0, sh[0] - 1, out_h).astype(int)
+    xs = np.linspace(0, sh[1] - 1, out_w).astype(int)
+    speck = speck_small[np.ix_(ys, xs)] & mask
+
+    rgba = img if img.mode == "RGBA" else img.convert("RGBA")
+    arr = np.array(rgba)
+    for sel, colour, alpha in ((mask, PLAYA_FILL, PLAYA_FILL_ALPHA),
+                               (speck, PLAYA_SPECK, PLAYA_SPECK_ALPHA)):
+        if not sel.any():
+            continue
+        px = arr[sel][:, :3].astype("float32")
+        px *= (1.0 - alpha)
+        px += np.array(colour, "float32")[None, :] * alpha
+        chunk = arr[sel]
+        chunk[:, :3] = np.clip(px, 0, 255).astype("uint8")
+        arr[sel] = chunk
+    img = Image.fromarray(arr, "RGBA")
     d = ImageDraw.Draw(img, "RGBA")
-    sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
+    for pts in rings:
+        _dash_polygon(d, pts, PLAYA_SPECK + (255,),
+                      max(1, round(_pt_to_px(PLAYA_EDGE_PT, dpi))),
+                      _pt_to_px(PLAYA_DASH_PT, dpi), _pt_to_px(PLAYA_GAP_PT, dpi))
+    return img
+
+
+def _draw_lake_vignette(img, hydro, spec, out_w, out_h, ctx, depth):
+    """Composite the depth-graded lake body. `depth` (spec.water_depth) scales the
+    grade AWAY FROM the flat fill, so the knob interpolates WATER_FILL -> the graded
+    colour: at 0 the pixels are the flat fill exactly, which is what makes the knob a
+    strict no-op at its default (the caller skips this entirely, so that path is
+    literally untouched). The 235 alpha is unchanged, so the lakebed relief still
+    ghosts through at every setting.
+
+    Composites over the SELECTED PIXELS ONLY, never over full-sheet planes. Water is a
+    few percent of a sheet -- 2.9% on the plate this was measured against -- so the
+    obvious form (`graded = lerp(...)` shaped like the whole sheet, blended under a
+    full-sheet alpha) allocates gigabytes to paint almost nothing: 2216 MB and 23.7 s
+    on a 300 dpi 18x24. Selecting first makes every array N x 3 where N is the water
+    pixel count, which is the same lesson `looks._soft_light` carries about in-place
+    compositing, applied to a layer that is mostly empty. Measured after: 506 MB and
+    7.5 s on that sheet, and what remains is the sheet buffers any compositor pays
+    (the uint8 RGBA copy and the depth field), not the blend."""
+    mask, t = _lake_depth_field(hydro, spec, out_w, out_h, ctx)
+    n = int(mask.sum())
+    if not n:
+        return img
+    # already-RGBA is the only caller today; convert() would copy the sheet a second
+    # time for nothing on a plane this size
+    rgba = img if img.mode == "RGBA" else img.convert("RGBA")
+    arr = np.array(rgba)                         # one writable uint8 buffer
+    tv = t[mask].astype("float32")[:, None]      # (N, 1) -- the only field we keep
+    del t
+    shallow = np.array(WATER_SHALLOW, "float32")[None, :]
+    deep = np.array(WATER_DEEP, "float32")[None, :]
+    flat = np.array(WATER_FILL, "float32")[None, :]
+    graded = shallow * (1.0 - tv) + deep * tv    # (N, 3)
+    graded *= depth
+    graded += flat * (1.0 - depth)
+    a = 235.0 / 255.0                            # scalar: the mask already selected
+    px = arr[mask][:, :3].astype("float32")
+    px *= (1.0 - a)
+    px += graded * a
+    np.clip(px, 0, 255, out=px)
+    sel = arr[mask]
+    sel[:, :3] = px.astype("uint8")
+    arr[mask] = sel
+    return Image.fromarray(arr, "RGBA")
+
+
+def _lake_polygons_px(hydro, spec, out_w, out_h, ctx):
+    """Every lake ring as an output-pixel point list, warp-registered. One place, so
+    the fill, the depth field and the shoreline can never disagree about where a lake
+    is (they are drawn from this list in that order)."""
+    out = []
     for lake in hydro.get("lakes", []):
         # tolerate missing key + 3-tuple (z) coords, matching what the baker emits
         pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
                for x, y, *_ in (lake.get("coords") or [])]
         if len(pts) >= 3:
+            out.append(pts)
+    return out
+
+
+def _lake_depth_field(hydro, spec, out_w, out_h, ctx):
+    """`(mask, t)` for the sheet's lakes: `mask` is True on water, `t` is 0 at the
+    shoreline rising to 1 at VIGNETTE_REACH_M inside it -- the synthesized depth the
+    vignette grades along.
+
+    The distance transform runs on a grid decimated to VIGNETTE_GRID_M of GROUND, then
+    resamples up: bounded memory, and dpi-stable because both a proof and a final
+    measure on the same ground grid (see VIGNETTE_GRID_M). Under the plan-oblique warp
+    the mask is the warped one, so the shelf rides the standing terrain with its
+    lake."""
+    polys = _lake_polygons_px(hydro or {}, spec, out_w, out_h, ctx)
+    if not polys:
+        z = np.zeros((out_h, out_w), dtype="float32")
+        return z.astype(bool), z
+    gpp = (spec.crop[2] - spec.crop[0]) / out_w          # ground metres per output px
+    k = max(1.0, VIGNETTE_GRID_M / gpp)                  # decimation factor
+    sw, sh = max(2, int(round(out_w / k))), max(2, int(round(out_h / k)))
+    small = Image.new("1", (sw, sh), 0)
+    sd = ImageDraw.Draw(small)
+    for pts in polys:
+        sd.polygon([(x * sw / out_w, y * sh / out_h) for x, y in pts], fill=1)
+    m_small = np.asarray(small, dtype=bool)
+    if not m_small.any():                                # water thinner than one cell
+        z = np.zeros((out_h, out_w), dtype="float32")
+        return z.astype(bool), z
+    # distance in SMALL cells -> ground metres, via that grid's own resolution
+    grid_m = (spec.crop[2] - spec.crop[0]) / sw
+    t_small = (distance_transform_edt(m_small).astype("float32") * grid_m)
+    t_small /= VIGNETTE_REACH_M
+    np.clip(t_small, 0.0, 1.0, out=t_small)
+    t_small **= VIGNETTE_GAMMA
+    t = _resize_to(t_small, (out_h, out_w)).astype("float32")
+    np.clip(t, 0.0, 1.0, out=t)
+    # the MASK is drawn at full resolution: the shoreline is a crisp edge and must not
+    # inherit the decimated grid's staircase, even though the gradient inside may.
+    full = Image.new("1", (out_w, out_h), 0)
+    fd = ImageDraw.Draw(full)
+    for pts in polys:
+        fd.polygon(pts, fill=1)
+    mask = np.asarray(full, dtype=bool)
+    t *= mask
+    return mask, t
+
+
+def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
+    """Composite baked water over the relief: lakes filled (flat, or depth-graded when
+    spec.water_depth > 0), rivers as order-weighted lines. All widths in physical
+    units. Under the plan-oblique warp every vertex displaces with its ground, so
+    rivers drape down their valleys and a lake's shoreline rides its (flat) surface as
+    one piece."""
+    if not hydro:
+        return img
+    depth = float(np.clip(getattr(spec, "water_depth", 0.0), 0.0, 1.0))
+    if depth > 0:
+        img = _draw_lake_vignette(img, hydro, spec, out_w, out_h, ctx, depth)
+    d = ImageDraw.Draw(img, "RGBA")
+    sw = max(1, round(_pt_to_px(SHORELINE_PT, dpi)))
+    for pts in _lake_polygons_px(hydro, spec, out_w, out_h, ctx):
+        if depth > 0:
+            # the graded body is already composited; only the shoreline is left to ink
+            d.polygon(pts, fill=None, outline=WATER_SHORELINE + (255,), width=sw)
+        else:
             # 235 alpha, not opaque: a whisper of the lakebed relief ghosts through, so
             # lakes sit IN the toothy sheet instead of reading as flat vinyl stickers
             # (red-team beauty finding). The shoreline stays crisp at full ink.
             d.polygon(pts, fill=WATER_FILL + (235,), outline=WATER_SHORELINE + (255,), width=sw)
     for r in hydro.get("rivers", []):
-        wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
-        wpx = max(1, round(_pt_to_px(wpt, dpi)))
         pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
                for x, y, *_ in (r.get("coords") or [])]
         if len(pts) >= 2:
-            d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
+            _draw_river(d, pts, r.get("order", 3), dpi)
     return img
+
+
+def _river_width_pt(order):
+    """The drawn width of a stream of Horton-Strahler `order`, in points."""
+    return min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, order - 3))
+
+
+def _river_taper_pt(order):
+    """`(upstream_pt, downstream_pt)` for a reach of this order.
+
+    A reach enters at the width of the order BELOW it and leaves at its own, which is
+    what makes the network continuous: two order-3 reaches end at width(3), and the
+    order-4 reach they feed begins at width(3) and grows. Taper each reach from its own
+    width instead and every confluence gains a visible step -- the artefact this
+    replaces, where a river changed gauge abruptly at a junction.
+
+    Order 3 is the headwater gauge (width(2) == width(3)), so it returns an equal pair
+    and the caller takes the original constant-width path."""
+    return _river_width_pt(order - 1), _river_width_pt(order)
+
+
+def _draw_river(d, pts, order, dpi):
+    """Ink one reach, tapering upstream -> downstream along its own arc length.
+
+    Direction is the vertex order NHD ships, which digitises downstream; checked
+    against this plate's DEM at 226 reaches running downhill to 15 running uphill (the
+    rest flat within 0.5 m). A reach digitised backwards tapers the wrong way by half a
+    point over its whole length, which is under a pixel at print resolution.
+
+    PIL draws no variable-width polyline, so a tapering reach is drawn segment by
+    segment with a disc at each joint to keep the seam closed. Reaches that do not
+    taper -- every order-3 headwater, i.e. most of them -- take the original single
+    `line(..., joint="curve")` call untouched."""
+    w0_pt, w1_pt = _river_taper_pt(order)
+    ink = RIVER_COLOR + (255,)
+    if w0_pt == w1_pt:
+        d.line(pts, fill=ink, width=max(1, round(_pt_to_px(w1_pt, dpi))), joint="curve")
+        return
+    seg = [_m.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+           for i in range(len(pts) - 1)]
+    total = sum(seg)
+    if total <= 0:
+        d.line(pts, fill=ink, width=max(1, round(_pt_to_px(w1_pt, dpi))), joint="curve")
+        return
+    w0, w1 = _pt_to_px(w0_pt, dpi), _pt_to_px(w1_pt, dpi)
+    run = 0.0
+    for i, s in enumerate(seg):
+        mid = (run + s / 2) / total                    # this segment's place along it
+        w = max(1, round(w0 + (w1 - w0) * mid))
+        d.line([pts[i], pts[i + 1]], fill=ink, width=w)
+        if i and w > 2:                                # close the elbow, not the ends
+            x, y = pts[i]
+            rr = w / 2.0
+            d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=ink)
+        run += s
 
 # The compose->rasterize seam, split into three stages so a time-lapse can paint the
 # static base ONCE and re-ink only the route per frame. rasterize = base -> journey(all
@@ -2316,8 +2627,13 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     if hydro and hydro.get("crs") and hydro["crs"] != cfg["crs"]:
         # invariant 4: water must be in the region CRS or it mis-registers silently
         raise ValueError(f"hydro CRS {hydro['crs']} != region CRS {cfg['crs']}")
-    himg = _draw_hydro(Image.fromarray(rgb, "RGB").convert("RGBA"),
-                       hydro, spec, out_w, out_h, dpi, ctx=ctx)
+    himg = Image.fromarray(rgb, "RGB").convert("RGBA")
+    # dry lakes go UNDER the water: a playa is ground, and where NHD maps a pan and a
+    # lake over the same place (a reservoir inside its own dry bed) the wet feature is
+    # the one on top. Opt-in, and a plate with no playa.json paints nothing either way.
+    if spec.dry_lakes:
+        himg = _draw_playa(himg, _load_playa(region_dir), spec, out_w, out_h, dpi, ctx=ctx)
+    himg = _draw_hydro(himg, hydro, spec, out_w, out_h, dpi, ctx=ctx)
     return himg, ctx, hydro
 
 def _apply_labels(himg, spec: CompositionSpec, dpi: int, region_dir: str,
@@ -2535,7 +2851,7 @@ def _plate_fingerprint(region_dir, cfg):
     parts = []
     for name in (cfg.get("dem_path", "dem.tif"),
                  cfg.get("landcover_path", "landcover.tif"),
-                 "hydro.json", "labels.json"):
+                 "hydro.json", "labels.json", "playa.json"):
         try:
             st = os.stat(os.path.join(region_dir, name))
             parts.append(f"{name}:{st.st_mtime_ns}:{st.st_size}")

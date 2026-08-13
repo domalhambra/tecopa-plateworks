@@ -299,6 +299,7 @@ function applyPrefill(p) {
     // Looks: `?? 0`, NOT the store default — a pre-feature poster restores the plain
     // look it was actually printed with, not the subtle-on look a new poster starts at.
     softLight: s.softLight ?? 0, haze: s.haze ?? 0,
+    waterDepth: s.waterDepth ?? 0, dryLakes: !!s.dryLakes,
     lightMode: s.lightMode || 'archival', sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7, profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,
     bleedIn: s.bleed ?? 0, trackColorBy: s.trackColorBy || 'none',
