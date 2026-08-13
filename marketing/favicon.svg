@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="Plateworks">
+  <!-- Plateworks full mark, favicon build. The master's four contours verbatim,
+       scaled 1.14x about the ink center so the artwork fills the canvas
+       (the master reserves ~8u margins for in-page clear space, which a
+       favicon slot supplies on its own). All four bands and the eccentric
+       drift are preserved: this is the original drawing, not a redraw.
+       Approved by Dom 2026-08-13 as the favicon build on every property.
+       GENERATED from badwater-mark.svg; re-derive, do not hand-edit. -->
+  <style>
+    path { fill: #020306; }
+    @media (prefers-color-scheme: dark) { path { fill: #EFF3EE; } }
+  </style>
+  <path fill-rule="evenodd" d="M48.88 3.08C63.70 -0.34 83.08 7.64 92.20 23.60C101.32 39.56 99.04 58.94 89.92 73.76C80.80 88.58 63.70 97.70 46.60 97.70C29.50 97.70 12.40 88.58 5.56 71.48C-1.28 55.52 2.14 35.00 12.40 21.32C22.66 7.64 36.34 4.22 48.88 3.08Z M45.46 19.04C29.50 20.18 16.96 31.58 14.68 47.54C12.40 63.50 19.24 79.46 34.06 86.30C48.88 93.14 65.98 89.72 76.24 78.32C86.50 66.92 86.50 49.82 79.66 37.28C72.82 24.74 58.00 17.90 45.46 19.04Z M53.44 36.14C42.04 35.00 34.06 41.84 31.78 50.96C29.50 60.08 34.06 70.34 43.18 76.04C52.30 81.74 63.70 78.32 70.54 70.34C77.38 62.36 77.38 49.82 71.68 42.98C65.98 36.14 60.28 35.00 53.44 36.14Z M53.44 52.10C48.88 52.10 45.46 55.52 45.46 58.94C45.46 62.36 48.88 65.78 53.44 65.78C58.00 65.78 61.42 62.36 61.42 58.94C61.42 55.52 58.00 52.10 53.44 52.10Z"></path>
+</svg>

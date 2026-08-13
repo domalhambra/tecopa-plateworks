@@ -82,6 +82,7 @@ def main() -> int:
         print(f"  {name:24s} -> {name:24s} {size/1048576:5.2f} MB  (verbatim)")
 
     shutil.copytree(REPO / "marketing" / "vendor", out / "vendor")
+    shutil.copy2(REPO / "marketing" / "favicon.svg", out / "favicon.svg")
 
     html = (REPO / "marketing" / "landing.html").read_text(encoding="utf-8")
     html = html.replace("../assets/", "/assets/")
