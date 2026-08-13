@@ -33,7 +33,7 @@ import zipfile
 # an installer that writes attacker-named files is a shell-away from being a dropper.
 ALLOWED_MEMBERS = frozenset({"region.json", "dem.tif", "hydro.json", "labels.json",
                              "landcover.tif", "overview.png", "sources.json",
-                             "PLATE.txt"})
+                             "playa.json", "PLATE.txt"})
 _ID_RE = re.compile(r"[a-z0-9_]+\Z")          # region ids as region_prep mints them
 # the self-name pack_region mints: <id>-<first 12 hex of the zip's own sha256>.
 # A source whose basename carries this shape has COMMITTED to its bytes.
