@@ -57,10 +57,12 @@ def _height_at(H: np.ndarray, u: float, v: float) -> float:
     return float(H[y, x])
 
 
-def build_plate_glb(img: Image.Image) -> bytes:
-    """The disc: displaced top grid (center + DISC_RINGS rings x DISC_SEGMENTS),
+def plate_mesh(img: Image.Image):
+    """The disc mesh: displaced top grid (center + DISC_RINGS rings x DISC_SEGMENTS),
     flat back (mirror grid), and a rim wall (the outer ring duplicated top+bottom
-    with radial normals). One material, the final's centered square as its texture."""
+    with radial normals). Shared by the GLB export and the coin-spin turntable, so
+    the plate on the landing page and the plate in the social film are the SAME
+    object. Returns (positions, normals, uvs, indices, top_count)."""
     H = _sample_height(img)
     seg, rings = DISC_SEGMENTS, DISC_RINGS
     R, T, D = DISC_RADIUS, DISC_THICKNESS, DISPLACE_MAX
@@ -137,10 +139,15 @@ def build_plate_glb(img: Image.Image) -> bytes:
         i2 = (i + 1) % seg
         idx += [wt + i, wb + i, wb + i2, wt + i, wb + i2, wt + i2]
 
-    positions = np.asarray(pos, dtype=np.float32)
-    normals = np.asarray(nrm, dtype=np.float32)
-    uvs = np.asarray(uv, dtype=np.float32)
-    indices = np.asarray(idx, dtype=np.uint16)
+    return (np.asarray(pos, dtype=np.float32), np.asarray(nrm, dtype=np.float32),
+            np.asarray(uv, dtype=np.float32), np.asarray(idx, dtype=np.uint16),
+            top_count)
+
+
+def build_plate_glb(img: Image.Image) -> bytes:
+    """The GLB: plate_mesh() plus one material, the final's centered square as its
+    texture, in a deterministic single-buffer glTF 2.0 container."""
+    positions, normals, uvs, indices, _top = plate_mesh(img)
 
     tex = io.BytesIO()
     _centered_square(img.convert("RGB"), TEXTURE_PX).save(tex, "PNG", optimize=True)
