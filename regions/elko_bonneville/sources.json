@@ -33,6 +33,10 @@
     "labels.json": {
       "sha256": "bc5510eb106f7a3941822393bb14bb10a8d47cd9555d030c5f14dac95be9c3ff",
       "bytes": 448810
+    },
+    "playa.json": {
+      "sha256": "561025dd7beee1d0f2a362dfebb47ebf7bdef6131fb6fce4857f1fce424c1c45",
+      "bytes": 155123
     }
   },
   "sources": [

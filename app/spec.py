@@ -256,6 +256,15 @@ class CompositionSpec:
     # read. 0.0 is the flat fill exactly, so every pre-feature poster reprints
     # byte-identically (tests/test_water.py holds that line).
     water_depth: float = 0.0
+    # Dry lakes (v1.14): draw the plate's playa -- alkali flats that are dry most of
+    # the year. NHD ftype 361 is deliberately NOT in the blue-water set (filling it
+    # drew Honey Lake as a 234 km2 solid slab), so it bakes to its own sidecar and gets
+    # its own treatment: a stippled salt-white pan, never a lake. Opt-in and default
+    # False, so a plate without playa.json -- and every pre-feature poster -- is
+    # untouched. The sidecar is excluded from the plate hash unless this is on, so
+    # baking dry lakes onto a plate cannot make existing posters report a mismatch
+    # (provenance.region_pack_block, the labels/landcover precedent).
+    dry_lakes: bool = False
 
     def pixel_size(self, dpi: int) -> tuple:
         # the DELIVERED canvas: trim + 2*bleed per axis (bleed 0 -> the classic sheet)

@@ -318,3 +318,143 @@ def test_label_order_keeps_rank_order_inside_and_outside_the_reserve():
     assert rivers[:reserve] == ["A", "B"][:reserve]        # reserve filled in order
     tail_ranks = [c[0] for c in ordered[reserve + render.GEO_KIND_FLOOR.get("lake", 0):]]
     assert tail_ranks == sorted(tail_ranks, reverse=True)  # the rest stays ranked
+
+
+# ---- dry lakes (playa) -------------------------------------------------------------
+
+PLAYA_REGION = "regions/susanville_reno"     # Honey Lake's pan, 25 km2
+
+
+def _playa_spec(**kw):
+    """Framed on the plate's LARGEST pan, with the centre clamped so the crop stays
+    inside the DEM -- Honey Lake's pan sits against the plate's edge, and an unclamped
+    frame trips the off-DEM guard (11% uncovered) rather than testing anything."""
+    cfg = _cfg(PLAYA_REGION)
+    playa = render._load_playa(PLAYA_REGION)
+    def _area(p):
+        c = np.asarray(p["coords"], float)
+        x, y = c[:, 0], c[:, 1]
+        return 0.5 * abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1)))
+    biggest = max(playa["playas"], key=_area)
+    c = np.asarray(biggest["coords"], float)
+    cx, cy = c[:, 0].mean(), c[:, 1].mean()
+    half = 18500.0 / 2
+    w, s, e, n = cfg["bounds"]
+    cx = min(max(cx, w + half), e - half)
+    cy = min(max(cy, s + half), n - half)
+    base = dict(region_id="susanville_reno", crs=cfg["crs"],
+                crop=(cx - half, cy - half, cx + half, cy + half),
+                print_w_in=12.0, print_h_in=12.0,
+                native_resolution_m=cfg["native_resolution_m"],
+                tracks=[], hotspots=[])
+    base.update(kw)
+    return CompositionSpec(**base)
+
+
+def test_dry_lakes_defaults_off_and_changes_nothing():
+    cfg = _cfg(PLAYA_REGION)
+    assert _playa_spec().dry_lakes is False
+    a = np.asarray(render.rasterize(_playa_spec(), 150, PLAYA_REGION, cfg=cfg))
+    b = np.asarray(render.rasterize(_playa_spec(dry_lakes=False), 150, PLAYA_REGION, cfg=cfg))
+    assert np.array_equal(a, b)
+
+
+def test_a_playa_is_drawn_as_pale_ground_never_as_water():
+    """The whole reason playa is not in WATER_FTYPES: filled blue it drew Honey Lake as
+    a 234 km2 slab. On the pan, the sheet must move AWAY from the lake colour."""
+    cfg = _cfg(PLAYA_REGION)
+    off = np.asarray(render.rasterize(_playa_spec(), 150, PLAYA_REGION, cfg=cfg)).astype(int)
+    on = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION,
+                                     cfg=cfg)).astype(int)
+    assert not np.array_equal(off, on)
+    spec = _playa_spec(dry_lakes=True)
+    out_w, out_h = spec.pixel_size(150)
+    from PIL import Image, ImageDraw
+    m = Image.new("1", (out_w, out_h), 0)
+    d = ImageDraw.Draw(m)
+    for pan in render._load_playa(PLAYA_REGION)["playas"]:
+        pts = [render._crs_to_px_oblique(x, y, spec, out_w, out_h, None)
+               for x, y, *_ in pan["coords"]]
+        if len(pts) >= 3:
+            d.polygon(pts, fill=1)
+    pan_mask = np.asarray(m, dtype=bool)
+    assert pan_mask.sum() > 5000
+    # paler than before (salt ground lifts it), and further from the lake blue
+    assert on[..., :3][pan_mask].mean() > off[..., :3][pan_mask].mean()
+    dist = lambda a: np.abs(a[..., :3][pan_mask] - np.array(render.WATER_FILL)).sum(axis=1).mean()
+    assert dist(on) > dist(off)
+
+
+def test_the_stipple_is_deterministic_and_ground_sized():
+    """Seeded from spec.seed like the paper grain, and its cell is a GROUND size, so
+    the same pan carries the same speckle on a proof and on a final."""
+    cfg = _cfg(PLAYA_REGION)
+    a = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION, cfg=cfg))
+    b = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION, cfg=cfg))
+    assert np.array_equal(a, b)
+    c = np.asarray(render.rasterize(_playa_spec(dry_lakes=True, seed=99), 150,
+                                    PLAYA_REGION, cfg=cfg))
+    assert not np.array_equal(a, c), "the stipple must follow the spec's seed"
+
+
+def test_the_pan_edge_is_broken_not_continuous():
+    """A playa's shore is an intermittent boundary, and the broken edge is what says
+    'dry' before any colour does. Walk the ring and count how many of its pixels the
+    edge inked: a solid outline marks nearly all of them, no outline marks none."""
+    from PIL import Image, ImageDraw
+    spec = _playa_spec(dry_lakes=True)
+    out_w, out_h = spec.pixel_size(150)
+    rings = []
+    for pan in render._load_playa(PLAYA_REGION)["playas"]:
+        pts = [render._crs_to_px_oblique(x, y, spec, out_w, out_h, None)
+               for x, y, *_ in pan["coords"]]
+        if len(pts) >= 3:
+            rings.append(pts)
+    solid = Image.new("1", (out_w, out_h), 0)
+    dashed = Image.new("1", (out_w, out_h), 0)
+    ds, dd = ImageDraw.Draw(solid), ImageDraw.Draw(dashed)
+    for pts in rings:
+        ds.line(list(pts) + [pts[0]], fill=1, width=1)
+        render._dash_polygon(dd, pts, 1, 1,
+                             render._pt_to_px(render.PLAYA_DASH_PT, 150),
+                             render._pt_to_px(render.PLAYA_GAP_PT, 150))
+    ring_px = np.asarray(solid, dtype=bool)
+    inked = np.asarray(dashed, dtype=bool) & ring_px
+    duty = inked.sum() / ring_px.sum()
+    # the nominal duty cycle, with slack for the raster's own rounding on short segments
+    nominal = render.PLAYA_DASH_PT / (render.PLAYA_DASH_PT + render.PLAYA_GAP_PT)
+    assert 0.3 < duty < nominal + 0.2, f"edge duty {duty:.2f} is not a broken line"
+
+
+def test_a_plate_without_playa_draws_nothing_and_does_not_crash():
+    """rifle_aspen is mountains: bake_playa wrote no sidecar there, and turning the
+    knob on must be a no-op rather than an error."""
+    rd = "regions/rifle_aspen"
+    assert render._load_playa(rd) is None
+    cfg = _cfg(rd)
+    w, s, e, n = cfg["bounds"]
+    cx, cy = (w + e) / 2, (s + n) / 2
+    half = 18500.0 / 2
+    kw = dict(region_id="rifle_aspen", crs=cfg["crs"],
+              crop=(cx - half, cy - half, cx + half, cy + half),
+              print_w_in=12.0, print_h_in=12.0, native_resolution_m=10,
+              tracks=[], hotspots=[])
+    off = np.asarray(render.rasterize(CompositionSpec(**kw), 150, rd, cfg=cfg))
+    on = np.asarray(render.rasterize(CompositionSpec(dry_lakes=True, **kw), 150, rd, cfg=cfg))
+    assert np.array_equal(off, on)
+
+
+def test_baking_playa_cannot_invalidate_an_existing_poster():
+    """The property the whole sidecar design exists for. hydro.json is hashed into the
+    plate's identity, so appending playa to it would have made EVERY poster ever
+    printed report a plate mismatch on reprint. In its own file, excluded from the hash
+    unless the sheet draws it, a plate's identity is unchanged for everyone else."""
+    from app import provenance
+    plain = provenance.region_pack_block(PLAYA_REGION)
+    assert plain is not None
+    assert "playa.json" not in plain["assets"]
+    drawn = provenance.region_pack_block(PLAYA_REGION, dry_lakes=True)
+    # ... and a sheet that DOES draw them still pins the file it drew
+    if os.path.exists(os.path.join(PLAYA_REGION, "playa.json")):
+        assert "playa.json" in drawn["assets"]
+        assert drawn["pack_version"] != plain["pack_version"]
