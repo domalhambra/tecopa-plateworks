@@ -267,8 +267,9 @@ on — it replaced the stepped draw, which no knob preserved.
 
 **Dry lakes** (`Dry lakes` toggle) draw a plate's playas as speckled salt ground with a
 broken edge — never blue. NHD's Playa ftype (361) is deliberately *not* in
-`render.WATER_FTYPES`: filled as water it drew Honey Lake as a 234 km² slab. The pans
-live in their own `regions/<id>/playa.json` sidecar, baked by
+`region_prep.WATER_FTYPES`: filled as water it puts 874 km² of fictional lake across
+`elko_bonneville`, half of it in one 491 km² sheet of Bonneville salt. The pans live in
+their own `regions/<id>/playa.json` sidecar, baked by
 
 ```bash
 python scripts/bake_playa.py <region-id>

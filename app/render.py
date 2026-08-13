@@ -106,7 +106,8 @@ VIGNETTE_GAMMA = 0.75            # < 1 holds the pale band tight against the sho
 VIGNETTE_GRID_M = 40.0
 # ---- dry lakes (spec.dry_lakes, v1.14) --------------------------------------------
 # A playa is not water and must never be drawn as water -- filling NHD's ftype 361 blue
-# is what rendered Honey Lake as a 234 km2 solid slab. It is a dry alkali pan, and the
+# is what put 874 km2 of fictional lake across elko_bonneville, half of it in one
+# 491 km2 sheet of Bonneville salt. It is a dry alkali pan, and the
 # cartographic convention for one is a STIPPLE: a pale salt ground carrying a fine
 # speckle, edged with a broken line rather than a shoreline, so it reads as ground you
 # could walk on and not as a lake.

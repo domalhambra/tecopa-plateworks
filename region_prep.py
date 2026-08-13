@@ -113,12 +113,17 @@ def _lines(geom):
     return []
 
 # NHD waterbody ftypes that are honestly "blue water" on a poster. Playa (361) is a
-# dry alkali flat most of the year (Honey Lake rendered as a ~234 km2 solid slab --
-# red-team's top beauty finding), and SwampMarsh (466) / Ice (378) mislead the same
-# way. LakePond (390) + Reservoir (436) stay.
+# dry alkali flat most of the year (red-team's top beauty finding: a basin plate came
+# back carrying hundreds of km2 of fictional water), and SwampMarsh (466) / Ice (378)
+# mislead the same way. LakePond (390) + Reservoir (436) stay.
+#
+# The finding named Honey Lake, which turns out to be the wrong example: NHD files it
+# as LakePond, so it is drawn blue today and nothing here changes that. The ftype that
+# actually costs is 361, and elko_bonneville is where it shows -- 139 pans, 874 km2 in
+# total, the largest a single 491 km2 sheet of Bonneville salt.
 WATER_FTYPES = {390, 436}
 # Playa (NHD ftype 361): a dry alkali flat, which is exactly why it is NOT in
-# WATER_FTYPES -- filling it blue drew Honey Lake as a ~234 km2 solid slab. It is still
+# WATER_FTYPES -- filling it blue paints a basin's salt as open water. It is still
 # real ground worth naming and drawing, just not as water, so it bakes to its OWN
 # sidecar (playa.json) rather than into hydro.json. Two reasons, and the second is the
 # one that decides it: a dry lake is a different cartographic object with a different

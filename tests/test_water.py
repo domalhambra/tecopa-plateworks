@@ -360,8 +360,8 @@ def test_dry_lakes_defaults_off_and_changes_nothing():
 
 
 def test_a_playa_is_drawn_as_pale_ground_never_as_water():
-    """The whole reason playa is not in WATER_FTYPES: filled blue it drew Honey Lake as
-    a 234 km2 slab. On the pan, the sheet must move AWAY from the lake colour."""
+    """The whole reason playa is not in WATER_FTYPES: filled blue it paints a basin's
+    salt as open water. On the pan, the sheet must move AWAY from the lake colour."""
     cfg = _cfg(PLAYA_REGION)
     off = np.asarray(render.rasterize(_playa_spec(), 150, PLAYA_REGION, cfg=cfg)).astype(int)
     on = np.asarray(render.rasterize(_playa_spec(dry_lakes=True), 150, PLAYA_REGION,
