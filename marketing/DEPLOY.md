@@ -9,17 +9,25 @@ renders are generated, and a synthetic-DEM preview is not real terrain. A
 git-connected build would therefore serve a page with seven broken images.
 The deploy assembles a root from the repo *plus* a fresh render.
 
-The published page is the repo's `landing.html` with three mechanical
+The published page is the repo's `landing.html` with four mechanical
 transforms, no hand-editing:
 
 1. `../assets/` → `/assets/` — the page becomes the site root, so the
    relative walk-up no longer resolves.
 2. Print-resolution PNGs → web derivatives. The farm's poster and editions are
-   ~50 MB each at 6200px, correct for print and unusable on a web page: the
-   seven referenced files total **218 MB**. Downscaled and re-encoded they come
-   to **5.3 MB**. Every pixel is still the engine's own render, resized only —
-   `film.webp` is the farm's own share twin, not a re-encode.
+   ~50 MB each at 6200px, correct for print and unusable on a web page.
+   Downscaled and re-encoded they come to a few MB. Every pixel is still the
+   engine's own render, resized only — `film.webp` is the farm's own share
+   twin, not a re-encode. The one exception to downscaling is `detail.jpg`,
+   the 1:1 print-pixels crop: its entire point is unscaled resolution, so it
+   ships at the farm's own crop size.
 3. `film.png` (APNG) → `film.webp`, which the farm already renders.
+4. Per-plate coins: every `data-plate` card's `mockup_plate.glb` is copied
+   into the root when the farm has rendered it; a card whose GLB is missing
+   has its `<model-viewer>` stripped (with a warning) rather than published
+   as a broken fetch. To ship all five coins, render the farm's `model` tier
+   for all five regions — which needs each region's real DEM for the poster
+   it restages.
 
 ## Steps
 
@@ -48,3 +56,13 @@ Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, and every
 - The `og:image` is `mockup_plate_1080x1080.jpg` from the farm. It must be
   copied into the staged root — nothing in `landing.html` references it, so a
   build that only follows `src` attributes will miss it.
+- **The region-request form is Netlify Forms.** Detection happens at deploy
+  time from the static HTML (`data-netlify` + the hidden `form-name` input) —
+  it works with a manual `netlify deploy`, no build step needed, but check
+  the Forms tab after the first deploy of a changed form: a renamed form is a
+  NEW form and notifications must be re-pointed at it. Submissions are the
+  region-demand signal (and the commission lead list); enable email
+  notifications in the Netlify site settings or they sit unread.
+- **The social coin videos** (`coin.webp` / `coin.mp4`, the farm's `coin`
+  tier) are for posting, not for the page — the page's coins are the live
+  GLBs. Don't add them to the deploy root; they'd be dead weight.

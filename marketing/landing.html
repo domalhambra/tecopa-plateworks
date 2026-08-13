@@ -153,6 +153,23 @@
   .plate-card .contour::before,.plate-card .contour::after{content:"";position:absolute;
     inset:22px;border-radius:50%;border:1px solid var(--rule)}
   .plate-card .contour::after{inset:44px}
+  .plate-card model-viewer.coin{width:100%;height:170px;margin-top:10px;background:transparent}
+  .detailcrop{transform:none}
+  .reqform{display:flex;flex-direction:column;gap:10px;margin-top:14px}
+  .reqform input{background:var(--ground);border:1px solid var(--rule);border-radius:8px;
+    color:var(--ink);font-family:var(--mono);font-size:13px;padding:11px 13px}
+  .reqform input::placeholder{color:var(--ink-3)}
+  .reqform input:focus{border-color:var(--gold);outline:none}
+  .reqform .btn{border:none;cursor:pointer}
+
+  /* two doors */
+  .doors{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .door{background:var(--ground-2);border:1px solid var(--rule);border-radius:14px;padding:30px 28px;
+    display:flex;flex-direction:column;gap:10px}
+  .door h3{font-size:22px;margin:0}
+  .door p{color:var(--ink-2);font-size:15px;margin:0}
+  .door .cta{margin-top:auto;padding-top:16px}
+  .door .fine{font-size:13px;color:var(--ink-3)}
 
   /* trust strip */
   .trust{display:grid;grid-template-columns:repeat(3,1fr);gap:32px}
@@ -184,7 +201,7 @@
   @media (max-width:860px){
     .hero{grid-template-columns:1fr;gap:40px;padding-bottom:64px}
     .hero-frame{margin:0 auto}
-    .pillars,.trust,.plates{grid-template-columns:1fr}
+    .pillars,.trust,.plates,.doors{grid-template-columns:1fr}
     .trip{grid-template-columns:1fr;gap:44px}
     .ed:nth-child(1),.ed:nth-child(2){transform:none}
     .formats{grid-template-columns:1fr;gap:36px}
@@ -211,6 +228,7 @@
     <div class="barnav">
       <a class="navlink" href="#how">How it works</a>
       <a class="navlink" href="#plates">Regions</a>
+      <a class="navlink" href="#order">Order</a>
       <a class="navlink" href="#pricing">Pricing</a>
       <button class="theme" id="themeBtn" aria-label="Switch light or dark">◐</button>
     </div>
@@ -220,18 +238,19 @@
     <div>
       <p class="eyebrow">GPX in · archival print out</p>
       <h1>Your years outdoors, as one artifact that <span class="gild">keeps growing</span>.</h1>
-      <p class="lede">Ten years of Lassen weekends. One map. Drop in your GPX tracks and
-        Tecopa Plateworks renders a museum-quality shaded-relief poster of your years within one
-        hand-built plate — performed as a print, a phone wallpaper, or a film, and grown
-        edition by edition.</p>
+      <p class="lede">Ten years of Lassen weekends. One map. Tecopa Plateworks sets your
+        years of tracks into a shaded-relief poster composed like a fine map — real
+        terrain, rivers in their true courses, place names in the map's own type, a
+        cartouche cut the way a print shop would cut it. Then it performs the same
+        picture as a print, a wallpaper, or a film — and grows it, edition by edition.</p>
       <div class="heroactions">
-        <a class="btn btn-solid" href="mailto:domalhambra@hey.com?subject=Tecopa%20Plateworks%20print%20order">Order a print</a>
+        <a class="btn btn-solid" data-evt="Hero CTA" href="#order">Get your print</a>
         <a class="btn btn-ghost" href="#plates">See the regions</a>
       </div>
-      <p class="caption" style="margin-top:22px">No account · no cloud · the file is the save file.</p>
+      <p class="caption" style="margin-top:22px">No account · no cloud · yours forever.</p>
     </div>
     <div class="hero-frame">
-      <figure class="frame" style="margin:0">
+      <figure class="frame" style="margin:0" data-see="Film Seen">
         <img src="../assets/lassen_ca/film.png" alt="A time-lapse of a season of trails inking themselves onto a shaded-relief map">
         <figcaption class="plate">The year, drawing itself</figcaption>
       </figure>
@@ -250,16 +269,17 @@
     </div>
     <div class="pillars">
       <div class="pillar">
-        <div class="n">01 · PRINT &amp; SCREEN</div>
+        <div class="n">01 · THE CRAFT</div>
+        <h3>Composed like a fine map</h3>
+        <p>Shaded relief from real USGS terrain, water in its true course, place names
+          set in the map's own type, your photos pinned to the summits they came from —
+          framed with a keyline and cartouche, not exported from an app.</p>
+      </div>
+      <div class="pillar">
+        <div class="n">02 · PRINT &amp; SCREEN</div>
         <h3>One picture, every format</h3>
         <p>The same composition renders as an archival print, a pixel-exact wallpaper cut
           to your device, and a time-lapse film whose final frame <i>is</i> the poster.</p>
-      </div>
-      <div class="pillar">
-        <div class="n">02 · PROVENANCE</div>
-        <h3>The file is the whole record</h3>
-        <p>Every PNG carries its own recipe, your route data, and even your pinned
-          photos — inside the file. Reprint it years later from the file alone.</p>
       </div>
       <div class="pillar">
         <div class="n">03 · EDITIONS</div>
@@ -271,14 +291,15 @@
   </div>
 </section>
 
-<section class="band">
+<section class="band" data-see="Editions Seen">
   <div class="wrap">
     <div class="band-head">
-      <p class="eyebrow">The magic trick</p>
-      <h2>The poster is the save file.</h2>
-      <p class="lede">Drag a finished poster back into the studio and the whole
-        composition wakes up — tracks, style, crop, photos. Add this year's GPX and the
-        cartouche ticks over. Nothing else on the wall can do this.</p>
+      <p class="eyebrow">The ritual</p>
+      <h2>Same frame. More ink. Every year.</h2>
+      <p class="lede">Next year, drop the new tracks onto this year's poster. The
+        composition holds — crop, palette, type, registration — and only the ink
+        accumulates, the edition number ticking over in the cartouche like a
+        printmaker's plate. Nothing else on the wall can do this.</p>
     </div>
     <div class="trip">
       <div class="ed"><span class="edtag">Edition 1 · 2024</span>
@@ -289,10 +310,10 @@
         <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/edition_3.png" alt="Edition three, the fullest version of the same map"></figure></div>
     </div>
     <div class="trip-note">
-      <span class="k">SAME&nbsp;SPEC →</span>
-      <span>Same frame, same style, same registration — only the ink accumulates. The
-        edition number and its ancestor chain ride inside the file, so the poster proves
-        its own lineage without an account or a server.</span>
+      <span class="k">SAME&nbsp;FRAME →</span>
+      <span>The whole composition — tracks, style, crop, pinned photos — travels inside
+        the poster file itself, so the ritual needs no account and no server. Drag the
+        poster back into the studio and it wakes up where you left it.</span>
     </div>
   </div>
 </section>
@@ -318,6 +339,24 @@
   </div>
 </section>
 
+<section class="band">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Look closer</p>
+      <h2>The thought is in the details.</h2>
+      <p class="lede">Everything on the sheet is decided in physical units — a 2.6&nbsp;pt
+        trail is 2.6&nbsp;pt on paper and on glass. Labels are placed to clear the ink.
+        Contours carry print weight, not screen weight. Even the grain is seeded, so
+        two proofs of the same poster agree to the pixel.</p>
+    </div>
+    <figure class="frame detailcrop" style="margin:0;max-width:760px">
+      <img src="../assets/lassen_ca/detail.png"
+        alt="A one-to-one crop of the print: track ink, contour lines, and a place label at full resolution">
+      <figcaption class="plate">Actual print pixels — a 1:1 crop of the 300 dpi sheet, unscaled</figcaption>
+    </figure>
+  </div>
+</section>
+
 <section class="band" id="plates">
   <div class="wrap">
     <div class="band-head">
@@ -328,7 +367,7 @@
         your poster can name. We never invent ground — if the data isn't sharp enough, we say so.</p>
     </div>
     <div class="plates">
-      <div class="plate-card feat">
+      <div class="plate-card feat" data-plate="lassen_ca">
         <figure class="frame" style="margin:0"><img src="../assets/lassen_ca/poster.png" alt="A finished Lassen County poster"><figcaption class="plate">Lassen County · CA</figcaption></figure>
         <div class="body">
           <div class="region">Lassen County, California</div>
@@ -339,30 +378,98 @@
             alt="The Lassen plate as a physical disc — drag to spin"
             camera-controls auto-rotate auto-rotate-delay="1200" rotation-per-second="12deg"
             disable-zoom interaction-prompt="none" loading="lazy"
+            shadow-intensity="0.9" shadow-softness="0.7"
             style="width:100%;max-width:340px;height:260px;margin-top:16px;background:transparent">
           </model-viewer>
           <p class="caption" style="margin:6px 0 0">The plate, as an object — drag to spin it.</p>
           <div class="avail">● Available now</div>
         </div>
       </div>
-      <div class="plate-card"><span class="contour"></span>
+      <div class="plate-card" data-plate="susanville_reno"><span class="contour"></span>
         <div class="region">Susanville — Reno</div>
         <div class="coord">CA / NV · 40.0° N · 120.0° W</div>
+        <model-viewer class="coin" src="../assets/susanville_reno/mockup_plate.glb"
+          alt="The Susanville–Reno plate as a physical disc — drag to spin"
+          camera-controls auto-rotate auto-rotate-delay="1500" rotation-per-second="12deg"
+          disable-zoom interaction-prompt="none" loading="lazy"
+          shadow-intensity="0.9" shadow-softness="0.7"></model-viewer>
         <div class="avail">● Available now</div>
       </div>
-      <div class="plate-card"><span class="contour"></span>
+      <div class="plate-card" data-plate="elko_bonneville"><span class="contour"></span>
         <div class="region">Elko — Bonneville</div>
         <div class="coord">NV / UT · 40.8° N · 114.5° W</div>
+        <model-viewer class="coin" src="../assets/elko_bonneville/mockup_plate.glb"
+          alt="The Elko–Bonneville plate as a physical disc — drag to spin"
+          camera-controls auto-rotate auto-rotate-delay="1500" rotation-per-second="12deg"
+          disable-zoom interaction-prompt="none" loading="lazy"
+          shadow-intensity="0.9" shadow-softness="0.7"></model-viewer>
         <div class="avail">● Available now</div>
       </div>
-      <div class="plate-card"><span class="contour"></span>
+      <div class="plate-card" data-plate="rifle_aspen"><span class="contour"></span>
         <div class="region">Rifle — Aspen</div>
         <div class="coord">Colorado · 39.4° N · 107.2° W</div>
+        <model-viewer class="coin" src="../assets/rifle_aspen/mockup_plate.glb"
+          alt="The Rifle–Aspen plate as a physical disc — drag to spin"
+          camera-controls auto-rotate auto-rotate-delay="1500" rotation-per-second="12deg"
+          disable-zoom interaction-prompt="none" loading="lazy"
+          shadow-intensity="0.9" shadow-softness="0.7"></model-viewer>
+        <div class="avail">● Available now</div>
+      </div>
+      <div class="plate-card" data-plate="tushar_beaver_ut"><span class="contour"></span>
+        <div class="region">Tushar Mountains</div>
+        <div class="coord">Utah · 38.4° N · 112.4° W · Beaver ↔ the crest</div>
+        <model-viewer class="coin" src="../assets/tushar_beaver_ut/mockup_plate.glb"
+          alt="The Tushar Mountains plate as a physical disc — drag to spin"
+          camera-controls auto-rotate auto-rotate-delay="1500" rotation-per-second="12deg"
+          disable-zoom interaction-prompt="none" loading="lazy"
+          shadow-intensity="0.9" shadow-softness="0.7"></model-viewer>
         <div class="avail">● Available now</div>
       </div>
       <div class="plate-card" style="justify-content:center;border-style:dashed">
-        <div class="region" style="color:var(--gold)">Request the next region →</div>
-        <div class="coord">Tell us where you've been. The most-asked ground gets cut next.</div>
+        <div class="region" style="color:var(--gold)">Request the next region</div>
+        <div class="coord">Tell us where you've been. The most-asked ground gets cut next —
+          and a commission jumps the queue.</div>
+        <form class="reqform" name="region-request" method="POST" data-netlify="true" netlify-honeypot="trap">
+          <input type="hidden" name="form-name" value="region-request">
+          <p style="display:none"><label>Leave this empty: <input name="trap"></label></p>
+          <input type="text" name="region" required placeholder="Where? e.g. “Bishop / Eastern Sierra”" aria-label="The region you want cut">
+          <input type="email" name="email" required placeholder="you@example.com" aria-label="Your email">
+          <button class="btn btn-solid" type="submit">Ask for this ground</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="band" id="order">
+  <div class="wrap">
+    <div class="band-head">
+      <p class="eyebrow">Two ways in</p>
+      <h2>A press you can email — or a studio you can run.</h2>
+      <p class="lede">Tecopa Plateworks is a local app and a one-person press. Pick the door
+        that fits how much you want to touch the machinery.</p>
+    </div>
+    <div class="doors">
+      <div class="door">
+        <p class="eyebrow" style="color:var(--olive)">Door one</p>
+        <h3>The concierge press</h3>
+        <p>Email your year — a bulk GPX export from Gaia, Strava, onX, or your watch.
+          We frame it, send you the proof, and nothing prints until you approve the
+          exact pixels. Paper arrives; the save file comes with it.</p>
+        <p class="fine">Said plainly: the press is a person. Your tracks are seen by the
+          printer, used for your render, and deleted after your edition ships. If that
+          trade isn't for you, take door two.</p>
+        <div class="cta"><a class="btn btn-solid" data-evt="Order Click" href="mailto:domalhambra@hey.com?subject=Tecopa%20Plateworks%20print%20order">Email the press</a></div>
+      </div>
+      <div class="door">
+        <p class="eyebrow" style="color:var(--olive)">Door two</p>
+        <h3>The studio, yours</h3>
+        <p>The engine is open source. Run the studio on your own machine, drop your
+          tracks in, and your data never leaves the room. Send us only the finished
+          save file for paper — or print anywhere you like. The file is yours.</p>
+        <p class="fine">Free forever under AGPL-3.0. Plates are free too — the studio
+          fetches the same terrain the press uses.</p>
+        <div class="cta"><a class="btn btn-ghost" data-evt="Studio Click" href="https://github.com/domalhambra/tecopa-plateworks">Run the studio — GitHub</a></div>
       </div>
     </div>
   </div>
@@ -379,11 +486,11 @@
     </div>
     <div class="trust pricing">
       <div><h3><span class="dot"></span>The Poster — $79</h3><p>The digital final: a print-resolution PNG that carries its own recipe, wallpapers cut to your exact screens, and the Year-Film. One composition, every performance.</p></div>
-      <div><h3><span class="dot"></span>The Print — $149</h3><p>The 18×24 archival print, lab-fulfilled and shipped, with the digital Poster included. Smaller sheets priced on request.</p></div>
+      <div><h3><span class="dot"></span>The Print — $149</h3><p>The 18×24 archival print, with the digital Poster included. The difference over the file buys the physical craft: colour-managed printing on museum-grade matte stock, a human eye on the sheet before it ships, and shipping itself. Smaller sheets priced on request.</p></div>
       <div><h3><span class="dot"></span>Edition N+1 — $49 / $99</h3><p>Next year, drop this year's PNG back in. The digital edition is $49; the reprinted 18×24 is $99. The ritual costs less than the first purchase, by design.</p></div>
-      <div><h3><span class="dot"></span>Commission a plate — $299</h3><p>Your valley isn't covered yet? The fee buys the making — curation, the terrain bakes, validation on real ground — plus your first 18×24 print. The finished plate publishes free, with your name in its record.</p></div>
+      <div><h3><span class="dot"></span>Commission a plate — $299</h3><p>Your valley isn't covered yet? The fee buys the making — curation, the terrain bakes, validation on real ground — plus your first 18×24 print. The finished plate publishes free, with your name in its record. <a data-evt="Commission Click" href="mailto:domalhambra@hey.com?subject=Tecopa%20Plateworks%20plate%20commission">Start a commission →</a></p></div>
     </div>
-    <p class="caption" style="margin-top:28px">Plates are free. Always. They are the trust layer behind "reprint forever" — your file must always be able to fetch the terrain it names.</p>
+    <p class="caption" style="margin-top:28px">Plates are free. Always. They are the trust layer behind reprinting from the file alone — your file must always be able to fetch the terrain it names. Commission pricing is a founding rate and will rise as the plate library grows.</p>
   </div>
 </section>
 
@@ -392,7 +499,7 @@
     <p class="eyebrow" style="margin-bottom:36px">Why you can trust the file</p>
     <div class="trust">
       <div><h3><span class="dot"></span>The proof is the print</h3><p>The low-res proof you approve and the full-resolution print are the same composition, painted twice — pixel-for-pixel, by design.</p></div>
-      <div><h3><span class="dot"></span>Reprint forever</h3><p>A poster you print today re-renders from its own file after any future upgrade. The v1 recipe is frozen and tested against every release.</p></div>
+      <div><h3><span class="dot"></span>Reprint from the file alone</h3><p>Send the PNG back years from now — or open it in the studio yourself — and it reprints. The file names the exact terrain plate and engine build that painted it, so a reprint is honest about anything that changed in between.</p></div>
       <div><h3><span class="dot"></span>Private by default</h3><p>Everything runs locally. Sharing a copy? One toggle strips your exact route coordinates from the shared image.</p></div>
     </div>
   </div>
@@ -403,7 +510,8 @@
     <p class="eyebrow" style="margin-bottom:28px">Questions</p>
     <div class="faq">
       <details open><summary>Why only a few regions?</summary><p>Each plate is built from real 3DEP elevation data, and we refuse to print terrain we can't back with real ground. Adding a region is deliberate craft, not a checkbox — and the request list decides what's cut next.</p></details>
-      <details><summary>What if Tecopa Plateworks disappears?</summary><p>Mechanism, not promise. The PNG carries its full recipe — composition, route geometry, source hashes, embedded photos — plus the identity of the exact terrain plate it was painted on, in a manifest whose schema is public domain (CC0), so anyone may write a reader without asking. The engine is open source on GitHub under AGPL-3.0-or-later, so anyone may run it, forever. Plates are versioned, hash-addressed downloads your file names by content. And the resurrection path is a test, not a promise — the orphan drill, run in CI on every change: a fresh machine with the engine, the one plate your file names installed from its pack, and one PNG, reproducing the poster byte-for-byte. No account, no server, no lock-in.</p></details>
+      <details><summary>What if Tecopa Plateworks disappears?</summary><p>Mechanism, not promise. The PNG carries its full recipe — composition, route geometry, source hashes, embedded photos — plus the identity of the exact terrain plate it was painted on and the exact engine build that painted it, in a manifest whose schema is public domain (CC0), so anyone may write a reader without asking. The engine is <a href="https://github.com/domalhambra/tecopa-plateworks" data-evt="Studio Click">open source on GitHub</a> under AGPL-3.0-or-later, so anyone may run it, forever. Plates are versioned, hash-addressed downloads your file names by content. No account, no server, no lock-in.</p></details>
+      <details><summary>Do you keep my tracks?</summary><p>Two answers for two doors. The concierge press sees your tracks — a person renders your poster — uses them for your editions, and deletes them once your order ships; nothing about you lives in a database, because there isn't one. The studio never shares them at all: it runs on your machine, and the only copy of your data is the save file in your own hands. Either way, the share-copy toggle strips exact route coordinates from anything you post.</p></details>
       <details><summary>How do I get my tracks in?</summary><p>Export GPX from Gaia, onX, Strava, or your watch — one bulk file can carry many tracks. Re-export your whole folder every year; a recording counts once, and a repeat visit on a new day still earns its worn-path weight.</p></details>
       <details><summary>What makes the time-lapse work?</summary><p>Your tracks already carry dates, and rendering is deterministic, so a film isn't a new kind of output — it's one poster painted many times, each frame a prefix of your journeys in day order. The final frame is byte-identical to the still print.</p></details>
     </div>
@@ -414,7 +522,8 @@
   <div class="wrap foot">
     <div class="brand" style="font-size:16px"><span class="mark"></span>Tecopa <b>Plateworks</b></div>
     <div>Shaded relief · GPX · living editions</div>
-    <div>The poster on your wall is the save file.</div>
+    <div><a data-evt="Studio Click" href="https://github.com/domalhambra/tecopa-plateworks" style="text-decoration:none">Open source — AGPL-3.0</a></div>
+    <div>Every image on this page is the engine's own render.</div>
   </div>
 </footer>
 
@@ -457,6 +566,23 @@
     }
   }
   draw(); addEventListener('resize',draw);
+
+  // Plausible custom events: the funnel beats the marketing plan says to measure.
+  // Guarded — the page must work identically when the analytics script is blocked.
+  (function(){
+    function evt(n){ if(window.plausible) plausible(n); }
+    document.querySelectorAll('[data-evt]').forEach(function(el){
+      el.addEventListener('click',function(){ evt(el.getAttribute('data-evt')); });
+    });
+    var io=('IntersectionObserver' in window)&&new IntersectionObserver(function(es){
+      es.forEach(function(e){
+        if(e.isIntersecting){ evt(e.target.getAttribute('data-see')); io.unobserve(e.target); }
+      });
+    },{threshold:.5});
+    if(io) document.querySelectorAll('[data-see]').forEach(function(el){ io.observe(el); });
+    var rf=document.querySelector('form[name="region-request"]');
+    if(rf) rf.addEventListener('submit',function(){ evt('Region Request'); });
+  })();
 </script>
 
 </body>

@@ -136,6 +136,42 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
    (the file names its plate and carries its recipe — hash-published plates, AGPL
    engine) · *Strava?* (export GPX; direct import if people ask).
 
+## Hierarchy correction (2026-08-13)
+
+"The poster is the save file" is an architecture story, and architecture stories
+don't sell posters — beauty does. On any customer-facing surface the order is:
+**design and craft first** (composed like a fine map, real terrain, considered
+type, the 1:1 detail crop as proof), the growing-artifact ritual second, and the
+file-as-record LAST — as a trust answer in the FAQ and the trust block, where it
+resolves doubt instead of leading the pitch. Pillar 2 leads only in the nerd
+channels (Show HN, the technical blog post), never on the landing page.
+
+## The funnel, honestly (added 2026-08-13)
+
+A landing page cannot close a sale for a service performed on someone's computer —
+and it shouldn't try. The funnel is: **social asset earns the click → the page earns
+trust → email opens the relationship → the proof loop closes the sale.** The page's
+only jobs are (a) making the visitor feel "that's MY years on a wall," (b) answering
+the trust questions before they're asked, and (c) capturing intent — an order email,
+a region request, a commission inquiry. Every order arriving by email IS the CRM:
+no accounts, but every customer is a correspondence.
+
+Two doors, stated on the page and never blurred:
+
+- **The concierge press** — email your GPX (or a save file), approve the proof, get
+  paper. Requires trusting a person with your tracks; the page says so plainly and
+  states the retention promise (used once, deleted after the edition ships).
+  **That promise is operational — honor it or remove it.**
+- **The studio** — run the AGPL engine locally, your data never moves, order paper
+  with the save file or print anywhere. The free door is the top of the funnel and
+  the trust proof for the paid one: nobody hides a lock-in behind a door they let
+  you open yourself.
+
+**The coin is the social primitive.** The plate as a physical disc — relief lit by a
+slow spotlight turn (`coin.webp` / `coin.mp4`, same mesh as the landing page's
+orbitable GLB) — is the scroll-stopper; the film is the story; the page is the
+close. Post the coin, link the page.
+
 ## Channels & launch sequence
 
 - **Phase 0 — asset farm (1–2 weeks).** Render 10–15 flagship pieces across the four

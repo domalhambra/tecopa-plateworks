@@ -31,6 +31,8 @@ DERIVATIVES = [
     ("edition_2.png", "edition_2.jpg", 1100, 82),
     ("edition_3.png", "edition_3.jpg", 1100, 82),
     ("wallpaper_iphone.png", "wallpaper_iphone.jpg", 760, 84),
+    # the 1:1 crop ships at FULL resolution -- its entire point is unscaled pixels
+    ("detail.png", "detail.jpg", 10_000, 86),
 ]
 # Copied as-is: the farm's own share twin, the 3D plate, and the og:image
 # (which no src attribute references, so it has to be named explicitly).
@@ -86,6 +88,29 @@ def main() -> int:
     for name, published, _, _ in DERIVATIVES:
         html = html.replace(f"/assets/{args.region}/{name}", f"/assets/{args.region}/{published}")
     html = html.replace(f"/assets/{args.region}/film.png", f"/assets/{args.region}/film.webp")
+
+    # Every plate card carries its own orbitable coin. Copy each card's GLB when the
+    # farm has rendered it; when it hasn't (the coin needs a real-DEM poster), strip
+    # that card's <model-viewer> instead of publishing a broken fetch -- the card
+    # degrades to the text it always was.
+    for rid in set(re.findall(r'data-plate="([^"]+)"', html)):
+        glb = REPO / "assets" / rid / "mockup_plate.glb"
+        ref = f"/assets/{rid}/mockup_plate.glb"
+        if glb.is_file():
+            dest = out / "assets" / rid
+            dest.mkdir(parents=True, exist_ok=True)
+            if not (dest / "mockup_plate.glb").exists():
+                shutil.copy2(glb, dest / "mockup_plate.glb")
+                size = (dest / "mockup_plate.glb").stat().st_size
+                total += size
+                print(f"  {rid + '/mockup_plate.glb':38s} {size/1048576:5.2f} MB  (verbatim)")
+        elif ref in html:
+            html = re.sub(
+                r'<model-viewer(?:(?!</model-viewer>).)*?src="' + re.escape(ref)
+                + r'"(?:(?!</model-viewer>).)*?</model-viewer>',
+                "", html, flags=re.S)
+            print(f"  ! {rid}: no mockup_plate.glb rendered — its coin was stripped "
+                  f"from the page (render the farm's model tier for it)", file=sys.stderr)
     (out / "index.html").write_text(html, encoding="utf-8")
 
     missing = [
