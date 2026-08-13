@@ -172,6 +172,10 @@ export const CONTROLS = [
     keywords: ['water', 'lake', 'depth', 'shore', 'littoral', 'imhof', 'vignette'] },
   { id: 'dryLakes', path: 'style.dryLakes', section: 'layers', panel: 'Cartography', label: 'Dry lakes',
     hint: 'stipple playas as salt ground', type: 'toggle', default: false, affectsProof: true,
+    // Hidden on a plate with no playa sidecar: there the toggle is a control that
+    // correctly does nothing, which reads exactly like a broken one. Bake pans onto a
+    // plate with scripts/bake_playa.py and it appears.
+    visibleWhen: (s) => !!s.regions.find((r) => r.id === s.region)?.has_playa,
     help: 'Draws the plate’s playas as speckled salt ground with a broken edge instead of water.',
     keywords: ['playa', 'dry lake', 'salt', 'stipple', 'alkali', 'pan'] },
   { id: 'contours', path: 'contours', section: 'layers', panel: 'Cartography', label: 'Contour lines',

@@ -39,12 +39,18 @@ class Region:
         return self.cfg.get("name", self.id)
 
     def meta(self) -> dict:
-        """Lightweight metadata for the region-picker UI (no DEM, no geometry)."""
+        """Lightweight metadata for the region-picker UI (no DEM, no geometry).
+
+        `has_playa` is here so the studio can hide the Dry lakes toggle on a plate that
+        carries no playa sidecar. Without it the toggle is a control that correctly does
+        nothing, which is indistinguishable from a broken one. Cheap enough for the
+        picker: one stat() per plate, no parse."""
         return {"id": self.id, "name": self.name,
                 "bounds": list(self.cfg["bounds"]),
                 "overview_size": list(self.cfg["overview_size"]),
                 "native_resolution_m": self.cfg["native_resolution_m"],
                 "overview": f"/regions/{self.id}/overview.png",
+                "has_playa": os.path.exists(os.path.join(self.dir, "playa.json")),
                 "lonlat_bbox": list(self.lonlat_bbox)}
 
     def readiness(self) -> dict:

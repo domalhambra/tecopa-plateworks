@@ -557,3 +557,23 @@ def test_baking_playa_cannot_invalidate_an_existing_poster():
     if os.path.exists(os.path.join(PLAYA_REGION, "playa.json")):
         assert "playa.json" in drawn["assets"]
         assert drawn["pack_version"] != plain["pack_version"]
+
+
+def test_the_studio_can_tell_which_plates_have_playa():
+    """The Dry lakes toggle is hidden on a plate with no playa sidecar, because there it
+    is a control that correctly does nothing -- indistinguishable from a broken one.
+    controls.js reads this flag off the region metadata, so the flag has to be honest."""
+    from app import regions
+    found = regions.discover()
+    for rid, region in found.items():
+        m = region.meta()
+        assert "has_playa" in m, f"{rid}: region meta must carry has_playa"
+        on_disk = os.path.exists(os.path.join(region.dir, "playa.json"))
+        assert m["has_playa"] is on_disk, f"{rid}: has_playa disagrees with the disk"
+        # and the flag must agree with what the renderer would actually find
+        assert bool(render._load_playa(region.dir)) is on_disk, \
+            f"{rid}: has_playa disagrees with _load_playa"
+    assert any(m["has_playa"] for m in (r.meta() for r in found.values())), \
+        "no plate has playa — this test would pass vacuously"
+    assert not all(m["has_playa"] for m in (r.meta() for r in found.values())), \
+        "every plate has playa — the hidden-toggle path would never be exercised"

@@ -278,9 +278,21 @@ python scripts/bake_playa.py <region-id>
 The sidecar is hashed into the plate's identity **only when the sheet actually draws
 it** (`provenance.region_pack_block(..., dry_lakes=True)`), the same pixel-honesty rule
 `labels.json` and `landcover.tif` follow — so baking playa onto a plate cannot make an
-already-printed poster report a mismatch on reprint. The stipple cell is a *ground* size
-and the pattern is seeded from `spec.seed`, so a proof and a final carry the same
-speckle. A plate with no playa renders identically whether the toggle is on or off.
+already-printed poster report a mismatch on reprint. A plate with no playa renders
+identically whether the toggle is on or off, and the studio hides the toggle there
+(`Region.meta()['has_playa']`) rather than offering a control that can do nothing.
+
+The stipple is a **screen, not a terrain texture**: its cell is a *paper* size
+(`PLAYA_SPECK_CELL_PT`), so the sheet reads at one density whatever the crop's scale,
+and the proof and the final put the same dots in the same places — `floor(px / cell_px)`
+is identically `floor(pt / cell_pt)`, so dpi divides out. Dots are round and jittered
+inside their cells; on a bare lattice the eye reads the rows before the texture.
+(`relief.MOTTLE_CELL_M` stays in ground metres and is not the precedent — at 6%
+luminance it is invisible as blocks. This was a ground size too until a real 300 dpi
+final showed it printing 0.59 mm blocks on a tight crop and nothing at all on a wide
+one.) The broken edge carries its own darker ink: a boundary line has to be darker than
+*both* sides, and borrowing the speckle tone put it midway between the pan and the
+ground, where it read as an antialiasing seam.
 
 ## Hero plates (Blender)
 
