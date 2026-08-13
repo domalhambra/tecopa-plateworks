@@ -264,3 +264,57 @@ def test_taper_is_dpi_stable_in_physical_units():
     # a whole-pixel width quantises (2.7 pt is 5.6 px at 150 and 11.25 at 300, drawn as
     # 6 and 11), so the ratio lands near 2 rather than on it
     assert widths[300] == pytest.approx(widths[150] * 2, rel=0.15)
+
+
+# ---- the label budget: water names must not be starved by rank ---------------------
+
+def test_water_gets_a_reserved_share_of_the_label_budget():
+    """Hydrography ranks last (river 40 of 100), so on any name-dense sheet the density
+    cap was spent entirely on summits, lakes and flats before a river was ever
+    considered -- the plate carries 30 distinct creek names and drew none of them. A
+    small per-kind floor reserves a few slots without reordering the rest."""
+    spec = _spec(labels=True, label_place="smart")
+    out_w, out_h = spec.pixel_size(150)
+    labels = render._load_labels(REGION_DIR)
+    hydro = render._load_hydro(REGION_DIR)
+    cands = render._label_candidates(labels, hydro, spec, out_w, out_h)
+    kinds = {k for _, k, _, _, _ in cands}
+    assert "river" in kinds, "fixture must contain river candidates to prove anything"
+    cap = max(6, round(spec.print_w_in * spec.print_h_in / 100.0
+                       * render.GEO_LABELS_PER_100IN2))
+    # before: strict rank order starves them
+    by_rank = sorted(cands, key=lambda c: -c[0])
+    assert not any(k == "river" for _, k, _, _, _ in by_rank[:cap])
+    # after: the floor hoists a couple into contention
+    ordered = render._label_order(cands)
+    assert any(k == "river" for _, k, _, _, _ in ordered[:cap])
+
+
+def test_label_order_preserves_every_candidate_exactly_once():
+    spec = _spec()
+    out_w, out_h = spec.pixel_size(150)
+    cands = render._label_candidates(render._load_labels(REGION_DIR),
+                                     render._load_hydro(REGION_DIR),
+                                     spec, out_w, out_h)
+    ordered = render._label_order(cands)
+    key = lambda c: (c[0], c[1], c[2])
+    assert sorted(map(key, ordered)) == sorted(map(key, cands))
+    assert len(ordered) == len(cands)
+
+
+def test_label_order_keeps_rank_order_inside_and_outside_the_reserve():
+    """The floor changes WHO is considered, never the ranking within either group --
+    the strongest names still lead, and the reserve is filled strongest-first too."""
+    cands = [(100, "range", "R", (0, 0), None),
+             (85, "summit", "S1", (0, 0), None),
+             (85, "summit", "S2", (0, 0), None),
+             (66, "lake", "L1", (0, 0), None),
+             (40, "river", "A", (0, 0), None),
+             (40, "river", "B", (0, 0), None),
+             (40, "river", "C", (0, 0), None)]
+    ordered = render._label_order(cands)
+    reserve = render.GEO_KIND_FLOOR.get("river", 0)
+    rivers = [c[2] for c in ordered if c[1] == "river"]
+    assert rivers[:reserve] == ["A", "B"][:reserve]        # reserve filled in order
+    tail_ranks = [c[0] for c in ordered[reserve + render.GEO_KIND_FLOOR.get("lake", 0):]]
+    assert tail_ranks == sorted(tail_ranks, reverse=True)  # the rest stays ranked

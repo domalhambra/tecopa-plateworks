@@ -129,6 +129,15 @@ GEO_KINDS = {
     "river":   (6.8,  False, 40,  "water"),
 }
 GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 sq inch
+# Reserved slots per kind, considered BEFORE the strict rank order. Hydrography ranks
+# last on purpose (a creek should never outrank a range), but rank + a density cap is a
+# starvation rule, not a priority: on a name-dense sheet the cap was spent entirely on
+# summits, lakes and flats before a river was ever reached, so a plate carrying 30
+# distinct creek names drew none of them. Reserving a couple of slots is the standard
+# answer -- a label class gets its own small budget -- and it changes only WHO is
+# considered, never the ranking within either group. A reserved candidate still has to
+# clear collision and the sheet edge like any other; the floor buys a chance, not a slot.
+GEO_KIND_FLOOR = {"river": 2, "lake": 2}
 GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
 # Curved along-feature labels: a linear landform (range, valley) sets its name along its
 # own spine -- the NatGeo/USGS convention -- instead of a horizontal block at the
@@ -1817,6 +1826,26 @@ def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
     cands.sort(key=lambda c: -c[0])
     return cands
 
+
+def _label_order(cands):
+    """The order the placer considers candidates in: each kind's GEO_KIND_FLOOR
+    reserve first (strongest of that kind first), then everything else by rank.
+
+    `cands` arrives rank-sorted from `_label_candidates`, so the reserve is taken by
+    scanning it once -- which is what keeps both groups internally ranked."""
+    if not GEO_KIND_FLOOR:
+        return list(cands)
+    room = dict(GEO_KIND_FLOOR)
+    reserved, rest = [], []
+    for c in cands:
+        kind = c[1]
+        if room.get(kind, 0) > 0:
+            room[kind] -= 1
+            reserved.append(c)
+        else:
+            rest.append(c)
+    return reserved + rest
+
 def _resample_path(poly, step_px, smooth_px):
     """Densify `poly` to ~step_px spacing, then moving-average smooth it over a
     ~smooth_px window so a name laid along it follows the spine instead of jittering on
@@ -2073,7 +2102,7 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
                                 _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
 
-    for rank, kind, name, (ax, ay), path in cands:
+    for rank, kind, name, (ax, ay), path in _label_order(cands):
         if len(placed) >= cap:
             break
         pt_size, caps, _, role = GEO_KINDS[kind]
