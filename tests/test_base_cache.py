@@ -353,11 +353,20 @@ def test_a_route_knob_hits_the_cache_and_a_terrain_knob_misses_it():
 # live" half of the assertion below pass vacuously -- so the case gets a composition
 # where it bites, rather than the assertion getting weakened.
 _PHASE2_SPEC_EXTRAS = {
-    # At 13 pt the 29 place names inside this crop never collide, so smart placement
-    # resolves every one of them to its anchor and label_place moves nothing. (Verified:
-    # 0 px at 13 pt, 1175 px at 26 pt.) Nothing is wrong with smart placement; the knob
-    # simply has no work to do until the type is big enough to overlap.
-    "label_place": {"label_pt": 26.0},
+    # At 13 pt the place names inside this crop never collide, so smart placement
+    # resolves every one to its anchor and label_place moves nothing. Nothing is wrong
+    # with smart placement; the knob has no work to do until the type is big enough to
+    # overlap, so the fixture sizes the type up until it does.
+    #
+    # This size has moved once already. It was 26 pt, chosen when the sheet drew six
+    # summit names; GEO_KIND_FLOOR now spends two of the cap's six slots on a lake and a
+    # river, and the four summits that remain do not collide at 26 pt. Re-measured on
+    # real terrain: 0 px at 16 and 18 pt, then 1248 at 19-20, 1312 at 21-24 and beyond.
+    # 22 pt sits mid-plateau rather than on the 18->19 cliff.
+    #
+    # A live knob is the whole point here -- see the second assertion in the test -- so
+    # if this ever reads 0 again, re-measure the ladder before changing anything else.
+    "label_place": {"label_pt": 22.0},
 }
 
 

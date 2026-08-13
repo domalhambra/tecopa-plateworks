@@ -177,6 +177,11 @@ GEO_LABELS_PER_100IN2 = 6.0           # density cap: ~ this many labels per 100 
 # considered, never the ranking within either group. A reserved candidate still has to
 # clear collision and the sheet edge like any other; the floor buys a chance, not a slot.
 GEO_KIND_FLOOR = {"river": 2, "lake": 2}
+# ...but never more than this share of the cap. The cap floors at 6 labels, and an
+# unbounded 4-slot reserve took two thirds of that -- the guard against water starving
+# had become terrain starving, and on a small sheet smart placement went inert because
+# too few terrain names survived to ever collide. See `_label_order`.
+GEO_FLOOR_MAX_SHARE = 1.0 / 3.0
 GEO_EDGE_IN = 0.32                    # keep labels this far inside the sheet edge
 # Curved along-feature labels: a linear landform (range, valley) sets its name along its
 # own spine -- the NatGeo/USGS convention -- instead of a horizontal block at the
@@ -1871,15 +1876,36 @@ def _label_candidates(labels, hydro, spec, out_w, out_h, ctx=None):
     return cands
 
 
-def _label_order(cands):
-    """The order the placer considers candidates in: each kind's GEO_KIND_FLOOR
-    reserve first (strongest of that kind first), then everything else by rank.
+def _label_order(cands, cap=None):
+    """The order the placer considers candidates in: a reserve of water names first
+    (strongest of each kind first), then everything else by rank.
 
     `cands` arrives rank-sorted from `_label_candidates`, so the reserve is taken by
-    scanning it once -- which is what keeps both groups internally ranked."""
-    if not GEO_KIND_FLOOR:
+    scanning it once -- which is what keeps both groups internally ranked.
+
+    The reserve is BOUNDED BY THE CAP, and that bound is the whole subtlety. A flat
+    "two rivers and two lakes" is a couple of slots on a 24x36 sheet, whose cap is 51 --
+    and two thirds of a 9x12 sheet, whose cap is the 6-label floor. Unbounded, the guard
+    against water starving became terrain starving: on a small sheet almost nothing but
+    water was ever considered. So the reserve may never take more than
+    GEO_FLOOR_MAX_SHARE of the cap, handed out one kind at a time so a single kind
+    cannot eat the allowance either."""
+    if not GEO_KIND_FLOOR or not cands:
         return list(cands)
     room = dict(GEO_KIND_FLOOR)
+    if cap is not None:
+        allowance = int(cap * GEO_FLOOR_MAX_SHARE)
+        if allowance < sum(room.values()):        # share it out round-robin, so a small
+            room = {k: 0 for k in room}           # cap trims every kind, not the last
+            kinds, i = sorted(GEO_KIND_FLOOR), 0
+            while allowance > 0 and kinds:
+                k = kinds[i % len(kinds)]
+                if room[k] < GEO_KIND_FLOOR[k]:
+                    room[k] += 1
+                    allowance -= 1
+                i += 1
+                if i % len(kinds) == 0 and all(room[k] >= GEO_KIND_FLOOR[k] for k in kinds):
+                    break
     reserved, rest = [], []
     for c in cands:
         kind = c[1]
@@ -2146,7 +2172,7 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
                                 _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
 
-    for rank, kind, name, (ax, ay), path in _label_order(cands):
+    for rank, kind, name, (ax, ay), path in _label_order(cands, cap):
         if len(placed) >= cap:
             break
         pt_size, caps, _, role = GEO_KINDS[kind]
