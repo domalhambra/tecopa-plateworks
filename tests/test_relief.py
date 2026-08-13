@@ -1,5 +1,6 @@
 # tests/test_relief.py
 import numpy as np
+from scipy.ndimage import distance_transform_edt
 from app import relief
 from app.relief import (shaded_relief, hillshade, _fill_nan,
                         multidirectional_hillshade, cast_shadow_mask,
@@ -222,3 +223,27 @@ def test_concurrent_relief_passes_do_not_move_a_pixel(monkeypatch):
     monkeypatch.setattr(relief, "RELIEF_WORKERS", 4)
     parallel = shaded_relief(elev, **kw)
     assert np.array_equal(serial, parallel)
+
+def test_margin_ring_fill_matches_the_edt_on_a_clean_off_dem_margin():
+    # The shape every near-full-plate crop makes: _read_window pads 6% past the crop
+    # and fills the overhang with NaN, so the finite data is one solid rectangle inside
+    # an all-NaN margin. Nearest-finite for a margin pixel is then its projection onto
+    # that rectangle (a convex set, so the minimiser is unique), which is exactly what
+    # edge replication does -- no ray of doubt, and no 60 MP distance transform.
+    rng = np.random.default_rng(0)
+    a = np.full((60, 74), np.nan, dtype="float32")
+    a[10:50, 12:62] = rng.normal(1500, 200, (40, 50)).astype("float32")
+    fast = relief._margin_ring_fill(a, np.isnan(a))
+    assert fast is not None, "a clean off-DEM margin must take the fast path"
+    idx = distance_transform_edt(np.isnan(a), return_distances=False, return_indices=True)
+    assert np.array_equal(fast, a[tuple(idx)])
+
+def test_margin_ring_fill_declines_when_the_finite_block_has_a_hole():
+    # lassen_ca's DEM does not fill its own UTM rectangle (the reprojected footprint
+    # leaves two opposite corners nodata), so the finite set is not convex and the
+    # projection argument does not hold. The fast path must decline and let the
+    # general distance transform answer, rather than guess.
+    a = np.full((20, 20), np.nan, dtype="float32")
+    a[5:15, 5:15] = 1500.0
+    a[7, 7] = np.nan                      # an interior hole
+    assert relief._margin_ring_fill(a, np.isnan(a)) is None

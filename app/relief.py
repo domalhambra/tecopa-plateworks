@@ -257,6 +257,40 @@ def _run_stage(stage, arr, frame):
 
 # ---------------------------------------------------------------------
 
+def _margin_ring_fill(elev, mask):
+    """The nearest-finite fill for the one nodata shape that dominates real renders --
+    or None when the window does not have that shape and the caller must fall back to
+    the general distance transform.
+
+    `_read_window` reads 6% past the crop with `fill_value=np.nan`, so any crop framed
+    near the edge of its plate comes back as solid data inside an all-NaN margin -- a
+    fifth of a full-plate window, and the reason this function is worth having. When
+    the finite pixels are exactly one filled rectangle, every NaN lies outside it, and
+    the nearest finite pixel to an outside point is its projection onto that rectangle:
+    a rectangle is convex, so the projection is the closest point of it, and it is
+    strictly closest (moving along the rectangle away from the projection only adds a
+    perpendicular term), so there is no tie for the transform to break differently.
+    That projection is precisely `np.pad(..., mode="edge")`.
+
+    The guard is the whole point. `lassen_ca`'s DEM does not fill its own UTM rectangle
+    -- reprojection leaves two opposite corners nodata -- so its finite set is NOT
+    convex and the argument above fails. A hole anywhere inside the block returns None
+    rather than a plausible-looking guess."""
+    rows = np.flatnonzero(~mask.all(axis=1))
+    cols = np.flatnonzero(~mask.all(axis=0))
+    if rows.size == 0 or cols.size == 0:
+        return None
+    r0, r1, c0, c1 = rows[0], rows[-1], cols[0], cols[-1]
+    # read the hole check off the mask the caller already built, and let `.any()`
+    # short-circuit: on a plate that declines (lassen_ca) this is all the fast path
+    # costs before the general transform runs, and a fresh isnan over a 40 MP block
+    # would be a measurable tax on exactly the renders that gain nothing here.
+    if mask[r0:r1 + 1, c0:c1 + 1].any():
+        return None
+    h, w = elev.shape
+    return np.pad(elev[r0:r1 + 1, c0:c1 + 1],
+                  ((r0, h - 1 - r1), (c0, w - 1 - c1)), mode="edge")
+
 def _fill_nan(elev):
     """Repair stray nodata pixels from the NEAREST finite neighbour -- NOT the crop
     mean, which invents a smooth plateau at the average elevation under any real
@@ -268,6 +302,9 @@ def _fill_nan(elev):
         return elev
     if mask.all():
         return np.zeros_like(elev)   # crop entirely off the DEM: flat fallback, no crash
+    ring = _margin_ring_fill(elev, mask)      # the off-DEM margin, without the transform
+    if ring is not None:
+        return ring
     idx = distance_transform_edt(mask, return_distances=False, return_indices=True)
     return elev[tuple(idx)]
 
