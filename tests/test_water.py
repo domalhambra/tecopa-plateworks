@@ -178,3 +178,89 @@ def test_depth_field_stays_bounded_in_memory():
     # field dpi-stable rather than merely cheap
     grid_m = (spec.crop[2] - spec.crop[0]) / calls["shape"][1]
     assert grid_m == pytest.approx(render.VIGNETTE_GRID_M, rel=0.35)
+
+
+# ---- tapered rivers ---------------------------------------------------------------
+
+def _straight_river(spec, order, frac_y=0.5, n=41):
+    """A due-east reach across the middle of the crop, as the baker would emit it:
+    first vertex upstream, last downstream (NHD digitises downstream -- checked
+    against the DEM on this plate at 226 reaches down vs 15 up)."""
+    x0, y0, x1, y1 = spec.crop
+    y = y0 + (y1 - y0) * frac_y
+    xs = np.linspace(x0 + (x1 - x0) * 0.1, x0 + (x1 - x0) * 0.9, n)
+    return {"crs": spec.crs, "lakes": [],
+            "rivers": [{"coords": [[float(x), float(y)] for x in xs],
+                        "order": order, "name": ""}]}
+
+
+def _ink_profile(img, out_w, out_h):
+    """Ink thickness (px) down each column -- how wide the river is drawn there."""
+    a = np.asarray(img.convert("RGB")).astype(int)
+    inked = np.abs(a - np.array(render.RIVER_COLOR)).sum(axis=2) < 90
+    return inked.sum(axis=0)
+
+
+def test_river_width_is_monotone_in_order_and_clamped():
+    w = [render._river_width_pt(o) for o in range(1, 12)]
+    assert w == sorted(w)
+    assert w[-1] == render.RIVER_MAX_PT
+    assert render._river_width_pt(3) == render.RIVER_BASE_PT
+
+
+def test_an_order_three_reach_is_still_drawn_at_one_constant_width():
+    """Order 3 is the headwater gauge: width(2) == width(3), so there is nothing to
+    taper and the reach takes the original single-line path unchanged."""
+    from PIL import Image
+    spec = _spec()
+    out_w, out_h = spec.pixel_size(150)
+    img = Image.new("RGBA", (out_w, out_h), (255, 255, 255, 255))
+    render._draw_hydro(img, _straight_river(spec, 3), spec, out_w, out_h, 150)
+    prof = _ink_profile(img, out_w, out_h)
+    lit = prof[prof > 0]
+    assert lit.size > 100
+    assert lit.max() - lit.min() <= 1        # constant to within rasterisation
+
+
+def test_an_order_four_reach_widens_downstream():
+    """Measured at PRINT dpi on purpose. The taper is 0.5 pt over a whole reach, which
+    is ~1 px at a 150 dpi proof and ~2 px at 300 -- it is a print-resolution refinement,
+    and asserting it at proof dpi would only be testing integer rounding."""
+    from PIL import Image
+    spec = _spec()
+    out_w, out_h = spec.pixel_size(300)
+    img = Image.new("RGBA", (out_w, out_h), (255, 255, 255, 255))
+    render._draw_hydro(img, _straight_river(spec, 4), spec, out_w, out_h, 300)
+    prof = _ink_profile(img, out_w, out_h)
+    cols = np.flatnonzero(prof > 0)
+    head = prof[cols[:len(cols) // 5]].mean()      # upstream fifth
+    mouth = prof[cols[-len(cols) // 5:]].mean()    # downstream fifth
+    assert mouth > head + 1.2, f"no taper: head {head:.1f} px, mouth {mouth:.1f} px"
+
+
+def test_the_taper_joins_continuously_at_a_confluence():
+    """The reason the taper runs width(order-1) -> width(order): two order-3 reaches
+    END at width(3), and the order-4 reach they feed STARTS at width(3). Get this
+    backwards and every confluence gains a visible step."""
+    assert render._river_taper_pt(3) == (render._river_width_pt(3),
+                                         render._river_width_pt(3))
+    for o in (4, 5, 6, 7):
+        up_end = render._river_taper_pt(o - 1)[1]
+        down_start = render._river_taper_pt(o)[0]
+        assert down_start == up_end, f"step at the order {o-1}->{o} confluence"
+
+
+def test_taper_is_dpi_stable_in_physical_units():
+    """The taper is drawn in POINTS, so doubling the dpi doubles the pixel width and
+    leaves the printed river the same size."""
+    from PIL import Image
+    spec = _spec()
+    widths = {}
+    for dpi in (150, 300):
+        out_w, out_h = spec.pixel_size(dpi)
+        img = Image.new("RGBA", (out_w, out_h), (255, 255, 255, 255))
+        render._draw_hydro(img, _straight_river(spec, 7), spec, out_w, out_h, dpi)
+        widths[dpi] = _ink_profile(img, out_w, out_h).max()   # the downstream end
+    # a whole-pixel width quantises (2.7 pt is 5.6 px at 150 and 11.25 at 300, drawn as
+    # 6 and 11), so the ratio lands near 2 rather than on it
+    assert widths[300] == pytest.approx(widths[150] * 2, rel=0.15)

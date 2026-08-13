@@ -2261,13 +2261,66 @@ def _draw_hydro(img, hydro, spec, out_w, out_h, dpi, ctx=None):
             # (red-team beauty finding). The shoreline stays crisp at full ink.
             d.polygon(pts, fill=WATER_FILL + (235,), outline=WATER_SHORELINE + (255,), width=sw)
     for r in hydro.get("rivers", []):
-        wpt = min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, r.get("order", 3) - 3))
-        wpx = max(1, round(_pt_to_px(wpt, dpi)))
         pts = [_crs_to_px_oblique(x, y, spec, out_w, out_h, ctx)
                for x, y, *_ in (r.get("coords") or [])]
         if len(pts) >= 2:
-            d.line(pts, fill=RIVER_COLOR + (255,), width=wpx, joint="curve")
+            _draw_river(d, pts, r.get("order", 3), dpi)
     return img
+
+
+def _river_width_pt(order):
+    """The drawn width of a stream of Horton-Strahler `order`, in points."""
+    return min(RIVER_MAX_PT, RIVER_BASE_PT + RIVER_STEP_PT * max(0, order - 3))
+
+
+def _river_taper_pt(order):
+    """`(upstream_pt, downstream_pt)` for a reach of this order.
+
+    A reach enters at the width of the order BELOW it and leaves at its own, which is
+    what makes the network continuous: two order-3 reaches end at width(3), and the
+    order-4 reach they feed begins at width(3) and grows. Taper each reach from its own
+    width instead and every confluence gains a visible step -- the artefact this
+    replaces, where a river changed gauge abruptly at a junction.
+
+    Order 3 is the headwater gauge (width(2) == width(3)), so it returns an equal pair
+    and the caller takes the original constant-width path."""
+    return _river_width_pt(order - 1), _river_width_pt(order)
+
+
+def _draw_river(d, pts, order, dpi):
+    """Ink one reach, tapering upstream -> downstream along its own arc length.
+
+    Direction is the vertex order NHD ships, which digitises downstream; checked
+    against this plate's DEM at 226 reaches running downhill to 15 running uphill (the
+    rest flat within 0.5 m). A reach digitised backwards tapers the wrong way by half a
+    point over its whole length, which is under a pixel at print resolution.
+
+    PIL draws no variable-width polyline, so a tapering reach is drawn segment by
+    segment with a disc at each joint to keep the seam closed. Reaches that do not
+    taper -- every order-3 headwater, i.e. most of them -- take the original single
+    `line(..., joint="curve")` call untouched."""
+    w0_pt, w1_pt = _river_taper_pt(order)
+    ink = RIVER_COLOR + (255,)
+    if w0_pt == w1_pt:
+        d.line(pts, fill=ink, width=max(1, round(_pt_to_px(w1_pt, dpi))), joint="curve")
+        return
+    seg = [_m.hypot(pts[i + 1][0] - pts[i][0], pts[i + 1][1] - pts[i][1])
+           for i in range(len(pts) - 1)]
+    total = sum(seg)
+    if total <= 0:
+        d.line(pts, fill=ink, width=max(1, round(_pt_to_px(w1_pt, dpi))), joint="curve")
+        return
+    w0, w1 = _pt_to_px(w0_pt, dpi), _pt_to_px(w1_pt, dpi)
+    run = 0.0
+    for i, s in enumerate(seg):
+        mid = (run + s / 2) / total                    # this segment's place along it
+        w = max(1, round(w0 + (w1 - w0) * mid))
+        d.line([pts[i], pts[i + 1]], fill=ink, width=w)
+        if i and w > 2:                                # close the elbow, not the ends
+            x, y = pts[i]
+            rr = w / 2.0
+            d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=ink)
+        run += s
 
 # The compose->rasterize seam, split into three stages so a time-lapse can paint the
 # static base ONCE and re-ink only the route per frame. rasterize = base -> journey(all
