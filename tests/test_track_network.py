@@ -1097,3 +1097,174 @@ def test_edition_icons_are_stable_across_editions(tmp_path):
         for s in farm._edition_spots(tracks[:upto], spots, r, str(tmp_path)):
             assert seen.setdefault(s["label"], s["icon"]) == s["icon"]
     assert seen == dict(zip(names, icons))
+
+
+# --------------------------------------------------------------------------
+# scripts/fetch_track_network.py -- the pure half. The fetch itself is
+# network-dependent and hand-verified (spec "Testing"), same policy as
+# region_prep.py, but the bbox transposition, the tiling arithmetic, the
+# classifier and the retry loop are all pure and all easy to get silently wrong.
+# --------------------------------------------------------------------------
+from scripts import fetch_track_network as fetch_net
+
+
+def test_overpass_bbox_transposes_lonlat_to_south_west_north_east():
+    """Region.lonlat_bbox is (w, s, e, n); Overpass wants (s, w, n, e). A
+    transposed bbox is silent -- it returns the wrong part of the world, or
+    nothing -- so pin the ordering with a box no symmetry can hide."""
+    assert fetch_net.overpass_bbox((-121.0738, 40.1503, -120.3188, 40.8597)) == (
+        40.1503, -121.0738, 40.8597, -120.3188)
+
+
+def test_a_small_plate_is_one_request():
+    tiles = fetch_net.tile_bboxes((-121.0738, 40.1503, -120.3188, 40.8597), 1.0)
+    assert tiles == [(40.1503, -121.0738, 40.8597, -120.3188)]
+
+
+def test_a_large_plate_is_tiled_and_covers_the_whole_bbox_exactly():
+    """elko_bonneville: 5.835 x 3.117 deg. Tiles must partition the bbox with no
+    gap and no slop at the far edges -- a hairline gap along the top or right
+    would drop every way in it."""
+    box = (-116.9464, 39.0681, -111.1115, 42.1847)
+    tiles = fetch_net.tile_bboxes(box, 1.0)
+    assert len(tiles) == 24                      # 6 x 4
+    w, s, e, n = box
+    assert min(t[1] for t in tiles) == w and max(t[3] for t in tiles) == e
+    assert min(t[0] for t in tiles) == s and max(t[2] for t in tiles) == n
+    for ts, tw, tn, te in tiles:
+        assert (te - tw) * (tn - ts) <= 1.0 + 1e-9
+    # areas sum to the original, i.e. a true partition
+    assert sum((te - tw) * (tn - ts) for ts, tw, tn, te in tiles) == pytest.approx(
+        (e - w) * (n - s))
+
+
+def test_tiling_is_deterministic():
+    box = (-107.7361, 39.0341, -106.6128, 39.6359)
+    assert fetch_net.tile_bboxes(box, 1.0) == fetch_net.tile_bboxes(box, 1.0)
+
+
+def test_way_class_maps_the_three_classes():
+    assert fetch_net.way_class({"highway": "track"}) == "4wd"
+    for h in ("path", "footway", "bridleway", "cycleway"):
+        assert fetch_net.way_class({"highway": h}) == "trail"
+    for h in ("motorway", "residential", "service", "unclassified"):
+        assert fetch_net.way_class({"highway": h}) == "road"
+    assert fetch_net.way_class(None) == "road"
+
+
+def test_query_asks_overpass_in_south_west_north_east_order():
+    q = fetch_net.overpass_query((40.1503, -121.0738, 40.8597, -120.3188))
+    assert "(40.150300,-121.073800,40.859700,-120.318800)" in q
+    assert '"service"!~' in q and '"footway"!~' in q
+
+
+def test_collect_ways_dedupes_across_overlapping_tiles():
+    """A way straddling a tile seam comes back whole from both tiles."""
+    el = {"type": "way", "id": 7, "tags": {"highway": "path"},
+          "geometry": [{"lon": -121.0, "lat": 40.5}, {"lon": -120.9, "lat": 40.6}]}
+    into = {}
+    assert fetch_net.collect_ways([el], into) == 1
+    assert fetch_net.collect_ways([el], into) == 0
+    assert into[7][0] == "trail"
+
+
+def test_collect_ways_skips_degenerate_and_non_way_elements():
+    into = {}
+    assert fetch_net.collect_ways([
+        {"type": "node", "id": 1, "lat": 40.0, "lon": -121.0},
+        {"type": "way", "id": 2, "geometry": [{"lon": -121.0, "lat": 40.0}]},
+        {"type": "way", "id": 3, "geometry": []},
+        {"type": "way", "id": 4},
+        {"type": "way", "id": 5, "geometry": [{"lon": None, "lat": None},
+                                              {"lon": -121.0, "lat": 40.0}]},
+    ], into) == 0
+    assert into == {}
+
+
+def test_project_ways_is_sorted_by_id_and_rounded_to_the_graph_grid():
+    """Sorted output is what makes a re-fetch byte-identical; 0.1 m is exactly
+    what Graph.key rounds to, so no precision is thrown away and none is faked."""
+    by_id = {99: ("road", [-121.0, -120.99], [40.5, 40.51]),
+             11: ("trail", [-121.0, -120.98], [40.5, 40.52])}
+    ways = fetch_net.project_ways(by_id, "EPSG:32610")
+    assert [w["class"] for w in ways] == ["trail", "road"]      # id 11 before 99
+    for w in ways:
+        for x, y in w["coords"]:
+            assert x == round(x, 1) and y == round(y, 1)
+    assert build_graph(ways).key(ways[0]["coords"][0]) == tuple(ways[0]["coords"][0])
+
+
+def test_project_ways_collapses_points_that_round_together():
+    """Two OSM nodes under 0.1 m apart are one graph vertex; keeping both would
+    only bloat the file with a segment build_graph already discards."""
+    by_id = {1: ("road", [-121.0, -121.0 + 1e-7, -120.99], [40.5, 40.5, 40.51])}
+    ways = fetch_net.project_ways(by_id, "EPSG:32610")
+    assert len(ways[0]["coords"]) == 2
+
+
+def test_project_ways_drops_a_way_that_collapses_to_a_point():
+    by_id = {1: ("road", [-121.0, -121.0 + 1e-9], [40.5, 40.5])}
+    assert fetch_net.project_ways(by_id, "EPSG:32610") == []
+
+
+def test_a_non_json_200_is_named_not_a_bare_decode_error():
+    """Overpass answers an overloaded query with 200 + an HTML error page more
+    often than with a status code."""
+    with pytest.raises(fetch_net.OverpassError, match="non-JSON response"):
+        fetch_net._post_from_bytes(b"<html><body>rate limited</body></html>")
+
+
+def test_retry_never_sleeps_after_the_final_attempt():
+    """The sketch's nested for/else slept a full backoff after the last attempt
+    on every endpoint -- minutes of dead air before an honest error."""
+    slept, calls = [], []
+
+    def boom(url, query):
+        calls.append(url)
+        raise fetch_net.OverpassError("HTTP 504 Gateway Timeout")
+
+    fetch_net._post, real = boom, fetch_net._post
+    try:
+        with pytest.raises(fetch_net.OverpassError, match="every Overpass endpoint"):
+            fetch_net.fetch_tile("q", endpoints=["a", "b"], attempts=3,
+                                 sleep=slept.append)
+    finally:
+        fetch_net._post = real
+    assert calls == ["a", "a", "a", "b", "b", "b"]
+    assert slept == [20, 40, 20, 40]          # 2 sleeps per endpoint, not 3
+
+
+def test_a_bad_query_is_not_retried():
+    """A 400 is our bug; retrying it just burns someone else's Overpass slot."""
+    calls = []
+
+    def boom(url, query):
+        calls.append(url)
+        raise fetch_net.OverpassError("HTTP 400 Bad Request -- line 1: parse error")
+
+    fetch_net._post, real = boom, fetch_net._post
+    try:
+        with pytest.raises(fetch_net.OverpassError, match="HTTP 400"):
+            fetch_net.fetch_tile("q", endpoints=["a", "b"], attempts=3,
+                                 sleep=lambda s: None)
+    finally:
+        fetch_net._post = real
+    assert calls == ["a"]
+
+
+def test_the_manifest_the_farm_reads_is_the_manifest_this_writes(tmp_path):
+    """load_network reads {"ways": [{"class", "coords"}]} -- the one contract
+    between the fetcher and everything downstream."""
+    manifest = {"region_id": "x", "crs": "EPSG:32610", "counts": {}, "ways":
+                fetch_net.project_ways({1: ("trail", [-121.0, -120.99],
+                                            [40.5, 40.51])}, "EPSG:32610")}
+    path = fetch_net.write_cache(manifest, str(tmp_path))
+    ways = track_network.load_network(path)
+    assert build_graph(ways).edges[0]["class"] == "trail"
+
+
+def test_class_counts_names_all_three_classes_even_at_zero():
+    """A plate with no trail is a broken query, and the summary has to be able
+    to say so rather than omitting the key."""
+    assert fetch_net.class_counts([{"class": "road", "coords": []}]) == {
+        "road": 1, "4wd": 0, "trail": 0}
