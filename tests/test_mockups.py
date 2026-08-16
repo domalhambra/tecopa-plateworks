@@ -344,6 +344,12 @@ def test_farm_integration(tmp_path, monkeypatch):
                          "--only", "poster", "film", "mockups", "model",
                          "--quick", "--dpi", "32", "--film-dpi", "32",
                          "--film-frames", "4", "--synthetic-dem",
+                         # --synthetic-tracks pins the INPUT: this test is about
+                         # mockup/GLB machinery, and cache/networks/ is gitignored,
+                         # so without it the test renders real routed journeys on a
+                         # machine that has fetched a cache and squiggles on one
+                         # that has not -- the same test measuring two things.
+                         "--synthetic-tracks",
                          "--out", str(tmp_path)])
     farm.main()
     out = tmp_path / "lassen_ca"
@@ -408,8 +414,11 @@ def test_farm_index_merge_keeps_prior_assets(tmp_path, monkeypatch):
     # full-run index with a mockup-only one while the real files still sit on disk
     import sys
     import scripts.render_asset_farm as farm
+    # --synthetic-tracks for the same reason as test_farm_integration: the index
+    # merge is what is under test, not which generator drew the ink
     base = ["render_asset_farm.py", "--regions", "lassen_ca", "--quick",
-            "--dpi", "32", "--synthetic-dem", "--out", str(tmp_path)]
+            "--dpi", "32", "--synthetic-dem", "--synthetic-tracks",
+            "--out", str(tmp_path)]
     monkeypatch.setattr(sys, "argv", base + ["--only", "poster"])
     farm.main()
     first = json.loads((tmp_path / "index.json").read_text())
