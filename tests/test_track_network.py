@@ -776,6 +776,143 @@ def test_densify_follows_the_source_geometry(tmp_path):
     assert long_leg > 1.8 * short_leg
 
 
+def _densify_path(points, spacing=75.0):
+    """Fill in a hand-built polyline's few far-apart via-points to ~spacing
+    metre node spacing, reusing the dense fixture's own `_line`. A fixture
+    with vertices only every few kilometres is exactly the shape that
+    concealed the trailhead-floor bug _dense_ways above exists to catch --
+    at real OSM spacing (20-300 m) the five nearest-to-target candidates can
+    span only a few metres of variation; at kilometre spacing they can't."""
+    out = [list(map(float, points[0]))]
+    for a, b in zip(points, points[1:]):
+        out.extend(_line(a, b, spacing=spacing)[1:])
+    return out
+
+
+def _big_network():
+    """A road ring near the plate edge + spokes + trail spurs to 9 summits,
+    one per 3x3 cell -- coverage is achievable, the composer must achieve it.
+    Densified to ~75 m node spacing (see _densify_path) so the test exercises
+    the same real-extract density as _dense_ways, not the concealing shape a
+    few-vertices-per-line fixture would be.
+
+    Also crowds 7 extra candidates into the SW cell (0, 0), listed FIRST in
+    labels.json/destination_pool order, alongside the one summit that already
+    lands there (Summit 1) -- 8 total, exactly n_trips's default. Every other
+    cell keeps exactly 1 candidate. This is what makes the fixture able to
+    catch a selector that stopped spreading: with 9 candidates in 9 cells
+    asking for 8, "first n of the pool" would already look fine (it only
+    misses one grid cell, everywhere else in-tolerance) -- the tautology this
+    module's own review history warns about (see
+    test_selection_uses_every_occupied_cell_before_repeating_one). With the
+    cluster, "first n" grabs the whole SW cell and nothing else; a selector
+    that actually spreads has 8 other fresh cells competing for the same 8
+    picks and has no reason to take more than one from the crowded cell."""
+    w, s, e, n = BOUNDS
+    xs = [w + (e - w) * f for f in (0.1, 0.5, 0.9)]
+    ys = [s + (n - s) * f for f in (0.1, 0.5, 0.9)]
+    ways = [{"class": "road", "coords": _densify_path([[x, ys[0]] for x in xs])},
+            {"class": "road", "coords": _densify_path([[x, ys[2]] for x in xs])},
+            {"class": "road", "coords": _densify_path([[xs[0], y] for y in ys])},
+            {"class": "road", "coords": _densify_path([[xs[2], y] for y in ys])},
+            {"class": "road", "coords": _densify_path([[xs[1], y] for y in ys])}]
+
+    feats = []
+    # Cluster candidates, sourced from the SAME west-road vertex list the
+    # xs[0] road way above densifies -- identical float coordinates, so each
+    # cluster trailhead lands on an existing graph vertex rather than
+    # dangling off the network.
+    west = _densify_path([[xs[0], ys[0]], [xs[0], ys[1]]])
+    row0_top = s + (n - s) / 3.0
+    cluster_srcs = [p for p in west if p[1] < row0_top - 500.0][1::8][:7]
+    for i, (cx, cy) in enumerate(cluster_srcs):
+        ways.append({"class": "trail",
+                     "coords": _densify_path([[cx, cy], [cx + 300.0, cy + 150.0]])})
+        feats.append({"name": f"Cluster {i}", "kind": "summit", "rank": 70,
+                      "coords": [[cx + 300.0, cy + 150.0]]})
+
+    k = 0
+    for x in xs:
+        for y in ys:
+            k += 1
+            ways.append({"class": "trail",
+                         "coords": _densify_path([[x, y], [x + 900, y + 900],
+                                                  [x + 1800, y + 1500]])})
+            feats.append({"name": f"Summit {k}", "kind": "summit", "rank": 70,
+                          "coords": [[x + 1800, y + 1500]]})
+    return ways, feats
+
+
+def test_coverage_spans_the_plate(tmp_path):
+    """The acceptance test for the whole project (spec Testing item 3). The
+    user's complaint, verbatim: demo routes "look like squiggly lines written
+    randomly" and cluster "in the middle with a bunch of empty-looking space"
+    instead of being "far-reaching enough that it makes the entire poster
+    look interesting." That is two claims, not one -- spread AND individual
+    journeys big enough to read as real trips -- and this test pins both,
+    against a fixture built so both are genuinely achievable: a road ring
+    near the plate edges, a spoke, and nine summits, one per 3x3 grid cell,
+    every one reachable from the ring.
+
+    Swept over 10 seeds, not pinned to one: test_no_track_is_degenerate above
+    already found a guarantee that held at seed 7 while failing at 9 of the
+    first 30 seeds elsewhere in this composer. A coverage guarantee that only
+    holds for one seed's draw is not a guarantee."""
+    import json
+    ways, feats = _big_network()
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "x", "features": feats}))
+    (tmp_path / "hydro.json").write_text(json.dumps({"crs": "x", "lakes": [],
+                                                     "rivers": []}))
+    r = _StubRegion(tmp_path)
+    r.cfg = {"bounds": list(BOUNDS)}
+    w, s, e, n = BOUNDS
+
+    for seed in range(10):
+        tracks, _ = network_tracks(r, ways, seed=seed)
+        assert tracks, f"seed {seed}: no tracks produced"
+        allpts = np.vstack([t.coords for t in tracks])
+
+        # half 1 of the complaint: spread, not clustered in the middle.
+        # Sampled every 25th point: POINT_SPACING_M is ~15 m, so this is one
+        # sample per ~375 m of travelled ink -- fine for cell OCCUPANCY,
+        # because the 3x3 grid cells here are ~8-10 km wide (a 30x20 km
+        # plate) and every visited cell holds a trailhead or a destination,
+        # not just a fleeting pass-through, so no occupied cell can vanish
+        # between two samples 375 m apart.
+        xspan = allpts[:, 0].max() - allpts[:, 0].min()
+        yspan = allpts[:, 1].max() - allpts[:, 1].min()
+        assert xspan >= 0.6 * (e - w), (
+            f"seed {seed}: x-span {xspan:.0f} m under 60% of the "
+            f"{e - w:.0f} m plate width")
+        assert yspan >= 0.6 * (n - s), (
+            f"seed {seed}: y-span {yspan:.0f} m under 60% of the "
+            f"{n - s:.0f} m plate height")
+        cells = {(min(2, int(3 * (x - w) / (e - w))), min(2, int(3 * (y - s) / (n - s))))
+                 for x, y in allpts[::25]}
+        assert len(cells) >= 5, f"seed {seed}: ink reached only {len(cells)} of 9 cells"
+
+        # half 2 of the complaint: journeys big enough to be interesting, not
+        # squiggly stubs -- pin it per-journey, not just on the aggregate,
+        # since a wide union bbox is consistent with eight tiny stubs
+        # scattered far apart.
+        #
+        # The Cluster destinations' own trail spurs are only ~335 m, so their
+        # span is entirely a function of the trailhead search, unlike the
+        # main 9 summits whose ~2.3 km trail spur alone clears any reasonable
+        # bar regardless of trailhead choice -- 0.05 * short (1000 m) passed
+        # even with trip_target_m mutated to return 1.0 (collapsing every
+        # trailhead onto the TRAILHEAD_MIN_M floor, the exact "always ON the
+        # floor" bug this project exists to fix): measured over 300 seeds,
+        # Cluster spans then topped out at 1456 m, while the real composer's
+        # never dropped below 1984 m. 0.85 * TRIP_SPAN_MIN_M = 1700 m sits
+        # comfortably in that gap.
+        for t in tracks:
+            tspan = float(np.hypot(*(t.coords.max(0) - t.coords.min(0))))
+            assert tspan > 0.85 * TRIP_SPAN_MIN_M, (
+                f"seed {seed}: {t.track_id} spans only {tspan:.0f} m -- "
+                "a squiggle, not a journey")
+
+
 def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):
     """Dates are seeded draws inside buckets as narrow as 91 days, with up to 8
     trips -- collisions are ordinary, not exotic. Two things must survive one:
