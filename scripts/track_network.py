@@ -72,5 +72,44 @@ def load_network(path: str) -> list[dict]:
         return json.load(f)["ways"]
 
 
-def dijkstra(*a, **k):
-    raise NotImplementedError
+def dijkstra(g: Graph, src: tuple, dst: tuple, weights: dict,
+             edge_penalty: dict | None = None):
+    """Cheapest path src->dst as a coord list, or None. `edge_penalty` maps
+    edge_idx -> multiplier (loop-finding). heapq only; county-scale graphs."""
+    if src not in g.adj or dst not in g.adj:
+        return None
+    dist = {src: 0.0}
+    prev: dict[tuple, tuple] = {}
+    pq = [(0.0, src)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u == dst:
+            break
+        if d > dist.get(u, float("inf")):
+            continue
+        for v, ei in g.adj[u]:
+            e = g.edges[ei]
+            c = e["len_m"] * weights[e["class"]]
+            if edge_penalty:
+                c *= edge_penalty.get(ei, 1.0)
+            nd = d + c
+            if nd < dist.get(v, float("inf")):
+                dist[v], prev[v] = nd, (u, ei)
+                heapq.heappush(pq, (nd, v))
+    if dst not in prev and src != dst:
+        return None
+    path, u = [dst], dst
+    while u != src:
+        u, _ei = prev[u]
+        path.append(u)
+    path.reverse()
+    return [list(p) for p in path]
+
+
+def path_edge_ids(g: Graph, path: list) -> list[int]:
+    """Edge indices along a dijkstra path (for loop-share accounting)."""
+    ids = []
+    for a, b in zip(path, path[1:]):
+        ka, kb = g.key(a), g.key(b)
+        ids.append(next(ei for v, ei in g.adj[ka] if v == kb))
+    return ids

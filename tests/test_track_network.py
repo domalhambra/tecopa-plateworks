@@ -4,7 +4,7 @@ summit, a 4wd loop pair, and a lake by the road. Distances in region-CRS metres.
 import numpy as np
 import pytest
 
-from scripts.track_network import build_graph, dijkstra, WEIGHTS
+from scripts.track_network import build_graph, dijkstra, path_edge_ids, WEIGHTS
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
 
@@ -60,3 +60,55 @@ def test_zero_length_segment_is_skipped():
     # only the final real segment (dup point -> 501_000) should produce an edge
     assert len(g.edges) == 1
     assert g.edges[0]["coords"] == [[500_000.02, 4_410_000.02], [501_000.0, 4_410_000.0]]
+
+
+def test_dijkstra_outing_prefers_the_trail():
+    g = build_graph(_ways())
+    src = g.key((515_000.0, 4_410_000.0))
+    dst = g.key((519_000.0, 4_414_000.0))
+    path = dijkstra(g, src, dst, WEIGHTS["outing"])
+    # the trail spur, not the long road detour
+    assert g.key(path[1]) == g.key((517_000.0, 4_412_000.0))
+
+
+def test_dijkstra_approach_prefers_the_road():
+    g = build_graph(_ways())
+    src = g.key((515_000.0, 4_410_000.0))
+    dst = g.key((519_000.0, 4_414_000.0))
+    # the trail is short enough that even the approach profile prefers it
+    # (5657 m x 1.3 = 7354 < 18000 m x 0.7 = 12600); force the contrast with a
+    # profile that makes road the only sane choice, proving weights steer routing
+    hostile = {"trail": 10.0, "4wd": 10.0, "road": 1.0}
+    path = dijkstra(g, src, dst, hostile)
+    assert g.key(path[1]) == g.key((524_000.0, 4_410_000.0))
+
+
+def test_dijkstra_unreachable_returns_none():
+    g = build_graph(_ways())
+    island = g.key((515_000.0, 4_410_000.0))
+    assert dijkstra(g, island, ("nope", "nope"), WEIGHTS["outing"]) is None
+
+
+def test_edge_penalty_pushes_the_route_off_its_first_choice():
+    """The loop-finding mechanism (T5): penalising the first path's edges must
+    make Dijkstra return a different route when one exists."""
+    g = build_graph(_ways())
+    src = g.key((515_000.0, 4_410_000.0))
+    dst = g.key((519_000.0, 4_414_000.0))
+    first = dijkstra(g, src, dst, WEIGHTS["outing"])
+    pen = {ei: 100.0 for ei in path_edge_ids(g, first)}
+    second = dijkstra(g, src, dst, WEIGHTS["outing"], edge_penalty=pen)
+    assert second is not None
+    assert second != first
+
+
+def test_path_edge_ids_match_the_path():
+    g = build_graph(_ways())
+    src = g.key((515_000.0, 4_410_000.0))
+    dst = g.key((519_000.0, 4_414_000.0))
+    path = dijkstra(g, src, dst, WEIGHTS["outing"])
+    ids = path_edge_ids(g, path)
+    assert len(ids) == len(path) - 1
+    # every id is a real edge joining its consecutive pair
+    for (a, b), ei in zip(zip(path, path[1:]), ids):
+        assert set(map(tuple, g.edges[ei]["coords"])) == {tuple(a), tuple(b)}
