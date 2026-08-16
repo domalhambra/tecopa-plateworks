@@ -68,26 +68,37 @@ in the repo carries OSM data. Plates stay CC0-clean.
 
 Seeded (`np.random.default_rng(seed)`), fully deterministic:
 
-- **Destination pool:** the plate's committed `labels.json` entries of kind
-  `summit`/`lake` (real named places), snapped to the nearest network node
-  within 2 km; entries that snap nowhere are dropped.
+- **Destination pool:** real named places from two committed plate files —
+  `labels.json` entries of kind `summit`/`gap` (point coords), and named lakes
+  from `hydro.json` (`lakes: [{name, coords}]`, destination = polygon
+  centroid). (`labels.json` has **no** `lake` kind — verified across all five
+  plates — so lakes must come from `hydro.json`.) Every candidate is snapped to
+  the nearest network node within 2 km; entries that snap nowhere are dropped.
 - **Coverage guarantee:** partition the plate into a 3×3 grid; greedy
   farthest-point selection of 6–8 destinations, never picking a cell twice
   until all occupied cells are used. This is the mechanical fix for
   requirement 2.
 - **Trip shapes**, chosen per destination by seeded draw: out-and-back
   (trailhead → destination → back), loop where the network offers two
-  sufficiently disjoint paths, or a 4WD day (route dominated by `4wd` ways).
+  sufficiently disjoint paths (disjointness threshold is a module constant,
+  like the edge costs), or a 4WD day (route dominated by `4wd` ways).
 - **Worn path:** one or two trailheads are reused across trips so the
   visitation-density story (`density.py` hotspots) survives.
-- **Dates:** spread across twelve months, low-elevation destinations earlier in
-  the year, high summits mid/late summer. The film becomes "the year drawing
-  itself".
+- **Dates:** spread across the year by **kind-based season buckets** —
+  lakes early (Mar–Jun), gaps mid (Jun–Aug), summits late (Jul–Oct) — with
+  seeded jitter inside each bucket. Deliberately **not** DEM-sampled: elevation
+  from the DEM would make dates a function of cache + seed + *DEM*, breaking
+  the §1 determinism statement on hosts whose plates carry synthetic stand-in
+  DEMs. Kind buckets are deterministic from committed plate data alone. The
+  film becomes "the year drawing itself".
 - **GPS realism:** densify edge geometry to ~15 m spacing, add seeded ~3 m
   jitter, so ink reads recorded rather than vector-perfect.
-- **Hotspots:** destinations become the hotspot list with their **real names**
-  from `labels.json` ("Antelope Mountain"), replacing the fake rotation
-  ("Base Camp", "The Notch"). `_annotate` keeps assigning icons/photo.
+- **Hotspots:** destinations become the hotspot list directly, carrying their
+  **real names** ("Antelope Mountain") — `density.hotspots` is **not consulted**
+  for network tracks (the worn-path bullet above is about the rendered ink
+  weave, not the spot list). `_annotate` changes accordingly: it assigns a
+  label only to spots that arrive without one, and keeps assigning icons and
+  the pinned photo for all.
 
 ### 4 · Farm integration + fallback
 
@@ -114,7 +125,8 @@ New `tests/test_track_network.py` with a small hand-built fixture network:
    axes, and ≥ 5 of the 3×3 cells receive ink.
 4. Determinism: same cache + seed → identical coordinate arrays.
 5. Fallback: no cache file → `_synth_tracks` output, byte-identical to today.
-6. Snapping: labels beyond 2 km of the network are dropped, never mis-anchored.
+6. Snapping: candidates (label points and lake centroids alike) beyond 2 km of
+   the network are dropped, never mis-anchored.
 
 `fetch_track_network.py` itself is verified by hand against one plate (network-
 dependent, same policy as `region_prep.py`).
