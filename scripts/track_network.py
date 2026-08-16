@@ -72,10 +72,15 @@ def load_network(path: str) -> list[dict]:
         return json.load(f)["ways"]
 
 
-def dijkstra(g: Graph, src: tuple, dst: tuple, weights: dict,
-             edge_penalty: dict | None = None):
-    """Cheapest path src->dst as a coord list, or None. `edge_penalty` maps
-    edge_idx -> multiplier (loop-finding). heapq only; county-scale graphs."""
+def dijkstra_edges(g: Graph, src: tuple, dst: tuple, weights: dict,
+                    edge_penalty: dict | None = None):
+    """Cheapest path src->dst as (coords, edge_ids), or None. `edge_ids` are
+    the exact edges Dijkstra traversed, in path order -- reconstructed from
+    the same `prev` chain the search builds, so they are unambiguous even
+    when parallel edges join a vertex pair (two ways over the same two
+    coords, common on real OSM data: a path mapped over a track, duplicated
+    imports, dual-carriageway merges). `edge_penalty` maps edge_idx ->
+    multiplier (loop-finding). heapq only; county-scale graphs."""
     if src not in g.adj or dst not in g.adj:
         return None
     dist = {src: 0.0}
@@ -98,16 +103,31 @@ def dijkstra(g: Graph, src: tuple, dst: tuple, weights: dict,
                 heapq.heappush(pq, (nd, v))
     if dst not in prev and src != dst:
         return None
-    path, u = [dst], dst
+    path, edge_ids, u = [dst], [], dst
     while u != src:
-        u, _ei = prev[u]
+        u, ei = prev[u]
         path.append(u)
+        edge_ids.append(ei)
     path.reverse()
-    return [list(p) for p in path]
+    edge_ids.reverse()
+    return [list(p) for p in path], edge_ids
+
+
+def dijkstra(g: Graph, src: tuple, dst: tuple, weights: dict,
+             edge_penalty: dict | None = None):
+    """Cheapest path src->dst as a coord list, or None. Thin wrapper over
+    `dijkstra_edges` -- there is exactly one search implementation."""
+    result = dijkstra_edges(g, src, dst, weights, edge_penalty=edge_penalty)
+    return None if result is None else result[0]
 
 
 def path_edge_ids(g: Graph, path: list) -> list[int]:
-    """Edge indices along a dijkstra path (for loop-share accounting)."""
+    """Edge indices along a coord path (for loop-share accounting), resolved
+    by taking the FIRST edge found joining each consecutive vertex pair.
+    This is ambiguous when parallel edges join a pair (two ways over the
+    same two coords) -- it may not be the edge Dijkstra actually traversed.
+    Callers that need the exact traversed edges should use
+    `dijkstra_edges`, which returns them directly from the search."""
     ids = []
     for a, b in zip(path, path[1:]):
         ka, kb = g.key(a), g.key(b)

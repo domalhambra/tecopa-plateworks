@@ -4,7 +4,8 @@ summit, a 4wd loop pair, and a lake by the road. Distances in region-CRS metres.
 import numpy as np
 import pytest
 
-from scripts.track_network import build_graph, dijkstra, path_edge_ids, WEIGHTS
+from scripts.track_network import (build_graph, dijkstra, dijkstra_edges,
+                                    path_edge_ids, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
 
@@ -112,3 +113,29 @@ def test_path_edge_ids_match_the_path():
     # every id is a real edge joining its consecutive pair
     for (a, b), ei in zip(zip(path, path[1:]), ids):
         assert set(map(tuple, g.edges[ei]["coords"])) == {tuple(a), tuple(b)}
+
+
+def test_dijkstra_edges_resolves_parallel_edges_correctly():
+    """Two ways over the IDENTICAL two coords -- a road and a trail -- are a
+    real OSM shape (a path mapped over a track, duplicated imports,
+    dual-carriageway merges). path_edge_ids can't tell them apart (it takes
+    the first match, which here is the more expensive road); dijkstra_edges
+    must, because it returns the edge the search actually walked."""
+    ways = [
+        {"class": "road",  "coords": [[0.0, 0.0], [100.0, 0.0]]},
+        {"class": "trail", "coords": [[0.0, 0.0], [100.0, 0.0]]},
+    ]
+    g = build_graph(ways)
+    src, dst = g.key((0.0, 0.0)), g.key((100.0, 0.0))
+
+    # outing weights make trail (0.6) strictly cheaper than road (1.5) here
+    path, edge_ids = dijkstra_edges(g, src, dst, WEIGHTS["outing"])
+    assert len(edge_ids) == 1
+    assert g.edges[edge_ids[0]]["class"] == "trail"
+
+    # path_edge_ids, given only the coord path, can't distinguish the two
+    # parallel edges -- it returns the first one added (the road), which is
+    # NOT the edge Dijkstra traversed. This demonstrates the ambiguity.
+    ambiguous_ids = path_edge_ids(g, path)
+    assert g.edges[ambiguous_ids[0]]["class"] == "road"
+    assert ambiguous_ids != edge_ids
