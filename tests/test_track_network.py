@@ -4,9 +4,11 @@ summit, a 4wd loop pair, and a lake by the road. Distances in region-CRS metres.
 import numpy as np
 import pytest
 
+from scripts import track_network
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
-                                    dijkstra_edges, path_edge_ids,
-                                    select_destinations, WEIGHTS)
+                                    dijkstra_edges, network_tracks,
+                                    path_edge_ids, select_destinations,
+                                    SEASONS, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
 
@@ -393,3 +395,142 @@ def test_selection_clamps_cells_for_out_of_bounds_candidates():
     assert len(picks) == 2
     assert "on_ne_corner" in names
     assert not {"west_of_plate", "south_of_plate"} <= names
+
+
+def _region(tmp_path):
+    import json
+    (tmp_path / "labels.json").write_text(json.dumps(LABELS))
+    (tmp_path / "hydro.json").write_text(json.dumps(HYDRO))
+    return _StubRegion(tmp_path)
+
+
+class _StubRegion:
+    def __init__(self, tmpdir):
+        self.id = "stub"
+        self.dir = str(tmpdir)
+        self.cfg = {"bounds": list(BOUNDS)}
+
+
+def test_network_tracks_shape_and_determinism(tmp_path):
+    r = _region(tmp_path)
+    t1, s1 = network_tracks(r, _ways(), seed=7)
+    t2, s2 = network_tracks(r, _ways(), seed=7)
+    assert len(t1) >= 2 and len(s1) >= 2
+    for a, b in zip(t1, t2):
+        assert a.day == b.day
+        assert np.array_equal(a.coords, b.coords)
+    assert [x["label"] for x in s1] == [x["label"] for x in s2]
+
+
+def test_tracks_are_dated_by_season_bucket_and_sorted(tmp_path):
+    from datetime import date
+    r = _region(tmp_path)
+    tracks, _ = network_tracks(r, _ways(), seed=7)
+    days = [date.fromisoformat(t.day) for t in tracks]
+    assert days == sorted(days)
+    for t, d in zip(tracks, days):
+        kind = t.track_id.split(":", 1)[0]      # track_id = "<kind>:<name>"
+        lo, hi = SEASONS[kind]
+        assert lo <= d.timetuple().tm_yday <= hi
+
+
+def test_tracks_are_densified_and_jittered(tmp_path):
+    r = _region(tmp_path)
+    tracks, _ = network_tracks(r, _ways(), seed=7)
+    seg = np.hypot(*np.diff(tracks[0].coords, axis=0).T)
+    assert np.median(seg) < 40.0
+    assert len(tracks[0].coords) > 100
+
+
+def test_spots_carry_real_names_and_positions(tmp_path):
+    r = _region(tmp_path)
+    _, spots = network_tracks(r, _ways(), seed=7)
+    names = {s["label"] for s in spots}
+    assert names <= {"Near Summit", "Road Lake"} and names
+    for s in spots:
+        assert set(s) >= {"x", "y", "weight", "label"}
+
+
+def test_different_seeds_give_different_journeys(tmp_path):
+    """Determinism must not mean the seed is ignored."""
+    r = _region(tmp_path)
+    a, _ = network_tracks(r, _ways(), seed=7)
+    b, _ = network_tracks(r, _ways(), seed=99)
+    same = (len(a) == len(b)
+            and all(np.array_equal(x.coords, y.coords) for x, y in zip(a, b)))
+    assert not same
+
+
+def test_no_track_is_degenerate(tmp_path):
+    """Every rendered journey must be a real path, not two points at a road-side
+    destination -- the trailhead distance floor exists for this.
+
+    Swept across seeds, not pinned to one: the trailhead is a seeded draw from
+    the five nearest candidates, so a single seed tests one draw. "Road Lake"
+    snaps ONTO the road crossing, which is exactly the shape that degenerates
+    -- with the 1 km floor deleted, 9 of the first 30 seeds produce a
+    sub-10 m track and seed 7 is not among them (measured). The guarantee is
+    per-journey and per-seed, so the test has to be too."""
+    r = _region(tmp_path)
+    for seed in range(12):
+        tracks, _ = network_tracks(r, _ways(), seed=seed)
+        assert tracks
+        for t in tracks:
+            span = np.hypot(*(t.coords.max(axis=0) - t.coords.min(axis=0)))
+            assert span > 500.0, f"seed {seed}: {t.track_id} spans only {span:.0f} m"
+
+
+def test_trailhead_never_lands_on_the_destination_itself():
+    """The last-resort branch: a destination inside a dense road web, where
+    EVERY road vertex sits within the 1 km floor. Taking the nearest vertex
+    then returns the destination's own node, and a trip from a point to itself
+    renders as a dot -- so this branch takes the farthest instead.
+
+    The main fixture can never reach here (it always has a road vertex beyond
+    1 km), which is why this is a direct unit test rather than a
+    network_tracks assertion."""
+    ways = [{"class": "road", "coords": [[0.0, 0.0], [300.0, 0.0], [600.0, 0.0]]}]
+    g = build_graph(ways)
+    dest = g.key((0.0, 0.0))
+    th = track_network._trailhead_for(g, dest, [], np.random.default_rng(3))
+    assert th != dest                       # not a dot
+    assert th == g.key((600.0, 0.0))        # the farthest available, not the nearest
+
+
+def test_trailhead_on_a_network_with_no_roads():
+    """A clipped OSM extract can hold trails and 4wd tracks but no `road` way
+    at all (a wilderness-interior tile). Without the fall-back to any vertex,
+    the empty road_keys list becomes a 1-D numpy array and `arr[:, 0]` raises
+    IndexError, taking down the whole farm run rather than routing a trip."""
+    g = build_graph([{"class": "trail", "coords": [[0.0, 0.0], [5_000.0, 0.0]]}])
+    th = track_network._trailhead_for(g, g.key((0.0, 0.0)), [],
+                                      np.random.default_rng(0))
+    assert th in g.adj
+    assert th == g.key((5_000.0, 0.0))
+
+
+def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):
+    """Dates are seeded draws inside buckets as narrow as 91 days, with up to 8
+    trips -- collisions are ordinary, not exotic. Two things must survive one:
+    the sort must not raise, and the resulting order must be deterministic.
+
+    A tuple sort key whose second element is the destination dict --
+    `key=lambda t: (t[0], t[2])`, the natural way to write "date then
+    payload" -- raises TypeError on the first tie and kills the farm run;
+    verified by mutation, this test catches exactly that. (A key of the bare
+    date does NOT raise: `sort(key=...)` compares only the extracted keys, so
+    the dict is never reached. It survives on Timsort's stability instead,
+    which is why the explicit `seq` tiebreaker is there.)
+
+    Collapse every season bucket to a single day to force the tie: the
+    fixture's two destinations are a summit and a lake, whose real buckets
+    are disjoint, so they can never collide on their own."""
+    monkeypatch.setattr(track_network, "SEASONS",
+                        {"lake": (200, 200), "gap": (200, 200), "summit": (200, 200)})
+    r = _region(tmp_path)
+    tracks, _ = network_tracks(r, _ways(), seed=7)
+    assert len(tracks) >= 2
+    assert len({t.day for t in tracks}) == 1          # the collision really happened
+    # and the tie broke deterministically, not by luck
+    again, _ = network_tracks(r, _ways(), seed=7)
+    assert [t.track_id for t in tracks] == [t.track_id for t in again]

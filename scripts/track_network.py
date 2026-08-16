@@ -229,6 +229,142 @@ def select_destinations(pool: list[dict], bounds: tuple, n: int, rng) -> list[di
     return [pool[i] for i in picks]
 
 
+def _densify(path: np.ndarray, rng) -> np.ndarray:
+    """~POINT_SPACING_M sampling along the polyline + seeded GPS jitter, so ink
+    reads recorded rather than vector-perfect.
+
+    Zero-length segments are dropped first: `np.interp` needs a strictly
+    increasing `xp`, and a repeated vertex (the graph rounds to 0.1 m, but an
+    out-and-back's turnaround and any hand-built fixture can still repeat one)
+    would otherwise leave a flat step in the arc-length array."""
+    p = np.asarray(path, dtype=float)
+    if len(p) < 2:
+        # a one-point path can't be interpolated; hand back two identical
+        # samples rather than dividing by a zero-length arc
+        p = np.repeat(p.reshape(-1, 2)[:1], 2, axis=0) if len(p) else np.zeros((2, 2))
+        return p + rng.normal(0.0, JITTER_M, p.shape)
+    seg = np.hypot(*np.diff(p, axis=0).T)
+    keep = seg > 1e-9
+    if not keep.all():
+        p = np.vstack([p[:1], p[1:][keep]])
+        seg = seg[keep]
+    total = float(seg.sum())
+    if total <= 0.0:                      # every vertex identical after filtering
+        out = np.repeat(p[:1], 2, axis=0)
+        return out + rng.normal(0.0, JITTER_M, out.shape)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    n = max(2, int(s[-1] / POINT_SPACING_M))
+    t = np.linspace(0.0, s[-1], n)
+    out = np.column_stack([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])])
+    return out + rng.normal(0.0, JITTER_M, out.shape)
+
+
+def _trailhead_for(g: Graph, dest_node: tuple, worn: list, rng) -> tuple:
+    """A road-touching vertex to start from, given a destination's snapped
+    graph key (an (x, y) tuple from `destination_pool`'s `node` field).
+
+    Reuse a worn trailhead when one lies within 12 km but NOT closer than 1 km
+    -- a trailhead that IS the destination (a lake beside the road) degenerates
+    the trip to two points -- else draw from the five nearest road vertices
+    outside 1 km, so repeated destinations don't always start identically.
+
+    The last-resort branch (every road vertex inside 1 km) takes the FARTHEST
+    one, not the nearest: on a plate where the destination sits in a dense
+    road web the nearest vertex can be the destination itself, and a trip from
+    a point to itself renders as a dot."""
+    for th in worn:
+        d = np.hypot(th[0] - dest_node[0], th[1] - dest_node[1])
+        if 1_000 < d < 12_000:
+            return th
+    road_keys = sorted({k for k, nbrs in g.adj.items()
+                        if any(g.edges[ei]["class"] == "road" for _, ei in nbrs)})
+    if not road_keys:                      # trail/4wd-only extract: any vertex will do
+        road_keys = sorted(g.adj.keys())
+    arr = np.array(road_keys, dtype=float)
+    d = np.hypot(arr[:, 0] - dest_node[0], arr[:, 1] - dest_node[1])
+    ok = np.where(d > 1_000)[0]
+    cand = ok[np.argsort(d[ok])[:5]] if len(ok) else np.argsort(d)[-1:]
+    return road_keys[int(rng.choice(cand))]
+
+
+def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
+    """The year of trips: seeded, deterministic from (ways, plate files, seed)
+    alone. Returns (tracks, spots) ready for the farm."""
+    from app.ingest import Track          # local: the graph half of this module
+                                          # must stay importable without the engine
+    rng = np.random.default_rng(seed)
+    g = build_graph(ways)
+    pool = destination_pool(region.dir, g)
+    dests = select_destinations(pool, tuple(region.cfg["bounds"]), n_trips, rng)
+
+    worn: list[tuple] = []
+    year = 2024
+    trips = []
+    # A destination in a different connected component than its trailhead routes
+    # to None and is skipped. Correct but silent, and on a clipped OSM extract it
+    # quietly thins the trip list -- so count and report rather than shipping a
+    # poster with three journeys where eight were intended.
+    skipped = 0
+    for seq, d in enumerate(dests):
+        th = _trailhead_for(g, d["node"], worn, rng)
+        if len(worn) < 2 and th not in worn:
+            worn.append(th)
+        # dijkstra_edges, not dijkstra + path_edge_ids: the loop penalty and the
+        # 4wd-share test must act on the edges actually traversed. Real OSM data
+        # carries parallel edges (a path mapped over a track), and resolving them
+        # by first-match would mis-apply the penalty silently.
+        got = dijkstra_edges(g, th, d["node"], WEIGHTS["outing"])
+        if got is None:
+            skipped += 1
+            continue
+        out_path, out_ids = got
+        shape = rng.choice(["out_and_back", "loop", "4wd"])
+        path = None
+        if shape == "loop":
+            pen = {ei: LOOP_PENALTY for ei in out_ids}
+            back = dijkstra_edges(g, d["node"], th, WEIGHTS["outing"], edge_penalty=pen)
+            if back is not None:
+                back_path, back_ids = back
+                shared = set(back_ids) & set(out_ids)
+                if len(shared) <= LOOP_SHARE_MAX * len(out_ids):
+                    path = out_path + back_path[1:]
+        elif shape == "4wd":
+            p4 = dijkstra_edges(g, th, d["node"], WEIGHTS["4wd_day"])
+            if p4 is not None:
+                p, ids = p4
+                l4 = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
+                lt = sum(g.edges[i]["len_m"] for i in ids) or 1.0
+                if l4 / lt >= 0.4:
+                    path = p + p[-2::-1]               # 4wd out-and-back
+        if path is None:                               # default / fallbacks
+            path = out_path + out_path[-2::-1]
+        lo, hi = SEASONS[d["kind"]]
+        day = date(year, 1, 1) + timedelta(days=int(rng.integers(lo, hi + 1)) - 1)
+        trips.append((day, seq, d, _densify(np.asarray(path, dtype=float), rng)))
+
+    if skipped:
+        print(f"  tracks: {skipped} of {len(dests)} destinations unreachable "
+              f"from their trailhead (disconnected network) -- skipped")
+    # `seq` is the tiebreaker on purpose. Shared dates are ordinary here, not
+    # exotic -- buckets as narrow as 91 days, up to 8 trips -- so the sort key
+    # must be TOTAL over dates. Sorting on the bare date works today only
+    # because Timsort is stable, i.e. the order of same-day trips rests on an
+    # unstated invariant; and the obvious "make it explicit" edit,
+    # `key=lambda t: (t[0], t[2])`, raises TypeError the first time two trips
+    # tie, because a tuple key falls through to comparing the dicts. `seq` is
+    # unique and already deterministic (selection order), so the key is total
+    # and never reaches the payload either way.
+    trips.sort(key=lambda t: (t[0], t[1]))
+    tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
+                    day=day.isoformat()) for day, _seq, d, coords in trips]
+    seen: dict[str, dict] = {}
+    for _day, _seq, d, _coords in trips:
+        s = seen.setdefault(d["name"], {"x": d["x"], "y": d["y"], "weight": 0,
+                                        "label": d["name"]})
+        s["weight"] += 1
+    return tracks, list(seen.values())
+
+
 def path_edge_ids(g: Graph, path: list) -> list[int]:
     """Edge indices along a coord path (for loop-share accounting), resolved
     by taking the FIRST edge found joining each consecutive vertex pair.
