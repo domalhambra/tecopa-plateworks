@@ -8,6 +8,7 @@ no way-splitting logic exists to get wrong. County-scale plates stay small."""
 from __future__ import annotations
 import heapq
 import json
+import math
 import os
 from datetime import date, timedelta
 
@@ -41,6 +42,10 @@ class Graph:
 
     def vertex_array(self):
         ks = list(self.adj.keys())
+        if not ks:
+            # np.array([], dtype=float) would be shape (0,), not (0, 2); Task 3's
+            # argmin-over-coordinates indexing needs the 2-D shape even when empty.
+            return ks, np.empty((0, 2))
         return ks, np.array(ks, dtype=float)
 
 
@@ -52,7 +57,7 @@ def build_graph(ways: list[dict]) -> Graph:
             ka, kb = g.key(a), g.key(b)
             if ka == kb:
                 continue
-            length = float(np.hypot(b[0] - a[0], b[1] - a[1]))
+            length = math.hypot(b[0] - a[0], b[1] - a[1])
             idx = len(g.edges)
             g.edges.append({"class": w["class"],
                             "coords": [list(map(float, a)), list(map(float, b))],

@@ -35,8 +35,9 @@ def _ways():
 def test_graph_shares_vertices_between_ways():
     g = build_graph(_ways())
     crossing = g.key((515_000.0, 4_410_000.0))
-    # the crossing joins the EW road, NS road, trail spur, and road detour
-    assert len(g.adj[crossing]) >= 4
+    # the crossing joins the EW road (2 segments), NS road (2 segments), trail
+    # spur (1 segment), and road detour (1 segment) -- exactly 6 adjacency entries
+    assert len(g.adj[crossing]) == 6
 
 
 def test_graph_keeps_edge_geometry_and_class():
@@ -44,3 +45,18 @@ def test_graph_keeps_edge_geometry_and_class():
     classes = {e["class"] for e in g.edges}
     assert classes == {"road", "trail", "4wd"}
     assert all(len(e["coords"]) == 2 for e in g.edges)   # vertex-per-point edges
+
+
+def test_zero_length_segment_is_skipped():
+    # a duplicate consecutive point (and a near-duplicate within 0.1 m, which
+    # rounds to the same vertex key) must not produce a zero-length edge
+    ways = [
+        {"class": "road", "coords": [[500_000, 4_410_000],
+                                      [500_000, 4_410_000],          # exact duplicate
+                                      [500_000.02, 4_410_000.02],     # rounds to same key
+                                      [501_000, 4_410_000]]},
+    ]
+    g = build_graph(ways)
+    # only the final real segment (dup point -> 501_000) should produce an edge
+    assert len(g.edges) == 1
+    assert g.edges[0]["coords"] == [[500_000.02, 4_410_000.02], [501_000.0, 4_410_000.0]]
