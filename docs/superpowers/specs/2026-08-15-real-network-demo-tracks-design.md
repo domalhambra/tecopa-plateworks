@@ -96,8 +96,25 @@ Seeded (`np.random.default_rng(seed)`), fully deterministic:
   (trailhead → destination → back), loop where the network offers two
   sufficiently disjoint paths (disjointness threshold is a module constant,
   like the edge costs), or a 4WD day (route dominated by `4wd` ways).
-- **Worn path:** one or two trailheads are reused across trips so the
-  visitation-density story (`density.py` hotspots) survives.
+- **Worn path:** arrives from the network itself. Trips starting at different
+  trailheads still funnel onto the same road corridors, so repeated ink appears
+  where the terrain actually forces it.
+
+  > **Amended 2026-08-15 (implementation review).** This bullet originally
+  > forced the effect: one or two trailheads reused across trips, justified as
+  > keeping "the visitation-density story (`density.py` hotspots)" alive. Both
+  > halves lapsed. The justification went first — the Hotspots bullet below now
+  > makes destinations the hotspot list directly and does not consult
+  > `density.hotspots` for network tracks, so there is no density story left to
+  > preserve. Then the mechanism proved unreachable: instrumented on real
+  > plates, trailhead reuse fired 0 times in 96 trips on `lassen_ca`, 0 in 96 on
+  > `elko_bonneville`, 2 in 96 on `tushar_beaver_ut`. It is structural, not a
+  > tuning miss — destination selection *maximises* separation across the 3×3
+  > grid, while a shared trailhead requires the opposite. On `lassen_ca` the
+  > minimum distance between any two selected destinations is 19–28 km against a
+  > reuse window topping out near 17 km, so widening the cap would not have
+  > rescued it either. The forcing mechanism is removed rather than left as a
+  > branch only test fixtures can enter.
 - **Dates:** spread across the year by **kind-based season buckets** —
   lakes early (Mar–Jun), gaps mid (Jun–Aug), summits late (Jul–Oct) — with
   seeded jitter inside each bucket. Deliberately **not** DEM-sampled: elevation
