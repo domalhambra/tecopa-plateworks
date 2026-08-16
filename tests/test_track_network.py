@@ -313,17 +313,36 @@ def test_selection_is_deterministic():
 
 
 def test_selection_uses_every_occupied_cell_before_repeating_one():
-    """The whole point: a plate with candidates in all 9 cells must not put two
-    trips in one cell while another cell sits empty."""
-    w, s, e, n = BOUNDS
-    pool = []
-    for i in range(3):
-        for j in range(3):
-            pool.append({"name": f"c{i}{j}", "kind": "summit",
-                         "x": w + (e - w) * (i + 0.5) / 3,
-                         "y": s + (n - s) * (j + 0.5) / 3, "node": ("k", i, j)})
-    picks = select_destinations(pool, BOUNDS, 9, np.random.default_rng(3))
-    assert len({_cell(d) for d in picks}) == 9     # all nine, no repeats
+    """The whole point, made with a fixture that can actually catch a
+    regression. Nine-candidates-in-nine-cells-asking-for-nine (the original
+    shape here) is tautological: n == len(pool), so every candidate comes
+    back regardless of whether the cell-rotation logic exists at all -- a
+    stripped-down plain-farthest-point selector with no cell awareness
+    passes it too.
+
+    This fixture instead crowds one cell (two points at opposite corners,
+    so pure distance makes them look maximally attractive to each other)
+    against three lone cells, and asks for one fewer than the candidate
+    count. Plain farthest-point picks both crowded-cell points before ever
+    reaching the fourth occupied cell at seeds 21 and 24 (confirmed by hand
+    against a stripped variant with the cell-rotation logic deleted); the
+    cell-aware selector must not repeat the crowded cell while a cell sits
+    untouched."""
+    pool = [
+        {"name": "crowded_sw", "kind": "summit", "x": 500_500.0, "y": 4_400_500.0,
+         "node": ("k", 0)},
+        {"name": "crowded_ne", "kind": "summit", "x": 509_500.0, "y": 4_406_000.0,
+         "node": ("k", 1)},
+        {"name": "lone_mid",   "kind": "summit", "x": 515_000.0, "y": 4_410_000.0,
+         "node": ("k", 2)},
+        {"name": "lone_ne",    "kind": "summit", "x": 525_000.0, "y": 4_416_000.0,
+         "node": ("k", 3)},
+        {"name": "lone_nw",    "kind": "summit", "x": 502_000.0, "y": 4_415_000.0,
+         "node": ("k", 4)},
+    ]
+    picks = select_destinations(pool, BOUNDS, 4, np.random.default_rng(21))
+    assert len(picks) == 4
+    assert len({_cell(d) for d in picks}) == 4     # all four occupied cells, no repeat
 
 
 def test_selection_handles_fewer_candidates_than_requested():
@@ -336,11 +355,31 @@ def test_selection_on_an_empty_pool():
     assert select_destinations([], BOUNDS, 8, np.random.default_rng(7)) == []
 
 
+def test_selection_with_n_less_than_one_returns_nothing():
+    """n=0 (or negative) must return an empty list, not one destination --
+    the unconditional `picks = [start]` before the loop would otherwise
+    hand back a single pick, and burn an RNG draw, for a caller that asked
+    for none. Not reachable today, but the signature promises n destinations
+    and a future caller may pass a computed count that lands on zero."""
+    assert select_destinations(_cands(), BOUNDS, 0, np.random.default_rng(7)) == []
+    assert select_destinations(_cands(), BOUNDS, -1, np.random.default_rng(7)) == []
+
+
 def test_selection_clamps_cells_for_out_of_bounds_candidates():
     """A destination that sits just off the nominal plate bounds (a label
-    snapped near the edge, say) must not blow up the cell grid with a
-    negative index -- confirms the low-side clamp, not just the high-side
-    one the BOUNDS-edge case already exercises via min(2, ...)."""
+    snapped near the edge, say) must not grow its own out-of-range pseudo
+    cell -- confirms the low-side clamp, not just the high-side one the
+    BOUNDS-edge corner point already exercises via min(2, ...).
+
+    west_of_plate and south_of_plate sit on opposite sides of the plate but
+    both clamp to the SAME real cell, (0, 0); on_ne_corner is the sole
+    occupant of (2, 2). Asking for n=2 with only 2 real cells occupied is
+    not tautological (n < len(pool)) and forces exactly one destination
+    from each real cell -- on_ne_corner must always come back. Without the
+    low-side clamp (only min(2, ...), no max(0, ...)), west_of_plate's
+    negative raw index reads as a permanently-fresh cell of its own, and at
+    seed 0 that bug picks BOTH crowded-cell members while skipping (2, 2)
+    entirely -- confirmed by hand against an unclamped variant."""
     w, s, e, n = BOUNDS
     pool = [
         {"name": "on_ne_corner", "kind": "summit", "x": e, "y": n, "node": ("k", 0)},
@@ -349,7 +388,8 @@ def test_selection_clamps_cells_for_out_of_bounds_candidates():
         {"name": "south_of_plate", "kind": "summit", "x": w + 5_000, "y": s - 50_000,
          "node": ("k", 2)},
     ]
-    picks = select_destinations(pool, BOUNDS, 3, np.random.default_rng(1))
-    assert len(picks) == 3
-    assert {d["name"] for d in picks} == {"on_ne_corner", "west_of_plate",
-                                          "south_of_plate"}
+    picks = select_destinations(pool, BOUNDS, 2, np.random.default_rng(0))
+    names = {d["name"] for d in picks}
+    assert len(picks) == 2
+    assert "on_ne_corner" in names
+    assert not {"west_of_plate", "south_of_plate"} <= names

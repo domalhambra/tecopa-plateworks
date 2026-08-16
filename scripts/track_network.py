@@ -199,7 +199,7 @@ def select_destinations(pool: list[dict], bounds: tuple, n: int, rng) -> list[di
     the nominal plate bounds (a label snapped near the edge, say) must still
     land in one of the 9 real cells rather than growing its own out-of-range
     cell that inflates the apparent spread."""
-    if not pool:
+    if not pool or n < 1:
         return []
     w, s, e, nb = bounds
 
