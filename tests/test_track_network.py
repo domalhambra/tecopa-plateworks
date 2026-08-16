@@ -515,7 +515,7 @@ def test_trailhead_never_lands_on_the_destination_itself():
     ways = [{"class": "road", "coords": [[0.0, 0.0], [300.0, 0.0], [600.0, 0.0]]}]
     g = build_graph(ways)
     dest = g.key((0.0, 0.0))
-    th = track_network._trailhead_for(road_vertex_index(g), dest, [], 5_000.0,
+    th = track_network._trailhead_for(road_vertex_index(g), dest, 5_000.0,
                                       np.random.default_rng(3))
     assert th != dest                       # not a dot
     assert th == g.key((600.0, 0.0))        # the farthest available, not the nearest
@@ -528,7 +528,7 @@ def test_trailhead_on_a_network_with_no_roads():
     IndexError, taking down the whole farm run rather than routing a trip."""
     g = build_graph([{"class": "trail", "coords": [[0.0, 0.0], [5_000.0, 0.0]]}])
     th = track_network._trailhead_for(road_vertex_index(g), g.key((0.0, 0.0)),
-                                      [], 5_000.0, np.random.default_rng(0))
+                                      5_000.0, np.random.default_rng(0))
     assert th in g.adj
     assert th == g.key((5_000.0, 0.0))
 
@@ -539,15 +539,15 @@ def test_trailhead_on_an_empty_graph_returns_none():
     from a cache that yielded no ways."""
     keys, arr = road_vertex_index(build_graph([]))
     assert keys == [] and arr.shape == (0, 2)
-    assert track_network._trailhead_for((keys, arr), (0.0, 0.0), [], 5_000.0,
+    assert track_network._trailhead_for((keys, arr), (0.0, 0.0), 5_000.0,
                                         np.random.default_rng(0)) is None
 
 
 def test_trip_target_scales_to_the_plate_and_clamps():
     """Trip length is a target scaled to the plate's SHORT side, so a day out
     reads as a day out at any plate scale -- and clamped at both ends, because
-    a tiny plate still needs a real walk and elko_bonneville (483 km wide)
-    must not ask for a 90 km day."""
+    a tiny plate still needs a real walk and elko_bonneville, whose SHORT
+    side is 331 km, must not ask for a 60 km day."""
     rng = np.random.default_rng(0)
     # 40 x 30 km plate -> short side 30 km -> 6%-18% is 1.8-5.4 km, floor 2 km
     mid = [trip_target_m((0.0, 0.0, 40_000.0, 30_000.0), rng) for _ in range(200)]
@@ -557,8 +557,10 @@ def test_trip_target_scales_to_the_plate_and_clamps():
     assert all(t == TRIP_SPAN_MIN_M
                for t in (trip_target_m((0.0, 0.0, 5_000.0, 5_000.0), rng)
                          for _ in range(20)))
-    # a 483 km corridor plate would ask for 29-87 km: the ceiling must cap it
-    assert max(trip_target_m((0.0, 0.0, 483_000.0, 483_000.0), rng)
+    # elko_bonneville's real shape: a 331 km short side asks 19.8-59.5 km,
+    # so the ceiling must cap it. (The long axis is 483 km, but trip_target_m
+    # scales off min(), which is why the ask is 60 km and not 87.)
+    assert max(trip_target_m((0.0, 0.0, 482_900.0, 330_800.0), rng)
                for _ in range(200)) == TRIP_SPAN_MAX_M
 
 
@@ -741,86 +743,6 @@ def test_4wd_route_is_dominated_by_4wd_ways(tmp_path):
     # and the outing profile disagrees -- otherwise the fixture proves nothing
     _, outing_ids = dijkstra_edges(g, src, dst, WEIGHTS["outing"])
     assert {g.edges[i]["class"] for i in outing_ids} == {"trail"}
-
-
-def test_worn_trailhead_is_reused_between_nearby_destinations(tmp_path):
-    """Spec §3's "worn path": trips share a trailhead so the visitation-density
-    story survives. The fixed 1-12 km window this replaces never fired on a
-    real plate (0 reuses in 200 trips), making the feature a silent no-op --
-    deleting the whole worn block passed every test.
-
-    Reuse is geometric, so the fixture has to be: two destinations ~4 km apart,
-    inside the scaled window. On a plate whose destinations are deliberately
-    spread to the corners (T4's job) reuse correctly stays rare.
-
-    Asserted through `network_tracks`, not against `_trailhead_for` directly:
-    the window and the `worn` bookkeeping are separate pieces, and a direct
-    unit test passes with the whole `worn.append` block deleted -- which is
-    exactly how the no-op survived. Two trips starting at the SAME point is
-    the observable effect, and it separates cleanly: 7 of 30 seeds share a
-    start with the block, 0 of 30 without it."""
-    import json
-    ways = []
-    for i in range(9):
-        y = 4_400_500.0 + i * 2_000.0
-        ways.append({"class": "road", "coords": _line([500_500.0, y], [519_500.0, y])})
-    for i in range(10):
-        x = 500_500.0 + i * 2_000.0
-        ways.append({"class": "road", "coords": _line([x, 4_400_500.0], [x, 4_416_500.0])})
-    (tmp_path / "labels.json").write_text(json.dumps({"crs": "EPSG:32611", "features": [
-        {"name": "Twin Peak East", "kind": "summit", "rank": 70,
-         "coords": [[512_500, 4_408_500]]},
-        {"name": "Twin Peak West", "kind": "summit", "rank": 70,
-         "coords": [[508_500, 4_408_500]]}]}))
-    (tmp_path / "hydro.json").write_text(
-        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
-    r = _StubRegion(tmp_path)
-    bounds = (500_000.0, 4_400_000.0, 520_000.0, 4_417_000.0)
-    r.cfg = {"bounds": list(bounds)}
-    assert len(destination_pool(str(tmp_path), build_graph(ways))) == 2
-
-    shared = 0
-    for seed in range(30):
-        tracks, _ = network_tracks(r, ways, seed=seed)
-        if len(tracks) == 2 and np.hypot(*(tracks[0].coords[0]
-                                           - tracks[1].coords[0])) < 4 * JITTER_M:
-            shared += 1
-    assert shared > 0, ("no two trips ever shared a trailhead between "
-                        "destinations 4 km apart -- the worn path is a no-op")
-
-
-def test_worn_reuse_scales_to_a_corridor_plate(tmp_path):
-    """The window has to SCALE, not just exist. On a 20 km plate the old fixed
-    1-12 km window works by accident, so the test above cannot tell the two
-    apart -- this one can. elko_bonneville is 483 km wide with ~88 km grid
-    cells, and there the fixed window is far too small: on this 400 x 200 km
-    plate with destinations 20 km apart, the scaled window shares a trailhead
-    on 14 of 20 seeds and the fixed one on 1."""
-    import json
-    ways = []
-    for i in range(11):
-        y = i * 20_000.0
-        ways.append({"class": "road", "coords": _line([0.0, y], [400_000.0, y], 2_000.0)})
-    for i in range(21):
-        x = i * 20_000.0
-        ways.append({"class": "road", "coords": _line([x, 0.0], [x, 200_000.0], 2_000.0)})
-    (tmp_path / "labels.json").write_text(json.dumps({"crs": "EPSG:32611", "features": [
-        {"name": "Mesa A", "kind": "summit", "rank": 70, "coords": [[200_000, 100_000]]},
-        {"name": "Mesa B", "kind": "summit", "rank": 70, "coords": [[220_000, 100_000]]}]}))
-    (tmp_path / "hydro.json").write_text(
-        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
-    r = _StubRegion(tmp_path)
-    r.cfg = {"bounds": [0.0, 0.0, 400_000.0, 200_000.0]}
-
-    shared = 0
-    for seed in range(20):
-        tracks, _ = network_tracks(r, ways, seed=seed)
-        if len(tracks) == 2 and np.hypot(*(tracks[0].coords[0]
-                                           - tracks[1].coords[0])) < 4 * JITTER_M:
-            shared += 1
-    assert shared >= 5, (
-        f"only {shared}/20 seeds shared a trailhead on a corridor plate -- the "
-        "reuse window is not scaling with the plate")
 
 
 def test_densify_follows_the_source_geometry(tmp_path):

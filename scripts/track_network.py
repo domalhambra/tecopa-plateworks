@@ -30,12 +30,11 @@ TRAILHEAD_CANDIDATES = 5      # draw among the 5 best-matching, for variety
 # plate's SHORT side instead makes a day out read as a day out at any scale.
 TRIP_SPAN_FRAC = (0.06, 0.18)  # trailhead->destination, as a fraction of that side
 TRIP_SPAN_MIN_M = 2_000.0     # ...clamped: a small plate still needs a real walk
-TRIP_SPAN_MAX_M = 45_000.0    # ...and elko_bonneville (483 km wide) must not
-                              # ask for a 90 km day
-WORN_REUSE_FACTOR = 1.5       # reuse a worn trailhead within this x the target.
-                              # A fixed 1-12 km window never fired on a real
-                              # plate (0 reuses in 200 trips on a 60 km plate),
-                              # making spec §3's "worn path" a silent no-op.
+TRIP_SPAN_MAX_M = 45_000.0    # ...and elko_bonneville, whose SHORT side is
+                              # 331 km, would otherwise ask for up to 60 km
+                              # (0.18 x 331). Measured off min(), not the
+                              # 483 km long axis -- that is what trip_target_m
+                              # scales on.
 WEIGHTS = {                   # class-weighted edge costs (spec §2)
     "outing":   {"trail": 0.6, "4wd": 0.7,  "road": 1.5},
     "approach": {"trail": 1.3, "4wd": 1.0,  "road": 0.7},
@@ -305,7 +304,7 @@ def trip_target_m(bounds: tuple, rng) -> float:
                          TRIP_SPAN_MIN_M, TRIP_SPAN_MAX_M))
 
 
-def _trailhead_for(index, dest_node: tuple, worn: list, target: float, rng):
+def _trailhead_for(index, dest_node: tuple, target: float, rng):
     """A road-touching vertex to start from, given a destination's snapped
     graph key (an (x, y) tuple from `destination_pool`'s `node` field) and a
     plate-scaled distance `target`.
@@ -317,17 +316,24 @@ def _trailhead_for(index, dest_node: tuple, worn: list, target: float, rng):
     trailhead that IS the destination (a lake beside the road) degenerates the
     trip to two points.
 
-    Reuses a worn trailhead when one sits inside the same scaled window, so the
-    visitation-density story survives. The last-resort branch (every road
-    vertex inside the floor) takes the FARTHEST one, not the nearest: in a
-    dense road web the nearest vertex can be the destination itself."""
+    There is deliberately no trailhead REUSE across trips. Spec §3 once asked
+    for one or two "worn" trailheads to keep `density.py`'s visitation story
+    alive, but that justification died when destinations became the hotspot
+    list directly and `density.hotspots` stopped being consulted. Instrumented
+    before removal, reuse fired 0/96 on lassen_ca, 0/96 on elko_bonneville and
+    2/96 on tushar_beaver_ut: it is structurally opposed to T4's farthest-point
+    selection, whose whole job is maximising destination separation (on lassen
+    the nearest two picks are 19-28 km apart against a ~16.8 km window, so
+    widening it would not have helped either). The worn-path look still arrives
+    on real posters, from trips funnelling onto shared road corridors -- honest
+    topology rather than forced geometry.
+
+    The last-resort branch (every road vertex inside the floor) takes the
+    FARTHEST one, not the nearest: in a dense road web the nearest vertex can
+    be the destination itself."""
     keys, arr = index
     if not keys:
         return None
-    for th in worn:
-        d = float(np.hypot(th[0] - dest_node[0], th[1] - dest_node[1]))
-        if TRAILHEAD_MIN_M < d < WORN_REUSE_FACTOR * target:
-            return th
     d = np.hypot(arr[:, 0] - dest_node[0], arr[:, 1] - dest_node[1])
     ok = np.where(d > TRAILHEAD_MIN_M)[0]
     if len(ok):
@@ -349,7 +355,6 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     dests = select_destinations(pool, bounds, n_trips, rng)
     index = road_vertex_index(g)           # built once: see road_vertex_index
 
-    worn: list[tuple] = []
     year = 2024
     trips = []
     # A destination in a different connected component than its trailhead routes
@@ -359,12 +364,10 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     skipped = 0
     for seq, d in enumerate(dests):
         target = trip_target_m(bounds, rng)
-        th = _trailhead_for(index, d["node"], worn, target, rng)
+        th = _trailhead_for(index, d["node"], target, rng)
         if th is None:                     # empty graph: nothing to route over
             skipped += 1
             continue
-        if len(worn) < 2 and th not in worn:
-            worn.append(th)
         # dijkstra_edges, not dijkstra + path_edge_ids: the loop penalty and the
         # 4wd-share test must act on the edges actually traversed. Real OSM data
         # carries parallel edges (a path mapped over a track), and resolving them
