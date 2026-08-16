@@ -203,23 +203,83 @@ def test_destination_pool_on_an_empty_graph(tmp_path):
     assert destination_pool(str(tmp_path), build_graph([])) == []
 
 
-def test_destination_pool_dedupes_repeated_names_by_rank(tmp_path):
-    """Real plates repeat names (multiple "Bear Lake"s, "Bald Mountain"s).
-    Downstream (T5's hotspot dict, T7's edition filter) keys by name, so two
-    distinct entries sharing a name must collapse to one here rather than
-    silently colliding later. The higher-rank labels.json entry wins."""
+def test_destination_pool_dedupes_repeated_lake_names(tmp_path):
+    """The real duplicate shape on committed plates: build_labels.py already
+    dedupes labels.json on (name.lower(), kind), so labels never collide
+    with each other, but hydro.json carries no such guarantee -- elko_bonneville
+    has "Bear Lake" x2, "Dry Lake" x3. First-in-file wins."""
+    import json
+    # both rectangles' vertex-mean centroids sit well within SNAP_MAX_M of the
+    # road crossing at (515_000, 4_410_000) -- 1000 m and ~1655 m respectively
+    # -- so both are real candidates and the tie is resolved by file order,
+    # not by one of them being unreachable.
+    hydro = {"crs": "EPSG:32611", "lakes": [
+        {"name": "Bear Lake", "coords": [[514_000, 4_408_500], [516_000, 4_408_500],
+                                         [516_000, 4_409_500], [514_000, 4_409_500]]},
+        {"name": "Bear Lake", "coords": [[516_000, 4_409_000], [517_000, 4_409_000],
+                                         [517_000, 4_409_600], [516_000, 4_409_600]]},
+    ], "rivers": []}
+    (tmp_path / "labels.json").write_text(
+        json.dumps({"crs": "EPSG:32611", "features": []}))
+    (tmp_path / "hydro.json").write_text(json.dumps(hydro))
+    g = build_graph(_ways())
+    pool = destination_pool(str(tmp_path), g)
+    matches = [d for d in pool if d["name"] == "Bear Lake"]
+    assert len(matches) == 1
+    assert matches[0]["x"] == pytest.approx(515_000.0)   # first lake's centroid
+
+
+def test_destination_pool_label_beats_lake_of_the_same_name(tmp_path):
+    """A summit and a lake sharing a name is the other real collision shape.
+    The summit must win regardless of which file lists it first -- lakes
+    carry no rank and are ranked below every labels.json entry."""
     import json
     labels = {"crs": "EPSG:32611", "features": [
-        {"name": "Bald Mountain", "kind": "summit", "rank": 50,
-         "coords": [[515_000, 4_410_100]]},
-        {"name": "Bald Mountain", "kind": "summit", "rank": 90,
-         "coords": [[515_050, 4_410_150]]},
+        {"name": "Twin Lake", "kind": "summit", "rank": 70,
+         "coords": [[515_200, 4_410_100]]},
+    ]}
+    hydro = {"crs": "EPSG:32611", "lakes": [
+        {"name": "Twin Lake", "coords": [[514_000, 4_409_500], [516_000, 4_409_500],
+                                         [516_000, 4_407_500], [514_000, 4_407_500]]},
+    ], "rivers": []}
+    (tmp_path / "labels.json").write_text(json.dumps(labels))
+    (tmp_path / "hydro.json").write_text(json.dumps(hydro))
+    g = build_graph(_ways())
+    pool = destination_pool(str(tmp_path), g)
+    matches = [d for d in pool if d["name"] == "Twin Lake"]
+    assert len(matches) == 1
+    assert matches[0]["kind"] == "summit"
+    assert matches[0]["x"] == 515_200
+
+
+def test_destination_pool_is_order_stable(tmp_path):
+    """T4's seeded selection depends on destination_pool returning the same
+    list, same order, every time for the same inputs -- pin that directly
+    rather than leaving it to rest on dict-insertion-order as an accident."""
+    import json
+    (tmp_path / "labels.json").write_text(json.dumps(LABELS))
+    (tmp_path / "hydro.json").write_text(json.dumps(HYDRO))
+    g = build_graph(_ways())
+    first = destination_pool(str(tmp_path), g)
+    second = destination_pool(str(tmp_path), g)
+    assert first == second
+
+
+def test_destination_pool_skips_a_feature_with_no_coords(tmp_path):
+    """destination_pool reads plate JSON directly with no schema validation --
+    a malformed labels.json row (empty coords) must not take down the whole
+    pool build. Mirrors the guard hydro.json lakes already had."""
+    import json
+    labels = {"crs": "EPSG:32611", "features": [
+        {"name": "Broken Summit", "kind": "summit", "rank": 70, "coords": []},
+        {"name": "Near Summit", "kind": "summit", "rank": 70,
+         "coords": [[519_000, 4_414_000]]},
     ]}
     (tmp_path / "labels.json").write_text(json.dumps(labels))
     (tmp_path / "hydro.json").write_text(
         json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
     g = build_graph(_ways())
     pool = destination_pool(str(tmp_path), g)
-    matches = [d for d in pool if d["name"] == "Bald Mountain"]
-    assert len(matches) == 1
-    assert matches[0]["x"] == 515_050   # the higher-rank (90) entry wins
+    names = {d["name"] for d in pool}
+    assert "Broken Summit" not in names
+    assert "Near Summit" in names

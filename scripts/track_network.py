@@ -138,15 +138,17 @@ def destination_pool(region_dir: str, g: Graph) -> list[dict]:
     the lake's own shape to snap to the wrong network vertex, and no such
     case has shown up on the five built plates.
 
-    Duplicate names -- real on OSM/GNIS data (multiple "Bear Lake"s or "Bald
-    Mountain"s on one plate) -- are collapsed to one entry per name, because
-    downstream consumers (T5's hotspot dict, T7's edition filter) key by
-    name and would otherwise let a later duplicate silently clobber an
-    earlier one. labels.json entries carry a `rank`; the higher-rank entry
-    wins. hydro.json lakes carry no rank and are ranked below any
-    labels.json entry, so a named lake never evicts a same-named summit/gap;
-    among lake-vs-lake duplicates, the first one encountered (hydro.json
-    order) wins.
+    Duplicate names are collapsed to one entry per name, because downstream
+    consumers (T5's hotspot dict, T7's edition filter) key by name and would
+    otherwise let a later duplicate silently clobber an earlier one.
+    build_labels.py already dedupes labels.json on (name.lower(), kind), so
+    the collision this actually guards against is lake vs. lake (real:
+    "Bear Lake" appears twice on elko_bonneville, "Dry Lake" three times) and
+    label vs. lake (a summit and a lake sharing a name). labels.json entries
+    carry a `rank`; the higher-rank entry wins. hydro.json lakes carry no
+    rank and are ranked below any labels.json entry, so a named lake never
+    evicts a same-named summit/gap; among lake-vs-lake duplicates, the first
+    one encountered (hydro.json order) wins.
     """
     keys, verts = g.vertex_array()
     best: dict[str, dict] = {}
@@ -168,7 +170,7 @@ def destination_pool(region_dir: str, g: Graph) -> list[dict]:
     with open(os.path.join(region_dir, "labels.json")) as f:
         for ft in json.load(f)["features"]:
             name = str(ft.get("name") or "").strip()
-            if ft["kind"] in ("summit", "gap") and name:
+            if ft["kind"] in ("summit", "gap") and name and ft.get("coords"):
                 (x, y), = ft["coords"][:1]
                 _snap(name, ft["kind"], x, y, int(ft.get("rank", 0)))
 
