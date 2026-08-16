@@ -4,11 +4,15 @@ summit, a 4wd loop pair, and a lake by the road. Distances in region-CRS metres.
 import numpy as np
 import pytest
 
+import math
+
 from scripts import track_network
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
                                     dijkstra_edges, network_tracks,
-                                    path_edge_ids, select_destinations,
-                                    SEASONS, WEIGHTS)
+                                    path_edge_ids, road_vertex_index,
+                                    select_destinations, trip_target_m,
+                                    JITTER_M, SEASONS, TRIP_SPAN_MAX_M,
+                                    TRIP_SPAN_MIN_M, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
 
@@ -434,12 +438,24 @@ def test_tracks_are_dated_by_season_bucket_and_sorted(tmp_path):
         assert lo <= d.timetuple().tm_yday <= hi
 
 
-def test_tracks_are_densified_and_jittered(tmp_path):
+def test_tracks_are_densified_and_jittered(tmp_path, monkeypatch):
     r = _region(tmp_path)
     tracks, _ = network_tracks(r, _ways(), seed=7)
     seg = np.hypot(*np.diff(tracks[0].coords, axis=0).T)
     assert np.median(seg) < 40.0
     assert len(tracks[0].coords) > 100
+
+    # ...and the jitter is real. Without this the test passed with JITTER_M
+    # zeroed, i.e. it only ever checked the densify half of the name. Seeded
+    # jitter is what makes the ink read recorded rather than vector-perfect.
+    monkeypatch.setattr(track_network, "JITTER_M", 0.0)
+    clean, _ = network_tracks(r, _ways(), seed=7)
+    assert len(clean[0].coords) == len(tracks[0].coords)
+    off = np.hypot(*(tracks[0].coords - clean[0].coords).T)
+    assert 0.3 * JITTER_M < np.median(off) < 4 * JITTER_M
+    # a straight leg sampled at a fixed spacing has near-constant segment
+    # lengths; jitter is what gives them spread
+    assert np.std(seg) > 0.5 * JITTER_M
 
 
 def test_spots_carry_real_names_and_positions(tmp_path):
@@ -449,6 +465,13 @@ def test_spots_carry_real_names_and_positions(tmp_path):
     assert names <= {"Near Summit", "Road Lake"} and names
     for s in spots:
         assert set(s) >= {"x", "y", "weight", "label"}
+        assert s["weight"] == 1          # one trip per destination, by construction
+
+    # The marker belongs on the PLACE, not on the road vertex the router
+    # snapped it to. Road Lake's centroid is 1.5 km from its snapped node, so
+    # this separates the two; Near Summit's coincide and cannot.
+    lake = next(s for s in spots if s["label"] == "Road Lake")
+    assert (lake["x"], lake["y"]) == pytest.approx((515_000.0, 4_408_500.0))
 
 
 def test_different_seeds_give_different_journeys(tmp_path):
@@ -492,7 +515,8 @@ def test_trailhead_never_lands_on_the_destination_itself():
     ways = [{"class": "road", "coords": [[0.0, 0.0], [300.0, 0.0], [600.0, 0.0]]}]
     g = build_graph(ways)
     dest = g.key((0.0, 0.0))
-    th = track_network._trailhead_for(g, dest, [], np.random.default_rng(3))
+    th = track_network._trailhead_for(road_vertex_index(g), dest, [], 5_000.0,
+                                      np.random.default_rng(3))
     assert th != dest                       # not a dot
     assert th == g.key((600.0, 0.0))        # the farthest available, not the nearest
 
@@ -503,10 +527,331 @@ def test_trailhead_on_a_network_with_no_roads():
     the empty road_keys list becomes a 1-D numpy array and `arr[:, 0]` raises
     IndexError, taking down the whole farm run rather than routing a trip."""
     g = build_graph([{"class": "trail", "coords": [[0.0, 0.0], [5_000.0, 0.0]]}])
-    th = track_network._trailhead_for(g, g.key((0.0, 0.0)), [],
-                                      np.random.default_rng(0))
+    th = track_network._trailhead_for(road_vertex_index(g), g.key((0.0, 0.0)),
+                                      [], 5_000.0, np.random.default_rng(0))
     assert th in g.adj
     assert th == g.key((5_000.0, 0.0))
+
+
+def test_trailhead_on_an_empty_graph_returns_none():
+    """`np.array([])` is shape (0,), so `arr[:, 0]` raises IndexError on an
+    empty graph -- the same trap `Graph.vertex_array` already guards. Reachable
+    from a cache that yielded no ways."""
+    keys, arr = road_vertex_index(build_graph([]))
+    assert keys == [] and arr.shape == (0, 2)
+    assert track_network._trailhead_for((keys, arr), (0.0, 0.0), [], 5_000.0,
+                                        np.random.default_rng(0)) is None
+
+
+def test_trip_target_scales_to_the_plate_and_clamps():
+    """Trip length is a target scaled to the plate's SHORT side, so a day out
+    reads as a day out at any plate scale -- and clamped at both ends, because
+    a tiny plate still needs a real walk and elko_bonneville (483 km wide)
+    must not ask for a 90 km day."""
+    rng = np.random.default_rng(0)
+    # 40 x 30 km plate -> short side 30 km -> 6%-18% is 1.8-5.4 km, floor 2 km
+    mid = [trip_target_m((0.0, 0.0, 40_000.0, 30_000.0), rng) for _ in range(200)]
+    assert TRIP_SPAN_MIN_M <= min(mid) and max(mid) <= 5_400.0
+    assert max(mid) - min(mid) > 1_000.0          # genuinely varied, not constant
+    # a 5 km plate would ask for 300-900 m: the floor must lift it
+    assert all(t == TRIP_SPAN_MIN_M
+               for t in (trip_target_m((0.0, 0.0, 5_000.0, 5_000.0), rng)
+                         for _ in range(20)))
+    # a 483 km corridor plate would ask for 29-87 km: the ceiling must cap it
+    assert max(trip_target_m((0.0, 0.0, 483_000.0, 483_000.0), rng)
+               for _ in range(200)) == TRIP_SPAN_MAX_M
+
+
+def test_road_vertex_index_covers_only_road_touching_vertices():
+    """Hoisted out of the trip loop (it is loop-invariant and cost 9.2 s for
+    eight trips at 728k vertices), so it needs its own test now that
+    network_tracks builds it once."""
+    keys, arr = road_vertex_index(build_graph(_ways()))
+    assert len(keys) == len(arr)
+    # the 4wd-only loop west of the crossing must not appear...
+    assert build_graph(_ways()).key((505_000.0, 4_415_000.0)) not in keys
+    # ...but the crossing, which several roads touch, must
+    assert build_graph(_ways()).key((515_000.0, 4_410_000.0)) in keys
+
+
+# --- dense fixture -------------------------------------------------------
+# _ways() spaces its points 5-15 km apart, which HIDES a whole bug class: under
+# the vertex-per-point graph, real OSM way points sit 20-300 m apart, so "the
+# nearest road vertex beyond the 1 km floor" is always ON the floor. Measured
+# against the pre-fix composer here: the five trailhead candidates spanned
+# 1001-1005 m and every journey came out a ~2 km stub (0.07 of the plate),
+# whatever the plate's size. This fixture reproduces that density. Do NOT fold
+# it into _ways() -- the sparse fixture is load-bearing for the routing tests.
+
+DENSE_BOUNDS = (500_000.0, 4_400_000.0, 540_000.0, 4_430_000.0)   # 40 x 30 km
+
+
+def _line(a, b, spacing=50.0):
+    n = max(1, int(math.hypot(b[0] - a[0], b[1] - a[1]) / spacing))
+    return [[a[0] + (b[0] - a[0]) * i / n, a[1] + (b[1] - a[1]) * i / n]
+            for i in range(n + 1)]
+
+
+def _dense_ways():
+    """A 2 km road mesh at ~50 m node spacing -- real-extract density -- plus
+    trails out to the summits and a 4wd corridor onto the north summit."""
+    w = []
+    for i in range(15):
+        y = 4_400_500.0 + i * 2_000.0
+        if y <= 4_429_500.0:
+            w.append({"class": "road", "coords": _line([500_500.0, y], [539_500.0, y])})
+    for i in range(20):
+        x = 500_500.0 + i * 2_000.0
+        if x <= 539_500.0:
+            w.append({"class": "road", "coords": _line([x, 4_400_500.0], [x, 4_429_500.0])})
+    for a, b in ((( 520_500.0, 4_424_500.0), (521_500.0, 4_428_000.0)),
+                 (( 504_500.0, 4_414_500.0), (502_500.0, 4_412_000.0)),
+                 (( 534_500.0, 4_416_500.0), (538_000.0, 4_420_000.0)),
+                 (( 520_500.0, 4_404_500.0), (512_000.0, 4_402_500.0))):
+        w.append({"class": "trail", "coords": _line(list(a), list(b))})
+    w.append({"class": "4wd",
+              "coords": _line([534_500.0, 4_424_500.0], [521_500.0, 4_428_000.0])})
+    return w
+
+
+DENSE_LABELS = {"crs": "EPSG:32611", "features": [
+    {"name": "North Summit", "kind": "summit", "rank": 70, "coords": [[521_500, 4_428_000]]},
+    {"name": "West Summit",  "kind": "summit", "rank": 70, "coords": [[502_500, 4_412_000]]},
+    {"name": "East Gap",     "kind": "gap",    "rank": 70, "coords": [[538_000, 4_420_000]]},
+]}
+DENSE_HYDRO = {"crs": "EPSG:32611", "lakes": [
+    {"name": "South Lake", "coords": [[511_500, 4_402_000], [512_500, 4_402_000],
+                                      [512_500, 4_403_000], [511_500, 4_403_000]]},
+], "rivers": []}
+
+
+def _dense_region(tmp_path):
+    import json
+    (tmp_path / "labels.json").write_text(json.dumps(DENSE_LABELS))
+    (tmp_path / "hydro.json").write_text(json.dumps(DENSE_HYDRO))
+    r = _StubRegion(tmp_path)
+    r.cfg = {"bounds": list(DENSE_BOUNDS)}
+    return r
+
+
+def _retrace_error(coords):
+    """Mean |c[i] - c[-1-i]|. An out-and-back's arc-length samples are
+    symmetric about the turnaround, so this is jitter-sized (~5 m); a genuine
+    loop returns by a different line, so it is hundreds of metres."""
+    return float(np.abs(coords - coords[::-1]).mean())
+
+
+def test_trips_span_a_real_fraction_of_the_plate(tmp_path):
+    """The whole point of the project, asserted plate-RELATIVE so it stays
+    meaningful on a 40 km plate and on elko_bonneville's 483 km corridor alike.
+
+    Against the pre-fix composer (globally-nearest trailhead) this fixture
+    gave a median span of 0.071 of the plate short side and a minimum of
+    0.034 -- the user's "squiggly lines clustered in the middle" in a new
+    costume. Trip length has to be a designed target, not an accident of how
+    far the nearest road happens to be."""
+    r = _dense_region(tmp_path)
+    ways = _dense_ways()
+    short = min(DENSE_BOUNDS[2] - DENSE_BOUNDS[0], DENSE_BOUNDS[3] - DENSE_BOUNDS[1])
+    spans = []
+    for seed in range(6):
+        tracks, _ = network_tracks(r, ways, seed=seed)
+        assert tracks
+        for t in tracks:
+            spans.append(float(np.hypot(*(t.coords.max(0) - t.coords.min(0)))))
+    spans = np.array(spans)
+    assert spans.min() / short > 0.05, f"shortest trip is {spans.min():.0f} m"
+    assert np.median(spans) / short > 0.12, (
+        f"median trip {np.median(spans):.0f} m is {np.median(spans)/short:.3f} "
+        "of the plate -- trips have collapsed toward the trailhead floor again")
+
+
+def test_loop_trips_actually_happen(tmp_path):
+    """The loop branch was dead in practice before trips were plate-scaled:
+    0 of 51 fired, and mutation-testing showed nothing guarded it --
+    LOOP_SHARE_MAX = -1.0 passed the whole suite. A loop is the only shape that
+    returns by a different line, so a large retrace error proves one rendered."""
+    r = _dense_region(tmp_path)
+    ways = _dense_ways()
+    errs = [_retrace_error(t.coords)
+            for seed in range(6) for t in network_tracks(r, ways, seed=seed)[0]]
+    assert max(errs) > 300.0, (
+        "no trip returned by a different line -- every journey retraced itself, "
+        "so the loop branch never accepted a second path")
+
+
+def _4wd_fixture(tmp_path):
+    """Trailhead road, then TWO ways onto one summit: a 10 km trail and a 20 km
+    4wd corridor that swings east. The weights make these disagree on purpose
+    -- outing takes the trail (10 km x 0.6 = 6000 < 20 km x 0.7 = 14000) while
+    4wd_day takes the track (20 km x 0.5 = 10000 < 10 km x 2.5 = 25000) -- so
+    the corridor is reached ONLY when the 4wd branch fires. Road-vs-4wd alone
+    cannot show this: whenever outing prefers road, so does 4wd_day."""
+    import json
+    j = [510_000.0, 4_400_500.0]
+    ways = [
+        {"class": "road",  "coords": _line([500_500.0, 4_400_500.0], j)},
+        {"class": "trail", "coords": _line(j, [510_000.0, 4_410_500.0])},
+        {"class": "4wd",   "coords": _line(j, [515_000.0, 4_400_500.0])},
+        {"class": "4wd",   "coords": _line([515_000.0, 4_400_500.0],
+                                           [515_000.0, 4_410_500.0])},
+        {"class": "4wd",   "coords": _line([515_000.0, 4_410_500.0],
+                                           [510_000.0, 4_410_500.0])},
+    ]
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "EPSG:32611", "features": [
+        {"name": "Track Peak", "kind": "summit", "rank": 70,
+         "coords": [[510_000, 4_410_500]]}]}))
+    (tmp_path / "hydro.json").write_text(
+        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
+    r = _StubRegion(tmp_path)
+    r.cfg = {"bounds": [500_000.0, 4_400_000.0, 530_000.0, 4_430_000.0]}
+    return r, ways
+
+
+def test_4wd_trips_actually_happen(tmp_path, monkeypatch):
+    """The 4wd branch was dead too: 0 of 46 fired, and a threshold of
+    `>= 99.0` passed the whole suite. Only the 4wd corridor reaches east of
+    x=513000, so ink out there proves the branch produced the route.
+
+    Loops are disabled for the duration: the corridor is also the only
+    alternative path a loop could take, so with the loop branch live this
+    assertion passes even when the 4wd branch is dead -- measured, it was the
+    reason the first version of this test failed to catch a 99.0 threshold."""
+    monkeypatch.setattr(track_network, "LOOP_SHARE_MAX", -1.0)
+    r, ways = _4wd_fixture(tmp_path)
+    reached = [seed for seed in range(12)
+               for t in network_tracks(r, ways, seed=seed)[0]
+               if t.coords[:, 0].max() > 513_000.0]
+    assert reached, ("no trip took the 4wd corridor -- the 4wd branch never "
+                     "accepted its route, so every trip fell back to the trail")
+
+
+def test_4wd_route_is_dominated_by_4wd_ways(tmp_path):
+    """The share test the branch applies, pinned directly: the 4wd_day profile
+    must return a route that really is mostly `highway=track`, not a road
+    detour that merely touches one."""
+    r, ways = _4wd_fixture(tmp_path)
+    g = build_graph(ways)
+    src = g.key((510_000.0, 4_400_500.0))
+    dst = g.key((510_000.0, 4_410_500.0))
+    _, ids = dijkstra_edges(g, src, dst, WEIGHTS["4wd_day"])
+    total = sum(g.edges[i]["len_m"] for i in ids)
+    four = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
+    assert four / total >= 0.4
+    # and the outing profile disagrees -- otherwise the fixture proves nothing
+    _, outing_ids = dijkstra_edges(g, src, dst, WEIGHTS["outing"])
+    assert {g.edges[i]["class"] for i in outing_ids} == {"trail"}
+
+
+def test_worn_trailhead_is_reused_between_nearby_destinations(tmp_path):
+    """Spec §3's "worn path": trips share a trailhead so the visitation-density
+    story survives. The fixed 1-12 km window this replaces never fired on a
+    real plate (0 reuses in 200 trips), making the feature a silent no-op --
+    deleting the whole worn block passed every test.
+
+    Reuse is geometric, so the fixture has to be: two destinations ~4 km apart,
+    inside the scaled window. On a plate whose destinations are deliberately
+    spread to the corners (T4's job) reuse correctly stays rare.
+
+    Asserted through `network_tracks`, not against `_trailhead_for` directly:
+    the window and the `worn` bookkeeping are separate pieces, and a direct
+    unit test passes with the whole `worn.append` block deleted -- which is
+    exactly how the no-op survived. Two trips starting at the SAME point is
+    the observable effect, and it separates cleanly: 7 of 30 seeds share a
+    start with the block, 0 of 30 without it."""
+    import json
+    ways = []
+    for i in range(9):
+        y = 4_400_500.0 + i * 2_000.0
+        ways.append({"class": "road", "coords": _line([500_500.0, y], [519_500.0, y])})
+    for i in range(10):
+        x = 500_500.0 + i * 2_000.0
+        ways.append({"class": "road", "coords": _line([x, 4_400_500.0], [x, 4_416_500.0])})
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "EPSG:32611", "features": [
+        {"name": "Twin Peak East", "kind": "summit", "rank": 70,
+         "coords": [[512_500, 4_408_500]]},
+        {"name": "Twin Peak West", "kind": "summit", "rank": 70,
+         "coords": [[508_500, 4_408_500]]}]}))
+    (tmp_path / "hydro.json").write_text(
+        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
+    r = _StubRegion(tmp_path)
+    bounds = (500_000.0, 4_400_000.0, 520_000.0, 4_417_000.0)
+    r.cfg = {"bounds": list(bounds)}
+    assert len(destination_pool(str(tmp_path), build_graph(ways))) == 2
+
+    shared = 0
+    for seed in range(30):
+        tracks, _ = network_tracks(r, ways, seed=seed)
+        if len(tracks) == 2 and np.hypot(*(tracks[0].coords[0]
+                                           - tracks[1].coords[0])) < 4 * JITTER_M:
+            shared += 1
+    assert shared > 0, ("no two trips ever shared a trailhead between "
+                        "destinations 4 km apart -- the worn path is a no-op")
+
+
+def test_worn_reuse_scales_to_a_corridor_plate(tmp_path):
+    """The window has to SCALE, not just exist. On a 20 km plate the old fixed
+    1-12 km window works by accident, so the test above cannot tell the two
+    apart -- this one can. elko_bonneville is 483 km wide with ~88 km grid
+    cells, and there the fixed window is far too small: on this 400 x 200 km
+    plate with destinations 20 km apart, the scaled window shares a trailhead
+    on 14 of 20 seeds and the fixed one on 1."""
+    import json
+    ways = []
+    for i in range(11):
+        y = i * 20_000.0
+        ways.append({"class": "road", "coords": _line([0.0, y], [400_000.0, y], 2_000.0)})
+    for i in range(21):
+        x = i * 20_000.0
+        ways.append({"class": "road", "coords": _line([x, 0.0], [x, 200_000.0], 2_000.0)})
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "EPSG:32611", "features": [
+        {"name": "Mesa A", "kind": "summit", "rank": 70, "coords": [[200_000, 100_000]]},
+        {"name": "Mesa B", "kind": "summit", "rank": 70, "coords": [[220_000, 100_000]]}]}))
+    (tmp_path / "hydro.json").write_text(
+        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
+    r = _StubRegion(tmp_path)
+    r.cfg = {"bounds": [0.0, 0.0, 400_000.0, 200_000.0]}
+
+    shared = 0
+    for seed in range(20):
+        tracks, _ = network_tracks(r, ways, seed=seed)
+        if len(tracks) == 2 and np.hypot(*(tracks[0].coords[0]
+                                           - tracks[1].coords[0])) < 4 * JITTER_M:
+            shared += 1
+    assert shared >= 5, (
+        f"only {shared}/20 seeds shared a trailhead on a corridor plate -- the "
+        "reuse window is not scaling with the plate")
+
+
+def test_densify_follows_the_source_geometry(tmp_path):
+    """Registration is correctness (invariant 5), and _densify emits the FINAL
+    coordinates. Both a transposition (swapping x and y) and interpolating by
+    vertex index instead of arc length passed the entire suite before this
+    test existed -- a coordinate bug in this function must not be invisible.
+
+    An L-shaped path pins both: it is asymmetric, so a transpose moves it, and
+    unevenly sampled, so index-interpolation bunches points on the short leg."""
+    src = np.array([[0.0, 0.0], [9_000.0, 0.0], [9_000.0, 3_000.0]])
+    out = track_network._densify(src, np.random.default_rng(0))
+
+    # endpoints land on the source's endpoints, jitter aside
+    assert np.hypot(*(out[0] - src[0])) < 4 * JITTER_M
+    assert np.hypot(*(out[-1] - src[-1])) < 4 * JITTER_M
+
+    # every sample sits on the source polyline
+    def seg_dist(p, a, b):
+        ab = b - a
+        t = np.clip(np.dot(p - a, ab) / np.dot(ab, ab), 0.0, 1.0)
+        return float(np.hypot(*(p - (a + t * ab))))
+    dev = np.array([min(seg_dist(p, src[i], src[i + 1]) for i in range(len(src) - 1))
+                    for p in out])
+    assert dev.max() < 4 * JITTER_M, f"max deviation {dev.max():.1f} m off the path"
+
+    # arc-length sampling, not index sampling: the 9 km leg must carry ~3x the
+    # points of the 3 km leg, not the same number
+    long_leg = int((out[:, 1] < 1_000.0).sum())
+    short_leg = int((out[:, 0] > 8_000.0).sum())
+    assert long_leg > 1.8 * short_leg
 
 
 def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):
@@ -524,13 +869,16 @@ def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):
 
     Collapse every season bucket to a single day to force the tie: the
     fixture's two destinations are a summit and a lake, whose real buckets
-    are disjoint, so they can never collide on their own."""
+    are disjoint, so they can never collide on their own.
+
+    The assertion is the EXACT resulting order, not merely that two runs agree
+    -- re-running one seed cannot detect order instability, so the weaker form
+    of this test passed with `seq` deleted. Tied trips must come back in
+    selection order, which for seed 7 puts Road Lake first."""
     monkeypatch.setattr(track_network, "SEASONS",
                         {"lake": (200, 200), "gap": (200, 200), "summit": (200, 200)})
     r = _region(tmp_path)
     tracks, _ = network_tracks(r, _ways(), seed=7)
-    assert len(tracks) >= 2
+    assert len(tracks) == 2
     assert len({t.day for t in tracks}) == 1          # the collision really happened
-    # and the tie broke deterministically, not by luck
-    again, _ = network_tracks(r, _ways(), seed=7)
-    assert [t.track_id for t in tracks] == [t.track_id for t in again]
+    assert [t.track_id for t in tracks] == ["lake:Road Lake", "summit:Near Summit"]

@@ -19,6 +19,23 @@ LOOP_SHARE_MAX = 0.35         # loops: 2nd path may reuse <=35% of 1st path's ed
 LOOP_PENALTY = 4.0            # cost multiplier on 1st-path edges when seeking the 2nd
 POINT_SPACING_M = 15.0        # GPS densification (spec §3)
 JITTER_M = 3.0                # seeded GPS jitter (spec §3)
+TRAILHEAD_MIN_M = 1_000.0     # hard floor: a trailhead nearer than this to the
+                              # destination renders as a dot, not a journey
+TRAILHEAD_CANDIDATES = 5      # draw among the 5 best-matching, for variety
+# Trip length is a TARGET, not a floor. Under the vertex-per-point graph, way
+# points sit 20-300 m apart, so "the nearest road vertex beyond the floor" is
+# always ON the floor -- measured on a 2 km road mesh at 50 m node spacing, the
+# five nearest candidates spanned 1001-1005 m and every journey came out a
+# ~1-2 km stub (0.07 of the plate) regardless of plate size. Scaling to the
+# plate's SHORT side instead makes a day out read as a day out at any scale.
+TRIP_SPAN_FRAC = (0.06, 0.18)  # trailhead->destination, as a fraction of that side
+TRIP_SPAN_MIN_M = 2_000.0     # ...clamped: a small plate still needs a real walk
+TRIP_SPAN_MAX_M = 45_000.0    # ...and elko_bonneville (483 km wide) must not
+                              # ask for a 90 km day
+WORN_REUSE_FACTOR = 1.5       # reuse a worn trailhead within this x the target.
+                              # A fixed 1-12 km window never fired on a real
+                              # plate (0 reuses in 200 trips on a 60 km plate),
+                              # making spec §3's "worn path" a silent no-op.
 WEIGHTS = {                   # class-weighted edge costs (spec §2)
     "outing":   {"trail": 0.6, "4wd": 0.7,  "road": 1.5},
     "approach": {"trail": 1.3, "4wd": 1.0,  "road": 0.7},
@@ -259,32 +276,65 @@ def _densify(path: np.ndarray, rng) -> np.ndarray:
     return out + rng.normal(0.0, JITTER_M, out.shape)
 
 
-def _trailhead_for(g: Graph, dest_node: tuple, worn: list, rng) -> tuple:
+def road_vertex_index(g: Graph):
+    """(keys, Nx2 array) of every road-touching vertex. Loop-invariant, so
+    `network_tracks` builds it ONCE: the set-comprehension scan plus its array
+    build cost ~1.2 s at 728k vertices, and doing it per trip cost 9.2 s for
+    eight trips.
+
+    Falls back to every vertex when the extract holds no `road` way at all (a
+    wilderness-interior tile), and returns the 2-D empty array on an empty
+    graph for the same reason `Graph.vertex_array` does -- `np.array([])` is
+    shape (0,), and the `arr[:, 0]` below would raise IndexError on it."""
+    keys = sorted({k for k, nbrs in g.adj.items()
+                   if any(g.edges[ei]["class"] == "road" for _, ei in nbrs)})
+    if not keys:
+        keys = sorted(g.adj.keys())
+    if not keys:
+        return [], np.empty((0, 2))
+    return keys, np.array(keys, dtype=float)
+
+
+def trip_target_m(bounds: tuple, rng) -> float:
+    """How far from its destination this trip should start, in metres, scaled
+    to the plate's short side and clamped. See TRIP_SPAN_FRAC."""
+    w, s, e, n = bounds
+    short = min(abs(e - w), abs(n - s))
+    lo, hi = TRIP_SPAN_FRAC
+    return float(np.clip(rng.uniform(lo, hi) * short,
+                         TRIP_SPAN_MIN_M, TRIP_SPAN_MAX_M))
+
+
+def _trailhead_for(index, dest_node: tuple, worn: list, target: float, rng):
     """A road-touching vertex to start from, given a destination's snapped
-    graph key (an (x, y) tuple from `destination_pool`'s `node` field).
+    graph key (an (x, y) tuple from `destination_pool`'s `node` field) and a
+    plate-scaled distance `target`.
 
-    Reuse a worn trailhead when one lies within 12 km but NOT closer than 1 km
-    -- a trailhead that IS the destination (a lake beside the road) degenerates
-    the trip to two points -- else draw from the five nearest road vertices
-    outside 1 km, so repeated destinations don't always start identically.
+    Candidates are the road vertices whose distance from the destination is
+    CLOSEST TO the target -- not the globally nearest, which under
+    vertex-per-point just returns whatever sits on the 1 km floor and makes
+    every journey a stub. The floor stays as a hard ceiling on closeness: a
+    trailhead that IS the destination (a lake beside the road) degenerates the
+    trip to two points.
 
-    The last-resort branch (every road vertex inside 1 km) takes the FARTHEST
-    one, not the nearest: on a plate where the destination sits in a dense
-    road web the nearest vertex can be the destination itself, and a trip from
-    a point to itself renders as a dot."""
+    Reuses a worn trailhead when one sits inside the same scaled window, so the
+    visitation-density story survives. The last-resort branch (every road
+    vertex inside the floor) takes the FARTHEST one, not the nearest: in a
+    dense road web the nearest vertex can be the destination itself."""
+    keys, arr = index
+    if not keys:
+        return None
     for th in worn:
-        d = np.hypot(th[0] - dest_node[0], th[1] - dest_node[1])
-        if 1_000 < d < 12_000:
+        d = float(np.hypot(th[0] - dest_node[0], th[1] - dest_node[1]))
+        if TRAILHEAD_MIN_M < d < WORN_REUSE_FACTOR * target:
             return th
-    road_keys = sorted({k for k, nbrs in g.adj.items()
-                        if any(g.edges[ei]["class"] == "road" for _, ei in nbrs)})
-    if not road_keys:                      # trail/4wd-only extract: any vertex will do
-        road_keys = sorted(g.adj.keys())
-    arr = np.array(road_keys, dtype=float)
     d = np.hypot(arr[:, 0] - dest_node[0], arr[:, 1] - dest_node[1])
-    ok = np.where(d > 1_000)[0]
-    cand = ok[np.argsort(d[ok])[:5]] if len(ok) else np.argsort(d)[-1:]
-    return road_keys[int(rng.choice(cand))]
+    ok = np.where(d > TRAILHEAD_MIN_M)[0]
+    if len(ok):
+        cand = ok[np.argsort(np.abs(d[ok] - target))[:TRAILHEAD_CANDIDATES]]
+    else:
+        cand = np.argsort(d)[-1:]
+    return keys[int(rng.choice(cand))]
 
 
 def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
@@ -294,8 +344,10 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
                                           # must stay importable without the engine
     rng = np.random.default_rng(seed)
     g = build_graph(ways)
+    bounds = tuple(region.cfg["bounds"])
     pool = destination_pool(region.dir, g)
-    dests = select_destinations(pool, tuple(region.cfg["bounds"]), n_trips, rng)
+    dests = select_destinations(pool, bounds, n_trips, rng)
+    index = road_vertex_index(g)           # built once: see road_vertex_index
 
     worn: list[tuple] = []
     year = 2024
@@ -306,7 +358,11 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     # poster with three journeys where eight were intended.
     skipped = 0
     for seq, d in enumerate(dests):
-        th = _trailhead_for(g, d["node"], worn, rng)
+        target = trip_target_m(bounds, rng)
+        th = _trailhead_for(index, d["node"], worn, target, rng)
+        if th is None:                     # empty graph: nothing to route over
+            skipped += 1
+            continue
         if len(worn) < 2 and th not in worn:
             worn.append(th)
         # dijkstra_edges, not dijkstra + path_edge_ids: the loop penalty and the
@@ -357,12 +413,14 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     trips.sort(key=lambda t: (t[0], t[1]))
     tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
                     day=day.isoformat()) for day, _seq, d, coords in trips]
-    seen: dict[str, dict] = {}
-    for _day, _seq, d, _coords in trips:
-        s = seen.setdefault(d["name"], {"x": d["x"], "y": d["y"], "weight": 0,
-                                        "label": d["name"]})
-        s["weight"] += 1
-    return tracks, list(seen.values())
+    # One spot per trip, weight 1, stated outright rather than accumulated:
+    # `destination_pool` dedupes by name and `select_destinations` removes each
+    # pick from its pool, so a destination can never be visited twice and the
+    # accumulation loop this replaces could only ever count to 1. x/y are the
+    # real summit/lake position, NOT the snapped road vertex -- the marker
+    # belongs on the place, not on the trailhead path.
+    return tracks, [{"x": d["x"], "y": d["y"], "weight": 1, "label": d["name"]}
+                    for _day, _seq, d, _coords in trips]
 
 
 def path_edge_ids(g: Graph, path: list) -> list[int]:
