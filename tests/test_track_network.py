@@ -5,13 +5,17 @@ import numpy as np
 import pytest
 
 import math
+from unittest import mock
 
 from scripts import track_network
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
                                     dijkstra_edges, network_tracks,
                                     path_edge_ids, road_vertex_index,
                                     select_destinations, trip_target_m,
-                                    JITTER_M, SEASONS, SELECT_INSET_FRAC,
+                                    densify_spacing_m,
+                                    BYTES_PER_POINT, DENSIFY_PX, JITTER_M,
+                                    MAX_TOTAL_POINTS, MAX_TRACK_POINTS,
+                                    POINT_SPACING_M, SEASONS, SELECT_INSET_FRAC,
                                     TRIP_SPAN_MAX_M,
                                     TRIP_SPAN_MIN_M, WEIGHTS)
 
@@ -650,6 +654,11 @@ def _dense_region(tmp_path):
     return r
 
 
+def _densify_at(path, rng, spacing):
+    """_densify is private; this names the one thing these tests need."""
+    return track_network._densify(path, rng, spacing)
+
+
 def _retrace_error(coords):
     """Mean |c[i] - c[-1-i]|. An out-and-back's arc-length samples are
     symmetric about the turnaround, so this is jitter-sized (~5 m); a genuine
@@ -1054,6 +1063,97 @@ def test_journeys_stay_on_the_sheet(tmp_path):
     assert frac_off < 0.02, (
         f"{100 * frac_off:.1f}% of track points fall outside the plate -- ink "
         "rendered where nobody sees it (was 14.3% on the real lassen_ca cache)")
+
+
+def test_densify_spacing_is_a_printed_pixel_not_a_fixed_metre():
+    """The invariant: the manifest must not carry geometry finer than the print
+    can show. A fixed 15 m spacing broke it on a corridor plate -- elko prints
+    at ~41 m of ground per pixel, so 15 m was 0.37 of a printed pixel, five
+    times finer than the sheet resolves. The invisible surplus pushed the
+    embedded manifest to 2.7 MB, past PIL's 1,048,576-byte MAX_TEXT_CHUNK, and
+    `Image.open()` refused the poster outright."""
+    # every plate but elko is a 10 m DEM, and 10 x 1.5 == POINT_SPACING_M, so
+    # they are unchanged BY CONSTRUCTION rather than by a special case
+    assert densify_spacing_m({"native_resolution_m": 10}) == POINT_SPACING_M
+    assert DENSIFY_PX * 10 == POINT_SPACING_M
+    # a coarser plate gets proportionally coarser geometry
+    assert densify_spacing_m({"native_resolution_m": 30}) == 45.0
+    # ...and the floor still holds for a hypothetical finer plate, so a 1 m DEM
+    # cannot ask for 1.5 m spacing and 10x the points
+    assert densify_spacing_m({"native_resolution_m": 1}) == POINT_SPACING_M
+    assert densify_spacing_m({}) == POINT_SPACING_M          # missing key is safe
+
+
+def test_manifest_budget_holds_on_a_corridor_scale_route():
+    """Pure arithmetic on _densify -- deliberately no render, because proving
+    this by rendering means a 107 MB poster in the suite.
+
+    A corridor plate's routes run 78-217 km. At the old fixed 15 m that is up
+    to 14,000 points in ONE track; the per-track ceiling and the plate-scaled
+    spacing must each hold it down, and the two together must keep a whole
+    8-trip year inside the byte budget."""
+    rng = np.random.default_rng(0)
+    spacing = densify_spacing_m({"native_resolution_m": 30})
+
+    # a route inside the ceiling samples at exactly the plate's spacing
+    moderate = np.array([[0.0, 0.0], [100_000.0, 0.0]])
+    assert len(_densify_at(moderate, rng, spacing)) == pytest.approx(
+        100_000 / spacing, rel=0.01)
+
+    # elko's LONGEST real route, 217 km, would want 4,822 points at 45 m -- so
+    # the per-track ceiling is load-bearing on real data, not just against
+    # pathological input, and it is what holds one route to a bounded share of
+    # the budget while seven others also need room.
+    long_route = np.array([[0.0, 0.0], [217_000.0, 0.0]])
+    assert 217_000 / spacing > MAX_TRACK_POINTS          # the ceiling really binds
+    assert len(_densify_at(long_route, rng, spacing)) == MAX_TRACK_POINTS
+
+    # the ceiling really is a ceiling: a pathological route cannot exceed it
+    absurd = np.array([[0.0, 0.0], [10_000_000.0, 0.0]])
+    assert len(_densify_at(absurd, rng, spacing)) == MAX_TRACK_POINTS
+
+    # and the whole year stays inside the chunk PIL will actually open
+    worst = MAX_TOTAL_POINTS * BYTES_PER_POINT
+    assert worst <= 800_000, f"budget is {worst:,} B"
+    assert worst < 1_048_576, "budget exceeds PIL's MAX_TEXT_CHUNK"
+
+
+def test_over_budget_plate_is_coarsened_and_under_budget_one_is_untouched(tmp_path):
+    """The budget is applied only where it is needed. A plate already inside it
+    must come back bit-identical -- jitter included -- because re-densifying
+    consumes fresh RNG draws, and lassen_ca's poster is already approved by eye.
+    Pinned with a monkeypatched budget so the assertion does not depend on a
+    fixture large enough to breach the real one."""
+    r = _region(tmp_path)
+    before, _ = network_tracks(r, _ways(), seed=7)
+    total = sum(len(t.coords) for t in before)
+
+    # a budget comfortably above what this fixture composes: nothing may move
+    with mock.patch.object(track_network, "MAX_TOTAL_POINTS", total * 10):
+        same, _ = network_tracks(r, _ways(), seed=7)
+    assert [t.track_id for t in same] == [t.track_id for t in before]
+    assert all(np.array_equal(a.coords, b.coords) for a, b in zip(before, same))
+
+    # ...and pinned ABSOLUTELY, not just relative to `before`. Comparing two
+    # runs cannot detect a budget pass that fires unconditionally: driven fine
+    # enough, every track saturates the per-track ceiling and both runs land on
+    # identical arrays. The spacing actually used is the thing to assert.
+    for t in same:
+        seg = np.hypot(*np.diff(t.coords, axis=0).T)
+        assert np.median(seg) == pytest.approx(POINT_SPACING_M, abs=2.0), (
+            f"{t.track_id} sampled at {np.median(seg):.1f} m, not the plate's "
+            f"{POINT_SPACING_M:.0f} m -- the budget pass ran when it should not")
+        assert len(t.coords) < MAX_TRACK_POINTS
+
+    # a budget below it: the composer must coarsen until it fits
+    with mock.patch.object(track_network, "MAX_TOTAL_POINTS", total // 3):
+        squeezed, _ = network_tracks(r, _ways(), seed=7)
+    assert sum(len(t.coords) for t in squeezed) <= total // 3
+    assert [t.track_id for t in squeezed] == [t.track_id for t in before]
+    # coarser sampling, but the journey is still the same journey
+    for a, b in zip(before, squeezed):
+        assert np.hypot(*(a.coords.max(0) - a.coords.min(0))) == pytest.approx(
+            np.hypot(*(b.coords.max(0) - b.coords.min(0))), rel=0.05)
 
 
 def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):

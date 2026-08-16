@@ -17,7 +17,35 @@ import numpy as np
 SNAP_MAX_M = 2_000.0          # destination -> network snap ceiling (spec §3)
 LOOP_SHARE_MAX = 0.35         # loops: 2nd path may reuse <=35% of 1st path's edges
 LOOP_PENALTY = 4.0            # cost multiplier on 1st-path edges when seeking the 2nd
-POINT_SPACING_M = 15.0        # GPS densification (spec §3)
+# The manifest must not carry geometry finer than the print can show. Densifying
+# at a FIXED 15 m did exactly that on a corridor plate: elko_bonneville prints at
+# ~41 m of ground per pixel, so 15 m spacing is 0.37 of a printed pixel -- five
+# times finer than the sheet can resolve, invisible ink costing 2.7 MB of
+# manifest. That is not merely waste: it pushed the embedded chunk past PIL's
+# 1 MB MAX_TEXT_CHUNK, so `Image.open()` REFUSED the poster outright, breaking
+# both this product's central promise (the file is the record, openable by
+# anyone) and our own downstream steps, which read poster.png back through PIL.
+#
+# So spacing is expressed in PRINTED PIXELS and resolved per plate. The 15 m
+# floor is not a separate rule -- it is exactly what DENSIFY_PX works out to on a
+# 10 m plate (10 x 1.5 = 15), which is every plate but elko, so those four are
+# untouched by construction and the poster Dom approved does not move.
+POINT_SPACING_M = 15.0        # GPS densification floor (spec §3)
+DENSIFY_PX = 1.5              # ...and the same spacing said in printed pixels
+MAX_TRACK_POINTS = 4_200      # per-track ceiling, guarding ONE absurd route. Sits
+                              # above the largest real track on the approved
+                              # lassen_ca poster (3,925) so it cannot bite there.
+# ...but a per-track ceiling cannot on its own keep the promise, and it is worth
+# saying why so nobody "simplifies" it away. At ~38 bytes per point, eight tracks
+# of 4,200 is 1.34 MB -- still past PIL. A ceiling low enough to guarantee the
+# budget (20,100 / 8 = 2,512) would clip lassen_ca's 3,925-point track and move
+# the poster Dom approved. So the real guarantee is a TOTAL budget, applied only
+# when a plate would exceed it: plates already inside are left bit-identical,
+# untouched down to their seeded jitter.
+BYTES_PER_POINT = 40          # measured across all five plates: 38.0-38.6, rounded up
+MAX_TOTAL_POINTS = 18_000     # ~720 KB of manifest, comfortably inside PIL's
+                              # 1,048,576 MAX_TEXT_CHUNK. lassen_ca composes
+                              # 15,829, so it sits under this and does not move.
 JITTER_M = 3.0                # seeded GPS jitter (spec §3)
 TRAILHEAD_MIN_M = 1_000.0     # hard floor: a trailhead nearer than this to the
                               # destination renders as a dot, not a journey
@@ -284,7 +312,22 @@ def select_destinations(pool: list[dict], bounds: tuple, n: int, rng) -> list[di
     return [pool[i] for i in picks]
 
 
-def _densify(path: np.ndarray, rng) -> np.ndarray:
+def densify_spacing_m(region_cfg: dict) -> float:
+    """Point spacing for this plate, in metres: DENSIFY_PX printed pixels.
+
+    Derived from `native_resolution_m` rather than from bounds, because that is
+    what actually sets the print scale -- `render_asset_farm._frame` sizes the
+    sheet so 300 dpi lands exactly one native pixel per printed pixel. It is
+    also the CONSERVATIVE end: the farm renders corridor plates below 300 dpi
+    (elko at 220), which only makes the print coarser, so spacing computed this
+    way never discards detail the sheet could have shown. Bounds alone cannot
+    tell you this -- two plates of equal extent print at different scales when
+    their DEMs differ."""
+    native = float(region_cfg.get("native_resolution_m") or 0.0)
+    return max(POINT_SPACING_M, native * DENSIFY_PX)
+
+
+def _densify(path: np.ndarray, rng, spacing: float = POINT_SPACING_M) -> np.ndarray:
     """~POINT_SPACING_M sampling along the polyline + seeded GPS jitter, so ink
     reads recorded rather than vector-perfect.
 
@@ -308,7 +351,9 @@ def _densify(path: np.ndarray, rng) -> np.ndarray:
         out = np.repeat(p[:1], 2, axis=0)
         return out + rng.normal(0.0, JITTER_M, out.shape)
     s = np.concatenate([[0.0], np.cumsum(seg)])
-    n = max(2, int(s[-1] / POINT_SPACING_M))
+    # MAX_TRACK_POINTS is a backstop, not the normal path: a route long enough
+    # to reach it is already coarser than one point per printed pixel.
+    n = min(MAX_TRACK_POINTS, max(2, int(s[-1] / max(spacing, 1e-9))))
     t = np.linspace(0.0, s[-1], n)
     out = np.column_stack([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])])
     return out + rng.normal(0.0, JITTER_M, out.shape)
@@ -410,6 +455,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     dests = select_destinations(pool, bounds, n_trips, rng)
     index = road_vertex_index(g)           # built once: see road_vertex_index
     centre = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
+    spacing = densify_spacing_m(region.cfg)
 
     year = 2024
     trips = []
@@ -455,11 +501,30 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
             path = out_path + out_path[-2::-1]
         lo, hi = SEASONS[d["kind"]]
         day = date(year, 1, 1) + timedelta(days=int(rng.integers(lo, hi + 1)) - 1)
-        trips.append((day, seq, d, _densify(np.asarray(path, dtype=float), rng)))
+        raw = np.asarray(path, dtype=float)
+        trips.append((day, seq, d, _densify(raw, rng, spacing), raw))
 
     if skipped:
         print(f"  tracks: {skipped} of {len(dests)} destinations unreachable "
               f"from their trailhead (disconnected network) -- skipped")
+
+    # The manifest budget. ONLY a plate that would break it is touched, so every
+    # plate already inside keeps its exact seeded geometry -- that is what makes
+    # this safe to add underneath an already-approved poster. Re-densifying
+    # consumes fresh RNG draws, which is precisely why it must not run in the
+    # common case. Point count scales as 1/spacing, so one pass converges; the
+    # loop only absorbs rounding and the per-track ceiling, and is bounded.
+    base_spacing = spacing
+    for _ in range(4):
+        if sum(len(c) for _, _, _, c, _ in trips) <= MAX_TOTAL_POINTS or not trips:
+            break
+        spacing *= 1.02 * sum(len(c) for _, _, _, c, _ in trips) / MAX_TOTAL_POINTS
+        trips = [(day, seq, d, _densify(raw, rng, spacing), raw)
+                 for day, seq, d, _c, raw in trips]
+    if spacing > base_spacing:
+        print(f"  tracks: {sum(len(c) for _, _, _, c, _ in trips):,} points at "
+              f"{spacing:.0f} m spacing -- coarsened from {base_spacing:.0f} m "
+              f"to hold the {MAX_TOTAL_POINTS:,}-point manifest budget")
     # `seq` is the tiebreaker on purpose. Shared dates are ordinary here, not
     # exotic -- buckets as narrow as 91 days, up to 8 trips -- so the sort key
     # must be TOTAL over dates. Sorting on the bare date works today only
@@ -471,7 +536,8 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     # and never reaches the payload either way.
     trips.sort(key=lambda t: (t[0], t[1]))
     tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
-                    day=day.isoformat()) for day, _seq, d, coords in trips]
+                    day=day.isoformat())
+              for day, _seq, d, coords, _raw in trips]
     # One spot per trip, weight 1, stated outright rather than accumulated:
     # `destination_pool` dedupes by name and `select_destinations` removes each
     # pick from its pool, so a destination can never be visited twice and the
@@ -482,7 +548,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     # leaves both alone once they are set.
     return tracks, [{"x": d["x"], "y": d["y"], "weight": 1, "label": d["name"],
                      "icon": KIND_ICONS.get(d["kind"], KIND_ICON_DEFAULT)}
-                    for _day, _seq, d, _coords in trips]
+                    for _day, _seq, d, _coords, _raw in trips]
 
 
 def path_edge_ids(g: Graph, path: list) -> list[int]:
