@@ -596,25 +596,33 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
         th = _trailhead_for(g, d["node"], worn, rng)
         if len(worn) < 2:
             worn.append(th)
-        out_path = dijkstra(g, th, d["node"], WEIGHTS["outing"])
-        if out_path is None:
+        # dijkstra_edges, not dijkstra + path_edge_ids: the loop penalty and the
+        # 4wd-share test must act on the edges actually traversed. Real OSM data
+        # carries parallel edges (a path mapped over a track), and resolving them
+        # by first-match would mis-apply the penalty silently -- a worse route,
+        # never an error.
+        got = dijkstra_edges(g, th, d["node"], WEIGHTS["outing"])
+        if got is None:
             continue
+        out_path, out_ids = got
         shape = rng.choice(["out_and_back", "loop", "4wd"])
         path = None
         if shape == "loop":
-            pen = {ei: LOOP_PENALTY for ei in path_edge_ids(g, out_path)}
-            back = dijkstra(g, d["node"], th, WEIGHTS["outing"], edge_penalty=pen)
+            pen = {ei: LOOP_PENALTY for ei in out_ids}
+            back = dijkstra_edges(g, d["node"], th, WEIGHTS["outing"], edge_penalty=pen)
             if back is not None:
-                shared = set(path_edge_ids(g, back)) & set(path_edge_ids(g, out_path))
-                if len(shared) <= LOOP_SHARE_MAX * len(path_edge_ids(g, out_path)):
-                    path = out_path + back[1:]
+                back_path, back_ids = back
+                shared = set(back_ids) & set(out_ids)
+                if len(shared) <= LOOP_SHARE_MAX * len(out_ids):
+                    path = out_path + back_path[1:]
         elif shape == "4wd":
-            p = dijkstra(g, th, d["node"], WEIGHTS["4wd_day"])
-            ids = path_edge_ids(g, p) if p else []
-            l4 = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
-            lt = sum(g.edges[i]["len_m"] for i in ids) or 1.0
-            if p is not None and l4 / lt >= 0.4:
-                path = p + p[-2::-1]                       # 4wd out-and-back
+            p4 = dijkstra_edges(g, th, d["node"], WEIGHTS["4wd_day"])
+            if p4 is not None:
+                p, ids = p4
+                l4 = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
+                lt = sum(g.edges[i]["len_m"] for i in ids) or 1.0
+                if l4 / lt >= 0.4:
+                    path = p + p[-2::-1]                   # 4wd out-and-back
         if path is None:                                    # default / fallbacks
             path = out_path + out_path[-2::-1]
         lo, hi = SEASONS[d["kind"]]
