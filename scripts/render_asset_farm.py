@@ -138,12 +138,68 @@ def _synth_tracks(region: Region, n_days: int = 7, seed: int = 7) -> list:
 # ---- specs + the real final path ----
 
 def _frame(region: Region):
-    """Frame the whole region as the poster, with a print size that lands the crop
-    exactly on the data floor (300 dpi == native_resolution_m per pixel)."""
-    b = region.cfg["bounds"]; floor = region.cfg["native_resolution_m"]
-    pw = (b[2] - b[0]) / (floor * NATIVE_FLOOR_DPI)
-    ph = (b[3] - b[1]) / (floor * NATIVE_FLOOR_DPI)
-    return (b[0], b[1], b[2], b[3]), pw, ph
+    """Frame the renderable region as the poster, with a print size that lands the
+    crop exactly on the data floor (300 dpi == native_resolution_m per pixel).
+
+    "Renderable" is the region bounds shrunk to the DEM's finite-data envelope: a
+    corridor-scale plate's UTM rectangle bulges past its 4326 fetch bbox, leaving
+    nodata strips along the frame edges (elko_bonneville: ~4%, north and south), and
+    the engine's off-DEM guard rightly refuses to paint them. Full-coverage plates
+    trim nothing -- their frame is their bounds, unchanged."""
+    b = tuple(region.cfg["bounds"]); floor = region.cfg["native_resolution_m"]
+    crop = _finite_envelope(region, b)
+    pw = (crop[2] - crop[0]) / (floor * NATIVE_FLOOR_DPI)
+    ph = (crop[3] - crop[1]) / (floor * NATIVE_FLOOR_DPI)
+    return crop, pw, ph
+
+
+def _finite_envelope(region: Region, bounds: tuple) -> tuple:
+    """Shrink `bounds` to the largest edge-trimmed rectangle of finite DEM data.
+
+    Reads a downsampled mask (cheap at any plate size) and peels edge rows/columns
+    whose finite fraction is under 99.5% until all four edges are clean, then pads
+    one native pixel inward so resampling at the crop edge never touches the void.
+    Interior nodata (none in practice) is left alone -- the guard still owns it."""
+    import rasterio
+    dem = os.path.join(region.dir, region.cfg.get("dem_path", "dem.tif"))
+    if not os.path.exists(dem):
+        return bounds
+    with rasterio.open(dem) as ds:
+        scale = max(1, ds.width // 1200, ds.height // 1200)
+        h, w = ds.height // scale, ds.width // scale
+        a = ds.read(1, out_shape=(h, w))
+        finite = np.isfinite(a) if ds.nodata is None or np.isnan(ds.nodata) \
+            else np.isfinite(a) & (a != ds.nodata)
+        top, bot, left, right = 0, h, 0, w
+        ok = 0.995
+        while top < bot and left < right:
+            # peel the WORST edge each pass -- a fixed order lets one bad column
+            # contaminate every row and eat the frame from the top
+            edges = [(finite[top, left:right].mean(), "top"),
+                     (finite[bot - 1, left:right].mean(), "bot"),
+                     (finite[top:bot, left].mean(), "left"),
+                     (finite[top:bot, right - 1].mean(), "right")]
+            frac, worst = min(edges)
+            if frac >= ok:
+                break
+            if worst == "top":
+                top += 1
+            elif worst == "bot":
+                bot -= 1
+            elif worst == "left":
+                left += 1
+            else:
+                right -= 1
+        if (top, bot, left, right) == (0, h, 0, w):
+            return bounds                        # full coverage: byte-identical frame
+        pad = region.cfg["native_resolution_m"]
+        wld = ds.transform * (left * scale, top * scale)      # px -> world, upper-left
+        wrd = ds.transform * (right * scale, bot * scale)
+        crop = (max(bounds[0], wld[0] + pad), max(bounds[1], wrd[1] + pad),
+                min(bounds[2], wrd[0] - pad), min(bounds[3], wld[1] - pad))
+    print(f"  frame: trimmed to the DEM's finite-data envelope "
+          f"({100 * (1 - (crop[2]-crop[0]) * (crop[3]-crop[1]) / ((bounds[2]-bounds[0]) * (bounds[3]-bounds[1]))):.1f}% off)")
+    return crop
 
 
 def _annotate(spots: list, out_dir: str) -> list:
