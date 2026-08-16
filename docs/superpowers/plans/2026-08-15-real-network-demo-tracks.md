@@ -1023,12 +1023,23 @@ Expected: a line like `cache/networks/lassen_ca.json: N ways (r road / f 4wd / t
 - [ ] **Step 3: Smoke the full path on the real plate**
 
 Run: `./.venv/bin/python -c "
+import time
 from app.regions import Region
-from scripts.track_network import load_network, network_tracks
+from scripts.track_network import load_network, network_tracks, build_graph
 r = Region('lassen_ca')
-tracks, spots = network_tracks(r, load_network('cache/networks/lassen_ca.json'))
-print(len(tracks), 'trips;', [s['label'] for s in spots])"`
+ways = load_network('cache/networks/lassen_ca.json')
+t0 = time.time(); g = build_graph(ways); t1 = time.time()
+print(f'graph: {len(g.adj):,} vertices, {len(g.edges):,} edges in {t1-t0:.1f}s')
+t0 = time.time(); tracks, spots = network_tracks(r, ways); t1 = time.time()
+print(f'{len(tracks)} trips in {t1-t0:.1f}s;', [s['label'] for s in spots])"`
 Expected: 6–8 trips; real place names (no 'Base Camp').
+
+**This is also the vertex-per-point measurement gate** (spec §2 amendment).
+Record graph size and wall-clock. If composing takes **over ~3 minutes**, stop
+and add a `contract_chains()` pass to `track_network.py` — collapse degree-2
+vertex runs into polyline edges, recovering the intersection-only graph behind
+the same API — then re-measure. Do not proceed to the rollout on a routing
+step that slow; it makes every future re-render painful.
 
 - [ ] **Step 4: Commit**
 

@@ -58,8 +58,22 @@ in the repo carries OSM data. Plates stay CC0-clean.
 
 ### 2 · Graph + routing — `scripts/track_network.py`
 
-- Build an undirected graph from the cached ways: nodes at endpoints and shared
-  intersections, full intermediate geometry retained on each edge.
+- Build an undirected graph from the cached ways, **vertex-per-point**: every
+  way point is a vertex keyed by its coordinates rounded to 0.1 m, and each
+  consecutive pair becomes an edge. Ways that share an OSM node therefore
+  connect automatically, and there is no way-splitting step to get wrong.
+
+  > **Amended 2026-08-15 (implementation review).** This section originally
+  > specified intersection-only nodes with full polyline geometry on each edge.
+  > Vertex-per-point trades a larger graph for the removal of the entire
+  > way-splitting code path — the part most likely to harbour a silent
+  > topology bug. The cost is real: vertex and edge counts multiply by roughly
+  > the average points-per-way, which Dijkstra pays directly. It is
+  > **measured, not assumed** — the Task 9 real-plate smoke test reports
+  > graph size and routing wall-clock. If routing proves too slow there, the
+  > fix is a localised `contract_chains()` pass that collapses degree-2 runs
+  > into polyline edges, recovering the intersection-only graph behind the
+  > same API, rather than reworking the composer.
 - Dijkstra over `heapq` (no new dependency; county-scale networks are small).
 - Class-weighted edge costs: outing legs prefer `trail`/`4wd` (cost × 0.6),
   approach legs prefer `road`. Weights are constants in this module.
