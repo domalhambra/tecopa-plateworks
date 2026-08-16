@@ -243,7 +243,7 @@ And the three `fmt-list` items:
 ./.venv/bin/python -m pytest tests/test_marketing_page.py::test_the_page_speaks_to_the_collector_not_the_builder -q
 ```
 
-Expected: still FAILS (on `"hash-addressed"`, `:367`; `"pixel-for-pixel"`, `:503`; `"AGPL"`, `:472`). The two `2.6` failures are gone. This mid-run is the checkpoint that both 2.6 sites are dead.
+Expected: still FAILS, with exactly one failure naming `'pixel-for-pixel'` (the test stops at the first failing assert, and after this task that is the first survivor in list order). The failure message changing from `'2.6'` to `'pixel-for-pixel'` is the checkpoint: both 2.6 sites are dead.
 
 - [ ] **Step 4: Commit**
 
@@ -424,7 +424,7 @@ The spec's Consequences §2, verbatim intent: an amendment that leaves the page-
 > channel map around that one customer, not as co-equal personas.
 ```
 
-- [ ] **Step 2: Re-translate the feature table's right column** (left column unchanged). Replace the table rows with:
+- [ ] **Step 2: Re-translate the feature table's right column** (left column unchanged, except the last row's plate count: "(4 today)" becomes "(5 today)", a deliberate drive-by correction against the five `region.json` files on disk). Replace the table rows with:
 
 ```markdown
 | Engineering truth | Customer-facing line |
@@ -472,7 +472,7 @@ translation table above is re-baselined against the Home-Ground Collector, and
 the register rules live in the profile spec.
 ```
 
-- [ ] **Step 5: Sweep the rest of the doc** for any remaining passage that prescribes struck page material (grep for `Private by default`, `retention`, `disappear`, `2.6` in `docs/marketing.md`); reconcile any hit with a dated amendment in the same style. The naming-kit and success-metric sections stay untouched.
+- [ ] **Step 5: Sweep the rest of the doc** for any remaining passage that prescribes struck page material (grep for `Private by default`, `retention`, `disappear`, `2.6` in `docs/marketing.md`); reconcile any hit with a dated amendment in the same style. Two expected hits need no action: the Step 4 amendment quotes the struck 2.6 line as history, and the ritual-engine channel sentence ("it requires no data retention because *their file* holds everything") describes the business mechanism, never page copy. The naming-kit and success-metric sections stay untouched.
 
 - [ ] **Step 6: Commit**
 
