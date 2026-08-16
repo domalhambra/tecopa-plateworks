@@ -4,10 +4,23 @@ summit, a 4wd loop pair, and a lake by the road. Distances in region-CRS metres.
 import numpy as np
 import pytest
 
-from scripts.track_network import (build_graph, dijkstra, dijkstra_edges,
-                                    path_edge_ids, WEIGHTS)
+from scripts.track_network import (build_graph, destination_pool, dijkstra,
+                                    dijkstra_edges, path_edge_ids, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
+
+LABELS = {"crs": "EPSG:32611", "features": [
+    {"name": "Near Summit", "kind": "summit", "rank": 70, "coords": [[519_000, 4_414_000]]},
+    {"name": "Far Summit",  "kind": "summit", "rank": 70, "coords": [[500_000, 4_419_900]]},
+    {"name": "Some Range",  "kind": "range",  "rank": 100, "coords": [[510_000, 4_412_000]]},
+]}
+HYDRO = {"crs": "EPSG:32611", "lakes": [
+    # centroid (515000, 4408500) -> 1500 m from the road crossing vertex: safely
+    # inside SNAP_MAX_M, not sitting on the threshold boundary it tests
+    {"name": "Road Lake", "coords": [[514_000, 4_409_500], [516_000, 4_409_500],
+                                     [516_000, 4_407_500], [514_000, 4_407_500]]},
+    {"name": "   ",       "coords": [[501_000, 4_401_000], [502_000, 4_401_000]]},
+], "rivers": []}
 
 
 def _ways():
@@ -162,3 +175,51 @@ def test_dijkstra_edges_resolves_parallel_edges_correctly():
     ambiguous_ids = path_edge_ids(g, path)
     assert g.edges[ambiguous_ids[0]]["class"] == "road"
     assert ambiguous_ids != edge_ids
+
+
+def test_destination_pool_snaps_and_drops(tmp_path):
+    import json
+    (tmp_path / "labels.json").write_text(json.dumps(LABELS))
+    (tmp_path / "hydro.json").write_text(json.dumps(HYDRO))
+    g = build_graph(_ways())
+    pool = destination_pool(str(tmp_path), g)
+    names = {d["name"] for d in pool}
+    assert "Near Summit" in names          # 0 m from a trail vertex
+    assert "Road Lake" in names            # centroid 1.5 km from the crossing vertex
+    assert "Far Summit" not in names       # ~10 km from anything: dropped
+    assert "Some Range" not in names       # kind not summit/gap
+    assert "   " not in names and "" not in names   # whitespace lake name dropped
+    lake = next(d for d in pool if d["name"] == "Road Lake")
+    assert lake["kind"] == "lake"
+    assert lake["node"] in g.adj           # snapped onto the graph
+
+
+def test_destination_pool_on_an_empty_graph(tmp_path):
+    """A cache that yielded no ways must produce an empty pool, not an
+    argmin-over-empty crash."""
+    import json
+    (tmp_path / "labels.json").write_text(json.dumps(LABELS))
+    (tmp_path / "hydro.json").write_text(json.dumps(HYDRO))
+    assert destination_pool(str(tmp_path), build_graph([])) == []
+
+
+def test_destination_pool_dedupes_repeated_names_by_rank(tmp_path):
+    """Real plates repeat names (multiple "Bear Lake"s, "Bald Mountain"s).
+    Downstream (T5's hotspot dict, T7's edition filter) keys by name, so two
+    distinct entries sharing a name must collapse to one here rather than
+    silently colliding later. The higher-rank labels.json entry wins."""
+    import json
+    labels = {"crs": "EPSG:32611", "features": [
+        {"name": "Bald Mountain", "kind": "summit", "rank": 50,
+         "coords": [[515_000, 4_410_100]]},
+        {"name": "Bald Mountain", "kind": "summit", "rank": 90,
+         "coords": [[515_050, 4_410_150]]},
+    ]}
+    (tmp_path / "labels.json").write_text(json.dumps(labels))
+    (tmp_path / "hydro.json").write_text(
+        json.dumps({"crs": "EPSG:32611", "lakes": [], "rivers": []}))
+    g = build_graph(_ways())
+    pool = destination_pool(str(tmp_path), g)
+    matches = [d for d in pool if d["name"] == "Bald Mountain"]
+    assert len(matches) == 1
+    assert matches[0]["x"] == 515_050   # the higher-rank (90) entry wins

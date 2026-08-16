@@ -124,6 +124,64 @@ def dijkstra(g: Graph, src: tuple, dst: tuple, weights: dict,
     return None if result is None else result[0]
 
 
+def destination_pool(region_dir: str, g: Graph) -> list[dict]:
+    """Real named destinations: labels.json summits/gaps (point coords) plus
+    hydro.json named lakes (polygon centroid -- labels.json has NO lake
+    kind). Each candidate is snapped to the nearest graph vertex and dropped
+    if that vertex is farther than SNAP_MAX_M away.
+
+    The lake centroid is the plain mean of the ring's vertices, not the true
+    area centroid -- biased toward densely-sampled parts of the ring, and in
+    a pathological concave ring (a horseshoe lake, say) it could in theory
+    fall outside the polygon. For snapping to a road within a 2 km ceiling
+    this is judged acceptable: it would have to land implausibly far from
+    the lake's own shape to snap to the wrong network vertex, and no such
+    case has shown up on the five built plates.
+
+    Duplicate names -- real on OSM/GNIS data (multiple "Bear Lake"s or "Bald
+    Mountain"s on one plate) -- are collapsed to one entry per name, because
+    downstream consumers (T5's hotspot dict, T7's edition filter) key by
+    name and would otherwise let a later duplicate silently clobber an
+    earlier one. labels.json entries carry a `rank`; the higher-rank entry
+    wins. hydro.json lakes carry no rank and are ranked below any
+    labels.json entry, so a named lake never evicts a same-named summit/gap;
+    among lake-vs-lake duplicates, the first one encountered (hydro.json
+    order) wins.
+    """
+    keys, verts = g.vertex_array()
+    best: dict[str, dict] = {}
+    best_rank: dict[str, int] = {}
+
+    def _snap(name: str, kind: str, x: float, y: float, rank: int) -> None:
+        if not len(verts):
+            return
+        d2 = (verts[:, 0] - x) ** 2 + (verts[:, 1] - y) ** 2
+        i = int(np.argmin(d2))
+        if float(np.sqrt(d2[i])) > SNAP_MAX_M:
+            return
+        if name in best and rank <= best_rank[name]:
+            return   # an equal-or-higher-rank entry already claimed this name
+        best[name] = {"name": name, "kind": kind, "x": float(x), "y": float(y),
+                      "node": keys[i]}
+        best_rank[name] = rank
+
+    with open(os.path.join(region_dir, "labels.json")) as f:
+        for ft in json.load(f)["features"]:
+            name = str(ft.get("name") or "").strip()
+            if ft["kind"] in ("summit", "gap") and name:
+                (x, y), = ft["coords"][:1]
+                _snap(name, ft["kind"], x, y, int(ft.get("rank", 0)))
+
+    with open(os.path.join(region_dir, "hydro.json")) as f:
+        for lk in json.load(f)["lakes"]:
+            name = str(lk.get("name") or "").strip()
+            if name and lk.get("coords"):
+                c = np.asarray(lk["coords"], dtype=float)
+                _snap(name, "lake", float(c[:, 0].mean()), float(c[:, 1].mean()), -1)
+
+    return list(best.values())
+
+
 def path_edge_ids(g: Graph, path: list) -> list[int]:
     """Edge indices along a coord path (for loop-share accounting), resolved
     by taking the FIRST edge found joining each consecutive vertex pair.
