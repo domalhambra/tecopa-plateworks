@@ -94,6 +94,9 @@ def dijkstra_edges(g: Graph, src: tuple, dst: tuple, weights: dict,
             continue
         for v, ei in g.adj[u]:
             e = g.edges[ei]
+            # cost must stay >= 0: both the break-on-pop-dst early exit below
+            # and Dijkstra's correctness assume non-negative edge costs, which
+            # holds today only because WEIGHTS and LOOP_PENALTY are positive.
             c = e["len_m"] * weights[e["class"]]
             if edge_penalty:
                 c *= edge_penalty.get(ei, 1.0)

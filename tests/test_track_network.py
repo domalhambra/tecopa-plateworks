@@ -90,17 +90,40 @@ def test_dijkstra_unreachable_returns_none():
     assert dijkstra(g, island, ("nope", "nope"), WEIGHTS["outing"]) is None
 
 
+def test_dijkstra_disconnected_component_returns_none():
+    """dst=('nope','nope') above never reaches the search loop -- it's caught
+    by the `dst not in g.adj` fast path. The line it doesn't exercise,
+    `dst not in prev and src != dst`, guards two REAL vertices in disconnected
+    components, which happens on clipped OSM extracts. Build a graph with a
+    genuinely isolated component to cover it."""
+    ways = [
+        {"class": "road", "coords": [[0.0, 0.0], [10.0, 0.0]]},
+        # a separate way sharing no vertex with the one above
+        {"class": "road", "coords": [[100.0, 100.0], [110.0, 100.0]]},
+    ]
+    g = build_graph(ways)
+    src = g.key((0.0, 0.0))
+    dst = g.key((110.0, 100.0))
+    assert src in g.adj and dst in g.adj   # both are real, valid vertices
+    assert dijkstra(g, src, dst, WEIGHTS["outing"]) is None
+    assert dijkstra_edges(g, src, dst, WEIGHTS["outing"]) is None
+
+
 def test_edge_penalty_pushes_the_route_off_its_first_choice():
     """The loop-finding mechanism (T5): penalising the first path's edges must
-    make Dijkstra return a different route when one exists."""
+    make Dijkstra return a different route when one exists. Models the SAFE
+    pattern -- penalise the edge_ids dijkstra_edges actually walked, never
+    path_edge_ids (610db72: ambiguous under parallel edges, which is exactly
+    the shape a real second-loop search can hit)."""
     g = build_graph(_ways())
     src = g.key((515_000.0, 4_410_000.0))
     dst = g.key((519_000.0, 4_414_000.0))
-    first = dijkstra(g, src, dst, WEIGHTS["outing"])
-    pen = {ei: 100.0 for ei in path_edge_ids(g, first)}
-    second = dijkstra(g, src, dst, WEIGHTS["outing"], edge_penalty=pen)
-    assert second is not None
-    assert second != first
+    first_path, first_edge_ids = dijkstra_edges(g, src, dst, WEIGHTS["outing"])
+    pen = {ei: 100.0 for ei in first_edge_ids}
+    second_path, second_edge_ids = dijkstra_edges(g, src, dst, WEIGHTS["outing"],
+                                                   edge_penalty=pen)
+    assert second_path is not None
+    assert second_path != first_path
 
 
 def test_path_edge_ids_match_the_path():
