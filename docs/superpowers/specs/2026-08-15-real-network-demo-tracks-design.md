@@ -127,9 +127,20 @@ Seeded (`np.random.default_rng(seed)`), fully deterministic:
 - **Hotspots:** destinations become the hotspot list directly, carrying their
   **real names** ("Antelope Mountain") — `density.hotspots` is **not consulted**
   for network tracks (the worn-path bullet above is about the rendered ink
-  weave, not the spot list). `_annotate` changes accordingly: it assigns a
-  label only to spots that arrive without one, and keeps assigning icons and
-  the pinned photo for all.
+  weave, not the spot list). Each spot also carries an **icon derived from its
+  kind** — `summit` → `peak`, `gap` → `flag`, `lake` → `water` — since the
+  composer knows what each destination is and `render._draw_glyph` already
+  draws all three. `_annotate` changes accordingly: it assigns a label *or* an
+  icon only to spots that arrive without one, and keeps pinning the photo.
+
+  > **Amended 2026-08-16 (implementation review).** This bullet originally said
+  > `_annotate` "keeps assigning icons for all", which left icons on the
+  > positional `HOTSPOT_ICONS` cycle while labels became real. The result is
+  > markers that contradict the names beside them: on a review run a lake
+  > printed with a tent glyph, and with eight destinations the cycle also hands
+  > a summit a camera. These are customer-facing marketing images, so a marker
+  > that lies is worse than a generic one. The kind→icon mapping was already
+  > available and simply discarded.
 
 ### 4 · Farm integration + fallback
 

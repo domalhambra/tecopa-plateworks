@@ -45,6 +45,15 @@ SEASONS = {                   # kind -> (first day-of-year, last), spec §3 date
     "gap":    (152, 243),     # Jun-Aug
     "summit": (182, 304),     # Jul-Oct
 }
+# kind -> marker glyph (spec §3). Total over the kinds `destination_pool` can
+# produce -- it emits exactly summit/gap from labels.json and lake from
+# hydro.json -- and every value is a glyph `render._draw_glyph` already knows.
+# The farm's positional icon cycle is fine for invented density hotspots but
+# libellous next to a real name: it put a tent on "Road Lake" and a camera on a
+# summit. KIND_ICONS is the fix; the `.get` fallback keeps a future kind from
+# taking down a farm run over a marker glyph.
+KIND_ICONS = {"summit": "peak", "gap": "flag", "lake": "water"}
+KIND_ICON_DEFAULT = "dot"
 
 
 class Graph:
@@ -421,8 +430,11 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     # pick from its pool, so a destination can never be visited twice and the
     # accumulation loop this replaces could only ever count to 1. x/y are the
     # real summit/lake position, NOT the snapped road vertex -- the marker
-    # belongs on the place, not on the trailhead path.
-    return tracks, [{"x": d["x"], "y": d["y"], "weight": 1, "label": d["name"]}
+    # belongs on the place, not on the trailhead path. The icon rides along so
+    # the glyph agrees with the name (see KIND_ICONS); the farm's `_annotate`
+    # leaves both alone once they are set.
+    return tracks, [{"x": d["x"], "y": d["y"], "weight": 1, "label": d["name"],
+                     "icon": KIND_ICONS.get(d["kind"], KIND_ICON_DEFAULT)}
                     for _day, _seq, d, _coords in trips]
 
 

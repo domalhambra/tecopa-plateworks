@@ -958,6 +958,13 @@ def test_farm_falls_back_without_cache(tmp_path, monkeypatch):
     assert len(got_tracks) == len(old)
     for a, b in zip(old, got_tracks):
         assert np.array_equal(a.coords, b.coords) and a.day == b.day
+    # ...and the SPOTS too, or "byte-identical" is only half-checked: a mutant
+    # that changed the fallback's spot derivation would move markers on the
+    # poster while every track stayed put.
+    from app.density import hotspots
+    assert len(got_spots) == len(hotspots(old, BOUNDS))
+    assert [s["label"] for s in got_spots] == farm.HOTSPOT_LABELS[:len(got_spots)]
+    assert [s["icon"] for s in got_spots] == farm.HOTSPOT_ICONS[:len(got_spots)]
 
 
 def test_annotate_keeps_existing_labels(tmp_path):
@@ -986,6 +993,9 @@ def test_edition_spots_keep_real_names_for_network_tracks(tmp_path):
     eds = farm._edition_spots(sub, spots, r, str(tmp_path))
     assert {s["label"] for s in eds} == {"Near Summit", "Road Lake"}
     assert next(s for s in eds if s["label"] == "Near Summit")["weight"] == 1
+    # exactly one pinned photo, like the poster -- has teeth against a mutant
+    # dropping the _annotate() re-pin on the network branch
+    assert sum("photo" in s for s in eds) == 1
     # synthetic ids (no colon) keep the density path -- track INSIDE bounds so
     # hotspots() actually yields a spot and the assertion has teeth
     synth = [Track(track_id="day-1",
@@ -1019,3 +1029,71 @@ def test_force_synthetic_overrides_a_present_cache(tmp_path, monkeypatch):
     r = _region(tmp_path)
     tracks, _ = farm._demo_journeys(r, str(tmp_path / "out"), force_synthetic=True)
     assert all(":" not in t.track_id for t in tracks)   # synthetic ids: "day-N"
+
+
+def test_farm_survives_a_corrupt_cache(tmp_path, monkeypatch, capsys):
+    """A truncated cache is what an interrupted Overpass fetch leaves behind.
+    It must fall back loudly, not abort the run -- _demo_journeys sits OUTSIDE
+    main()'s per-region try/except, so raising here would take down every later
+    region too, including ones with no cache that would have rendered fine."""
+    import json
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cache" / "networks").mkdir(parents=True)
+    cache = tmp_path / "cache" / "networks" / "stub.json"
+    r = _region(tmp_path)
+
+    for broken in ('{"region_id": "stub", "ways": [{"class": "road", "coo',  # truncated
+                   "",                                                       # empty
+                   '{"region_id": "stub", "crs": "x"}'):                     # no "ways"
+        cache.write_text(broken)
+        tracks, spots = farm._demo_journeys(r, str(tmp_path / "out"))
+        assert tracks and all(":" not in t.track_id for t in tracks)   # synthetic
+        assert "cache unreadable" in capsys.readouterr().out
+
+    # and the same region renders network journeys again once the cache is sound
+    cache.write_text(json.dumps({"region_id": "stub", "crs": "x", "ways": _ways()}))
+    tracks, _ = farm._demo_journeys(r, str(tmp_path / "out"))
+    assert tracks and all(":" in t.track_id for t in tracks)
+
+
+def test_network_spots_carry_an_icon_matching_their_kind(tmp_path):
+    """A lake wearing a tent is worse than a generic marker -- it contradicts
+    the name printed beside it on a customer-facing print."""
+    r = _region(tmp_path)
+    _tracks, spots = network_tracks(r, _ways(), seed=7)
+    by_label = {s["label"]: s for s in spots}
+    assert by_label["Road Lake"]["icon"] == "water"
+    assert by_label["Near Summit"]["icon"] == "peak"
+    assert set(track_network.KIND_ICONS) == set(SEASONS)   # total over the kinds
+
+
+def test_annotate_keeps_a_real_icon_but_still_cycles_unmarked_spots(tmp_path):
+    """The other half of the label guard: _annotate must not re-cycle an icon
+    that arrived meaning something."""
+    import scripts.render_asset_farm as farm
+    spots = [{"x": 1.0, "y": 2.0, "weight": 1, "label": "Road Lake", "icon": "water"},
+             {"x": 3.0, "y": 4.0, "weight": 1}]
+    out = farm._annotate(spots, str(tmp_path))
+    assert out[0]["icon"] == "water"                    # survives the cycle
+    assert out[1]["icon"] == farm.HOTSPOT_ICONS[1]      # unmarked spot still cycles
+
+
+def test_edition_icons_are_stable_across_editions(tmp_path):
+    """The positional cycle re-indexed per subset, so a destination could change
+    marker between Edition 1 and Edition 3 of the same lineage. It must not."""
+    import scripts.render_asset_farm as farm
+    from app.ingest import Track
+    names = ["Alpha Lake", "Bravo Peak", "Charlie Pass"]
+    icons = ["water", "peak", "flag"]
+    spots = farm._annotate([{"x": float(i), "y": 0.0, "weight": 1,
+                             "label": n, "icon": ic}
+                            for i, (n, ic) in enumerate(zip(names, icons))], str(tmp_path))
+    tracks = [Track(track_id=f"summit:{n}", coords=np.zeros((4, 2)), day="2024-07-01")
+              for n in names]
+    r = _StubRegion(tmp_path)
+    seen = {}
+    for upto in (1, 2, 3):
+        for s in farm._edition_spots(tracks[:upto], spots, r, str(tmp_path)):
+            assert seen.setdefault(s["label"], s["icon"]) == s["icon"]
+    assert seen == dict(zip(names, icons))

@@ -41,10 +41,18 @@ model, and lightsweep tiers are share-class and exercise none of that path: the 
 and the GLB restage an already-rendered final's pixels, and the lightsweep re-renders
 but carries no manifest.
 
-Usage:
+Usage (run from the REPO ROOT -- `regions/`, `cache/networks/` and the default
+`assets/` output root all resolve relative to the current directory):
     ./.venv/bin/python scripts/render_asset_farm.py                    # all regions, real DEMs
     ./.venv/bin/python scripts/render_asset_farm.py --regions lassen_ca --quick
     ./.venv/bin/python scripts/render_asset_farm.py --synthetic-dem    # local preview, no real DEM
+    ./.venv/bin/python scripts/render_asset_farm.py --synthetic-tracks # ignore the network cache
+
+Demo journeys come from the OSM network cache at `cache/networks/<region_id>.json`
+when one is present (see scripts/fetch_track_network.py), so markers carry the real
+summits and lakes the routes reached. The cache is gitignored; without it -- a fresh
+clone, CI -- the farm falls back to the synthetic track generator and renders exactly
+what it always did. `--synthetic-tracks` forces that fallback even when a cache exists.
 
 Real 3DEP DEMs are gitignored (see region_prep.py). On a machine that has them, this
 renders true terrain. Without them, pass --synthetic-dem to hydrate the same tiny
@@ -208,14 +216,22 @@ def _annotate(spots: list, out_dir: str) -> list:
     """Name + icon each hotspot and pin one synthetic photo, so the poster shows the
     marker/photo furniture the product is about (the photo embeds into the manifest).
 
-    A spot that ALREADY carries a label keeps it: network journeys arrive named after
-    the real summit/lake they reached, and overwriting "Antelope Mountain" with
-    "Base Camp" would throw away the whole point of routing over real terrain. Only
-    density-derived spots (which have no name) get one from the invented list."""
+    A spot that ALREADY carries a label or icon keeps both: network journeys arrive
+    named after the real summit/lake they reached, and carrying the glyph that matches
+    that kind (track_network.KIND_ICONS). Overwriting "Antelope Mountain" with
+    "Base Camp" would throw away the whole point of routing over real terrain, and
+    re-cycling the icon positionally is worse than generic -- it contradicts the name
+    printed beside it, putting a tent on a lake and a camera on a summit. Only
+    density-derived spots (which carry neither) get them from the invented lists.
+
+    Guarding the icon also makes a destination's glyph STABLE across the three
+    editions: the positional cycle re-indexed on each subset, so a summit could
+    change marker between Edition 1 and Edition 3 of the same lineage."""
     for k, s in enumerate(spots):
         if "label" not in s:
             s["label"] = HOTSPOT_LABELS[k % len(HOTSPOT_LABELS)]
-        s["icon"] = HOTSPOT_ICONS[k % len(HOTSPOT_ICONS)]
+        if "icon" not in s:
+            s["icon"] = HOTSPOT_ICONS[k % len(HOTSPOT_ICONS)]
     if spots:
         demo = Image.new("RGB", (240, 180)); px = demo.load()
         for yy in range(180):
@@ -231,12 +247,29 @@ def _annotate(spots: list, out_dir: str) -> list:
 def _demo_journeys(region, out_dir: str, force_synthetic: bool = False):
     """Tracks + spots for a region: journeys routed over the cached OSM network
     when cache/networks/<id>.json exists, else the synthetic generator. The
-    fallback keeps the farm runnable on a fresh clone and in CI."""
+    fallback keeps the farm runnable on a fresh clone and in CI.
+
+    A cache that exists but cannot be read falls back too, loudly. This is the
+    one place the farm does file I/O per region, and it sits OUTSIDE main()'s
+    per-region try/except -- so an unreadable cache raising here would abort the
+    whole run, taking down every LATER region including ones with no cache that
+    would have rendered fine. A truncated half-written JSON is exactly what an
+    interrupted Overpass fetch leaves on disk, so this is the expected failure,
+    not an exotic one. The catch is deliberately narrow (read/parse/shape
+    errors); anything else is a real bug and should still surface."""
     cache = os.path.join(NETWORK_CACHE, f"{region.id}.json")
     if not force_synthetic and os.path.exists(cache):
-        tracks, spots = network_tracks(region, load_network(cache))
-        print(f"  tracks: routed over {cache} (OSM, ODbL)")
-        return tracks, _annotate(spots, out_dir)
+        try:
+            tracks, spots = network_tracks(region, load_network(cache))
+        except (OSError, ValueError, KeyError) as ex:
+            print(f"  ! cache unreadable, falling back to synthetic tracks "
+                  f"({type(ex).__name__}: {ex})")
+        else:
+            print(f"  tracks: routed over {cache} (OSM, ODbL)")
+            return tracks, _annotate(spots, out_dir)
+    else:
+        why = "forced by --synthetic-tracks" if force_synthetic else f"no cache at {cache}"
+        print(f"  tracks: synthetic ({why})")
     tracks = _synth_tracks(region)
     return tracks, _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir)
 
@@ -257,6 +290,12 @@ def _edition_spots(sub: list, spots: list, region, out_dir: str) -> list:
         # A double pin needs a caller that annotates a non-first spot; the
         # strip costs nothing and makes that caller safe instead of subtly
         # wrong. Not tested, because no reachable state produces it.
+        #
+        # `names.count` likewise always returns 1 today: destination_pool dedupes
+        # by name and select_destinations removes each pick, so one trip per
+        # destination. Written as a count rather than a literal 1 so that a
+        # future generator which DOES revisit a place gets the right weight
+        # (marker size is weight-driven) instead of a silently flat one.
         eds = [{k: v for k, v in dict(s, weight=names.count(s["label"])).items()
                 if k != "photo"}
                for s in spots if s.get("label") in names]
