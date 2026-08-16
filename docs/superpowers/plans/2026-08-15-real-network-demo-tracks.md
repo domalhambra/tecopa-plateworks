@@ -346,6 +346,8 @@ def destination_pool(region_dir: str, g: Graph) -> list[dict]:
     out = []
 
     def _snap(name, kind, x, y):
+        if not len(verts):
+            return
         d2 = (verts[:, 0] - x) ** 2 + (verts[:, 1] - y) ** 2
         i = int(np.argmin(d2))
         if float(np.sqrt(d2[i])) <= SNAP_MAX_M:
@@ -592,6 +594,12 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     worn: list[tuple] = []
     year = 2024
     trips = []
+    # NOTE: a destination in a different connected component than its trailhead
+    # routes to None and is skipped below. That is correct but silent, and on a
+    # clipped OSM extract it can quietly thin the trip list -- so count the
+    # skips and print one line if any occurred, rather than shipping a poster
+    # with three journeys where eight were intended.
+    skipped = 0
     for d in dests:
         th = _trailhead_for(g, d["node"], worn, rng)
         if len(worn) < 2:
@@ -603,6 +611,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
         # never an error.
         got = dijkstra_edges(g, th, d["node"], WEIGHTS["outing"])
         if got is None:
+            skipped += 1
             continue
         out_path, out_ids = got
         shape = rng.choice(["out_and_back", "loop", "4wd"])
@@ -629,6 +638,9 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
         day = date(year, 1, 1) + timedelta(days=int(rng.integers(lo, hi + 1)) - 1)
         trips.append((day, d, _densify(np.asarray(path, dtype=float), rng)))
 
+    if skipped:
+        print(f"  tracks: {skipped} of {len(dests)} destinations unreachable "
+              f"from their trailhead (disconnected network) -- skipped")
     trips.sort(key=lambda t: t[0])
     from app.ingest import Track
     tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
