@@ -184,6 +184,51 @@ def destination_pool(region_dir: str, g: Graph) -> list[dict]:
     return list(best.values())
 
 
+def select_destinations(pool: list[dict], bounds: tuple, n: int, rng) -> list[dict]:
+    """Greedy farthest-point pick of n destinations, refusing to reuse a 3x3
+    grid cell until every occupied cell has been used once: the mechanical
+    guarantee that ink reaches the plate's corners instead of pooling in the
+    middle, which is the whole reason this module exists.
+
+    Works over indices into `pool`, not the dicts themselves -- `list.remove`
+    on dicts scans by equality, and while destination_pool's real output is
+    deduped by name (so no two candidates ever compare equal), nothing here
+    should rely on that guarantee holding for every future caller.
+
+    Cell indices are clamped on both ends: a destination that sits just off
+    the nominal plate bounds (a label snapped near the edge, say) must still
+    land in one of the 9 real cells rather than growing its own out-of-range
+    cell that inflates the apparent spread."""
+    if not pool:
+        return []
+    w, s, e, nb = bounds
+
+    def cell(d):
+        cx = min(2, max(0, int(3 * (d["x"] - w) / (e - w))))
+        cy = min(2, max(0, int(3 * (d["y"] - s) / (nb - s))))
+        return (cx, cy)
+
+    remaining = list(range(len(pool)))
+    start = remaining.pop(int(rng.integers(len(remaining))))
+    picks = [start]
+    used_cells = {cell(pool[start])}
+
+    while remaining and len(picks) < n:
+        fresh = [i for i in remaining if cell(pool[i]) not in used_cells]
+        # `fresh` is empty exactly when every occupied cell has already been
+        # used once (any occupied-but-unused cell would still have its
+        # original candidate sitting in `remaining`), so falling back to
+        # `remaining` here is precisely "start repeating cells now".
+        cands = fresh if fresh else remaining
+        dmin = [min((pool[i]["x"] - pool[p]["x"]) ** 2 + (pool[i]["y"] - pool[p]["y"]) ** 2
+                    for p in picks) for i in cands]
+        best = cands[int(np.argmax(dmin))]
+        remaining.remove(best)
+        picks.append(best)
+        used_cells.add(cell(pool[best]))
+    return [pool[i] for i in picks]
+
+
 def path_edge_ids(g: Graph, path: list) -> list[int]:
     """Edge indices along a coord path (for loop-share accounting), resolved
     by taking the FIRST edge found joining each consecutive vertex pair.

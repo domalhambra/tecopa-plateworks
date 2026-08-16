@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
-                                    dijkstra_edges, path_edge_ids, WEIGHTS)
+                                    dijkstra_edges, path_edge_ids,
+                                    select_destinations, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
 
@@ -283,3 +284,72 @@ def test_destination_pool_skips_a_feature_with_no_coords(tmp_path):
     names = {d["name"] for d in pool}
     assert "Broken Summit" not in names
     assert "Near Summit" in names
+
+
+def _cands(n=40, seed=0):
+    rng = np.random.default_rng(seed)
+    w, s, e, nb = BOUNDS
+    return [{"name": f"d{i}", "kind": "summit",
+             "x": float(rng.uniform(w, e)), "y": float(rng.uniform(s, nb)),
+             "node": ("k", i)} for i in range(n)]
+
+
+def _cell(d, bounds=BOUNDS):
+    w, s, e, n = bounds
+    return (min(2, int(3 * (d["x"] - w) / (e - w))),
+            min(2, int(3 * (d["y"] - s) / (n - s))))
+
+
+def test_selection_spreads_over_the_grid():
+    picks = select_destinations(_cands(), BOUNDS, 8, np.random.default_rng(7))
+    assert len(picks) == 8
+    assert len({_cell(d) for d in picks}) >= 5     # spec's cell floor
+
+
+def test_selection_is_deterministic():
+    a = select_destinations(_cands(), BOUNDS, 6, np.random.default_rng(7))
+    b = select_destinations(_cands(), BOUNDS, 6, np.random.default_rng(7))
+    assert [d["name"] for d in a] == [d["name"] for d in b]
+
+
+def test_selection_uses_every_occupied_cell_before_repeating_one():
+    """The whole point: a plate with candidates in all 9 cells must not put two
+    trips in one cell while another cell sits empty."""
+    w, s, e, n = BOUNDS
+    pool = []
+    for i in range(3):
+        for j in range(3):
+            pool.append({"name": f"c{i}{j}", "kind": "summit",
+                         "x": w + (e - w) * (i + 0.5) / 3,
+                         "y": s + (n - s) * (j + 0.5) / 3, "node": ("k", i, j)})
+    picks = select_destinations(pool, BOUNDS, 9, np.random.default_rng(3))
+    assert len({_cell(d) for d in picks}) == 9     # all nine, no repeats
+
+
+def test_selection_handles_fewer_candidates_than_requested():
+    picks = select_destinations(_cands(3), BOUNDS, 8, np.random.default_rng(7))
+    assert len(picks) == 3
+    assert len({d["name"] for d in picks}) == 3    # no duplicates padded in
+
+
+def test_selection_on_an_empty_pool():
+    assert select_destinations([], BOUNDS, 8, np.random.default_rng(7)) == []
+
+
+def test_selection_clamps_cells_for_out_of_bounds_candidates():
+    """A destination that sits just off the nominal plate bounds (a label
+    snapped near the edge, say) must not blow up the cell grid with a
+    negative index -- confirms the low-side clamp, not just the high-side
+    one the BOUNDS-edge case already exercises via min(2, ...)."""
+    w, s, e, n = BOUNDS
+    pool = [
+        {"name": "on_ne_corner", "kind": "summit", "x": e, "y": n, "node": ("k", 0)},
+        {"name": "west_of_plate", "kind": "summit", "x": w - 50_000, "y": s + 5_000,
+         "node": ("k", 1)},
+        {"name": "south_of_plate", "kind": "summit", "x": w + 5_000, "y": s - 50_000,
+         "node": ("k", 2)},
+    ]
+    picks = select_destinations(pool, BOUNDS, 3, np.random.default_rng(1))
+    assert len(picks) == 3
+    assert {d["name"] for d in picks} == {"on_ne_corner", "west_of_plate",
+                                          "south_of_plate"}
