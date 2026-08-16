@@ -11,7 +11,8 @@ from scripts.track_network import (build_graph, destination_pool, dijkstra,
                                     dijkstra_edges, network_tracks,
                                     path_edge_ids, road_vertex_index,
                                     select_destinations, trip_target_m,
-                                    JITTER_M, SEASONS, TRIP_SPAN_MAX_M,
+                                    JITTER_M, SEASONS, SELECT_INSET_FRAC,
+                                    TRIP_SPAN_MAX_M,
                                     TRIP_SPAN_MIN_M, WEIGHTS)
 
 BOUNDS = (500_000.0, 4_400_000.0, 530_000.0, 4_420_000.0)   # 30 x 20 km
@@ -292,18 +293,27 @@ def test_destination_pool_skips_a_feature_with_no_coords(tmp_path):
     assert "Near Summit" in names
 
 
+def _inset(bounds=BOUNDS):
+    """The frame select_destinations actually works over -- both its 3x3 grid
+    and its candidate filter. Mirrored here so these tests describe the real
+    contract; a candidate outside it is dropped, not clamped."""
+    w, s, e, n = bounds
+    dx, dy = SELECT_INSET_FRAC * (e - w), SELECT_INSET_FRAC * (n - s)
+    return (w + dx, s + dy, e - dx, n - dy)
+
+
 def _cands(n=40, seed=0):
     rng = np.random.default_rng(seed)
-    w, s, e, nb = BOUNDS
+    w, s, e, nb = _inset()
     return [{"name": f"d{i}", "kind": "summit",
              "x": float(rng.uniform(w, e)), "y": float(rng.uniform(s, nb)),
              "node": ("k", i)} for i in range(n)]
 
 
-def _cell(d, bounds=BOUNDS):
-    w, s, e, n = bounds
-    return (min(2, int(3 * (d["x"] - w) / (e - w))),
-            min(2, int(3 * (d["y"] - s) / (n - s))))
+def _cell(d, bounds=None):
+    w, s, e, n = _inset() if bounds is None else bounds
+    return (min(2, max(0, int(3 * (d["x"] - w) / (e - w)))),
+            min(2, max(0, int(3 * (d["y"] - s) / (n - s)))))
 
 
 def test_selection_spreads_over_the_grid():
@@ -335,15 +345,19 @@ def test_selection_uses_every_occupied_cell_before_repeating_one():
     cell-aware selector must not repeat the crowded cell while a cell sits
     untouched."""
     pool = [
-        {"name": "crowded_sw", "kind": "summit", "x": 500_500.0, "y": 4_400_500.0,
+        # Coordinates sit inside the inset frame (SELECT_INSET_FRAC): a
+        # candidate in the plate's margin is now dropped before selection
+        # runs, so the old rim positions would have exercised the filter
+        # rather than the cell rotation. The SHAPE is unchanged.
+        {"name": "crowded_sw", "kind": "summit", "x": 503_800.0, "y": 4_402_600.0,
          "node": ("k", 0)},
-        {"name": "crowded_ne", "kind": "summit", "x": 509_500.0, "y": 4_406_000.0,
+        {"name": "crowded_ne", "kind": "summit", "x": 511_000.0, "y": 4_407_300.0,
          "node": ("k", 1)},
         {"name": "lone_mid",   "kind": "summit", "x": 515_000.0, "y": 4_410_000.0,
          "node": ("k", 2)},
         {"name": "lone_ne",    "kind": "summit", "x": 525_000.0, "y": 4_416_000.0,
          "node": ("k", 3)},
-        {"name": "lone_nw",    "kind": "summit", "x": 502_000.0, "y": 4_415_000.0,
+        {"name": "lone_nw",    "kind": "summit", "x": 504_500.0, "y": 4_415_500.0,
          "node": ("k", 4)},
     ]
     picks = select_destinations(pool, BOUNDS, 4, np.random.default_rng(21))
@@ -826,20 +840,31 @@ def _big_network():
     row0_top = s + (n - s) / 3.0
     cluster_srcs = [p for p in west if p[1] < row0_top - 500.0][1::8][:7]
     for i, (cx, cy) in enumerate(cluster_srcs):
-        ways.append({"class": "trail",
-                     "coords": _densify_path([[cx, cy], [cx + 300.0, cy + 150.0]])})
+        tip = [cx + 1_100.0, cy + 700.0]
+        ways.append({"class": "trail", "coords": _densify_path([[cx, cy], tip])})
         feats.append({"name": f"Cluster {i}", "kind": "summit", "rank": 70,
-                      "coords": [[cx + 300.0, cy + 150.0]]})
+                      "coords": [list(tip)]})
 
+    # Spurs run INWARD from the perimeter road, so every summit sits inside
+    # the SELECT_INSET_FRAC frame. They previously all ran +x/+y, which put
+    # the east column at 0.96 and the north row at 0.98 of the plate -- the
+    # rim the composer now deliberately refuses to select from, and exactly
+    # the placement the real lassen_ca render proved unusable (5 of 8
+    # destinations within 5% of an edge, 14.3% of ink off the sheet). A trail
+    # climbing from a rim road toward the interior is the realistic shape
+    # anyway. The assertions below are unchanged.
     k = 0
     for x in xs:
         for y in ys:
             k += 1
+            sx = -1 if x == xs[2] else 1
+            sy = -1 if y == ys[2] else 1
+            mid = [x + sx * 900, y + sy * 900]
+            tip = [x + sx * 1800, y + sy * 1500]
             ways.append({"class": "trail",
-                         "coords": _densify_path([[x, y], [x + 900, y + 900],
-                                                  [x + 1800, y + 1500]])})
+                         "coords": _densify_path([[x, y], mid, tip])})
             feats.append({"name": f"Summit {k}", "kind": "summit", "rank": 70,
-                          "coords": [[x + 1800, y + 1500]]})
+                          "coords": [list(tip)]})
     return ways, feats
 
 
@@ -911,6 +936,124 @@ def test_coverage_spans_the_plate(tmp_path):
             assert tspan > 0.85 * TRIP_SPAN_MIN_M, (
                 f"seed {seed}: {t.track_id} spans only {tspan:.0f} m -- "
                 "a squiggle, not a journey")
+
+
+def test_trailhead_leans_toward_the_plate_centre():
+    """Distance is not enough -- DIRECTION decides whether a rim destination's
+    route lands on the sheet or off it. Both fixes in this area are needed and
+    the plate fixtures cannot separate them, because the inset filter alone
+    keeps synthetic destinations far enough inside that direction stops
+    mattering. On real caches it still does: rifle_aspen renders 0.65% of its
+    ink off-frame without this tiebreak and 0.00% with it.
+
+    A destination sits near the west edge with road vertices at EQUAL distance
+    on both sides -- x=-4000 (further out) and x=+6000 (further in), both 5000
+    m away, so the distance-matched shortlist cannot choose between them. The
+    inward tiebreak must."""
+    road = [[x * 100.0, 0.0] for x in range(-50, 101)]      # -5000..10000, 100 m
+    index = road_vertex_index(build_graph([{"class": "road", "coords": road}]))
+    dest = (1_000.0, 0.0)
+    centre = (10_000.0, 0.0)
+
+    inward = [track_network._trailhead_for(index, dest, 5_000.0,
+                                           np.random.default_rng(seed), centre=centre)
+              for seed in range(25)]
+    assert all(th[0] > dest[0] for th in inward), (
+        "a trailhead was chosen on the outward side of a rim destination: "
+        f"{sorted({th[0] for th in inward})}")
+    # The tiebreak REFINES the distance target, it does not override it. It
+    # picks the most-central of a TRAILHEAD_SHORTLIST-wide band, so it can
+    # move the distance by the width of that band -- here 600 m on a 5 km
+    # target, because this fixture's vertices are a coarse 100 m apart. On a
+    # real cache the band is far tighter: the median |distance - target| is
+    # 10-45 m with the tiebreak against 3-11 m without it, comfortably inside
+    # the tolerance the composer was already accepted at.
+    assert all(abs(abs(th[0] - dest[0]) - 5_000.0) < 0.15 * 5_000.0
+               for th in inward), (
+        "the inward tiebreak broke the distance target it is supposed to "
+        f"refine: {sorted({th[0] for th in inward})}")
+
+    # ...and without a centre it genuinely has no preference, so the test
+    # above is measuring the tiebreak and not some accident of the fixture
+    blind = {track_network._trailhead_for(index, dest, 5_000.0,
+                                          np.random.default_rng(seed))[0]
+             for seed in range(25)}
+    assert any(x < dest[0] for x in blind), (
+        "the no-centre control never picked the outward side, so the fixture "
+        "does not actually pose the choice this test claims to measure")
+
+
+def test_journeys_stay_on_the_sheet(tmp_path):
+    """The other half of the acceptance criterion, and the one
+    test_coverage_spans_the_plate could not see. That test measures bounding-box
+    span and cell occupancy, and BOTH reward ink leaving the sheet -- a 109%
+    span was recorded as a success when it actually meant routes running off
+    the plate.
+
+    Measured on the real lassen_ca cache before this was fixed: 5 of 8
+    destinations sat within 5% of an edge, "Long Lake" landed at -0.005
+    (outside the plate entirely), and 14.3% of all track points rendered
+    outside the frame where nobody sees them. The poster read as scattered
+    scratches around the border with an empty middle -- the user's original
+    complaint inverted, not solved.
+
+    Two guarantees, both swept over seeds:
+      1. no selected destination lies in the plate's margin, because a
+         destination there has no room for its own route; and
+      2. essentially no composed ink falls outside `bounds`.
+    """
+    import json
+    ways, feats = _big_network()
+    w, s, e, n = BOUNDS
+
+    # The trap, and the reason this fixture is not just _big_network(): four
+    # named places ON the rim, reachable by a spur off the perimeter road.
+    # Real plates are full of these -- lassen_ca's "Long Lake" sits at -0.005
+    # and "Clover Butte" at 0.020 -- and farthest-point selection LOVES them,
+    # because maximising separation means walking to the extremes of the
+    # candidate set. Without the inset filter these four are exactly what gets
+    # picked. The composer must leave them alone and spread among the interior
+    # candidates instead.
+    xs = [w + (e - w) * f for f in (0.1, 0.5, 0.9)]
+    ys = [s + (n - s) * f for f in (0.1, 0.5, 0.9)]
+    for i, (src, tip) in enumerate((
+            ((xs[0], ys[1]), (w + 0.010 * (e - w), ys[1])),
+            ((xs[2], ys[1]), (w + 0.990 * (e - w), ys[1])),
+            ((xs[1], ys[0]), (xs[1], s + 0.010 * (n - s))),
+            ((xs[1], ys[2]), (xs[1], s + 0.990 * (n - s))))):
+        ways.append({"class": "trail",
+                     "coords": _densify_path([list(src), list(tip)])})
+        feats.append({"name": f"Rim {i}", "kind": "summit", "rank": 70,
+                      "coords": [list(tip)]})
+
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "x", "features": feats}))
+    (tmp_path / "hydro.json").write_text(json.dumps({"crs": "x", "lakes": [],
+                                                     "rivers": []}))
+    r = _StubRegion(tmp_path)
+    r.cfg = {"bounds": list(BOUNDS)}
+
+    worst_edge, off, total = 1.0, 0, 0
+    for seed in range(10):
+        tracks, spots = network_tracks(r, ways, seed=seed)
+        assert tracks, f"seed {seed}: no tracks produced"
+
+        for sp in spots:
+            fx, fy = (sp["x"] - w) / (e - w), (sp["y"] - s) / (n - s)
+            edge = min(fx, 1 - fx, fy, 1 - fy)
+            worst_edge = min(worst_edge, edge)
+            assert edge >= 0.08, (
+                f"seed {seed}: destination {sp['label']!r} sits {edge:.3f} from "
+                "the plate edge -- no room for its own route")
+
+        pts = np.vstack([t.coords for t in tracks])
+        off += int(((pts[:, 0] < w) | (pts[:, 0] > e) |
+                    (pts[:, 1] < s) | (pts[:, 1] > n)).sum())
+        total += len(pts)
+
+    frac_off = off / total
+    assert frac_off < 0.02, (
+        f"{100 * frac_off:.1f}% of track points fall outside the plate -- ink "
+        "rendered where nobody sees it (was 14.3% on the real lassen_ca cache)")
 
 
 def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):

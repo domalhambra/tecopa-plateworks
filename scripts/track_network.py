@@ -22,6 +22,17 @@ JITTER_M = 3.0                # seeded GPS jitter (spec §3)
 TRAILHEAD_MIN_M = 1_000.0     # hard floor: a trailhead nearer than this to the
                               # destination renders as a dot, not a journey
 TRAILHEAD_CANDIDATES = 5      # draw among the 5 best-matching, for variety
+TRAILHEAD_SHORTLIST = 25      # distance-matched shortlist, narrowed to the 5
+                              # above by the inward tiebreak (see _trailhead_for)
+# Destinations are picked inside an inset of the plate, never from its rim. T4's
+# farthest-point selection MAXIMISES separation, so left to the full plate it
+# drives picks to the extremes of the candidate set -- which are the corners and
+# edges. Measured on the real lassen_ca cache: 5 of 8 destinations landed within
+# 5% of an edge, one fell off the plate entirely, and 14.3% of all ink rendered
+# outside the frame. That inverted the original complaint rather than fixing it
+# ("clustered in the middle" became "clinging to the edges"). A destination needs
+# room around it for its own route, and the plate edge has none.
+SELECT_INSET_FRAC = 0.12
 # Trip length is a TARGET, not a floor. Under the vertex-per-point graph, way
 # points sit 20-300 m apart, so "the nearest road vertex beyond the floor" is
 # always ON the floor -- measured on a 2 km road mesh at 50 m node spacing, the
@@ -220,13 +231,32 @@ def select_destinations(pool: list[dict], bounds: tuple, n: int, rng) -> list[di
     deduped by name (so no two candidates ever compare equal), nothing here
     should rely on that guarantee holding for every future caller.
 
-    Cell indices are clamped on both ends: a destination that sits just off
-    the nominal plate bounds (a label snapped near the edge, say) must still
-    land in one of the 9 real cells rather than growing its own out-of-range
-    cell that inflates the apparent spread."""
+    Both the grid and the farthest-point geometry are computed over an INSET
+    of the plate (SELECT_INSET_FRAC), and candidates outside that inset are
+    dropped rather than clamped into it. Spread is still the goal; spread to
+    the rim is not. Farthest-point selection maximises separation, so over the
+    full plate it necessarily walks to the extremes of the candidate set --
+    the corners and edges -- and a destination there has no room for its own
+    route, which ends up rendered off the sheet. See SELECT_INSET_FRAC.
+
+    Cell indices are still clamped on both ends. The inset filter makes that
+    unreachable for any candidate that survives it, but the clamp costs
+    nothing and keeps the function total if the filter is ever relaxed."""
     if not pool or n < 1:
         return []
-    w, s, e, nb = bounds
+    bw, bs, be, bn = bounds
+    dx = SELECT_INSET_FRAC * (be - bw)
+    dy = SELECT_INSET_FRAC * (bn - bs)
+    w, s, e, nb = bw + dx, bs + dy, be - dx, bn - dy
+    inset_pool = [d for d in pool if w <= d["x"] <= e and s <= d["y"] <= nb]
+    if not inset_pool:
+        # Every named place on this plate sits in the margin. Better an
+        # edge-hugging poster than none, but say so -- silently falling back
+        # is how the off-sheet render happened in the first place.
+        print(f"  tracks: no destination lies inside the "
+              f"{SELECT_INSET_FRAC:.0%} inset -- falling back to the full plate")
+        inset_pool = list(pool)
+    pool = inset_pool
 
     def cell(d):
         cx = min(2, max(0, int(3 * (d["x"] - w) / (e - w))))
@@ -313,7 +343,7 @@ def trip_target_m(bounds: tuple, rng) -> float:
                          TRIP_SPAN_MIN_M, TRIP_SPAN_MAX_M))
 
 
-def _trailhead_for(index, dest_node: tuple, target: float, rng):
+def _trailhead_for(index, dest_node: tuple, target: float, rng, centre=None):
     """A road-touching vertex to start from, given a destination's snapped
     graph key (an (x, y) tuple from `destination_pool`'s `node` field) and a
     plate-scaled distance `target`.
@@ -337,6 +367,16 @@ def _trailhead_for(index, dest_node: tuple, target: float, rng):
     on real posters, from trips funnelling onto shared road corridors -- honest
     topology rather than forced geometry.
 
+    Direction is chosen too, not just distance. Given `centre` (the plate's
+    middle), the distance-matched shortlist is narrowed to the candidates
+    whose MIDPOINT with the destination sits nearest the centre -- i.e. the
+    journey leans back onto the sheet instead of off it. Without this, a
+    destination near the rim is as likely to be approached from further out as
+    from inside, which is how 14.3% of lassen_ca's ink ended up outside the
+    frame. The shortlist stays TRAILHEAD_SHORTLIST wide before the tiebreak
+    and the final draw is still random among TRAILHEAD_CANDIDATES, so routes
+    lean inward without all pointing at the middle.
+
     The last-resort branch (every road vertex inside the floor) takes the
     FARTHEST one, not the nearest: in a dense road web the nearest vertex can
     be the destination itself."""
@@ -346,7 +386,13 @@ def _trailhead_for(index, dest_node: tuple, target: float, rng):
     d = np.hypot(arr[:, 0] - dest_node[0], arr[:, 1] - dest_node[1])
     ok = np.where(d > TRAILHEAD_MIN_M)[0]
     if len(ok):
-        cand = ok[np.argsort(np.abs(d[ok] - target))[:TRAILHEAD_CANDIDATES]]
+        cand = ok[np.argsort(np.abs(d[ok] - target))[:TRAILHEAD_SHORTLIST]]
+        if centre is not None and len(cand) > TRAILHEAD_CANDIDATES:
+            mid = (arr[cand] + np.asarray(dest_node, dtype=float)) / 2.0
+            inward = np.hypot(mid[:, 0] - centre[0], mid[:, 1] - centre[1])
+            cand = cand[np.argsort(inward)[:TRAILHEAD_CANDIDATES]]
+        else:
+            cand = cand[:TRAILHEAD_CANDIDATES]
     else:
         cand = np.argsort(d)[-1:]
     return keys[int(rng.choice(cand))]
@@ -363,6 +409,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     pool = destination_pool(region.dir, g)
     dests = select_destinations(pool, bounds, n_trips, rng)
     index = road_vertex_index(g)           # built once: see road_vertex_index
+    centre = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
 
     year = 2024
     trips = []
@@ -373,7 +420,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     skipped = 0
     for seq, d in enumerate(dests):
         target = trip_target_m(bounds, rng)
-        th = _trailhead_for(index, d["node"], target, rng)
+        th = _trailhead_for(index, d["node"], target, rng, centre=centre)
         if th is None:                     # empty graph: nothing to route over
             skipped += 1
             continue
