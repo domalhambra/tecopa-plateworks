@@ -41,3 +41,11 @@ def test_demand_signals_have_a_channel():
 
 def test_the_studio_door_exists():
     assert "https://github.com/domalhambra/tecopa-plateworks" in PAGE
+
+
+def test_osm_attribution_is_present():
+    # the demo journeys are routed over OpenStreetMap geometry, which is ODbL:
+    # the rendered posters are a produced work, so attribution ships or the
+    # licence is not satisfied. A claim on the page needs a test behind it, and
+    # so does an obligation.
+    assert "OpenStreetMap contributors" in PAGE
