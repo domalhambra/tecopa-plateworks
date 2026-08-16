@@ -941,3 +941,81 @@ def test_two_trips_on_the_same_date_still_sort(tmp_path, monkeypatch):
     assert len(tracks) == 2
     assert len({t.day for t in tracks}) == 1          # the collision really happened
     assert [t.track_id for t in tracks] == ["lake:Road Lake", "summit:Near Summit"]
+
+
+# ---- T7: the farm seam ----
+
+def test_farm_falls_back_without_cache(tmp_path, monkeypatch):
+    """No cache file -> _synth_tracks, byte-identical to today. This is what
+    keeps a fresh clone and CI rendering exactly what they rendered before."""
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)            # no cache/networks/ here
+    r = _StubRegion(tmp_path)
+    r.cfg["bounds"] = list(BOUNDS)
+    old = farm._synth_tracks(r)
+    got_tracks, got_spots = farm._demo_journeys(r, str(tmp_path / "out"),
+                                               force_synthetic=False)
+    assert len(got_tracks) == len(old)
+    for a, b in zip(old, got_tracks):
+        assert np.array_equal(a.coords, b.coords) and a.day == b.day
+
+
+def test_annotate_keeps_existing_labels(tmp_path):
+    import scripts.render_asset_farm as farm
+    spots = [{"x": 1.0, "y": 2.0, "weight": 3, "label": "Antelope Mountain"},
+             {"x": 4.0, "y": 5.0, "weight": 1}]
+    out = farm._annotate(spots, str(tmp_path))
+    assert out[0]["label"] == "Antelope Mountain"      # real name survives
+    assert out[1]["label"] in farm.HOTSPOT_LABELS      # unnamed spot gets one
+    assert all("icon" in s for s in out)
+    assert "photo" in out[0]
+
+
+def test_edition_spots_keep_real_names_for_network_tracks(tmp_path):
+    """_editions regenerates spots per subset; for network journeys it must keep
+    the real destination names, not re-mint 'Base Camp' from density.hotspots."""
+    import scripts.render_asset_farm as farm
+    from app.ingest import Track
+    tracks = [Track(track_id="summit:Near Summit", coords=np.zeros((4, 2)), day="2024-07-01"),
+              Track(track_id="lake:Road Lake",     coords=np.ones((4, 2)),  day="2024-04-01"),
+              Track(track_id="summit:Near Summit", coords=np.zeros((4, 2)), day="2024-09-01")]
+    spots = [{"x": 1.0, "y": 2.0, "weight": 2, "label": "Near Summit"},
+             {"x": 3.0, "y": 4.0, "weight": 1, "label": "Road Lake"}]
+    r = _StubRegion(tmp_path)
+    sub = tracks[:2]                                   # edition 1: one visit each
+    eds = farm._edition_spots(sub, spots, r, str(tmp_path))
+    assert {s["label"] for s in eds} == {"Near Summit", "Road Lake"}
+    assert next(s for s in eds if s["label"] == "Near Summit")["weight"] == 1
+    # synthetic ids (no colon) keep the density path -- track INSIDE bounds so
+    # hotspots() actually yields a spot and the assertion has teeth
+    synth = [Track(track_id="day-1",
+                   coords=np.array([[505_000, 4_405_000], [512_000, 4_412_000]]),
+                   day="2024-06-01")]
+    eds = farm._edition_spots(synth, [], r, str(tmp_path))
+    assert eds and all(s["label"] in farm.HOTSPOT_LABELS for s in eds)
+
+
+def test_farm_uses_the_cache_when_present(tmp_path, monkeypatch):
+    """With a cache on disk the farm must route real journeys, not squiggles."""
+    import json
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cache" / "networks").mkdir(parents=True)
+    (tmp_path / "cache" / "networks" / "stub.json").write_text(
+        json.dumps({"region_id": "stub", "crs": "x", "ways": _ways()}))
+    r = _region(tmp_path)                              # writes labels/hydro
+    tracks, spots = farm._demo_journeys(r, str(tmp_path / "out"))
+    assert tracks and all(":" in t.track_id for t in tracks)
+    assert {s["label"] for s in spots} <= {"Near Summit", "Road Lake"}
+
+
+def test_force_synthetic_overrides_a_present_cache(tmp_path, monkeypatch):
+    import json
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cache" / "networks").mkdir(parents=True)
+    (tmp_path / "cache" / "networks" / "stub.json").write_text(
+        json.dumps({"region_id": "stub", "crs": "x", "ways": _ways()}))
+    r = _region(tmp_path)
+    tracks, _ = farm._demo_journeys(r, str(tmp_path / "out"), force_synthetic=True)
+    assert all(":" not in t.track_id for t in tracks)   # synthetic ids: "day-N"

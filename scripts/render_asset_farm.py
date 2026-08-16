@@ -67,11 +67,13 @@ from app.ingest import Track
 from app.density import hotspots
 from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
+from scripts.track_network import load_network, network_tracks
 
 NATIVE_FLOOR_DPI = 300          # the zoom cap is judged at print dpi: 10 m/px at 300 dpi
 HOTSPOT_LABELS = ["Base Camp", "The Notch", "North Shore", "South Fork", "The Marina",
                   "Trailhead", "High Overlook", "Cold Spring"]
 HOTSPOT_ICONS = ["camp", "peak", "water", "flag", "camera", "star", "dot", "water"]
+NETWORK_CACHE = os.path.join("cache", "networks")
 
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
@@ -204,9 +206,15 @@ def _finite_envelope(region: Region, bounds: tuple) -> tuple:
 
 def _annotate(spots: list, out_dir: str) -> list:
     """Name + icon each hotspot and pin one synthetic photo, so the poster shows the
-    marker/photo furniture the product is about (the photo embeds into the manifest)."""
+    marker/photo furniture the product is about (the photo embeds into the manifest).
+
+    A spot that ALREADY carries a label keeps it: network journeys arrive named after
+    the real summit/lake they reached, and overwriting "Antelope Mountain" with
+    "Base Camp" would throw away the whole point of routing over real terrain. Only
+    density-derived spots (which have no name) get one from the invented list."""
     for k, s in enumerate(spots):
-        s["label"] = HOTSPOT_LABELS[k % len(HOTSPOT_LABELS)]
+        if "label" not in s:
+            s["label"] = HOTSPOT_LABELS[k % len(HOTSPOT_LABELS)]
         s["icon"] = HOTSPOT_ICONS[k % len(HOTSPOT_ICONS)]
     if spots:
         demo = Image.new("RGB", (240, 180)); px = demo.load()
@@ -218,6 +226,42 @@ def _annotate(spots: list, out_dir: str) -> list:
         photo = os.path.join(out_dir, "_demo_photo.png"); demo.save(photo)
         spots[0]["photo"] = photo
     return spots
+
+
+def _demo_journeys(region, out_dir: str, force_synthetic: bool = False):
+    """Tracks + spots for a region: journeys routed over the cached OSM network
+    when cache/networks/<id>.json exists, else the synthetic generator. The
+    fallback keeps the farm runnable on a fresh clone and in CI."""
+    cache = os.path.join(NETWORK_CACHE, f"{region.id}.json")
+    if not force_synthetic and os.path.exists(cache):
+        tracks, spots = network_tracks(region, load_network(cache))
+        print(f"  tracks: routed over {cache} (OSM, ODbL)")
+        return tracks, _annotate(spots, out_dir)
+    tracks = _synth_tracks(region)
+    return tracks, _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir)
+
+
+def _edition_spots(sub: list, spots: list, region, out_dir: str) -> list:
+    """Spots for an edition's track subset. Network journeys carry their
+    destination in track_id ("<kind>:<name>"): the edition shows the real
+    destinations its ink has reached, weights recounted for the subset.
+    Synthetic tracks (ids like "day-1") keep the density-hotspot path."""
+    names = [t.track_id.split(":", 1)[1] for t in sub if ":" in t.track_id]
+    if names:
+        # drop any inherited "photo" pin -- _annotate re-pins on eds[0], and an
+        # edition must carry ONE pinned photo like the poster, not two.
+        # Defensive rather than load-bearing under today's caller, and
+        # deliberately left in: _annotate pins only spots[0] and the filter
+        # below preserves order, so the carrier is either eds[0] (re-pinned,
+        # still one) or filtered out (none inherited, _annotate pins eds[0]).
+        # A double pin needs a caller that annotates a non-first spot; the
+        # strip costs nothing and makes that caller safe instead of subtly
+        # wrong. Not tested, because no reachable state produces it.
+        eds = [{k: v for k, v in dict(s, weight=names.count(s["label"])).items()
+                if k != "photo"}
+               for s in spots if s.get("label") in names]
+        return _annotate(eds, out_dir)
+    return _annotate(hotspots(sub, tuple(region.cfg["bounds"])), out_dir)
 
 
 def _base_spec(region: Region, tracks: list, spots: list, edition: int = 1) -> CompositionSpec:
@@ -302,7 +346,7 @@ def _editions(region, tracks, spots, out_dir, dpi):
     steps = [max(1, len(tracks) // 3), max(2, 2 * len(tracks) // 3), len(tracks)]
     for ed, upto in enumerate(steps, start=1):
         sub = tracks[:upto]
-        subspots = _annotate(hotspots(sub, tuple(region.cfg["bounds"])), out_dir)
+        subspots = _edition_spots(sub, spots, region, out_dir)
         spec = _base_spec(region, sub, subspots, edition=ed)
         out = os.path.join(out_dir, f"edition_{ed}.png")
         made.append(_write_final(spec, region, dpi, out, lineage=list(lineage)))
@@ -461,6 +505,9 @@ def main():
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
     ap.add_argument("--synthetic-dem", action="store_true",
                     help="hydrate the test suite's synthetic DEM when a real one is absent")
+    ap.add_argument("--synthetic-tracks", action="store_true",
+                    help="force the synthetic track generator even when a "
+                         "network cache exists (parity with --synthetic-dem)")
     args = ap.parse_args()
 
     if args.quick:
@@ -490,9 +537,8 @@ def main():
         if needs_render and not _ensure_dem(region, args.synthetic_dem):
             continue
         out_dir = os.path.join(args.out, rid); os.makedirs(out_dir, exist_ok=True)
-        tracks = _synth_tracks(region) if needs_render else []
-        spots = _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir) \
-            if needs_render else []
+        tracks, spots = _demo_journeys(region, out_dir, args.synthetic_tracks) \
+            if needs_render else ([], [])
         if needs_render:
             print(f"  tracks={len(tracks)}  hotspots={len(spots)}")
         made = []
