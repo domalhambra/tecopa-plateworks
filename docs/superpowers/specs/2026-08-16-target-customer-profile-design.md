@@ -3,12 +3,14 @@
 **Date:** 2026-08-16 · **Status:** approved in session; written form pending Dom's read ·
 **Scope:** governs every customer-facing surface (landing page, order flow, social
 captions, email replies). The nerd channels (Show HN, the technical blog post) keep
-their own register, per `docs/marketing.md` §Audiences.
+their own register, per `docs/marketing.md` §Audiences and §Hierarchy correction
+(2026-08-13).
 
 ## Why this document exists
 
-The landing page says "a 2.6 pt trail is literally 2.6 pt on the glass," twice. Dom's
-verdict: a customer doesn't care that a track is 2.6 pt wide. The line traces
+The landing page tells the customer that "a 2.6 pt trail is literally 2.6 pt on the
+glass," then says it again in a variant one section later ("2.6 pt on paper and on
+glass"). Dom's verdict: a customer doesn't care that a track is 2.6 pt wide. The line traces
 upstream. The translation table in `docs/marketing.md` carries it in its
 *customer-facing* column, which means the table itself drifted from customer language
 into engineering proof, and fixing the page without fixing the understanding of the
@@ -88,8 +90,11 @@ All craftsman-transaction questions, none of them technical:
    Never by specification.
 2. **"Is it a hassle?"** They do not know what an export is called in onX. Step one
    must be concrete to the tap.
-3. **"Is $80 worth it?"** Anchored against what any framed print costs, and against
-   the fact that nothing else on earth can be their years on their ground.
+3. **"Is it worth the price?"** Anchored against what any framed print costs, and
+   against the fact that nothing else on earth can be their years on their ground.
+   (Copy takes the number itself from the pricing decision, Consequences §4, never
+   from this document. The $80 sensibility above is what this person believes, and
+   is recorded to inform that decision, never to be quoted at him.)
 4. **"Will my stuff show up right?"** The one trust story that survives translation,
    told plainly: nothing prints until you have seen it and said yes.
 
@@ -121,8 +126,9 @@ evidence:
 3. **The maker is present.** "I built this. I work on every sheet." One person
    standing behind the thing, which is also simply true: the press is a person.
 4. **Quality is shown and vouched, never measured.** "Super nice" plus the detail
-   crop outsells any specification. Customer-meaningful numbers only: 18×24, $80.
-   No pt, dpi, ppi, hash, deterministic, byte-identical, or archival jargon.
+   crop outsells any specification. Customer-meaningful numbers only: the sheet
+   size, the price. No pt, dpi, ppi, hash, deterministic, byte-identical, or
+   archival jargon.
 5. **Press lexicon is seasoning, never load-bearing.** "Edition" and "plate" may
    flavor a sentence whose meaning stands without them. A first-time reader decodes
    nothing. "One score, three performances" fails this test.
@@ -152,6 +158,10 @@ manifests, schemas, licenses, hash addressing, physical units, typography talk,
 format. None of these are false. All of them are the builder talking to the
 reviewer instead of the buddy across the tailgate.
 
+The filter cuts vocabulary, never structure: the studio door itself stays on the
+page (its disposition is Consequences §6). What goes is the license names and
+file-format talk it is currently dressed in.
+
 ## Consequences for existing surfaces and docs
 
 The copy-rework plan that follows this profile must touch:
@@ -163,13 +173,25 @@ The copy-rework plan that follows this profile must touch:
 2. **`docs/marketing.md`** — re-translate the translation table's right column
    against this profile; demote the four-audience list to channels around the one
    persona; extend the 2026-08-13 hierarchy correction with its second half: even
-   craft copy is written from the customer's chair, not the builder's.
+   craft copy is written from the customer's chair, not the builder's. Then sweep
+   every page-prescribing passage and reconcile it, because two sections currently
+   mandate what this profile strikes: §Landing page blueprint still prescribes a
+   "Private by default" trust block and a "What if you disappear?" FAQ, and §The
+   funnel, honestly still instructs stating the retention promise on the page. An
+   amendment that leaves those standing makes marketing.md require and forbid the
+   same material at once.
 3. **`tests/test_marketing_page.py`** — the page's claims are pinned by tests;
    every copy change lands with its pins updated in the same change.
 4. **Pricing display** — the $149/18×24 versus $80-sensibility tension is recorded
    here and decided by Dom, outside the copy rework.
 5. **The request/commission door** — earns its place on the page (a named prospect
    sits outside every built plate) and gets rewritten in this register.
+6. **The studio door stays, demoted and re-registered.** For this person the free
+   local studio is a path he will never take and the strongest trust signal on the
+   page: the maker publishes the recipe, and you pay him to perform it. It survives
+   in plain words ("the app is free if you'd rather do it yourself; most people
+   have me do it"), with license names and file-format talk left to the GitHub page
+   it links to. Its test pin (`test_the_studio_door_exists`) stays.
 
 ## Out of scope
 
