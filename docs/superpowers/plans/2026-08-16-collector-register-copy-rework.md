@@ -218,8 +218,13 @@ git commit -m "marketing: the ritual keeps its headline, loses the machinery"
 <p class="eyebrow">It comes with the screens</p>
 <h2>From the wall to the lock screen.</h2>
 <p class="lede">Pick your phone and the wallpaper is cut to its exact screen,
-  matching your print line for line. Labels even dodge the lock-screen clock.</p>
+  drawn at the same weight as your print. Labels even dodge the lock-screen clock.</p>
 ```
+
+(The first draft said "matching your print line for line." Line *weights* do hold
+across devices, but `geo.refit_crop_aspect` changes the ground extent when the
+aspect ratio differs, so a reader taking "line for line" to mean the same
+composition would be misled on an ultrawide.)
 
 And the three `fmt-list` items:
 
@@ -438,7 +443,7 @@ The spec's Consequences §2, verbatim intent: an amendment that leaves the page-
 | `/api/reprint` — the file carries its whole recipe | "Send it back years from now; it reprints." |
 | Living editions + lineage | "Same frame, more ink, Edition 2 in the corner." |
 | Embedded photos in the manifest | "Your photos, pinned to the spots they came from." |
-| Wallpaper ppi math | "The wallpaper matches your print, line for line." |
+| Wallpaper ppi math | "The wallpaper is drawn at the same weight as your print." |
 | APNG time-lapse, journeys in day order | "Watch your year draw itself." |
 | GNIS labels, hydro, biome tint | "Real terrain, real place names, real rivers." |
 | Zoom cap, off-DEM refusal | "I never invent ground. If the data isn't sharp enough, I say so." |
@@ -514,7 +519,7 @@ netlify deploy --prod --dir dist/landing --site 1902a58d-74a9-4def-8b4e-d93793f8
 - [ ] **Step 4: Verify live**
 
 ```bash
-curl -s https://tecopa.plateworks.org/ | grep -c "2.6"          # expect 0
+curl -s https://tecopa.plateworks.org/ | grep -cF "2.6"         # expect 0 (-F: the dot is a wildcard without it, and matches 236px in the CSS)
 curl -s https://tecopa.plateworks.org/ | grep -c "until you say yes"   # expect >= 2
 curl -s https://tecopa.plateworks.org/ | grep -c "region-request"      # expect >= 2 (form intact)
 curl -s https://tecopa.plateworks.org/ | grep -c "OpenStreetMap contributors"  # expect 1
