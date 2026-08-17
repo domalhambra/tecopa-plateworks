@@ -82,6 +82,12 @@ HOTSPOT_LABELS = ["Base Camp", "The Notch", "North Shore", "South Fork", "The Ma
                   "Trailhead", "High Overlook", "Cold Spring"]
 HOTSPOT_ICONS = ["camp", "peak", "water", "flag", "camera", "star", "dot", "water"]
 NETWORK_CACHE = os.path.join("cache", "networks")
+# The detail crop's ink scan. INK_TOL is the per-channel distance from TRACK_INK that
+# still reads as route: wide enough for the antialiased edges and the grain, tight
+# enough that warm terrain doesn't outvote a route (at 60 the lassen_ca scan picks a
+# bare sunlit slope over the journeys). INK_BLOCK is the cell the mask is summed into.
+INK_TOL = 24
+INK_BLOCK = 32
 
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
@@ -455,10 +461,50 @@ def _model(out_dir):
     return [out]
 
 
+def _ink_window(img, cw, ch, block=INK_BLOCK, tol=INK_TOL):
+    """Top-left corner of the cw x ch window of `img` carrying the most route ink, or
+    None when the sheet holds none. The mask is built full-res (a hairline route is one
+    or two pixels wide -- resampling the picture first would blend it into the terrain
+    and lose it), row-band by row-band, then summed down into `block`-sized cells; the
+    window scan runs over that coarse grid, so it is a few thousand adds, not millions.
+    Candidate offsets are the grid pitch, clamped to keep the window inside the sheet."""
+    ink = np.array(render.TRACK_INK, np.int16)
+    w, h = img.size
+    gw, gh = -(-w // block), -(-h // block)
+    grid = np.zeros((gh, gw), np.int32)
+    src = img if img.mode == "RGB" else img.convert("RGB")   # convert copies 100+ MB
+    for top in range(0, h, block * 8):                      # bands, to cap peak memory
+        bh = min(block * 8, h - top)
+        band = np.asarray(src.crop((0, top, w, top + bh)), np.int16)
+        mask = np.abs(band - ink).max(axis=2) <= tol
+        pad_y, pad_x = -(-bh // block) * block - bh, gw * block - w
+        if pad_y or pad_x:
+            mask = np.pad(mask, ((0, pad_y), (0, pad_x)))
+        rows = mask.reshape(mask.shape[0] // block, block,
+                            gw, block).sum(axis=(1, 3))
+        grid[top // block:top // block + rows.shape[0]] = rows
+    if not grid.any():
+        return None
+    # window sums over the coarse grid, via its integral image
+    ii = np.pad(grid.cumsum(0).cumsum(1), ((1, 0), (1, 0)))
+    kw, kh = max(1, cw // block), max(1, ch // block)
+    sums = (ii[kh:, kw:] - ii[:-kh, kw:] - ii[kh:, :-kw] + ii[:-kh, :-kw])
+    gy, gx = np.unravel_index(int(np.argmax(sums)), sums.shape)
+    return (min(int(gx) * block, w - cw), min(int(gy) * block, h - ch))
+
+
 def _detail(out_dir):
     """The 1:1 detail crop: actual print pixels cut from the freshly rendered poster,
     so the landing page can show what 300 dpi looks like instead of a downscaled blur.
-    Center crop -- the synth tracks converge there, so it lands on ink and labels."""
+
+    The window is chosen by ink CONTENT, from the poster's own pixels alone (this tier
+    stages an already-rendered final: no DEM, no tracks, no spec). Journeys route over
+    the real OSM network and are spread across the whole plate deliberately, so the
+    centre is now typically the emptiest part of a sheet -- a centre crop lands on bare
+    terrain and the landing page's "look close at the labels" copy points at nothing.
+    Picking the densest ink window lands on labels too: every destination marker sits at
+    the end of a route with its name beside it. Falls back to the centre crop when the
+    sheet carries no ink -- a poster rendered with no tracks, the one case it was right."""
     poster = os.path.join(out_dir, "poster.png")
     if not os.path.exists(poster):
         print(f"  ! no poster.png in {out_dir} — render the poster first (detail skipped)")
@@ -466,7 +512,10 @@ def _detail(out_dir):
     img = Image.open(poster)
     w, h = img.size
     cw, ch = min(1400, w), min(1050, h)
-    x0, y0 = (w - cw) // 2, (h - ch) // 2
+    at = _ink_window(img, cw, ch)
+    if at is None:
+        print("  · detail: no route ink found on the sheet — centre crop")
+    x0, y0 = at if at is not None else ((w - cw) // 2, (h - ch) // 2)
     out = os.path.join(out_dir, "detail.png")
     img.crop((x0, y0, x0 + cw, y0 + ch)).save(out, "PNG")
     return [out]
