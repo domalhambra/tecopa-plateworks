@@ -58,8 +58,8 @@ Never say the left column in public. Always say the right column.
 | `embed_spec=false` share copy | "One toggle makes a copy safe to post." (social captions only; never page copy) |
 | Curated regions (5 today) | "Handcrafted plates" — scarcity as craft, not limitation. |
 
-The last row matters: four regions (Lassen County CA, Susanville–Reno, Elko–Bonneville,
-Rifle–Aspen) is not a weakness to hide. Market them like vintages or map plates —
+The last row matters: five regions (Lassen County CA, Susanville–Reno, Elko–Bonneville,
+Rifle–Aspen, Tushar Mountains UT) is not a weakness to hide. Market them like vintages or map plates —
 "now serving: the Lassen plate" — and make each new region a launch event. And when
 someone's valley isn't covered, sell the *making*, not the map: **"Commission a plate"**
 — a one-time fee for building plate #N (the finished plate publishes free, the
@@ -135,7 +135,7 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
 5. **Trust block:** "The proof is the print" (determinism) · "The poster is the
    save file" (the recipe rides the PNG) · "Private by default" (local, share-copy
    toggle, no account).
-6. **Region gallery:** the four plates with real sample posters, plus "Request — or
+6. **Region gallery:** the five plates with real sample posters, plus "Request — or
    commission — the next plate": requests are the demand signal, commissions are the
    demand signal *with a credit card*.
 7. **FAQ that converts honesty into trust:** *Why only these regions?* (we refuse to
@@ -195,7 +195,7 @@ close. Post the coin, link the page.
 
 ## Channels & launch sequence
 
-- **Phase 0 — asset farm (1–2 weeks).** Render 10–15 flagship pieces across the four
+- **Phase 0 — asset farm (1–2 weeks).** Render 10–15 flagship pieces across the five
   plates: 3 posters with photos/markers, 2 films, 2 phone wallpapers, 1 three-edition
   lineage set. These feed everything below.
 - **Phase 1 — the nerd launch.** Show HN / lobste.rs, pitching pillar 2 ("posters
@@ -203,7 +203,7 @@ close. Post the coin, link the page.
   architecture story and stress-tests the message. Pair with a technical blog post —
   "We embed the whole poster recipe in a PNG chunk" — which doubles as durable SEO.
 - **Phase 2 — the trail launch.** r/ultrarunning, r/trailrunning, r/Strava, r/hiking
-  plus regional groups for the four plates (Lassen/Reno and Roaring Fork communities
+  plus regional groups for the five plates (Lassen/Reno and Roaring Fork communities
   are small and dense). Asset: the film, posted natively — "my year, drawing itself."
   Offer a founding-user run of each plate.
 - **Phase 3 — the ritual engine.** Editions write the calendar: year-end ("turn 2026
@@ -236,7 +236,7 @@ close. Post the coin, link the page.
    before anything else).
 2. Film completion rate on the landing page — do people watch to the Edition-2 beat?
 3. Region-request emails — the expansion roadmap, crowdsourced.
-4. **Commission inquiries** — demand with a credit card; plate #5's location is
+4. **Commission inquiries** — demand with a credit card; plate #6's location is
    decided by whoever pays for it.
 5. **Edition-2 rate a year out** — the single number that proves the chronicle
    thesis. One customer returning a poster for Edition 2 is the testimonial that
