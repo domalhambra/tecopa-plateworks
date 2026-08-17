@@ -82,7 +82,7 @@ git commit -m "tests: gate the landing page on the Collector's register, red fir
 | Line | New value |
 |---|---|
 | `<title>` (:6) | `Tecopa Plateworks — everywhere you've gone, on one poster` |
-| `meta description` (:8) | `Email your GPX tracks and get back a shaded-relief poster of everywhere you've gone: real terrain, real place names, your photos pinned to the spots they came from. You see the exact poster before it prints.` |
+| `meta description` (:8) | `Email your GPX tracks and get back a shaded-relief poster of everywhere you've gone. You see the exact poster before it prints.` (127 chars: the first draft ran 207 and search snippets truncate near 160, which cut off the proof answer) |
 | `og:title` (:13) | `Everywhere you've gone, on one poster` |
 | `og:description` (:14) | `Years of tracks sit on your phone, never once seen as a whole. Tecopa Plateworks prints them as one shaded-relief poster of your ground.` |
 
