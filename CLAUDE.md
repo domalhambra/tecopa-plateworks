@@ -93,6 +93,23 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
   restoration into a new *plate version* (NHD already went 116 → 109 lakes once). Then
   check the sha256 against `sources.json`; a match proves the exact plate is back. Done
   2026-07-27: `20cec75c…`, 192,087,365 B, drift 0.0 m, every committed asset untouched.
+  **`build_dem_cog` does not write the sidecar** — `write_sources_manifest` is called
+  from `region_prep.main` and nowhere else, so this repair always leaves `sources.json`
+  describing the PREVIOUS bytes. `python scripts/verify_regions.py` reports the state in
+  ~0.6 s for all five plates (a script, not a test, on purpose — see its docstring), and
+  what it finds is a decision, not a cleanup:
+  - **sha256 matches** → you restored the exact plate. Nothing to do; the sidecar was
+    already true.
+  - **sha256 differs** → USGS re-tiled and you built a *new plate version*. **Leave the
+    sidecar alone.** The mismatch is the only surviving record that the plate was
+    swapped, and the poster-level truth is already covered elsewhere:
+    `provenance.region_pack_block` hashes every asset from disk at final time and
+    explicitly refuses to trust `sources.json`. To pack, use `pack_region --resync`,
+    which writes the true disk hashes into the ZIP's copy without mutating the source
+    dir. Never re-stamp `sources.json` to silence the gate — a manifest that re-syncs
+    itself can no longer detect the swap it exists to detect. And never re-stamp it by
+    re-running `write_sources_manifest`: its asset loop omits `playa.json` (four
+    sidecars record one) and it resets `built` to today.
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` hydrates a tiny
   synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
   match their own bounds exactly. Check the tag, not the flag, before judging a poster by
@@ -102,6 +119,26 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
   `tushar_beaver_ut` (64.8 MB, 4074×3740). The count has moved twice (two real on
   08-13, `susanville_reno` still synthetic on 07-27), so re-check the tag rather than
   trusting this line.
+- **Four DEMs are rebuilt, not restored — `sources.json` drift on them is KNOWN and
+  deliberate.** Diagnosed 2026-08-17. `lassen_ca` is the only plate whose DEM matches
+  its sidecar, because 2026-07-27 restored its exact bytes; the other four were rebuilt
+  (three of them in one batch on 2026-08-15, 21:02–21:20) via the orphan repair above,
+  which never re-runs the sidecar writer. Only `dem.tif` drifted — every committed asset
+  in all five regions is byte-identical — and geometric drift is **0.000 m** on all five
+  (same CRS, shape, resolution, bounds), so no poster is affected. USGS re-tiles 3DEP,
+  so the recorded bytes cannot be reproduced. Superseded → current:
+
+  | region | recorded (superseded) | on disk now | Δ bytes |
+  |---|---|---|---|
+  | `elko_bonneville` | `576ab5d6…` 703,568,015 | `0cd7733e…` 700,753,827 | −2,814,188 |
+  | `rifle_aspen` | `93840989…` 260,294,107 | `84d4bcc1…` 260,475,433 | +181,326 |
+  | `susanville_reno` | `46d9d174…` 256,622,855 | `daedb832…` 257,191,595 | +568,740 |
+  | `tushar_beaver_ut` | `18d721ff…` 64,638,737 | `b506c35b…` 64,760,003 | +121,266 |
+
+  Full digests are in the commit that added this table. **Do not "fix" this drift.**
+  Nothing is blocked by it: `plates/` has never existed, no plate has ever been packed,
+  and `pack_region --resync` is the designed path when one is. Re-stamping would delete
+  the only evidence the swap happened.
 - ~~the orphan drill~~ — deleted 2026-07-27 with the forever-contract (its last run on
   real terrain, 2026-07-27, passed). The `serial` pytest tier died with it.
 - **Seven** label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it. The exact set as of 2026-08-13, so a future run can diff against it rather than re-derive it:
