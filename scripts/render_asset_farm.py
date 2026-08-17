@@ -593,8 +593,20 @@ def _terrain_record(dem_path: str) -> dict | None:
     invented. (That is the lassen_ca orphan bug's shape, from the other side.) The record
     describes the bytes the render consumed, so it stays true however the plate moves.
 
-    None means "no DEM was consulted", which is the honest answer for the restage tiers
-    and which the deploy guard treats as unverified. Never fabricate one.
+    Three answers, because they mean three different things:
+
+      None                     no DEM was consulted at all — the honest answer for the
+                               restage tiers, and the only one _merge_index may let a
+                               prior record survive.
+      {"synthetic": None, …}   a DEM WAS consulted and could not be characterized. It
+                               must overwrite any prior record: the earlier claim of
+                               real terrain describes different bytes than the ones
+                               these pixels came from, and inheriting it would attach a
+                               stale promise to an unknown file. The deploy guard reads
+                               a non-bool `synthetic` as unverified and refuses.
+      {"synthetic": bool, …}   the real thing.
+
+    Never fabricate the third from the second.
     """
     if not os.path.exists(dem_path):
         return None
@@ -602,10 +614,10 @@ def _terrain_record(dem_path: str) -> dict | None:
     try:
         with rasterio.open(dem_path) as ds:
             synthetic = ds.tags().get("synthetic") == "1"   # tests/conftest.py's mark
-    except Exception as ex:                                 # unreadable: claim nothing
+    except Exception as ex:                                 # present, but uncharacterized
         print(f"  ! could not read terrain provenance from {dem_path} "
-              f"({type(ex).__name__}: {ex})")
-        return None
+              f"({type(ex).__name__}: {ex}) — recording it as unverified")
+        return {"synthetic": None, "sha256": None, "bytes": os.path.getsize(dem_path)}
     h = hashlib.sha256()
     with open(dem_path, "rb") as f:                         # chunked: these run to 700 MB
         for block in iter(lambda: f.read(1 << 20), b""):

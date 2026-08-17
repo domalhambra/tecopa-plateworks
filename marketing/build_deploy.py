@@ -61,6 +61,23 @@ def load_index(repo: pathlib.Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def plate_coins(repo: pathlib.Path, html: str) -> dict:
+    """Every plate card on the page → its rendered coin, or None when the farm has
+    not rendered one.
+
+    Derived ONCE, because two consumers ask the same question and must not drift:
+    the terrain guard's coverage set, and the copy loop that either publishes a card's
+    GLB or strips its <model-viewer>. Leaving a coinless region out of the guard is
+    only correct *because* that same region gets stripped — if the two predicates ever
+    disagreed, a coin would ship unguarded.
+    """
+    coins = {}
+    for rid in sorted(set(re.findall(r'data-plate="([^"]+)"', html))):
+        glb = repo / "assets" / rid / "mockup_plate.glb"
+        coins[rid] = glb if glb.is_file() else None
+    return coins
+
+
 def terrain_guard(index: dict, regions, allow_synthetic: bool = False,
                   allow_unverified: bool = False) -> int:
     """Refuse (1) to publish regions the farm's index does not vouch for; else 0.
@@ -76,9 +93,20 @@ def terrain_guard(index: dict, regions, allow_synthetic: bool = False,
     those coins are marketing images too.
     """
     def record(rid):
+        """The region's terrain record, or None if it does not vouch for anything.
+
+        `synthetic` must be a real bool. The farm writes nothing else, so any other
+        shape — absent, `{}`, `null`, `0`, `"false"` — means the file was hand-edited
+        or corrupted, and a corrupted provenance record is precisely what this guard
+        exists not to believe. Reading it as "not synthetic" would be the one way a
+        malformed index could fail OPEN; routing it here sends it to the unverified
+        refusal with every other malformed shape.
+        """
         entry = index.get(rid)
         rec = entry.get("terrain") if isinstance(entry, dict) else None
-        return rec if isinstance(rec, dict) else None      # malformed reads as absent
+        if isinstance(rec, dict) and isinstance(rec.get("synthetic"), bool):
+            return rec
+        return None
 
     synthetic = sorted(r for r in regions if (record(r) or {}).get("synthetic"))
     unrecorded = sorted(r for r in regions if record(r) is None)
@@ -140,9 +168,8 @@ def main() -> int:
     # Every region this deploy publishes anything for — the --region derivatives plus
     # each plate card whose coin the farm has actually rendered (a card with no GLB is
     # stripped below, so nothing of that region ships and nothing of it is guarded).
-    published_regions = {args.region} | {
-        rid for rid in set(re.findall(r'data-plate="([^"]+)"', html))
-        if (REPO / "assets" / rid / "mockup_plate.glb").is_file()}
+    coins = plate_coins(REPO, html)
+    published_regions = {args.region} | {r for r, glb in coins.items() if glb}
     if terrain_guard(load_index(REPO), published_regions,
                      args.allow_synthetic, args.allow_unverified_terrain):
         return 1
@@ -189,10 +216,9 @@ def main() -> int:
     # farm has rendered it; when it hasn't (the coin needs a real-DEM poster), strip
     # that card's <model-viewer> instead of publishing a broken fetch -- the card
     # degrades to the text it always was.
-    for rid in set(re.findall(r'data-plate="([^"]+)"', html)):
-        glb = REPO / "assets" / rid / "mockup_plate.glb"
+    for rid, glb in coins.items():
         ref = f"/assets/{rid}/mockup_plate.glb"
-        if glb.is_file():
+        if glb is not None:
             dest = out / "assets" / rid
             dest.mkdir(parents=True, exist_ok=True)
             if not (dest / "mockup_plate.glb").exists():

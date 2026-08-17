@@ -73,6 +73,18 @@ def test_terrain_record_is_none_when_no_dem_was_consulted(tmp_path):
     assert farm._terrain_record(str(tmp_path / "absent.tif")) is None
 
 
+def test_terrain_record_of_an_unreadable_dem_claims_nothing_rather_than_nothing_at_all(tmp_path):
+    """"No DEM was consulted" and "a DEM was consulted and could not be characterized"
+    are different answers. The first may inherit yesterday's record; the second must not,
+    or a stale claim of real terrain gets attached to pixels from an unknown file."""
+    bad = tmp_path / "dem.tif"
+    bad.write_bytes(b"not a geotiff at all")
+    rec = farm._terrain_record(str(bad))
+    assert rec is not None, "a present-but-unreadable DEM is not the same as no DEM"
+    assert rec["synthetic"] is None, "it must not claim the DEM is real"
+    assert rec["sha256"] is None
+
+
 # --- 2. the merge keeps a known-good record it cannot re-derive ----------------------
 
 def test_merge_preserves_a_prior_terrain_record_when_the_run_stamped_none():
@@ -94,6 +106,16 @@ def test_merge_prefers_the_terrain_this_run_actually_rendered_from():
 def test_merge_invents_no_record_for_a_region_that_never_had_one():
     fresh = {"rifle_aspen": {"name": "Rifle", "assets": []}}
     assert "terrain" not in farm._merge_index(fresh, {})["rifle_aspen"]
+
+
+def test_merge_does_not_inherit_a_real_record_over_an_uncharacterized_dem():
+    # the run DID open a DEM and could not read it -- the prior "real" claim describes
+    # different bytes than the ones these pixels came from, so it must not carry forward
+    prior = {"lassen_ca": {"name": "L", "assets": [],
+                           "terrain": {"synthetic": False, "sha256": "real", "bytes": 9}}}
+    fresh = {"lassen_ca": {"name": "L", "assets": [],
+                           "terrain": {"synthetic": None, "sha256": None, "bytes": 20}}}
+    assert farm._merge_index(fresh, prior)["lassen_ca"]["terrain"]["synthetic"] is None
 
 
 def test_merge_still_preserves_a_prior_regions_untouched_entry():
@@ -203,6 +225,64 @@ def test_the_guard_covers_a_region_that_only_contributes_a_coin(tmp_path, monkey
     assert _run(repo, tmp_path, monkeypatch) == 1
     err = capsys.readouterr().err
     assert "tushar_beaver_ut" in err
+
+
+# A malformed record must route to the UNVERIFIED refusal, never read as a promise of
+# real terrain. Everything except a literal JSON `false` was already refusing; a dict
+# whose `synthetic` was absent, empty, or not a bool was the one shape that published.
+# Strict: the farm only ever writes a real bool, so anything else means the file was
+# hand-edited or corrupted, and a corrupted provenance record is exactly the thing this
+# guard exists not to trust. `0` is a legitimate JSON encoding of false but is not what
+# the farm writes, so it refuses too -- pinned deliberately, not by accident.
+MALFORMED_TERRAIN = [
+    pytest.param({}, id="empty-record"),
+    pytest.param({"sha256": "abc", "bytes": 7}, id="no-synthetic-key"),
+    pytest.param({"synthetic": None, "sha256": None, "bytes": 7}, id="uncharacterized-dem"),
+    pytest.param({"synthetic": 0, "sha256": "abc", "bytes": 7}, id="int-zero-not-a-bool"),
+    pytest.param({"synthetic": "false", "sha256": "abc", "bytes": 7}, id="string-false"),
+]
+
+
+@pytest.mark.parametrize("bad", MALFORMED_TERRAIN)
+def test_a_malformed_terrain_record_is_not_a_promise_of_real_terrain(
+        bad, tmp_path, monkeypatch, capsys):
+    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": bad},
+                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
+    assert _run(repo, tmp_path, monkeypatch) == 1
+    err = capsys.readouterr().err
+    assert "lassen_ca" in err and "UNVERIFIED" in err
+
+
+@pytest.mark.parametrize("bad", MALFORMED_TERRAIN)
+def test_a_malformed_terrain_record_is_waved_through_by_the_unverified_override(
+        bad, tmp_path, monkeypatch):
+    # it refuses as UNVERIFIED, so that is the override that must open it -- not
+    # --allow-synthetic, which is a different admission
+    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": bad},
+                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
+    assert _run(repo, tmp_path, monkeypatch, "--allow-synthetic") == 1
+    assert _run(repo, tmp_path, monkeypatch, "--allow-unverified-terrain") == 0
+
+
+def test_the_plate_card_predicate_is_written_once():
+    """The guard's coverage set and the copy loop's strip condition are the same
+    question: which plate cards have a rendered coin? Excluding a GLB-less region from
+    the guard is only correct because that same region's <model-viewer> is stripped.
+    Two copies of the predicate can drift apart and silently publish an unguarded coin,
+    so the card regex lives in exactly one place."""
+    src = (REPO / "marketing" / "build_deploy.py").read_text(encoding="utf-8")
+    assert src.count('data-plate=') == 1, "the plate-card regex is duplicated"
+
+
+def test_plate_coins_maps_every_card_to_its_rendered_coin_or_none(tmp_path):
+    repo = _fake_repo(tmp_path, {}, coin_regions=("tushar_beaver_ut",))
+    html = (repo / "marketing" / "landing.html").read_text(encoding="utf-8")
+    coins = build_deploy.plate_coins(repo, html)
+    assert set(coins) == {"lassen_ca", "tushar_beaver_ut"}
+    assert coins["tushar_beaver_ut"] == repo / "assets" / "tushar_beaver_ut" / "mockup_plate.glb"
+
+    (repo / "assets" / "tushar_beaver_ut" / "mockup_plate.glb").unlink()
+    assert build_deploy.plate_coins(repo, html)["tushar_beaver_ut"] is None
 
 
 def test_a_stripped_coin_is_not_guarded(tmp_path, monkeypatch):

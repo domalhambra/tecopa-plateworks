@@ -57,11 +57,20 @@ coins are marketing images too. Two refusals:
 
 - **`synthetic: true`** → exit 1. The plate must be rebuilt from real 3DEP
   terrain and the farm re-run. Override: `--allow-synthetic`.
-- **no `terrain` record** → exit 1. What the assets were rendered from is
+- **no usable `terrain` record** → exit 1. What the assets were rendered from is
   unrecorded. Note a restage-only run (`--only detail/model/mockups/coin`)
   opens no DEM and so stamps nothing — it deliberately preserves any prior
-  record rather than clobbering it, but it cannot create one. Override:
-  `--allow-unverified-terrain`.
+  record rather than clobbering it, but it cannot create one. A DEM that was
+  opened and could not be read is stamped `"synthetic": null`, which lands here
+  too and *replaces* any prior record rather than inheriting a stale claim.
+  Override: `--allow-unverified-terrain`.
+
+Only `synthetic` is enforced, and only as a literal JSON `true`/`false` — any
+other shape (`{}`, missing, `0`, `"false"`) is a hand-edited or corrupt record
+and refuses as unverified rather than reading as real terrain. **`sha256` and
+`bytes` are recorded for future audit and nothing checks them yet**, so do not
+read a published page as evidence that its DEM digest was verified; it is
+evidence the DEM was real, not that it was a *particular* DEM.
 
 Each override prints a loud stderr warning naming exactly what is being
 published unverified. Each opens only its own door: `--allow-unverified-terrain`
