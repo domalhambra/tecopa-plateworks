@@ -7,6 +7,13 @@ is to never market features side by side, but as **one story told at three depth
 and the scope doc (`docs/scope.md`) already wrote the story. This plan is its
 outward-facing twin.
 
+> **Amendment 2026-08-16:** the audience and register for every customer-facing
+> surface are now canon in
+> `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md` (the
+> Home-Ground Collector). Where this plan and that profile disagree about what
+> the page says, the profile wins. The audiences list below survives as a
+> channel map around that one customer, not as co-equal personas.
+
 > **Your years outdoors, as one artifact that keeps growing.**
 
 Everything the app does is a *consequence* of that sentence: the poster is how the
@@ -39,17 +46,17 @@ Never say the left column in public. Always say the right column.
 
 | Engineering truth | Customer-facing line |
 |---|---|
-| Provenance manifest in a zTXt chunk | "The poster is the save file." |
-| Deterministic render, spec-driven | "The proof you approve is *pixel-for-pixel* the print you receive." |
-| `/api/reprint` — the file carries its whole recipe | "The poster is its own record. Send it back, we reprint it." |
-| Living editions + lineage | "Year two doesn't need a new poster. It needs Edition 2." |
-| Embedded photos in the manifest | "Pin a photo to the summit. It travels *inside* the file." |
-| Wallpaper ppi math | "A wallpaper cut to your exact screen — your 2.6 pt trail is 2.6 pt on glass." |
+| Provenance manifest in a zTXt chunk | "Keep the file with the print; next year is easy." |
+| Deterministic render, spec-driven | "You see the exact poster before it prints." |
+| `/api/reprint` — the file carries its whole recipe | "Send it back years from now; it reprints." |
+| Living editions + lineage | "Same frame, more ink, Edition 2 in the corner." |
+| Embedded photos in the manifest | "Your photos, pinned to the spots they came from." |
+| Wallpaper ppi math | "The wallpaper is drawn at the same weight as your print." |
 | APNG time-lapse, journeys in day order | "Watch your year draw itself." |
-| GNIS labels, hydro, biome tint | "Real place names, real rivers, real land — from USGS data." |
-| Zoom cap, off-DEM refusal | "We never invent terrain. If the data isn't sharp enough, we tell you." |
-| `embed_spec=false` share copy | "One toggle strips your exact routes for a share-safe copy." |
-| Curated regions (4 today) | "Handcrafted plates" — scarcity as craft, not limitation. |
+| GNIS labels, hydro, biome tint | "Real terrain, real place names, real rivers." |
+| Zoom cap, off-DEM refusal | "I never invent ground. If the data isn't sharp enough, I say so." |
+| `embed_spec=false` share copy | "One toggle makes a copy safe to post." (social captions only; never page copy) |
+| Curated regions (5 today) | "Handcrafted plates" — scarcity as craft, not limitation. |
 
 The last row matters: four regions (Lassen County CA, Susanville–Reno, Elko–Bonneville,
 Rifle–Aspen) is not a weakness to hide. Market them like vintages or map plates —
@@ -136,6 +143,12 @@ Beat 5 is the differentiator. Every competitor sells a *snapshot*; Tecopa Platew
    (the file names its plate and carries its recipe — hash-published plates, AGPL
    engine) · *Strava?* (export GPX; direct import if people ask).
 
+> **Amendment 2026-08-16:** items 5 and 7 are superseded by the profile spec.
+> The trust block answers the Collector's four doubts (looks good, easy,
+> worth it, shows up right), never "Private by default"; the FAQ asks his
+> questions, never "What if you disappear?" or "Do you keep my tracks?". The
+> file-as-record and privacy stories live in the nerd channels only.
+
 ## Hierarchy correction (2026-08-13)
 
 "The poster is the save file" is an architecture story, and architecture stories
@@ -145,6 +158,12 @@ type, the 1:1 detail crop as proof), the growing-artifact ritual second, and the
 file-as-record LAST — as a trust answer in the FAQ and the trust block, where it
 resolves doubt instead of leading the pitch. Pillar 2 leads only in the nerd
 channels (Show HN, the technical blog post), never on the landing page.
+
+**Second half (2026-08-16):** craft copy is written from the customer's chair,
+not the builder's. "Design and craft first" produced sentences like "a 2.6 pt
+trail is 2.6 pt on glass": craft measured instead of craft shown. The
+translation table above is re-baselined against the Home-Ground Collector, and
+the register rules live in the profile spec.
 
 ## The funnel, honestly (added 2026-08-13)
 
@@ -159,9 +178,11 @@ no accounts, but every customer is a correspondence.
 Two doors, stated on the page and never blurred:
 
 - **The concierge press** — email your GPX (or a save file), approve the proof, get
-  paper. Requires trusting a person with your tracks; the page says so plainly and
-  states the retention promise (used once, deleted after the edition ships).
-  **That promise is operational — honor it or remove it.**
+  paper. Requires trusting a person with your tracks, and the page carries exactly one
+  plain line about it at the order door ("you're emailing your tracks to the
+  person who makes your poster"), per the profile spec: privacy reassurance
+  answers a question the print-shop customer never asked. (The stated retention
+  promise was removed from copy 2026-08-15 rather than adopted operationally.)
 - **The studio** — run the AGPL engine locally, your data never moves, order paper
   with the save file or print anywhere. The free door is the top of the funnel and
   the trust proof for the paid one: nobody hides a lock-in behind a door they let
