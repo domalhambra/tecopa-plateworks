@@ -332,9 +332,13 @@ git commit -m "marketing: the plates band drops the hash talk, gains the maker"
 ```html
 <p class="eyebrow">Founding prices</p>
 <h2>Honest numbers to start.</h2>
-<p class="lede">Revisited after the first run of orders. Every price includes the
-  proof: you see the exact poster and say yes before anything prints or ships.</p>
+<p class="lede">Revisited after the first run of orders. Nothing prints or ships
+  until you have seen the exact poster and said yes.</p>
 ```
+
+(The first draft opened "Every price includes the proof." Literally true, but next
+to a commission tier whose fee is committed before any poster exists, it reads as
+a money-back assurance. The narrower claim is the one every tier honors.)
 
 Price-card paragraphs (headings and dollar figures unchanged):
 
