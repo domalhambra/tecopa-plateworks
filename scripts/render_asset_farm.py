@@ -346,18 +346,36 @@ def _poster(region, tracks, spots, out_dir, dpi):
 
 
 def _wallpapers(region, tracks, spots, out_dir, preset_ids):
+    """One wallpaper per preset, each re-cropped from the poster's frame to the
+    device's aspect.
+
+    The roam box is `base.crop` -- the finite-data envelope `_frame` already
+    computed -- NOT `region.cfg["bounds"]`. Bounds were the bug: a preset is allowed
+    to re-crop anywhere inside the box it is given, and elko_bonneville's bounds
+    include the nodata strips its UTM rectangle bulges into (~3.8% of the plate,
+    north and south edges). Landscape presets stayed wide and got away with it;
+    every portrait and square preset extended vertically into the void and the
+    off-DEM guard refused all ten at 3.14%. Handing over the envelope keeps every
+    preset inside real elevation data -- 18/18 render on elko. Reusing base.crop
+    also costs nothing: no second DEM read.
+
+    A preset that cannot be satisfied skips ITSELF, never the region. The render is
+    inside the try for the same reason the spec build is: an OffDemError escaping
+    here used to kill the whole region *after* its poster was written, and main()
+    then discarded a correct 132 MB file and left the terrain record unstamped."""
     made = []
     base = _base_spec(region, tracks, spots)
+    roam = tuple(base.crop)
     for pid in preset_ids:
         preset = wallpaper.PRESETS.get(pid)
         if preset is None:
             print(f"  ! unknown wallpaper preset {pid!r}, skipping"); continue
-        try:
-            wspec = wallpaper.spec_for_preset(base, preset, tuple(region.cfg["bounds"]))
-        except Exception as ex:
-            print(f"  ! {pid}: region can't satisfy this device ({ex})"); continue
         out = os.path.join(out_dir, f"wallpaper_{pid}.png")
-        made.append(_write_final(wspec, region, wspec.final_dpi(), out))
+        try:
+            wspec = wallpaper.spec_for_preset(base, preset, roam)
+            made.append(_write_final(wspec, region, wspec.final_dpi(), out))
+        except Exception as ex:
+            print(f"  ! wallpaper {pid} skipped ({type(ex).__name__}: {ex})")
     return made
 
 
