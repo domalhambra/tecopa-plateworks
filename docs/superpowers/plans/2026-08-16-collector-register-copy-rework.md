@@ -135,8 +135,12 @@ git commit -m "marketing: hero sells the seeing, not the artifact"
 <h2>The poster is the point. The rest comes with it.</h2>
 <p class="lede">One map, decided once. It prints as the poster, cuts itself to your
   phone as a wallpaper, and plays as a short film of your year drawing itself.
-  Same picture, three forms, one price.</p>
+  Same picture, three forms.</p>
 ```
+
+(The first draft ended "three forms, one price." It is true of the $79 Poster and
+reads as misleading three sections above four price tiers, so the price claim
+stays where the prices are.)
 
 - [ ] **Step 2: Replace the three pillar cards**
 
