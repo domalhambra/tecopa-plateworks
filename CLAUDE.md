@@ -175,8 +175,8 @@ Gotchas already paid for:
 - **Deliberately out of scope** (`docs/scope.md`): social features, cloud sync and accounts, fitness metrics, route planning or live tracking, and track editing. The app looks backward and renders what happened; it does not revise it.
 - **Licensing:** code is **AGPL-3.0-or-later**; region plates and the manifest schema are **CC0-1.0**; the name and branding are covered by neither. Keep relicensing power intact — the first outside contribution needs a DCO sign-off or CLA.
 - **Marketing honesty:** every marketing image is rendered by the engine (`scripts/render_asset_farm.py`), never a mockup. Every claim must have a test behind it — the claims register in the branding plan is the whitelist. Plates are free, always. **And the render must be of real country:** the farm stamps the DEM it opened into `assets/index.json` (`terrain: {synthetic, sha256, bytes}`) and `marketing/build_deploy.py` refuses, per published region, anything synthetic or unrecorded. A synthetic stand-in renders *cleanly*, so nothing else can tell. See `marketing/DEPLOY.md` § The terrain guard.
-- **Vocabulary:** plate (not region/dataset), proof (not preview), edition (not update), share copy (not privacy mode), the save file (not your data).
-- **Workflow:** TDD, granular present-tense commits explaining the *why*, and an adversarial review pass after each substantial component — that practice caught ~15 real bugs in one session, including a 90°-rotated hillshade. Cloud sessions land on `claude/*` branches and reach `main` by squash-merged PR; the Mac commits to `main` directly, only when green. Session work is logged to the PKM `SESSION_LOG.md` via the session-log skill, not a repo-local log.
+- **Vocabulary:** plate (not region/dataset), proof (not preview), edition (not update), share copy (not privacy mode), the save file (not your data). Customer-facing copy also answers to the **Collector's register** — canon in `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, gated by `tests/test_marketing_page.py`. Read the spec before you edit landing copy; a wording change alone can turn those tests red.
+- **Workflow:** TDD, granular present-tense commits explaining the *why*, and an adversarial review pass after each substantial component — that practice caught ~15 real bugs in one session, including a 90°-rotated hillshade. Cloud sessions land on `claude/*` branches and reach `main` by squash-merged PR; the Mac commits to `main` directly, only when green. For session logs, use § Session logging below.
 
 ## Map of the repo
 
@@ -196,6 +196,7 @@ Gotchas already paid for:
 | `app/main.py` | the FastAPI endpoints |
 | `app/static/` | the single-window studio (~22 ES modules; `app.js` routes, `viewer.js` owns proof zoom/pan, `statusbar.js` the truth line) |
 | `region_prep.py` | offline DEM/hydro/landcover bake — run in `.venv-prep` |
+| `marketing/` | the landing page for `tecopa.plateworks.org` — `landing.html`, `build_deploy.py` (the manual deploy and the terrain guard), `DEPLOY.md` (the runbook) |
 | `docs/scope.md`, `docs/MANIFEST.md`, `docs/marketing.md` | the goal, the CC0 file format, the story |
 | `docs/superpowers/` | `specs/` `plans/` `assessments/` `handoffs/` `quality/golden/` — the design record |
 
@@ -209,7 +210,13 @@ Log sessions to the Notion **Session Log** database. This is written here, in th
 - `Activity` — build | fix | research | write | ops | plan
 - `Status` — Complete | In Progress | Blocked
 - `Shipped` — checkbox (`"__YES__"`) for deploys and launches
-- `Tags` — JSON array **encoded as a string**, not a native array
+- `Tags` — JSON array **encoded as a string**, not a native array. It is a
+  constrained multi-select. A value outside the allowed set fails the whole write
+  with a `validation_error`. Allowed today: `skill development`, `Notion`,
+  `admin`, `Human Design`, `coaching`, `writing`, `DMIHC`, `Claude`,
+  `Ghost CMS`, `SEO`, `Tecopa Plateworks`. Pick from these; do not invent one. If
+  none fit, omit `Tags`. A missing tag costs nothing; an invented one loses the
+  whole log.
 - `Quarter` computes itself from Date. Never set it by hand.
 
 Body sections: What We Did / Open Threads / Next Steps / Notes.
