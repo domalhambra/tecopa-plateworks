@@ -708,10 +708,18 @@ def main():
                 want.discard(slow)
 
     index = {}
+    # Every region that was ASKED FOR and did not render, with why. The farm used to
+    # print "! <rid> failed:" and then exit 0, so a run that lost a whole plate was
+    # indistinguishable from a clean one to anything reading the status code -- which
+    # is how elko_bonneville stayed unrendered while the run looked successful. The
+    # deploy caught it downstream (no terrain record), but a guard two steps away is
+    # not a substitute for the exit code being true.
+    failed: list[tuple[str, str]] = []
     for rid in ids:
         region = regions.get(rid)
         if region is None:
-            print(f"! unknown region {rid!r} (built: {', '.join(regions)})"); continue
+            print(f"! unknown region {rid!r} (built: {', '.join(regions)})")
+            failed.append((rid, "unknown region")); continue
         print(f"\n=== {rid} — {region.name} ===")
         # mockups/model/detail/coin stage already-rendered finals: they need no DEM
         # and no tracks, so --only mockups works on any machine with yesterday's assets
@@ -719,6 +727,7 @@ def main():
         terrain = None
         if needs_render:
             if not _ensure_dem(region, args.synthetic_dem):
+                failed.append((rid, "no DEM (pass --synthetic-dem to stand one in)"))
                 continue
             # stamp the DEM we are about to paint from, before painting from it
             terrain = _terrain_record(
@@ -763,6 +772,7 @@ def main():
                     print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)
         except Exception as ex:
             print(f"  ! {rid} failed: {type(ex).__name__}: {ex}")
+            failed.append((rid, f"{type(ex).__name__}: {ex}"))
             continue
         if made:
             # a region whose every wanted deliverable was skipped gets no entry:
@@ -789,6 +799,13 @@ def main():
     else:
         print("\nno assets rendered")
 
+    if failed:
+        print(f"\n{len(failed)} of {len(ids)} region(s) did NOT render:")
+        for rid, why in failed:
+            print(f"  ! {rid}: {why}")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
