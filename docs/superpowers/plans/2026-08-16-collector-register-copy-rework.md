@@ -380,7 +380,7 @@ git commit -m "marketing: two doors and prices in the maker's voice"
 <p class="eyebrow" style="margin-bottom:36px">The part you'd ask about</p>
 <div class="trust">
   <div><h3><span class="dot"></span>You see it before it prints</h3><p>The proof I email you is the exact poster. Look it over, ask for changes, and nothing prints or ships until you say yes.</p></div>
-  <div><h3><span class="dot"></span>Your tracks are easy to get out</h3><p>Gaia, onX, Strava, and most watches export GPX in bulk. If yours hides the button, I'll point you at it.</p></div>
+  <div><h3><span class="dot"></span>Your tracks are easy to get out</h3><p>Every tracking app has a bulk export, and that one file is all I need. If yours hides the button, I'll point you at it.</p></div>
   <div><h3><span class="dot"></span>It reprints, years from now</h3><p>Keep the file with the print. Send it back in five years for a fresh sheet or the next edition. If the terrain data changed underneath, I'll tell you what moved before printing.</p></div>
 </div>
 ```
