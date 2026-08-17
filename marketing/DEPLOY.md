@@ -29,6 +29,48 @@ transforms, no hand-editing:
    for all five regions — which needs each region's real DEM for the poster
    it restages.
 
+## The terrain guard
+
+The footer promises every image on the page is the engine's own render. A
+*synthetic* DEM — the 240x300 stand-in `tests/conftest.py` hydrates for any
+plate missing its real 3DEP terrain — renders perfectly cleanly: right
+hillshade, right palette, right place labels, right route ink. Nothing in the
+picture betrays that the landforms are invented, so a container that could not
+pull 700 MB of DEM would deploy happily and publish country that does not
+exist.
+
+So the farm stamps the DEM it actually opened into `assets/index.json`:
+
+```json
+"terrain": {"synthetic": false, "sha256": "20cec75c…", "bytes": 192087365}
+```
+
+**Stamped at render time, never re-derived at deploy time.** Reading
+`regions/<id>/dem.tif` here would answer the wrong question — a machine can
+render from a stand-in and obtain the real DEM afterwards, at which point the
+file on disk reports "real" while the posters on disk are still synthetic. That
+is the lassen_ca orphan bug seen from the other side.
+
+`build_deploy.py` fails closed on **every region it publishes anything for** —
+`--region`'s derivatives *and* each plate card whose coin it copies, since the
+coins are marketing images too. Two refusals:
+
+- **`synthetic: true`** → exit 1. The plate must be rebuilt from real 3DEP
+  terrain and the farm re-run. Override: `--allow-synthetic`.
+- **no `terrain` record** → exit 1. What the assets were rendered from is
+  unrecorded. Note a restage-only run (`--only detail/model/mockups/coin`)
+  opens no DEM and so stamps nothing — it deliberately preserves any prior
+  record rather than clobbering it, but it cannot create one. Override:
+  `--allow-unverified-terrain`.
+
+Each override prints a loud stderr warning naming exactly what is being
+published unverified. Each opens only its own door: `--allow-unverified-terrain`
+will not wave through a *known*-synthetic plate.
+
+Every plate built before 2026-08-16 predates the stamp, so the first deploy
+after this guard landed refuses until the farm is re-rendered. That refusal is
+the guard working — re-render rather than reaching for the override.
+
 ## Steps
 
 ```bash
@@ -46,7 +88,8 @@ Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, and every
 
 - **`--regions lassen_ca` needs the real DEM.** `regions/lassen_ca/dem.tif` is
   gitignored and goes orphan on a pull; see CLAUDE.md's "Known local failures".
-  A synthetic plate renders a poster that is wrong to show a customer.
+  A synthetic plate renders a poster that is wrong to show a customer — which
+  the terrain guard above now refuses rather than trusts you to remember.
 - **Netlify's cert is slow and its API lies about it.** `POST /sites/<id>/ssl`
   returns `200` with a `null` body and creates nothing observable for minutes.
   Poll the site's `ssl` field; it flipped `False` → `True` about 90 seconds

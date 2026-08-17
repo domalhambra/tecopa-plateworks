@@ -96,10 +96,12 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` hydrates a tiny
   synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
   match their own bounds exactly. Check the tag, not the flag, before judging a poster by
-  eye. As of 2026-08-13 **two** plates carry real terrain here — `lassen_ca`
-  (192.1 MB, 6200×7719) and `susanville_reno` (257.2 MB, 6459×9977, `synthetic=0`) —
-  while `elko_bonneville`, `rifle_aspen` and `tushar_beaver_ut` are the 240×300 synthetic
-  stand-ins. `susanville_reno` was still synthetic in the 07-27 record; it is not now.
+  eye. As of 2026-08-16 **all five** plates carry real terrain here — `elko_bonneville`
+  (700.8 MB, 16096×11027), `lassen_ca` (192.1 MB, 6200×7719), `rifle_aspen`
+  (260.5 MB, 9533×6454), `susanville_reno` (257.2 MB, 6459×9977) and
+  `tushar_beaver_ut` (64.8 MB, 4074×3740). The count has moved twice (two real on
+  08-13, `susanville_reno` still synthetic on 07-27), so re-check the tag rather than
+  trusting this line.
 - ~~the orphan drill~~ — deleted 2026-07-27 with the forever-contract (its last run on
   real terrain, 2026-07-27, passed). The `serial` pytest tier died with it.
 - **Seven** label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it. The exact set as of 2026-08-13, so a future run can diff against it rather than re-derive it:
@@ -135,7 +137,7 @@ Gotchas already paid for:
 
 - **Deliberately out of scope** (`docs/scope.md`): social features, cloud sync and accounts, fitness metrics, route planning or live tracking, and track editing. The app looks backward and renders what happened; it does not revise it.
 - **Licensing:** code is **AGPL-3.0-or-later**; region plates and the manifest schema are **CC0-1.0**; the name and branding are covered by neither. Keep relicensing power intact — the first outside contribution needs a DCO sign-off or CLA.
-- **Marketing honesty:** every marketing image is rendered by the engine (`scripts/render_asset_farm.py`), never a mockup. Every claim must have a test behind it — the claims register in the branding plan is the whitelist. Plates are free, always.
+- **Marketing honesty:** every marketing image is rendered by the engine (`scripts/render_asset_farm.py`), never a mockup. Every claim must have a test behind it — the claims register in the branding plan is the whitelist. Plates are free, always. **And the render must be of real country:** the farm stamps the DEM it opened into `assets/index.json` (`terrain: {synthetic, sha256, bytes}`) and `marketing/build_deploy.py` refuses, per published region, anything synthetic or unrecorded. A synthetic stand-in renders *cleanly*, so nothing else can tell. See `marketing/DEPLOY.md` § The terrain guard.
 - **Vocabulary:** plate (not region/dataset), proof (not preview), edition (not update), share copy (not privacy mode), the save file (not your data).
 - **Workflow:** TDD, granular present-tense commits explaining the *why*, and an adversarial review pass after each substantial component — that practice caught ~15 real bugs in one session, including a 90°-rotated hillshade. Cloud sessions land on `claude/*` branches and reach `main` by squash-merged PR; the Mac commits to `main` directly, only when green. Session work is logged to the PKM `SESSION_LOG.md` via the session-log skill, not a repo-local log.
 

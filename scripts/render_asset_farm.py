@@ -58,9 +58,15 @@ Real 3DEP DEMs are gitignored (see region_prep.py). On a machine that has them, 
 renders true terrain. Without them, pass --synthetic-dem to hydrate the same tiny
 synthetic DEMs the test suite uses -- fine for wiring/preview, not for a real poster.
 Outputs land under assets/<region_id>/ (override with --out).
+
+`assets/index.json` records, per region, the assets made AND the DEM they were rendered
+from ("terrain": {synthetic, sha256, bytes}). That stamp is what marketing/build_deploy.py
+refuses to publish without: a synthetic stand-in renders cleanly, so the picture cannot
+betray itself and the record is the only thing that can. See marketing/DEPLOY.md.
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -576,6 +582,64 @@ def _ensure_dem(region: Region, allow_synthetic: bool) -> bool:
     return region.readiness().get("dem_present", False)
 
 
+def _terrain_record(dem_path: str) -> dict | None:
+    """Provenance for the DEM this run is about to paint from, or None if there is none.
+
+    Stamped HERE, where the DEM is actually opened, and never re-derived at deploy time.
+    A synthetic stand-in renders cleanly -- right hillshade, right palette, right labels
+    -- so the picture cannot betray itself, and reading `regions/<id>/dem.tif` later
+    answers the wrong question: a machine can render from a stand-in and obtain the real
+    DEM afterwards, at which point the disk says "real" while the posters are still
+    invented. (That is the lassen_ca orphan bug's shape, from the other side.) The record
+    describes the bytes the render consumed, so it stays true however the plate moves.
+
+    None means "no DEM was consulted", which is the honest answer for the restage tiers
+    and which the deploy guard treats as unverified. Never fabricate one.
+    """
+    if not os.path.exists(dem_path):
+        return None
+    import rasterio
+    try:
+        with rasterio.open(dem_path) as ds:
+            synthetic = ds.tags().get("synthetic") == "1"   # tests/conftest.py's mark
+    except Exception as ex:                                 # unreadable: claim nothing
+        print(f"  ! could not read terrain provenance from {dem_path} "
+              f"({type(ex).__name__}: {ex})")
+        return None
+    h = hashlib.sha256()
+    with open(dem_path, "rb") as f:                         # chunked: these run to 700 MB
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return {"synthetic": synthetic, "sha256": h.hexdigest(),
+            "bytes": os.path.getsize(dem_path)}
+
+
+def _merge_index(fresh: dict, prior: dict) -> dict:
+    """Fold this run's entries into yesterday's index rather than overwriting it.
+
+    Assets: a run that rendered only some tiers keeps the earlier tiers' records whose
+    files still sit on disk (and every other region's entry, untouched).
+
+    Terrain: a restage-only run (--only mockups/model/detail/coin) opens no DEM and so
+    stamps nothing — it must carry the prior record forward. Clobbering a known-good
+    record with silence would demote a verified region to an unverified one at the next
+    deploy, which is worse than never having recorded it. A run that DID open a DEM
+    always wins: its record describes the terrain the new pixels actually came from.
+    """
+    merged = dict(prior)
+    for rid, entry in fresh.items():
+        entry = dict(entry)
+        old = prior.get(rid)
+        if isinstance(old, dict):
+            kept = [p for p in old.get("assets", [])
+                    if p not in entry.get("assets", []) and os.path.exists(p)]
+            entry["assets"] = kept + entry.get("assets", [])
+            if "terrain" not in entry and isinstance(old.get("terrain"), dict):
+                entry["terrain"] = old["terrain"]
+        merged[rid] = entry
+    return merged
+
+
 def main():
     ap = argparse.ArgumentParser(description="Render the Phase-0 marketing asset farm.")
     ap.add_argument("--regions", nargs="*", help="region ids (default: all built regions)")
@@ -622,8 +686,16 @@ def main():
         # mockups/model/detail/coin stage already-rendered finals: they need no DEM
         # and no tracks, so --only mockups works on any machine with yesterday's assets
         needs_render = bool(want - {"mockups", "model", "detail", "coin"})
-        if needs_render and not _ensure_dem(region, args.synthetic_dem):
-            continue
+        terrain = None
+        if needs_render:
+            if not _ensure_dem(region, args.synthetic_dem):
+                continue
+            # stamp the DEM we are about to paint from, before painting from it
+            terrain = _terrain_record(
+                os.path.join(region.dir, region.cfg.get("dem_path", "dem.tif")))
+            if terrain and terrain["synthetic"]:
+                print("  · terrain: SYNTHETIC stand-in — these renders are not real "
+                      "country and the deploy will refuse them")
         out_dir = os.path.join(args.out, rid); os.makedirs(out_dir, exist_ok=True)
         tracks, spots = _demo_journeys(region, out_dir, args.synthetic_tracks) \
             if needs_render else ([], [])
@@ -667,14 +739,13 @@ def main():
             # an empty "assets": [] would read as a rendered region
             index[rid] = {"name": region.name,
                           "assets": [os.path.relpath(p) for p in made]}
+            if terrain:
+                index[rid]["terrain"] = terrain
 
     if index:
         idx_path = os.path.join(args.out, "index.json")
         os.makedirs(args.out, exist_ok=True)
         total = sum(len(v["assets"]) for v in index.values())
-        # merge into yesterday's index, never overwrite it: --only mockups on a dir
-        # from an earlier full run must keep the poster/wallpaper/film records whose
-        # files still sit on disk (and every other region's entry, untouched)
         prior = {}
         if os.path.exists(idx_path):
             try:
@@ -682,14 +753,8 @@ def main():
                     prior = json.load(f)
             except (OSError, ValueError):
                 prior = {}
-        for rid, entry in index.items():
-            old = prior.get(rid)
-            if isinstance(old, dict):
-                kept = [p for p in old.get("assets", [])
-                        if p not in entry["assets"] and os.path.exists(p)]
-                entry["assets"] = kept + entry["assets"]
         with open(idx_path, "w") as f:
-            json.dump({**prior, **index}, f, indent=2)
+            json.dump(_merge_index(index, prior), f, indent=2)
         print(f"\nwrote {total} assets across {len(index)} region(s) -> {idx_path}")
     else:
         print("\nno assets rendered")
