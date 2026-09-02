@@ -1,4 +1,4 @@
-# CLAUDE.md — Badwater Trails / Tecopa Plateworks
+# CLAUDE.md — Tecopa Plateworks
 
 Operator manual for Claude. Human entry point is `README.md`; the product's reason for existing is `docs/scope.md`; the file format's normative spec is `docs/MANIFEST.md`. For current state, read `git log` before any dated handoff — the handoffs describe the state at their date and `main` has moved past them more than once.
 
@@ -21,7 +21,7 @@ The product is **Tecopa Plateworks**. Several layers carry different names on pu
 | Layer | Value | Rule |
 |---|---|---|
 | Product brand | **Tecopa Plateworks** | Full compound always. Never bare "Plateworks" — a Minnesota flexographic-plate maker (Plateworks Plus) operates under it. |
-| Folder | `Badwater Trails/` | Pre-rebrand, deliberately not renamed on disk. |
+| Folder | `Tecopa Plateworks/` | Renamed from `Badwater Trails/` on 2026-09-02, matching the brand. |
 | GitHub repo | `domalhambra/tecopa-plateworks` | Renamed 2026-07-21. The old `badwatertrails` name survives only as a 301. |
 | `ENGINE` | `"tecopa-plateworks"` | Stamped into every manifest, **never read back** — `LEGACY_ENGINES` records the old values and nothing gates on any of them. |
 | `ENGINE_URL` | the repo URL | Must be the repo's **real** name, never a redirect — GitHub frees a renamed repo's old name for reuse. |
