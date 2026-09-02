@@ -105,7 +105,11 @@ MAX_ANIMATION_PIXELS = 600_000_000
 # is allowed up to the ceiling for whoever wants one.
 TIMELAPSE_DEFAULT_DPI = PROOF_DPI
 
-app = FastAPI()
+# No /docs, /redoc, or /openapi.json: FastAPI's default doc pages pull Swagger UI and
+# ReDoc from cdn.jsdelivr.net and a font from fonts.googleapis.com. The privacy page
+# promises the studio goes online only to build a plate, and nothing in the studio or
+# the tests reads the schema, so the pages go rather than the promise.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 # The deliverable isn't only a print: a PDF suits "an image someone saves for
 # themselves" and is what a print shop asks for anyway (V1-10). Both encode the

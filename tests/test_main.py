@@ -544,3 +544,13 @@ def test_proof_then_final_happy_path():
     r2 = c.post("/api/final", data={"session_id": j["session"]})
     assert r2.status_code == 200
     assert Image.open(io.BytesIO(r2.content)).size == (2700, 3600)
+
+
+def test_auto_docs_are_switched_off():
+    # The privacy page says the studio goes online only to build a plate. FastAPI's
+    # default /docs and /redoc pages would fetch Swagger UI and ReDoc from
+    # cdn.jsdelivr.net and a font from fonts.googleapis.com the moment someone opened
+    # them, so all three auto-doc routes must answer 404 like any other unknown path.
+    c = _client()
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert c.get(path).status_code == 404, path
