@@ -360,6 +360,8 @@ def _best_region(payloads, stats=None):
     if stats is not None and best_stats:
         for k, v in best_stats.items():
             stats[k] = stats.get(k, 0) + v
+    if best is not None:
+        _ready_or_503(best)      # only the winner is gated: losers are never painted
     return best, best_tracks
 
 
@@ -399,7 +401,7 @@ def _resolve_region(payloads, session_id, region_id, stats=None):
                 stats[k] = stats.get(k, 0) + v
         return region, tracks
     if len(REGIONS) == 1:
-        region = next(iter(REGIONS.values()))
+        region = _ready_or_503(next(iter(REGIONS.values())))
         tracks = _load_all(payloads, region, stats=stats)
         if tracks and _count_in_bounds(tracks, region) == 0:
             raise HTTPException(422, "Tracks don't fall within any available region")

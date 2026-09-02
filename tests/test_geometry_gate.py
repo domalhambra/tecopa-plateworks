@@ -114,3 +114,30 @@ def test_missing_dem_is_503_not_500(tmp_path, plates):
     r = _upload(_gpx_inside(GOOD), region_id="nodem")
     assert r.status_code == 503, r.text
     assert "DEM is missing" in r.json()["detail"]
+
+
+def test_auto_detect_into_a_drifted_plate_is_the_drift_503_not_a_no_region_422(tmp_path, plates):
+    """Two plates, the tracks land in the drifted one. The winner must be gated: the
+    operator needs 'this plate drifted', not 'tracks fall in no region'."""
+    plates(orphan=_plate(tmp_path, "orphan", GOOD, SHIFTED),
+           far=_plate(tmp_path, "far", FAR, FAR))
+    r = _upload(_gpx_inside(GOOD))                       # no region_id -> auto-detect
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"].startswith("Plate orphan can't render:")
+
+
+def test_single_plate_branch_is_gated(tmp_path, plates):
+    plates(orphan=_plate(tmp_path, "orphan", GOOD, SHIFTED))
+    r = _upload(_gpx_inside(GOOD))                       # one plate -> the sole-plate branch
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"].startswith("Plate orphan can't render:")
+
+
+def test_auto_recovery_into_a_drifted_plate_is_gated(tmp_path, plates):
+    """Operator picked 'far', the tracks are really in 'orphan': recovery switches to
+    the drifted plate and must refuse there, not paint."""
+    plates(orphan=_plate(tmp_path, "orphan", GOOD, SHIFTED),
+           far=_plate(tmp_path, "far", FAR, FAR))
+    r = _upload(_gpx_inside(GOOD), region_id="far")
+    assert r.status_code == 503, r.text
+    assert r.json()["detail"].startswith("Plate orphan can't render:")
