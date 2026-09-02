@@ -1573,6 +1573,7 @@ def _manifest_region_or_422(spec, verb: str, manifest=None, allow_plate_mismatch
         painted = f" It was painted on plate {file_pv}." if file_pv else ""
         raise HTTPException(422, f"Region {spec.region_id!r} isn't built on this server, "
                                  f"so this poster can't be {verb} here.{painted}")
+    _ready_or_503(region)     # geometry first: the pack override below must not bypass it
     if file_pv:
         server = provenance.region_pack_block(region.dir, labels=spec.labels,
                                               biome=spec.biome,

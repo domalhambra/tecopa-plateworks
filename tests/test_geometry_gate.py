@@ -141,3 +141,16 @@ def test_auto_recovery_into_a_drifted_plate_is_gated(tmp_path, plates):
     r = _upload(_gpx_inside(GOOD), region_id="far")
     assert r.status_code == 503, r.text
     assert r.json()["detail"].startswith("Plate orphan can't render:")
+
+
+def test_manifest_region_gate_refuses_a_drifted_plate_before_the_pack_check(tmp_path, plates):
+    """Reprint and continue resolve their plate here. Geometry is checked BEFORE the
+    pack-version comparison, so allow_plate_mismatch can never walk past an orphan."""
+    from types import SimpleNamespace
+    plates(orphan=_plate(tmp_path, "orphan", GOOD, SHIFTED))
+    spec = SimpleNamespace(region_id="orphan", labels=False, biome=False, dry_lakes=False)
+    with pytest.raises(HTTPException) as ei:
+        main._manifest_region_or_422(spec, "reprinted", manifest=None,
+                                     allow_plate_mismatch=True)
+    assert ei.value.status_code == 503
+    assert ei.value.detail.startswith("Plate orphan can't render:")
