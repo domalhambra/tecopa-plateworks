@@ -268,10 +268,43 @@ def _render_bundle_to_blob(items, region_dir, key, cfg, sources, embed_spec, lin
     BLOBS.put(key, buf.getvalue())
     return key                                         # job result = the blob key
 
+def _not_ready_detail(report: dict) -> str:
+    """One humanized sentence per Region.readiness() failure. The prefix is a contract
+    the studio's truth line and the tests both read; keep it."""
+    rid = report.get("id", "?")
+    fix = " Run scripts/verify_regions.py, then the orphan repair in CLAUDE.md."
+    if not report.get("dem_present"):
+        return f"Plate {rid} can't render: its DEM is missing on this machine.{fix}"
+    if report.get("error"):
+        return (f"Plate {rid} can't render: its DEM could not be opened "
+                f"({report['error']}).{fix}")
+    if not report.get("crs_match", True):
+        return (f"Plate {rid} can't render: the DEM on disk is in a different CRS than "
+                f"region.json, so it is not the DEM this plate was built with.{fix}")
+    return (f"Plate {rid} can't render: the DEM on disk drifts "
+            f"{report.get('bounds_drift_m', 0.0):.2f} m from region.json, so it is not "
+            f"the DEM this plate was built with.{fix}")
+
+def _ready_or_503(region):
+    """The DEM geometry gate. A plate is handed to a verb only when its DEM on disk
+    matches its region.json (Region.readiness(): present, bounds within 1.5 px, same
+    CRS). The failure this catches is the pull orphan (CLAUDE.md § Known local
+    failures): a rebuilt plate ships region.json to main while the gitignored DEM stays
+    behind, and the old terrain paints under the new bounds with no error. /readyz has
+    reported it since v1; nothing refused on it until now. Deliberately no override --
+    unlike a rebuilt-plate hash mismatch, a misregistered DEM has no honest render.
+    Runs per request: readiness() reads one GeoTIFF header, milliseconds against a
+    proof, and a stat-keyed memo can come later if a profile ever shows it."""
+    rep = region.readiness()
+    if rep.get("ready"):
+        return region
+    log.warning("event=plate.not_ready region=%s report=%s", region.id, rep)
+    raise HTTPException(503, _not_ready_detail(rep))
+
 def _region_or_404(rid):
     if rid not in REGIONS:
         raise HTTPException(404, f"Unknown region {rid!r}")
-    return REGIONS[rid]
+    return _ready_or_503(REGIONS[rid])
 
 def _load_all(payloads, region, stats=None):
     """Parse every uploaded file into tracks for one region; skip unparseable ones
