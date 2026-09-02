@@ -27,6 +27,14 @@ What drift means depends on which asset moved, and the answer is never automatic
 
   * MISSING -> the region is not built, or a pull orphaned the DEM.
 
+  * ORPHAN (the geometry row) -> the DEM on disk does not cover region.json's bounds
+    or CRS. This is the pull orphan: a plate rebuilt elsewhere shipped its region.json
+    to main and this machine's gitignored DEM stayed behind. Repair it (CLAUDE.md,
+    the orphan repair). The engine refuses to render such a plate with a 503.
+
+  The decisive rule: dem.tif DRIFT with geometry ok is a REBUILT plate, known and
+  left alone. dem.tif DRIFT with geometry ORPHAN needs the repair.
+
 This does NOT decide anything or write anything. Re-stamping a sidecar is a
 deliberate act with a reason recorded next to it, never a script's side effect:
 a manifest that silently re-syncs itself can no longer detect the swap it exists
@@ -50,6 +58,37 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from scripts.pack_region import _sha256_file   # noqa: E402  one hasher, one verdict
+
+# The geometry row needs the render stack (rasterio via app.regions). The script stays
+# stdlib-first: without it the row says "not checked" and everything else still runs.
+try:
+    from app.regions import Region as _Region   # noqa: E402
+
+    def _readiness(region_dir: str) -> dict:
+        root, rid = os.path.split(os.path.abspath(region_dir))
+        return _Region(rid, root=root).readiness()
+except Exception:                                # ImportError, or a broken venv
+    _readiness = None
+
+
+def geometry_verdict(region_dir: str) -> tuple[str, str]:
+    """(verdict, detail) for the DEM's geometry against region.json.
+    ok | ORPHAN | MISSING | skip. `skip` means the render stack is not installed here."""
+    if _readiness is None:
+        return ("skip", "not checked (render stack not installed; run from .venv)")
+    if not os.path.exists(os.path.join(region_dir, "region.json")):
+        return ("MISSING", "no region.json")
+    rep = _readiness(region_dir)
+    if not rep.get("dem_present"):
+        return ("MISSING", "dem.tif absent")
+    if rep.get("error"):
+        return ("ORPHAN", f"DEM could not be opened: {rep['error']}")
+    if rep.get("ready"):
+        return ("ok", f"bounds drift {rep['bounds_drift_m']:.2f} m, CRS matches")
+    why = (f"bounds drift {rep.get('bounds_drift_m', 0.0):.2f} m"
+           if not rep.get("bounds_match", True) else "CRS differs from region.json")
+    return ("ORPHAN", f"{why} -- the DEM on disk is not this plate's; "
+                      f"run the orphan repair in CLAUDE.md")
 
 
 def verify_region(region_dir: str) -> list[tuple[str, str, str]]:
@@ -81,12 +120,12 @@ def verify_region(region_dir: str) -> list[tuple[str, str, str]]:
     return rows
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("region_id", nargs="*",
                     help="regions to check (default: every region on disk)")
     ap.add_argument("--regions-root", default="regions")
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
 
     root = args.regions_root
     if not os.path.isdir(root):
@@ -107,10 +146,20 @@ def main() -> int:
             else:
                 print(f"  {verdict:<6} {name}  {detail}")
 
+        verdict, detail = geometry_verdict(os.path.join(root, rid))
+        if verdict == "ok":
+            print(f"  ok     geometry  {detail}")
+        elif verdict == "skip":
+            print(f"  --     geometry  {detail}")
+        else:
+            print(f"  {verdict:<6} geometry  {detail}")
+            bad += 1
+
     if bad:
-        print(f"\n{bad} drifted or missing asset(s). This is a finding to READ, not "
-              f"a failure to clear -- see this script's docstring for what each kind "
-              f"means. Do not re-stamp a sidecar to make it quiet.")
+        print(f"\n{bad} drifted, missing, or orphaned finding(s). This is a finding to "
+              f"READ, not a failure to clear -- see this script's docstring for what "
+              f"each kind means. ORPHAN is the one that needs repair. Do not re-stamp "
+              f"a sidecar to make it quiet.")
     else:
         print(f"\nevery listed asset in {len(ids)} region(s) matches its sources.json.")
     return 1 if bad else 0
