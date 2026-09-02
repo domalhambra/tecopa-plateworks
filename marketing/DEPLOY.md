@@ -29,6 +29,13 @@ transforms, no hand-editing:
    for all five regions — which needs each region's real DEM for the poster
    it restages.
 
+The site has one more page. `privacy.html` is copied verbatim into the root as
+`privacy/index.html`, so it serves at `/privacy/` with no redirect rule. It
+references no farm asset, so none of the four transforms touch it. Its copy
+describes what `landing.html` loads and stores, and `tests/test_marketing_page.py`
+pins each claim to the landing HTML it describes: change the landing page and
+the privacy page goes red until its copy and its "Last updated" date follow.
+
 ## The terrain guard
 
 The footer promises every image on the page is the engine's own render. A
@@ -90,8 +97,9 @@ export NETLIFY_AUTH_TOKEN=$(cat ~/.config/netlify/token)
 netlify deploy --prod --dir=<staged root> --site=1902a58d-74a9-4def-8b4e-d93793f81ac4
 ```
 
-Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, and every
-`/assets/...` reference in the deployed `index.html` returns 200.
+Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, every
+`/assets/...` reference in the deployed `index.html` returns 200, and
+`curl -sI https://tecopa.plateworks.org/privacy/` → `HTTP/2 200`.
 
 ## Gotchas paid for
 

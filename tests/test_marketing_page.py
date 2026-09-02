@@ -82,3 +82,40 @@ def test_the_customers_doubts_are_answered():
     assert "export GPX in bulk" in PAGE         # doubt 2: getting tracks out is easy
     assert "the person who makes your poster" in PAGE   # the one plain order-door line
     assert "Tell me where you've been" in PAGE  # the request door, maker-present
+
+
+# The privacy page (marketing/privacy.html, published at /privacy/) makes claims
+# about the landing page -- what it loads, what it stores, where the form goes.
+# Those claims are only true while the landing page stays as described, so each
+# one is pinned here against the HTML it describes. Change the landing page and
+# the privacy page goes red until its copy is brought back into step.
+PRIVACY = (REPO / "marketing" / "privacy.html").read_text(encoding="utf-8")
+FOOTER = PAGE[PAGE.index("<footer"):PAGE.index("</footer>")]
+
+
+def test_the_footer_links_to_the_privacy_page():
+    assert 'href="/privacy/"' in FOOTER
+
+
+def test_privacy_page_carries_its_furniture():
+    assert re.search(r"Last updated \d{4}-\d{2}-\d{2}\.", PRIVACY)
+    assert 'href="mailto:badwaterguidance@gmail.com"' in PRIVACY
+    # the comment markers keep Cloudflare's email obfuscation off the address
+    assert "<!--email_off-->" in PRIVACY and "<!--/email_off-->" in PRIVACY
+    assert 'href="/"' in PRIVACY               # a way back to the landing page
+
+
+def test_privacy_page_describes_what_the_landing_page_actually_does():
+    # analytics: the page loads Plausible, and the privacy page says so
+    assert "plausible.io" in PAGE and "Plausible" in PRIVACY
+    # "stores nothing in your browser": the landing page must not touch storage
+    for api in ("localStorage", "sessionStorage", "document.cookie", "indexedDB"):
+        assert api not in PAGE, f"landing page uses {api}; the privacy page says it stores nothing"
+    # the region-request form is Netlify Forms, and the privacy page names it
+    assert 'name="region-request"' in PAGE and "Netlify" in PRIVACY
+    # orders happen over mailto, and the privacy page says where that lands
+    assert "mailto:" in PAGE and "email" in PRIVACY
+    # "Plausible's script is the only one loaded from another site": every
+    # src/href that leaves this origin must be Plausible's, or a plain link
+    loaded = set(re.findall(r'<(?:script|link|img|iframe|source)[^>]+?(?:src|href)="https?://([^/"]+)', PAGE))
+    assert loaded == {"plausible.io"}, f"landing page loads from {loaded}; update privacy.html"

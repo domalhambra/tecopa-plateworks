@@ -172,6 +172,7 @@ def _fake_repo(tmp_path, index: dict, coin_regions=("tushar_beaver_ut",)) -> pat
     repo = tmp_path / "repo"
     (repo / "marketing" / "vendor").mkdir(parents=True)
     (repo / "marketing" / "favicon.svg").write_text("<svg/>")
+    (repo / "marketing" / "privacy.html").write_text("<html>privacy</html>")
     (repo / "marketing" / "landing.html").write_text(PAGE.format(
         imgs="\n".join(f'<img src="../assets/lassen_ca/{n}">' for n in DERIVED)))
     lassen = repo / "assets" / "lassen_ca"
@@ -299,6 +300,17 @@ def test_a_clean_index_deploys(tmp_path, monkeypatch):
     assert _run(repo, tmp_path, monkeypatch) == 0
     assert (tmp_path / "out" / "index.html").is_file()
     assert (tmp_path / "out" / "assets" / "lassen_ca" / "poster.jpg").is_file()
+
+
+def test_the_privacy_page_ships_beside_the_landing_page(tmp_path, monkeypatch):
+    # marketing/privacy.html is the site's second page, published at /privacy/ from
+    # the same staged root -- verbatim, since it carries no asset references to rewrite
+    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": REAL},
+                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
+    assert _run(repo, tmp_path, monkeypatch) == 0
+    published = tmp_path / "out" / "privacy" / "index.html"
+    assert published.is_file(), "the privacy page did not reach the deploy root"
+    assert published.read_text() == (repo / "marketing" / "privacy.html").read_text()
 
 
 # --- 4. the overrides open the door, loudly -----------------------------------------

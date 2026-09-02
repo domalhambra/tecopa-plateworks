@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Assemble the deployable landing-page root from the repo + a rendered asset farm.
+"""Assemble the deployable site root from the repo + a rendered asset farm.
 
 The published site is `landing.html` with its asset paths rewritten and the
-farm's print-resolution renders downscaled to web weights. See DEPLOY.md for
-why this is a manual deploy rather than a git-connected build.
+farm's print-resolution renders downscaled to web weights, plus `privacy.html`
+copied verbatim to `/privacy/`. See DEPLOY.md for why this is a manual deploy
+rather than a git-connected build.
 
     python3 marketing/build_deploy.py [--out DIR] [--region lassen_ca]
 
@@ -206,6 +207,12 @@ def main() -> int:
 
     shutil.copytree(REPO / "marketing" / "vendor", out / "vendor")
     shutil.copy2(REPO / "marketing" / "favicon.svg", out / "favicon.svg")
+
+    # The site's second page. It references no farm asset, so none of the transforms
+    # below apply and it ships verbatim -- as a directory index, so the public URL is
+    # /privacy/ with no extension and no redirect rule to maintain.
+    (out / "privacy").mkdir()
+    shutil.copy2(REPO / "marketing" / "privacy.html", out / "privacy" / "index.html")
 
     html = html.replace("../assets/", "/assets/")
     for name, published, _, _ in DERIVATIVES:

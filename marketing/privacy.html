@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy · Tecopa Plateworks</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta name="description" content="What tecopa.plateworks.org tracks, what it stores in your browser, and where the region form and order emails go.">
+<meta name="color-scheme" content="dark">
+
+<!-- Privacy-friendly analytics by Plausible -->
+<script async src="https://plausible.io/js/pa-rNm26IBrqYBhuPO5c8MOm.js"></script>
+<script>
+  window.plausible=window.plausible||function(){(plausible.q=plausible.q||[]).push(arguments)},plausible.init=plausible.init||function(i){plausible.o=i||{}};
+  plausible.init()
+</script>
+</head>
+<body>
+<style>
+  :root{
+    --ground:#13160e; --ground-2:#1b1f15; --rule:#333829;
+    --ink:#e9e9df; --ink-2:#b3b6a5; --ink-3:#83876f;
+    --gold:#d69e3a; --gold-bright:#eab84f;
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --maxw:1120px;
+  }
+  @media (prefers-color-scheme:light){
+    :root{ --ground:#e9e4d6; --ground-2:#f4f0e6; --rule:#d3ccba;
+      --ink:#20231a; --ink-2:#4d5142; --ink-3:#6f7360; }
+  }
+  :root[data-theme="dark"]{ --ground:#13160e; --ground-2:#1b1f15; --rule:#333829;
+    --ink:#e9e9df; --ink-2:#b3b6a5; --ink-3:#83876f; }
+  :root[data-theme="light"]{ --ground:#e9e4d6; --ground-2:#f4f0e6; --rule:#d3ccba;
+    --ink:#20231a; --ink-2:#4d5142; --ink-3:#6f7360; }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+  a{color:inherit}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--gold);margin:0}
+
+  /* ---- top bar, as on the landing page ---- */
+  .bar{display:flex;align-items:center;justify-content:space-between;padding:22px 0;gap:12px}
+  .barnav{display:flex;gap:12px;align-items:center}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:19px;
+    letter-spacing:.01em;text-decoration:none}
+  .brand b{font-weight:600}
+  .mark{width:22px;height:22px;border:1.5px solid var(--gold);border-radius:50%;position:relative;flex:none}
+  .mark::before{content:"";position:absolute;inset:3px;border-radius:50%;
+    background:conic-gradient(from -30deg,var(--gold),transparent 40% 60%,var(--gold))}
+  .navlink{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-2);text-decoration:none;padding:8px 14px;border:1px solid var(--rule);border-radius:999px}
+  .navlink:hover{color:var(--ink);border-color:var(--gold)}
+
+  /* ---- the page ---- */
+  .page{max-width:62ch;padding:28px 0 84px}
+  .page h1{font-family:var(--serif);font-weight:600;text-wrap:balance;letter-spacing:-.01em;
+    font-size:clamp(32px,4.4vw,48px);line-height:1.08;margin:.3em 0 .6em}
+  .page p{color:var(--ink-2);font-size:clamp(16px,1.3vw,18px);margin:0 0 1.1em}
+  .page a{color:var(--ink)}
+  .updated{font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--ink-3);margin-top:2em}
+
+  footer{border-top:1px solid var(--rule);padding:44px 0 60px;color:var(--ink-3)}
+  .foot{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:center;
+    font-family:var(--mono);font-size:12px;letter-spacing:.06em}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px;border-radius:4px}
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <a class="brand" href="/"><span class="mark"></span>Tecopa <b>Plateworks</b></a>
+    <div class="barnav">
+      <a class="navlink" href="/">Home</a>
+    </div>
+  </div>
+
+  <main class="page">
+    <p class="eyebrow">Privacy</p>
+    <h1>What this site tracks</h1>
+
+    <p>Tecopa Plateworks counts page views with Plausible. It's cookieless and builds no profile of you across sites. I see aggregate counts of pages read, rough location, device type, which buttons were clicked, and how far people scrolled.</p>
+
+    <p>The site sets no cookies and stores nothing in your browser.</p>
+
+    <p>The region request form is Netlify Forms. Netlify stores what you type there and I read it there.</p>
+
+    <p>Orders happen by email. The tracks and photos you send go to my inbox and are used to make your poster.</p>
+
+    <p>Plausible's script is the only one loaded from another site. Cloudflare adds a small script of its own that unscrambles the email links.</p>
+
+    <p>The studio app runs on your own computer with no account and no analytics. It goes online only to download plates and public map data.</p>
+
+    <p>Netlify serves the pages and Cloudflare carries them. Both keep ordinary server logs.</p>
+
+    <p>Questions: <!--email_off--><a href="mailto:badwaterguidance@gmail.com">badwaterguidance@gmail.com</a><!--/email_off-->.</p>
+
+    <p class="updated">Last updated 2026-09-02.</p>
+  </main>
+</div>
+
+<footer>
+  <div class="wrap foot">
+    <div class="brand" style="font-size:16px"><span class="mark"></span>Tecopa <b>Plateworks</b></div>
+    <div>Shaded relief · GPX · living editions</div>
+    <div><a href="/" style="text-decoration:none">Home</a></div>
+    <div><a href="https://github.com/domalhambra/tecopa-plateworks" style="text-decoration:none">Open source</a></div>
+  </div>
+</footer>
+
+</body>
+</html>
