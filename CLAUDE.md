@@ -88,6 +88,10 @@ A warning the 07-27 run earned: two tests were coupled to the local plate being 
   Happened on 2026-07-21 (`3e2b5e7`), and again on 2026-07-27 when pulling
   `a6a93c2 → 5a0094e` re-orphaned it at 509.83 m drift. **After any pull touching
   `regions/`, run `regions.discover()` → `readiness()` before trusting a render.**
+  Since 2026-09-01 the engine asks for you: every render verb refuses an orphaned
+  plate with a 503 that names the drift (`_ready_or_503` in `app/main.py`, no
+  override), the farm skips it, and `scripts/verify_regions.py` prints a geometry
+  row whose `ORPHAN` verdict is the one finding that needs the repair below.
   To repair, call `region_prep.build_dem_cog` directly (with `plan_build`) rather than
   `region_prep.main` — main refetches NHD/NLCD too, and upstream drift turns a
   restoration into a new *plate version* (NHD already went 116 → 109 lakes once). Then
