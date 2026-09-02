@@ -588,16 +588,30 @@ def _lightsweep(region, tracks, spots, out_dir):
 
 # ---- driver ----
 
-def _ensure_dem(region: Region, allow_synthetic: bool) -> bool:
+def _ensure_dem(region: Region, allow_synthetic: bool) -> str | None:
+    """None when the plate can paint, else the reason it cannot (the farm records it
+    and exits non-zero). Three refusals, in order:
+      * DEM present but its geometry drifts from region.json -> the pull orphan.
+        Refused even under --synthetic-dem: that flag stands in for a MISSING DEM and
+        must never paper over a real one that is wrong.
+      * DEM missing, no --synthetic-dem -> skip.
+      * DEM missing, --synthetic-dem -> hydrate the test stand-in (preview only)."""
     ready = region.readiness()
     if ready.get("dem_present"):
-        return True
+        if ready.get("ready"):
+            return None
+        why = (f"DEM geometry drifts {ready.get('bounds_drift_m', 0.0):.2f} m from "
+               f"region.json (orphaned DEM; run the orphan repair in CLAUDE.md)")
+        print(f"  ! {region.id}: {why} -- skipping")
+        return why
     if not allow_synthetic:
         print(f"  ! {region.id}: no DEM present -- skipping (pass --synthetic-dem for a preview)")
-        return False
+        return "no DEM (pass --synthetic-dem to stand one in)"
     import tests.conftest  # noqa: F401  -- importing hydrates every missing DEM synthetically
     print(f"  · {region.id}: hydrated a SYNTHETIC DEM (preview only, not real terrain)")
-    return region.readiness().get("dem_present", False)
+    if region.readiness().get("ready"):
+        return None
+    return "synthetic hydration did not produce a usable DEM"
 
 
 def _terrain_record(dem_path: str) -> dict | None:
@@ -726,8 +740,9 @@ def main():
         needs_render = bool(want - {"mockups", "model", "detail", "coin"})
         terrain = None
         if needs_render:
-            if not _ensure_dem(region, args.synthetic_dem):
-                failed.append((rid, "no DEM (pass --synthetic-dem to stand one in)"))
+            why = _ensure_dem(region, args.synthetic_dem)
+            if why is not None:
+                failed.append((rid, why))
                 continue
             # stamp the DEM we are about to paint from, before painting from it
             terrain = _terrain_record(
