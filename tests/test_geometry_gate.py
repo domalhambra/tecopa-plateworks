@@ -1,7 +1,7 @@
 # tests/test_geometry_gate.py
 # The DEM geometry gate: a plate whose dem.tif no longer matches its region.json must
 # refuse to render with a 503 that names the drift. This is the pull-orphan failure
-# (CLAUDE.md § Known local failures): a cloud plate rebuild ships region.json to main,
+# (docs/changing-things.md, Repair an orphaned DEM): a cloud plate rebuild ships region.json to main,
 # the gitignored DEM stays behind, and the next pull pairs new bounds with old terrain.
 # Before this gate the poster painted with no error, just wrong. Every test CONSTRUCTS
 # its drift in tmp_path (tests/test_plates.py rule: never inherit drift from the host).

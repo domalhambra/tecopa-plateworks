@@ -601,7 +601,8 @@ def _ensure_dem(region: Region, allow_synthetic: bool) -> str | None:
         if ready.get("ready"):
             return None
         why = (f"DEM geometry drifts {ready.get('bounds_drift_m', 0.0):.2f} m from "
-               f"region.json (orphaned DEM; run the orphan repair in CLAUDE.md)")
+               f"region.json (orphaned DEM; see Repair an orphaned DEM in "
+               f"docs/changing-things.md)")
         print(f"  ! {region.id}: {why} -- skipping")
         return why
     if not allow_synthetic:

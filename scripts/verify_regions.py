@@ -14,7 +14,8 @@ DEM, and before packing a plate.
 What drift means depends on which asset moved, and the answer is never automatic:
 
   * dem.tif drifted, everything else clean -> a DEM was REBUILT rather than
-    restored. Expected after the CLAUDE.md orphan repair, which calls
+    restored. Expected after the orphan repair in docs/changing-things.md,
+    which calls
     `region_prep.build_dem_cog` directly and so never re-runs the sidecar writer.
     USGS re-tiles 3DEP, so a rebuild cannot reproduce the original bytes. Leave
     the sidecar alone -- the mismatch IS the record that the plate was swapped --
@@ -29,8 +30,8 @@ What drift means depends on which asset moved, and the answer is never automatic
 
   * ORPHAN (the geometry row) -> the DEM on disk does not cover region.json's bounds
     or CRS. This is the pull orphan: a plate rebuilt elsewhere shipped its region.json
-    to main and this machine's gitignored DEM stayed behind. Repair it (CLAUDE.md,
-    the orphan repair). The engine refuses to render such a plate with a 503.
+    to main and this machine's gitignored DEM stayed behind. Repair it
+    (docs/changing-things.md, Repair an orphaned DEM). The engine refuses to render such a plate with a 503.
 
   The decisive rule: dem.tif DRIFT with geometry ok is a REBUILT plate, known and
   left alone. dem.tif DRIFT with geometry ORPHAN needs the repair.
@@ -88,7 +89,7 @@ def geometry_verdict(region_dir: str) -> tuple[str, str]:
     why = (f"bounds drift {rep.get('bounds_drift_m', 0.0):.2f} m"
            if not rep.get("bounds_match", True) else "CRS differs from region.json")
     return ("ORPHAN", f"{why} -- the DEM on disk is not this plate's; "
-                      f"run the orphan repair in CLAUDE.md")
+                      f"run Repair an orphaned DEM in docs/changing-things.md")
 
 
 def verify_region(region_dir: str) -> list[tuple[str, str, str]]:

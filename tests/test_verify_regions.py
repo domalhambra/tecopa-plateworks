@@ -1,7 +1,7 @@
 # tests/test_verify_regions.py
 # verify_regions.py separates the two kinds of DEM drift. A hash mismatch alone is a
-# REBUILT plate (four of five on this Mac, deliberate, CLAUDE.md § Known local
-# failures). A geometry mismatch is the pull ORPHAN, and it is the only kind that needs
+# REBUILT plate (four of five on this Mac, deliberate: docs/changing-things.md,
+# Repair an orphaned DEM). A geometry mismatch is the pull ORPHAN, and it is the only kind that needs
 # repair. Before this row the script printed the same DRIFT line for both.
 import json
 import os

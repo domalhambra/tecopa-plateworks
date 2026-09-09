@@ -119,7 +119,7 @@ def terrain_guard(index: dict, regions, allow_synthetic: bool = False,
         for rid in synthetic:
             print(f"  {rid}", file=sys.stderr)
         print("The page promises every image is the engine's own render. Rebuild the "
-              "plate from real\nterrain (see CLAUDE.md, \"Known local failures\"), then "
+              "plate from real\nterrain (see docs/changing-things.md, \"Repair an orphaned DEM\"), then "
               "re-render:", file=sys.stderr)
         print(f"  {FARM_CMD} {' '.join(synthetic)}", file=sys.stderr)
         print("To publish them anyway: --allow-synthetic", file=sys.stderr)

@@ -1,232 +1,81 @@
-# CLAUDE.md — Tecopa Plateworks
+# Tecopa Plateworks
 
-Operator manual for Claude. Human entry point is `README.md`; the product's reason for existing is `docs/scope.md`; the file format's normative spec is `docs/MANIFEST.md`. For current state, read `git log` before any dated handoff — the handoffs describe the state at their date and `main` has moved past them more than once.
+A local app that turns GPX, KML, and KMZ tracks into a shaded-relief poster of your journeys inside one curated plate. The poster performs as a print, a wallpaper, a film, or a social canvas. No account, no database, no cloud: the file is the archive. One FastAPI process serves the studio and the render engine.
 
-## What this project is
+This file is a router: the rules that must not break, and the one document to read for each change. Everything else lives in `docs/`, indexed at `docs/README.md`.
 
-A single **local** app that turns GPX/KML/KMZ tracks into a **self-archiving chronicle of a life outdoors** — a shaded-relief poster of where you've been inside one curated region, performed as a print, a wallpaper, a film, or a social canvas. One FastAPI process serves a browser studio and the render engine; all real rendering happens server-side in Python. No account, no database, no cloud: **the artifact is the archive, and the poster on the wall is the save file.**
+## Read this before changing that
 
-Three pillars, stated fully in `docs/scope.md`:
+Unnamed sections below are in `docs/changing-things.md`.
 
-1. **One score, many performances** — the composition is decided once in ground coordinates, then performed at any size (print), any pixel density (wallpaper), and along its own time axis (film).
-2. **The file is the whole record** — picture, geometry, source hashes, and pinned photos all travel inside the PNG.
-3. **The record is alive** — last year's poster plus this year's GPX renders the next edition (`POST /api/continue`), lineage carried in the file itself.
-
-This is a **commercial** property (concierge press: prints, editions, plate commissions) and the only Badwater project with a public license stance. It is not safety-relevant — that's Ignition.
-
-## Naming
-
-The product is **Tecopa Plateworks**. Several layers carry different names on purpose; collapsing them breaks either the brand or old files' readability.
-
-| Layer | Value | Rule |
-|---|---|---|
-| Product brand | **Tecopa Plateworks** | Full compound always. Never bare "Plateworks" — a Minnesota flexographic-plate maker (Plateworks Plus) operates under it. |
-| Folder | `Tecopa Plateworks/` | Renamed from `Badwater Trails/` on 2026-09-02, matching the brand. |
-| GitHub repo | `domalhambra/tecopa-plateworks` | Renamed 2026-07-21. The old `badwatertrails` name survives only as a 301. |
-| `ENGINE` | `"tecopa-plateworks"` | Stamped into every manifest, **never read back** — `LEGACY_ENGINES` records the old values and nothing gates on any of them. |
-| `ENGINE_URL` | the repo URL | Must be the repo's **real** name, never a redirect — GitHub frees a renamed repo's old name for reuse. |
-| `MANIFEST_KEY` | `"trailprint"` | **Frozen v1 format keyword.** Changing it orphans every poster ever printed — the one genuinely frozen name. (`NOTE_KEY` / the resurrection note retired 2026-07-27; files already printed keep theirs.) |
-| Env vars, `localStorage`, bundle id, download prefix | `TECOPA_*`, `'tecopa'`, `guide.badwater.tecopa`, `tecopa_<region>` | Name-neutral by design. A rebrand touches none of them, so no saved preference is orphaned and macOS never sees a new app. |
-
-**Type roles.** The sheet sets type by role — `body`, `point`, `area`, `water`, `title` (`render.TYPE_ROLES`) — and the operator binds faces per role via `TECOPA_FONT_<ROLE>` (see README's font table). Faces are operator-side because MB Type is licensed and this repo is public (`.gitignore` blocks `*.otf`/`*.ttf`/`*.woff*` — commit `39ad08c`, never weaken it). Bound faces are auto-normalised on register metrics; `TECOPA_FONT_AREA_CASE=mixed` is required when binding a small-caps face like Advocate. The bindings ride in no manifest: a render on a host with different bindings looks different, by design.
-
-**Naming history:** `trailprint` → `tecopa-printworks` (2026-07-19 to 07-21, an accidental name) → `tecopa-plateworks`. `docs/MANIFEST.md` requires readers to accept all three and not reject an unrecognized fourth. Dated files under `docs/superpowers/` keep their original wording as historical record — if you port UI copy out of one, substitute the current name.
-
-**Before renaming again:** `ENGINE` and `ENGINE_URL` ride in every manifest as provenance. Renaming changes what new files record — harmless now that cross-build byte-identity is retired, but the strings in files already printed are permanent, so readers must keep accepting every historical value.
-
-## Architecture — the one seam
-
-The engine splits at exactly one seam: **compose** decides the picture once in ground coordinates and emits a `CompositionSpec`; **rasterize** paints that spec at any resolution. The proof and the final are the *same spec* painted at two pixel sizes. Region-level data (DEM, `hydro.json`, labels) is read from the region dir by `render` — it is **not** carried on the spec. The spec holds the picture *decisions*: crop, print size, tracks, hotspots, style values, seed.
-
-The front end is a **single-window studio** (no wizard, no gated section rail — both were replaced): a top output-target switcher (Poster / Wallpaper / Film / Social), a project sidebar left, an always-present appearance sidebar right, and a center stage that adapts to the target. `app.js` is the router over target × view; each target's behaviour lives in its own module. The proof stage is **progressive** — an instant draft swaps to a background high-dpi refine while `viewer.js` keeps the zoom/pan transform stable across the swap.
-
-## Invariants — protect these
-
-1. **One spec, painted at many sizes.** Never compute the picture twice.
-2. **Physical units (points / inches), never pixels,** for anything visual. This bug class has bitten more than once: a pixel-sized element looks bold in the proof and vanishes in the final.
-3. **Determinism.** Same spec + seed → identical image. Grain and jitter are seeded. Note that the four heavy relief passes run **concurrently** (`relief._fan_out`, 2026-08-13) — this does not weaken the invariant: results merge in submission order and each task combines its own pass with the same expressions in the same order, so the sheet is bit-identical however the threads interleave. `TECOPA_RELIEF_WORKERS=1` forces the old serial call order, which is what the test pins.
-4. **One projection throughout.** DEM, overview, tracks, crop, hydro all in the region CRS metres; tracks arrive lon/lat and are reprojected first.
-5. **Registration is correctness.** Prove the coordinate chain before tuning aesthetics. `app/geo.py` is the single source of truth for coordinate conversions.
-6. **The zoom cap.** Never request finer ground detail than the data holds. `CompositionSpec.validate(dpi)` enforces it at the *final* dpi. A 422 on a large print of a small plate is the invariant working, not a bug.
-
-## Versioned drift (the forever-contract is retired)
-
-The old rule — a poster printed today must reprint byte-identically after any future upgrade — was **retired on 2026-07-27** (`docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md`). What replaced it:
-
-- **`engine_version` rides every manifest** (`provenance.ENGINE_VERSION`: the git commit, or `TECOPA_ENGINE_VERSION` in packaged builds). Cross-build drift is recorded, not prevented — when a reprint stops matching, the file says which build painted it. **No new revs, ever**; a pixel-moving improvement just ships.
-- **Determinism (invariant 3) is unchanged and still load-bearing**: same spec + seed + build → identical image. That is what makes the proof predict the print and a same-day reorder trustworthy. Do not confuse the retired *cross-build* promise with this *within-build* one.
-- **Read-tolerance is the promise that remains**: `serialize.spec_from_json` drops unknown fields and defaults missing ones, so any old file opens. `spec_to_json` always emits every field — the omit-at-default dance is gone; never reintroduce it.
-- **One door for untrusted manifests:** `provenance.spec_from_manifest` is the single place a crafted PNG becomes a render-ready spec (parse → drop non-embedded photos → bound geometry → validate). Any new file-consuming verb funnels through it and inherits the hardening. This guards against hostile files, not drift — it survives the retirement untouched.
-- **A plate mismatch warns, it does not refuse**: `/api/reprint` and `/api/continue` surface a rebuilt plate honestly and proceed on `allow_plate_mismatch=true`. A customer reorder is never blocked because USGS re-flew the terrain.
-- `MANIFEST_VERSION` stays **1** and `docs/MANIFEST.md` is now an **internal** format doc (the CC0 dedication on previously published versions stands and cannot be revoked).
-
-## Build & test
-
-```bash
-source .venv/bin/activate                 # Python 3.14
-pip install -r requirements-lock.txt      # pinned set — what CI installs
-pytest -q -n auto                         # ~937 tests; renders real posters/films, ~3 min
-uvicorn app.main:app --reload             # http://127.0.0.1:8000
-```
-
-- `requirements.txt` core · `-dev` test stack · `-lock` pinned (determinism/CI) · `-regionprep` the heavy offline build stack · `-share` imageio-ffmpeg for MP4 twins. To match CI exactly, add `pandas geopandas` and `-r requirements-share.txt` on top of the lock — CI installs them deliberately outside the lock so the region-prep and MP4 tests run instead of skipping.
-- **`.venv` matches that CI recipe exactly as of 2026-09-01** — the lock, then `pandas geopandas`, then `-r requirements-share.txt`, in that order. Verified: every lock pin exact, `pip check` clean, and the extras do **not** drag numpy forward. Rebuild it the same way or the versions will not be the ones the pins name.
-- **Never install the region-prep stack into `.venv`.** That is what caused the only drift this repo has had: `py3dep` and `pynhd` require numpy/scipy/rasterio, so installing them silently pulled all three past their pins (numpy 2.4.6→2.5.0, scipy 1.17.1→1.18.0, rasterio 1.4.4→1.5.0, and pillow *down* 12.3.0→12.2.0), and the venv stayed that way from ~2026-07-20 to 2026-09-01. The app imports none of that stack; it belongs in `.venv-prep`, which the in-app build spawns as a subprocess. Only `pandas` + `geopandas` (for the region-prep and hydro *tests*) belong in `.venv`.
-- `.venv-prep` is a **separate** venv for `region_prep.py`, spawned as a subprocess by in-app region builds. Without it, `/api/regions/plan` returns `prep_ready: false` and the UI shows the setup command instead of a Build button. Override with `TECOPA_PREP_PYTHON`.
-- **The venvs are interpreter-bound — check that first when Python breaks.** A dead venv reads as `no such file or directory` running `.venv/bin/python` even though `ls` lists it — the symlink resolves to a missing target. Rebuild with `python3.14 -m venv --clear .venv`, then reinstall the three-step CI recipe above. As of 2026-09-01 `.venv` is healthy and bound to the **python.org framework** build (`.venv/bin/python` → `/Library/Frameworks/Python.framework/Versions/3.14/bin/python3.14`, Python 3.14.2) — that framework had gone missing once, which is what this bullet was originally written about, and it is present again. Homebrew's `/opt/homebrew/bin/python3.14` is the other candidate; check which one the symlink actually resolves to rather than assuming either. **Rebuild in place; never rename a venv** — its console-script shebangs and `pyvenv.cfg` hold the absolute path, so a moved venv breaks `pip`/`pytest`/`uvicorn` while `bin/python` keeps working, which makes the breakage look unrelated.
-- Real 3DEP DEMs are gitignored; `tests/conftest.py` hydrates a tiny synthetic DEM per region so the suite runs on a fresh clone. **A synthetic DEM is useless for judging a poster by eye** — rebuild the real one first.
-- There is **no JS test runner.** For front-end work: `node --check` each edited module, cross-reference every `$('id')` against the HTML, then drive the real UI in a browser (synthetic `DragEvent` + `DataTransfer` works; click coordinates in headless don't).
-
-## Known local failures (green in CI, red on this Mac)
-
-Re-verified 2026-09-01 against `7457770`, on the real `lassen_ca` plate, after the venv rebuild: **8 failed, 928 passed, 1 skipped** in 3:10 under `-n auto`. Seven are the font item below; the eighth is the MP4 item, which now *runs* because `imageio-ffmpeg` is installed. Confirm any new failure against a clean checkout before chasing it — most of these are the host, not the code. **Compare the failure set, not the totals** — totals have moved three times (815 on 07-27, 793 on 08-13, 937 now) and only the named failures are the stable signal. The same commit on CI: **935 passed, 2 skipped, 0 failed**, so all eight are macOS-only.
-
-A warning the 07-27 run earned: two tests were coupled to the local plate being *wrong*, and both went red the moment the real DEM was restored — the pack-gate drift test inherited its drift from the ambient synthetic DEM instead of constructing it, and `label_place` turned out inert on real terrain at 13 pt type. Both fixed (`c81ca51`, `5c22096`). If a test only passes on a synthetic plate, it is testing the host.
-
-- **The `lassen_ca` DEM goes orphan on a pull — this recurs, it is not a past incident.**
-  `regions/*/dem.tif` is gitignored, every other plate asset is committed. A plate rebuilt
-  in a cloud container therefore ships its small assets to `main` and leaves the DEM
-  behind, and the next pull here pairs a NEW `region.json` with the OLD local DEM.
-  Happened on 2026-07-21 (`3e2b5e7`), and again on 2026-07-27 when pulling
-  `a6a93c2 → 5a0094e` re-orphaned it at 509.83 m drift. **After any pull touching
-  `regions/`, run `regions.discover()` → `readiness()` before trusting a render.**
-  Since 2026-09-01 the engine asks for you: every render verb refuses an orphaned
-  plate with a 503 that names the drift (`_ready_or_503` in `app/main.py`, no
-  override), the farm skips it, and `scripts/verify_regions.py` prints a geometry
-  row whose `ORPHAN` verdict is the one finding that needs the repair below.
-  To repair, call `region_prep.build_dem_cog` directly (with `plan_build`) rather than
-  `region_prep.main` — main refetches NHD/NLCD too, and upstream drift turns a
-  restoration into a new *plate version* (NHD already went 116 → 109 lakes once). Then
-  check the sha256 against `sources.json`; a match proves the exact plate is back. Done
-  2026-07-27: `20cec75c…`, 192,087,365 B, drift 0.0 m, every committed asset untouched.
-  **`build_dem_cog` does not write the sidecar** — `write_sources_manifest` is called
-  from `region_prep.main` and nowhere else, so this repair always leaves `sources.json`
-  describing the PREVIOUS bytes. `python scripts/verify_regions.py` reports the state in
-  ~0.6 s for all five plates (a script, not a test, on purpose — see its docstring), and
-  what it finds is a decision, not a cleanup:
-  - **sha256 matches** → you restored the exact plate. Nothing to do; the sidecar was
-    already true.
-  - **sha256 differs** → USGS re-tiled and you built a *new plate version*. **Leave the
-    sidecar alone.** The mismatch is the only surviving record that the plate was
-    swapped, and the poster-level truth is already covered elsewhere:
-    `provenance.region_pack_block` hashes every asset from disk at final time and
-    explicitly refuses to trust `sources.json`. To pack, use `pack_region --resync`,
-    which writes the true disk hashes into the ZIP's copy without mutating the source
-    dir. Never re-stamp `sources.json` to silence the gate — a manifest that re-syncs
-    itself can no longer detect the swap it exists to detect. And never re-stamp it by
-    re-running `write_sources_manifest`: its asset loop omits `playa.json` (four
-    sidecars record one) and it resets `built` to today.
-- **`ready: True` does not mean real terrain.** `tests/conftest.py` hydrates a tiny
-  synthetic DEM (tagged `synthetic=1`, 170–2000 m) for any plate lacking one, and those
-  match their own bounds exactly. Check the tag, not the flag, before judging a poster by
-  eye. As of 2026-08-16 **all five** plates carry real terrain here — `elko_bonneville`
-  (700.8 MB, 16096×11027), `lassen_ca` (192.1 MB, 6200×7719), `rifle_aspen`
-  (260.5 MB, 9533×6454), `susanville_reno` (257.2 MB, 6459×9977) and
-  `tushar_beaver_ut` (64.8 MB, 4074×3740). The count has moved twice (two real on
-  08-13, `susanville_reno` still synthetic on 07-27), so re-check the tag rather than
-  trusting this line.
-- **Four DEMs are rebuilt, not restored — `sources.json` drift on them is KNOWN and
-  deliberate.** Diagnosed 2026-08-17. `lassen_ca` is the only plate whose DEM matches
-  its sidecar, because 2026-07-27 restored its exact bytes; the other four were rebuilt
-  (three of them in one batch on 2026-08-15, 21:02–21:20) via the orphan repair above,
-  which never re-runs the sidecar writer. Only `dem.tif` drifted — every committed asset
-  in all five regions is byte-identical — and geometric drift is **0.000 m** on all five
-  (same CRS, shape, resolution, bounds), so no poster is affected. USGS re-tiles 3DEP,
-  so the recorded bytes cannot be reproduced. Superseded → current:
-
-  | region | recorded (superseded) | on disk now | Δ bytes |
-  |---|---|---|---|
-  | `elko_bonneville` | `576ab5d6…` 703,568,015 | `0cd7733e…` 700,753,827 | −2,814,188 |
-  | `rifle_aspen` | `93840989…` 260,294,107 | `84d4bcc1…` 260,475,433 | +181,326 |
-  | `susanville_reno` | `46d9d174…` 256,622,855 | `daedb832…` 257,191,595 | +568,740 |
-  | `tushar_beaver_ut` | `18d721ff…` 64,638,737 | `b506c35b…` 64,760,003 | +121,266 |
-
-  Full digests are in the commit that added this table. **Do not "fix" this drift.**
-  Nothing is blocked by it: `plates/` has never existed, no plate has ever been packed,
-  and `pack_region --resync` is the designed path when one is. Re-stamping would delete
-  the only evidence the swap happened.
-- ~~the orphan drill~~ — deleted 2026-07-27 with the forever-contract (its last run on
-  real terrain, 2026-07-27, passed). The `serial` pytest tier died with it.
-- **Seven** label / bleed / oblique tests — all *marginally* over a MAD threshold (3.53 / 3.49 / 3.07 vs a limit of 3.0). `render.py`'s font chain prefers `Georgia.ttf`, which **is** installed here but absent on CI's Ubuntu, where it falls back to DejaVu; the thresholds appear tuned to DejaVu metrics. Set `TECOPA_FONT` to test it. The exact set as of 2026-08-13, so a future run can diff against it rather than re-derive it:
-  ```
-  test_base_cache.py::test_phase2_serves_the_knobs_phase1_could_not[label_place-anchor]
-  test_bleed.py::test_full_bleed_render_keeps_furniture_off_the_bleed_band
-  test_labels.py::test_label_placement_is_a_faithful_scale_across_dpi
-  test_labels.py::test_diagonal_range_is_dpi_stable
-  test_oblique.py::test_oblique_proof_is_a_faithful_scale_of_final
-  test_oblique.py::test_oblique_summit_marker_stays_glued
-  test_smart_labels_and_weave.py::test_smart_labels_are_dpi_stable
-  ```
-  The `label_place-anchor` case is the seventh and arrived with the 2026-08-10 pull; it was confirmed pre-existing by re-running all seven against `c44415c` with `app/relief.py` reverted, where they fail identically.
-- `test_mp4_twin_is_tagged_bt709` — no `colr` box in the MP4. Not version drift: the bundled ffmpeg **binary** is platform-specific, and it writes the tag on CI's Linux but not on this Mac. **It runs here as of 2026-09-01** — installing `-r requirements-share.txt` turned the old 6 skips into 5 running tests (4 green, this one red) plus 1 remaining skip, and that skip is deliberate: `test_timelapse.py:423` skips *because* the share extra is present and the API-level 422 case monkeypatches instead. Accepting one known-red macOS test is the deliberate trade for actually exercising the MP4 path locally.
-
-## macOS app
-
-`scripts/macos/build_app.sh --install` builds a double-clickable **Tecopa Plateworks.app** into `/Applications`. It runs the engine *from this repo's* `.venv` on port 8848, so `git pull` updates it with no rebuild — rebuild only if the repo moves or the launcher itself changes. Logs to `~/Library/Logs/TecopaPlateworks.log`; verify with `scripts/macos/smoke_test.sh` (needs a human: it raises one-time Documents and Automation prompts). `CFBundleIdentifier` is `guide.badwater.tecopa` — name-neutral, so rebrands don't make macOS see a new app or re-prompt.
-
-## Regions ("plates")
-
-Five built: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. The region is an **outcome, not a first step** — tracks are dropped first, and if no built plate covers them, `/api/regions/plan` → `/api/regions/build` bakes one from USGS 3DEP on a dedicated single-slot queue. US-only, and corridor-scale areas are refused honestly in-app.
-
-Gotchas already paid for:
-
-- **Python 3.14 only** on this Mac.
-- **NHD SSL:** `region_prep.py` sets `SSL_CERT_FILE` from `certifi` at the very top, *before* importing py3dep/pynhd (aiohttp captures SSL config at import), and fetches hydro **before** the DEM. Keep that ordering if you add network code.
-- **py3dep returns EPSG:5070 in metres, not 4326.** `plan_build` sizes the job before any fetch so a corridor-scale bbox can't OOM the build (the 15.8 GB lesson).
-- `regions/*/dem.tif` and `cache/` are gitignored; `region.json` / `overview.png` / `hydro.json` / `landcover.tif` **are** committed.
-- For out-of-plate test coordinates use Virginia (~-79.5, 37.8) — `elko_bonneville` is corridor-scale and swallows most "obviously outside" western points.
-
-## Guardrails
-
-- **Deliberately out of scope** (`docs/scope.md`): social features, cloud sync and accounts, fitness metrics, route planning or live tracking, and track editing. The app looks backward and renders what happened; it does not revise it.
-- **Licensing:** code is **AGPL-3.0-or-later**; region plates and the manifest schema are **CC0-1.0**; the name and branding are covered by neither. Keep relicensing power intact — the first outside contribution needs a DCO sign-off or CLA.
-- **Marketing honesty:** every marketing image is rendered by the engine (`scripts/render_asset_farm.py`), never a mockup. Every claim must have a test behind it — the claims register in the branding plan is the whitelist. Plates are free, always. **And the render must be of real country:** the farm stamps the DEM it opened into `assets/index.json` (`terrain: {synthetic, sha256, bytes}`) and `marketing/build_deploy.py` refuses, per published region, anything synthetic or unrecorded. A synthetic stand-in renders *cleanly*, so nothing else can tell. See `marketing/DEPLOY.md` § The terrain guard.
-- **Vocabulary:** plate (not region/dataset), proof (not preview), edition (not update), share copy (not privacy mode), the save file (not your data). Customer-facing copy also answers to the **Collector's register** — canon in `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, gated by `tests/test_marketing_page.py`. Read the spec before you edit landing copy; a wording change alone can turn those tests red.
-- **Workflow:** TDD, granular present-tense commits explaining the *why*, and an adversarial review pass after each substantial component — that practice caught ~15 real bugs in one session, including a 90°-rotated hillshade. Cloud sessions land on `claude/*` branches and reach `main` by squash-merged PR; the Mac commits to `main` directly, only when green. For session logs, use § Session logging below.
-
-## Map of the repo
-
-| Path | What |
+| Changing | Read first |
 |---|---|
-| `app/geo.py` | every coordinate conversion — the registration source of truth |
-| `app/ingest.py` | GPX/KML/KMZ → reproject → simplify → clean polylines |
-| `app/density.py` | visitation-weighted hotspots (distinct tracks, not points) |
-| `app/spec.py` | the `CompositionSpec` contract + zoom-cap validation |
-| `app/relief.py` | pure-numpy relief passes — **the tuning surface** |
-| `app/render.py` | paint relief + water + tracks + markers + labels in physical units |
-| `app/basecache.py` | the proof loop's byte-budgeted LRU, backing two layers — what may be reused is `render.base_cache_key` (terrain) and `render.ink_cache_key` (route ink) |
-| `app/provenance.py` | the manifest; `spec_from_manifest` is the one untrusted door |
-| `app/solar.py` | NOAA/Meeus solar position for Journey Light |
-| `app/timelapse.py`, `app/wallpaper.py`, `app/mockups.py` | the film, device/social presets, marketing renders |
-| `app/regionbuild.py`, `app/regions.py`, `app/plates.py` | GPX-first region creation, the registry, the plate installer/verifier |
-| `app/main.py` | the FastAPI endpoints |
-| `app/static/` | the single-window studio (~22 ES modules; `app.js` routes, `viewer.js` owns proof zoom/pan, `statusbar.js` the truth line) |
-| `region_prep.py` | offline DEM/hydro/landcover bake — run in `.venv-prep` |
-| `marketing/` | the landing page for `tecopa.plateworks.org` — `landing.html`, `build_deploy.py` (the manual deploy and the terrain guard), `DEPLOY.md` (the runbook) |
-| `docs/scope.md`, `docs/MANIFEST.md`, `docs/marketing.md` | the goal, the CC0 file format, the story |
-| `docs/superpowers/` | `specs/` `plans/` `assessments/` `handoffs/` `quality/golden/` — the design record |
+| Anything, for the first time | `README.md`, then `docs/architecture.md` |
+| A venv, Python, a new machine | Set up a machine |
+| The tests, a Mac-only failure | Run the tests |
+| A pull touching `regions/`, a 503 naming drift | Repair an orphaned DEM |
+| A plate, `region_prep.py`, labels, playa | `docs/superpowers/specs/2026-07-19-gpx-first-region-creation-design.md`, then Build a new plate |
+| A relief technique | `docs/relief-passes.md` (its corrections blockquote governs), then Add a relief technique |
+| What the product is for, what stays out | `docs/scope.md` |
+| A spec field, `STYLE_BOUNDS`, `app/static/controls.js` | Add a spec knob or studio control |
+| The manifest, a verb that reads a file | `docs/MANIFEST.md`, then Change the manifest or add a file-consuming verb |
+| `engine_version`, `spec_from_json`, a reprint promise | `docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md` |
+| A font or type role | Bind fonts per role, then `00_Resources/typography-standards.md` |
+| Anything under `app/static/` | Work on the studio front end |
+| The farm, the landing page, Netlify | `marketing/DEPLOY.md`, then Add a region to the farm and deploy the landing page |
+| A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
+| The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` |
+| The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
+| Blender | Render a hero plate |
+| A past decision | `docs/decisions.md` |
+| Machine state, a trap a session hit | `docs/superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md`, then `git log` |
+| How this repo is documented | `docs/superpowers/specs/2026-09-08-documentation-layout-design.md` |
+
+## Invariants
+
+1. **One spec, painted at many sizes.** Compose decides the picture once in ground coordinates; rasterize paints it at any size. Region data stays in the region dir, never on the spec.
+2. **Physical units, never pixels.** A pixel-sized element looks bold in the proof and vanishes in the final.
+3. **Determinism within a build.** Same spec, seed, and build give identical bytes, so the proof predicts the print.
+4. **One projection, the region CRS metres.** Tracks are reprojected on arrival.
+5. **`app/geo.py` is the only coordinate source.** Prove the chain before tuning looks.
+6. **The zoom cap at the final dpi.** A 422 on a large print of a small plate is correct.
+7. **The forever-contract is retired.** `engine_version` records cross-build drift. No new revs, and never reintroduce omit-at-default. `serialize.spec_from_json` stays read-tolerant. A plate mismatch refuses with 422 unless `allow_plate_mismatch=true`. A relief pass is a no-op at its pre-feature default.
+8. **`provenance.spec_from_manifest` is the one untrusted-manifest door.** Every verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect` is the exception: it builds no spec.
+9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` and the bundle id are name-neutral.
+10. **Never commit a font.** The repo is public and MB Type is licensed. `.gitignore` blocks font files (commit 39ad08c).
+11. **Marketing honesty.** Every marketing image is an engine render of real country: `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test. Plates are free.
+12. **Never re-stamp `sources.json`** to silence the drift gate. The mismatch is the only record that a plate was swapped.
+13. **Two venvs.** Never install the region-prep stack into `.venv`: it pulled numpy, scipy and rasterio past their pins for six weeks. `region_prep.py` runs in `.venv-prep`.
+14. **Words.** Tecopa Plateworks in full, never bare Plateworks. Plate, proof, edition, share copy, save file.
+15. **License.** Code AGPL-3.0-or-later, plates and the manifest schema CC0-1.0, the name under neither. An outside contribution needs a DCO sign-off or a CLA.
+
+## Working here
+
+- `.venv/bin/python -m pytest -n auto -m "not slow" -q` before any claim of done, the full suite before a push to `main`. Compare the failure set, not the totals.
+- `ready: True` does not mean real terrain: `tests/conftest.py` hydrates a synthetic DEM. After a pull touching `regions/`, run `.venv/bin/python scripts/verify_regions.py`.
+- No JS test runner. `node --check` each module, match every `$('id')` to the HTML, drive the browser.
+- Only the landing page deploys, by hand. FastAPI auto-docs are off (commit a3d4ba9).
+- TDD, and granular present-tense commits that say why. Cloud sessions squash-merge from `claude/**`; the Mac commits to `main` only when green.
+- `tests/test_docs.py` holds this file under 2,000 tokens.
 
 ## Session logging
 
-Log sessions to the Notion **Session Log** database. This is written here, in the repo, on purpose: a cloud container clones only this repo, so a convention that lives in the workspace CLAUDE.md or a Mac-local skill never reaches it. Everything needed is below — no other file required.
+Log sessions to the Notion **Session Log** database. Inlined because a cloud container clones only this repo.
 
 - Parent: `{"type": "data_source_id", "data_source_id": "60f3ea17-4424-4815-8a4b-6a4d4de61c4f"}`
-- `Session Title` (title) and `date:Date:start` (ISO date — note the expanded property name, not `Date`)
-- `Repo` — relation. **This repo is** `["https://app.notion.com/p/3a44f171f472818782c1c9dbb2b6547a"]`
-- `Activity` — build | fix | research | write | ops | plan
-- `Status` — Complete | In Progress | Blocked
-- `Shipped` — checkbox (`"__YES__"`) for deploys and launches
-- `Tags` — JSON array **encoded as a string**, not a native array. It is a
-  constrained multi-select. A value outside the allowed set fails the whole write
-  with a `validation_error`. Allowed today: `skill development`, `Notion`,
-  `admin`, `Human Design`, `coaching`, `writing`, `DMIHC`, `Claude`,
-  `Ghost CMS`, `SEO`, `Tecopa Plateworks`. Pick from these; do not invent one. If
-  none fit, omit `Tags`. A missing tag costs nothing; an invented one loses the
-  whole log.
+- `Session Title` (title) and `date:Date:start` (ISO date)
+- `Repo`: relation. **This repo is** `["https://app.notion.com/p/3a44f171f472818782c1c9dbb2b6547a"]`.
+- `Activity`: build | fix | research | write | ops | plan
+- `Status`: Complete | In Progress | Blocked
+- `Shipped`: checkbox (`"__YES__"`) for deploys and launches
+- `Tags`: a JSON array **encoded as a string**, a constrained multi-select. Use `Tecopa Plateworks`. An invented value fails the whole write.
 - `Quarter` computes itself from Date. Never set it by hand.
 
 Body sections: What We Did / Open Threads / Next Steps / Notes.
 
-Also open a **Threads** record for work deliberately left unfinished, and a **Decisions** record for any durable choice that will constrain future work.
+Open a **Threads** record for work left unfinished and a **Decisions** record for any durable choice, both related to the session page. A Notion decision also gets a row in `docs/decisions.md`.
 
-**If Notion is unreachable** — no connector attached in this container, or offline — append the entry to this repo's own `SESSION_LOG.md` (newest first, append-only, never rewrite history) and say so plainly in the closing summary. Confirm the Notion write returned a page ID before reporting the log as done. A log that silently doesn't happen is the failure this fallback exists to prevent.
+- **Threads**: data source `a6971fe4-6e13-4699-a0c3-3f23d5d8b552`. `Thread` (title), `Status` (Open | Closed | Dropped), `date:Opened:start`, `Opened in`. Closing one also needs `date:Closed:start`, `Closed in`, and `Resolution`. Close the threads this session resolved.
+- **Decisions**: data source `d6449689-97bd-4b10-9dc7-5d7a3d6b64f5`. `Decision` (title), `Status` (Proposed | Accepted | Superseded), `date:Date:start`, `Context`, `Consequences`, `Made in`. Never delete one. Supersede it and link `Supersedes` / `Superseded by`.
+
+**If Notion is unreachable**, append the entry to `SESSION_LOG.md` here (newest first, append-only) and say so in the closing summary. Confirm the write returned a page ID before reporting the log as done.

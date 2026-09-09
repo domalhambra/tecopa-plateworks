@@ -91,7 +91,7 @@ the guard working — re-render rather than reaching for the override.
 
 ```bash
 cd "<repo>"
-./.venv/bin/python scripts/render_asset_farm.py --regions lassen_ca   # real DEM; see CLAUDE.md
+./.venv/bin/python scripts/render_asset_farm.py --regions lassen_ca   # real DEM; see ../docs/changing-things.md
 python3 marketing/build_deploy.py                                     # writes the staged root
 export NETLIFY_AUTH_TOKEN=$(cat ~/.config/netlify/token)
 netlify deploy --prod --dir=<staged root> --site=1902a58d-74a9-4def-8b4e-d93793f81ac4
@@ -104,7 +104,8 @@ Verify: `curl -sI https://tecopa.plateworks.org` → `HTTP/2 200`, every
 ## Gotchas paid for
 
 - **`--regions lassen_ca` needs the real DEM.** `regions/lassen_ca/dem.tif` is
-  gitignored and goes orphan on a pull; see CLAUDE.md's "Known local failures".
+  gitignored and goes orphan on a pull; see "Repair an orphaned DEM" in
+  `../docs/changing-things.md`.
   A synthetic plate renders a poster that is wrong to show a customer — which
   the terrain guard above now refuses rather than trusts you to remember.
 - **Netlify's cert is slow and its API lies about it.** `POST /sites/<id>/ssl`

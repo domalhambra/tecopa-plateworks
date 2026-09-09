@@ -276,7 +276,7 @@ def _not_ready_detail(report: dict) -> str:
     """One humanized sentence per Region.readiness() failure. The prefix is a contract
     the studio's truth line and the tests both read; keep it."""
     rid = report.get("id", "?")
-    fix = " Run scripts/verify_regions.py, then the orphan repair in CLAUDE.md."
+    fix = " Run scripts/verify_regions.py, then Repair an orphaned DEM in docs/changing-things.md."
     if not report.get("dem_present"):
         return f"Plate {rid} can't render: its DEM is missing on this machine.{fix}"
     if report.get("error"):
@@ -292,8 +292,8 @@ def _not_ready_detail(report: dict) -> str:
 def _ready_or_503(region):
     """The DEM geometry gate. A plate is handed to a verb only when its DEM on disk
     matches its region.json (Region.readiness(): present, bounds within 1.5 px, same
-    CRS). The failure this catches is the pull orphan (CLAUDE.md § Known local
-    failures): a rebuilt plate ships region.json to main while the gitignored DEM stays
+    CRS). The failure this catches is the pull orphan (docs/changing-things.md,
+    Repair an orphaned DEM): a rebuilt plate ships region.json to main while the gitignored DEM stays
     behind, and the old terrain paints under the new bounds with no error. /readyz has
     reported it since v1; nothing refused on it until now. Deliberately no override --
     unlike a rebuilt-plate hash mismatch, a misregistered DEM has no honest render.
