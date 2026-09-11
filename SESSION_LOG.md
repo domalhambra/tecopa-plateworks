@@ -1,5 +1,7 @@
 # Session Log
 
+This file ended when the log moved to Notion. From 2026-09-10 the record continues in the repo `plateworks-session-log`.
+
 Fallback record of Cowork sessions for this repo, used when the Notion **Session Log**
 database (see `CLAUDE.md` → *Session logging*) is unreachable from the container. Newest
 first, append-only — never rewrite history. Backfill these into Notion when a connector
