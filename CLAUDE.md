@@ -60,8 +60,10 @@ Unnamed sections below are in `docs/changing-things.md`.
 
 ## Session logging
 
-Log every session to the repo `plateworks-session-log`. Clone it beside this
-one if it is not present. Its convention file, CONVENTION.md, is
+Log every session to the repo `plateworks-session-log`. On Dom's Mac it is
+checked out at `00-09 System/04 Session Log/` in the workspace; elsewhere,
+clone it beside this one if it is not present. Its convention file,
+CONVENTION.md, is
 self-contained: format, tag set, and procedure. If the repo is unreachable,
 append the entry to `SESSION_LOG.md` here under a heading saying it belongs in
 the log repo, and say the push is pending.

@@ -114,7 +114,8 @@ Red-team passes and viability studies. Each is a dated record.
 
 ## Canon that lives outside this repo
 
-In the Badwater OS workspace under `00_Resources/`, one folder up on Dom's Macs.
+In the Plateworks OS workspace, at `../../00-09 System/00 Resources/` from this repo on Dom's Mac;
+quoted here as `00_Resources/` by convention.
 
 | Document | Governs |
 |---|---|

@@ -3,7 +3,7 @@
 `docs/README.md` must list every document under `docs/`, every path the guide
 and the docs quote must exist, and `CLAUDE.md` must stay under its token
 budget. The check itself is `scripts/docs_check.py`, vendored byte for byte
-from Badwater OS; this test only runs it. The standard is
+from Plateworks OS; this test only runs it. The standard is
 00_Resources/documentation-standard.md.
 
 The test is fast and pure: it reads Markdown and walks the tree. It renders
