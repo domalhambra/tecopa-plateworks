@@ -192,6 +192,8 @@ never from git, because its images are engine renders under `assets/` (gitignore
 
 1. `.venv/bin/python scripts/render_asset_farm.py --regions <ids>` on real DEMs. The
    farm stamps the terrain it opened into `assets/index.json`.
+   `elko_bonneville` needs its own run with `--dpi 250`: at the default 300 dpi its
+   poster is 160 MP and the 120 MP output ceiling refuses it.
 2. `python3 marketing/build_deploy.py` writes the staged root. The terrain guard refuses
    any published region whose record is synthetic or missing. Never weaken it: a
    synthetic plate renders cleanly, so nothing else can tell. The guard does carry an
