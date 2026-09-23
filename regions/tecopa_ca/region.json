@@ -1,0 +1,24 @@
+{
+  "id": "tecopa_ca",
+  "name": "Tecopa, California",
+  "crs": "EPSG:32611",
+  "bounds": [
+    552560.0,
+    3938020.0,
+    602780.0,
+    4019540.0
+  ],
+  "overview_size": [
+    862,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 82.77114868164062,
+  "elevation_max": 1814.81787109375,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}
