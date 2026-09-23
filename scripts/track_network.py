@@ -69,11 +69,21 @@ SELECT_INSET_FRAC = 0.12
 # plate's SHORT side instead makes a day out read as a day out at any scale.
 TRIP_SPAN_FRAC = (0.06, 0.18)  # trailhead->destination, as a fraction of that side
 TRIP_SPAN_MIN_M = 2_000.0     # ...clamped: a small plate still needs a real walk
-TRIP_SPAN_MAX_M = 45_000.0    # ...and elko_bonneville, whose SHORT side is
-                              # 331 km, would otherwise ask for up to 60 km
-                              # (0.18 x 331). Measured off min(), not the
-                              # 483 km long axis -- that is what trip_target_m
-                              # scales on.
+TRIP_SPAN_MAX_M = 45_000.0    # ...and a guard. It was written for
+                              # elko_bonneville (331 km short side, which would
+                              # ask for 60 km at 0.18), but elko is a corridor
+                              # plate now with its own cap. Below the corridor
+                              # threshold the ask tops out at 27 km, so this
+                              # binds only if CORRIDOR_SHORT_SIDE_M is raised.
+# Corridor plates tell a drive, not a day hike (Dom, 2026-09-23). On a plate this
+# wide a day-out trip reads as a dot, and eight of them read as noise, so the
+# composer asks for fewer, longer journeys instead. Measured off the SHORT side,
+# like trip_target_m: only elko_bonneville (331 km) qualifies; the next largest
+# plate, susanville_reno, has a 65 km short side.
+CORRIDOR_SHORT_SIDE_M = 150_000.0
+CORRIDOR_TRIPS = 5
+CORRIDOR_SPAN_FRAC = (0.10, 0.20)
+CORRIDOR_SPAN_MAX_M = 60_000.0
 WEIGHTS = {                   # class-weighted edge costs (spec §2)
     "outing":   {"trail": 0.6, "4wd": 0.7,  "road": 1.5},
     "approach": {"trail": 1.3, "4wd": 1.0,  "road": 0.7},
@@ -378,14 +388,30 @@ def road_vertex_index(g: Graph):
     return keys, np.array(keys, dtype=float)
 
 
+def _short_side_m(bounds: tuple) -> float:
+    w, s, e, n = bounds
+    return min(abs(e - w), abs(n - s))
+
+
+def _is_corridor(bounds: tuple) -> bool:
+    return _short_side_m(bounds) >= CORRIDOR_SHORT_SIDE_M
+
+
+def trip_count(bounds: tuple) -> int:
+    """How many journeys the plate composes: fewer on a corridor plate."""
+    return CORRIDOR_TRIPS if _is_corridor(bounds) else 8
+
+
 def trip_target_m(bounds: tuple, rng) -> float:
     """How far from its destination this trip should start, in metres, scaled
-    to the plate's short side and clamped. See TRIP_SPAN_FRAC."""
-    w, s, e, n = bounds
-    short = min(abs(e - w), abs(n - s))
-    lo, hi = TRIP_SPAN_FRAC
-    return float(np.clip(rng.uniform(lo, hi) * short,
-                         TRIP_SPAN_MIN_M, TRIP_SPAN_MAX_M))
+    to the plate's short side and clamped. See TRIP_SPAN_FRAC, and
+    CORRIDOR_SPAN_FRAC for the longer ask on a corridor plate."""
+    short = _short_side_m(bounds)
+    if _is_corridor(bounds):
+        (lo, hi), cap = CORRIDOR_SPAN_FRAC, CORRIDOR_SPAN_MAX_M
+    else:
+        (lo, hi), cap = TRIP_SPAN_FRAC, TRIP_SPAN_MAX_M
+    return float(np.clip(rng.uniform(lo, hi) * short, TRIP_SPAN_MIN_M, cap))
 
 
 def _trailhead_for(index, dest_node: tuple, target: float, rng, centre=None):
@@ -443,16 +469,24 @@ def _trailhead_for(index, dest_node: tuple, target: float, rng, centre=None):
     return keys[int(rng.choice(cand))]
 
 
-def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
+def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None = None):
     """The year of trips: seeded, deterministic from (ways, plate files, seed)
-    alone. Returns (tracks, spots) ready for the farm."""
+    alone. Returns (tracks, spots) ready for the farm. `n_trips` defaults to
+    the plate's own count (see trip_count)."""
     from app.ingest import Track          # local: the graph half of this module
                                           # must stay importable without the engine
     rng = np.random.default_rng(seed)
     g = build_graph(ways)
     bounds = tuple(region.cfg["bounds"])
+    if n_trips is None:
+        n_trips = trip_count(bounds)
     pool = destination_pool(region.dir, g)
-    dests = select_destinations(pool, bounds, n_trips, rng)
+    # The WHOLE pool, in selection order: the first n_trips are exactly the picks
+    # an n_trips-sized call returns (the rng is drawn once, for the start, and the
+    # greedy order is prefix-stable), and the rest are the replacements an
+    # unreachable pick falls through to. A plate that loses no destination
+    # therefore composes the same trips it always did.
+    dests = select_destinations(pool, bounds, len(pool), rng)
     index = road_vertex_index(g)           # built once: see road_vertex_index
     centre = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
     spacing = densify_spacing_m(region.cfg)
@@ -460,11 +494,14 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
     year = 2024
     trips = []
     # A destination in a different connected component than its trailhead routes
-    # to None and is skipped. Correct but silent, and on a clipped OSM extract it
-    # quietly thins the trip list -- so count and report rather than shipping a
-    # poster with three journeys where eight were intended.
+    # to None. On a clipped OSM extract that is real topology (a pocket of trails
+    # no road reaches), so the next candidate in selection order takes its place.
+    # Only when the pool runs out does the poster ship thinner -- and then it
+    # says so rather than shipping seven journeys where eight were intended.
     skipped = 0
     for seq, d in enumerate(dests):
+        if len(trips) == n_trips:
+            break
         target = trip_target_m(bounds, rng)
         th = _trailhead_for(index, d["node"], target, rng, centre=centre)
         if th is None:                     # empty graph: nothing to route over
@@ -505,8 +542,11 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int = 8):
         trips.append((day, seq, d, _densify(raw, rng, spacing), raw))
 
     if skipped:
-        print(f"  tracks: {skipped} of {len(dests)} destinations unreachable "
-              f"from their trailhead (disconnected network) -- skipped")
+        print(f"  tracks: {skipped} destination(s) unreachable from their "
+              f"trailhead (disconnected network) -- replaced from the pool")
+    if len(trips) < n_trips:
+        print(f"  tracks: pool exhausted -- composed {len(trips)} of {n_trips} "
+              f"journeys; the rest were unreachable")
 
     # The manifest budget. ONLY a plate that would break it is touched, so every
     # plate already inside keeps its exact seeded geometry -- that is what makes

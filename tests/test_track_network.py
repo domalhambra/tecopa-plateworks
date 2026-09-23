@@ -11,8 +11,10 @@ from scripts import track_network
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
                                     dijkstra_edges, network_tracks,
                                     path_edge_ids, road_vertex_index,
-                                    select_destinations, trip_target_m,
-                                    densify_spacing_m,
+                                    select_destinations, trip_count,
+                                    trip_target_m, densify_spacing_m,
+                                    CORRIDOR_SHORT_SIDE_M, CORRIDOR_SPAN_FRAC,
+                                    CORRIDOR_SPAN_MAX_M, CORRIDOR_TRIPS,
                                     BYTES_PER_POINT, DENSIFY_PX, JITTER_M,
                                     MAX_TOTAL_POINTS, MAX_TRACK_POINTS,
                                     POINT_SPACING_M, SEASONS, SELECT_INSET_FRAC,
@@ -575,11 +577,12 @@ def test_trip_target_scales_to_the_plate_and_clamps():
     assert all(t == TRIP_SPAN_MIN_M
                for t in (trip_target_m((0.0, 0.0, 5_000.0, 5_000.0), rng)
                          for _ in range(20)))
-    # elko_bonneville's real shape: a 331 km short side asks 19.8-59.5 km,
-    # so the ceiling must cap it. (The long axis is 483 km, but trip_target_m
-    # scales off min(), which is why the ask is 60 km and not 87.)
-    assert max(trip_target_m((0.0, 0.0, 482_900.0, 330_800.0), rng)
-               for _ in range(200)) == TRIP_SPAN_MAX_M
+    # elko_bonneville's real shape (331 km short side) is a corridor plate
+    # now, with its own span and cap: test_a_corridor_plate_asks_for_longer_trips.
+    # The day-out ceiling still clamps the largest non-corridor plate.
+    below = CORRIDOR_SHORT_SIDE_M - 1.0
+    assert max(trip_target_m((0.0, 0.0, 2 * below, below), rng)
+               for _ in range(200)) <= TRIP_SPAN_MAX_M
 
 
 def test_road_vertex_index_covers_only_road_touching_vertices():
@@ -1511,3 +1514,114 @@ def test_class_counts_names_all_three_classes_even_at_zero():
     to say so rather than omitting the key."""
     assert fetch_net.class_counts([{"class": "road", "coords": []}]) == {
         "road": 1, "4wd": 0, "trail": 0}
+
+
+# ---- disconnected pockets: an unreachable destination is replaced ------------------
+# susanville_reno, rifle_aspen and tushar_beaver_ut each composed 7 journeys where 8
+# were intended: one pick sat in a different connected component of the clipped OSM
+# extract than every trailhead. The composer now walks on to the next candidate in
+# selection order instead of shipping a thinner poster.
+
+def _pocket_region(tmp_path):
+    """_big_network plus one summit on an isolated trail no road touches: a pocket
+    the snap accepts (it is on the network) but no trailhead can ever reach."""
+    import json
+    ways, feats = _big_network()
+    w, s, e, n = BOUNDS
+    cx, cy = w + 0.5 * (e - w), s + 0.3 * (n - s)
+    ways.append({"class": "trail", "coords": _densify_path(
+        [[cx - 600.0, cy], [cx, cy + 400.0]])})
+    feats.append({"name": "Pocket Summit", "kind": "summit", "rank": 70,
+                  "coords": [[cx, cy + 400.0]]})
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "x", "features": feats}))
+    (tmp_path / "hydro.json").write_text(json.dumps({"crs": "x", "lakes": [],
+                                                     "rivers": []}))
+    r = _StubRegion(tmp_path)
+    return r, ways
+
+
+def _pocket_first(monkeypatch, r, ways):
+    """Force selection order to lead with the pocket, so the retry is exercised on
+    every run instead of only on seeds whose draw happens to reach it."""
+    pool = destination_pool(r.dir, build_graph(ways))
+    pocket = [d for d in pool if d["name"] == "Pocket Summit"]
+    assert pocket, "fixture broken: the pocket summit did not snap to the network"
+    rest = [d for d in pool if d["name"] != "Pocket Summit"]
+    monkeypatch.setattr(track_network, "select_destinations",
+                        lambda pool, bounds, n, rng: pocket + rest)
+    return len(pool)
+
+
+def test_an_unreachable_destination_is_replaced_from_the_pool(tmp_path, monkeypatch):
+    r, ways = _pocket_region(tmp_path)
+    _pocket_first(monkeypatch, r, ways)
+    tracks, spots = network_tracks(r, ways, seed=7, n_trips=8)
+    assert len(tracks) == 8 and len(spots) == 8
+    assert "Pocket Summit" not in {s["label"] for s in spots}
+
+
+def test_an_exhausted_pool_still_says_so(tmp_path, monkeypatch, capsys):
+    r, ways = _pocket_region(tmp_path)
+    size = _pocket_first(monkeypatch, r, ways)
+    tracks, _ = network_tracks(r, ways, seed=7, n_trips=size)
+    assert len(tracks) == size - 1
+    out = capsys.readouterr().out
+    assert "unreachable" in out and f"{size - 1} of {size}" in out
+
+
+def test_the_retry_leaves_a_fully_connected_plate_unchanged(tmp_path):
+    """The retry must not move a poster Dom approved. lassen_ca and elko_bonneville
+    lose no destination, so they must compose exactly the first n picks the old
+    code took. select_destinations draws from the rng once (its start), and its
+    greedy order is prefix-stable, so asking for the whole pool keeps those n."""
+    import json
+    ways, feats = _big_network()
+    (tmp_path / "labels.json").write_text(json.dumps({"crs": "x", "features": feats}))
+    (tmp_path / "hydro.json").write_text(json.dumps({"crs": "x", "lakes": [],
+                                                     "rivers": []}))
+    r = _StubRegion(tmp_path)
+    pool = destination_pool(r.dir, build_graph(ways))
+    for seed in range(10):
+        want = select_destinations(pool, BOUNDS, 8, np.random.default_rng(seed))
+        _, spots = network_tracks(r, ways, seed=seed, n_trips=8)
+        assert {s["label"] for s in spots} == {d["name"] for d in want}, seed
+
+
+# ---- corridor plates: fewer, longer journeys ----------------------------------------
+# Dom's call, 2026-09-23: on a corridor-scale plate the demo tells a Great Basin
+# drive, not a day hike. Only elko_bonneville (331 km short side) qualifies today.
+
+def test_only_a_corridor_plate_composes_fewer_journeys():
+    assert trip_count((0.0, 0.0, 482_900.0, 330_800.0)) == CORRIDOR_TRIPS   # elko
+    assert trip_count((0.0, 0.0, 95_000.0, 65_000.0)) == 8                  # rifle
+    edge = CORRIDOR_SHORT_SIDE_M
+    assert trip_count((0.0, 0.0, 2 * edge, edge)) == CORRIDOR_TRIPS
+    assert trip_count((0.0, 0.0, 2 * edge, edge - 1.0)) == 8
+    assert CORRIDOR_TRIPS < 8
+
+
+def test_a_corridor_plate_asks_for_longer_trips():
+    rng = np.random.default_rng(0)
+    elko = [trip_target_m((0.0, 0.0, 482_900.0, 330_800.0), rng) for _ in range(300)]
+    lo, _hi = CORRIDOR_SPAN_FRAC
+    assert min(elko) >= lo * 330_800.0
+    assert max(elko) == CORRIDOR_SPAN_MAX_M > TRIP_SPAN_MAX_M
+    # just under the threshold the plate keeps the day-out lengths and cap
+    below = CORRIDOR_SHORT_SIDE_M - 1.0
+    near = [trip_target_m((0.0, 0.0, 2 * below, below), rng) for _ in range(300)]
+    assert max(near) <= TRIP_SPAN_MAX_M
+
+
+def test_network_tracks_defaults_to_the_plate_trip_count(tmp_path, monkeypatch):
+    """n_trips left unset resolves through trip_count, so the farm (which never
+    passes it) gets five journeys on elko and eight everywhere else."""
+    r, ways = _pocket_region(tmp_path)
+    seen = []
+    real = track_network.trip_count
+    monkeypatch.setattr(track_network, "trip_count",
+                        lambda b: seen.append(b) or real(b))
+    tracks, _ = network_tracks(r, ways, seed=7)
+    assert seen == [tuple(BOUNDS)] and len(tracks) == 8
+    monkeypatch.setattr(track_network, "trip_count", lambda b: 3)
+    tracks, _ = network_tracks(r, ways, seed=7)
+    assert len(tracks) == 3
