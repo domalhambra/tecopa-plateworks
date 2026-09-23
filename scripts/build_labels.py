@@ -12,10 +12,16 @@ region without a rebuild.
     python scripts/build_labels.py                 # every region under regions/
     python scripts/build_labels.py rifle_aspen     # one region
 """
+# certifi BEFORE any network import, same reason and ordering as region_prep.py and
+# fetch_track_network.py: this Mac's framework Python ships no root certificates, so
+# a bare urlopen dies with CERTIFICATE_VERIFY_FAILED.
+import os
+import certifi
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+
 import gzip
 import hashlib
 import json
-import os
 import sys
 import urllib.parse
 import urllib.request
