@@ -68,7 +68,7 @@ notes on what changed against the spec while it ran.
 ## Handoffs
 
 Machine state and the traps a session hit. The current one is
-`superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md`. `HANDOFF.md`
+`superpowers/handoffs/2026-09-23-open-threads.md`. `HANDOFF.md`
 is not a pointer to the newest: it is the original 2026-06-30 architecture handoff,
 with a banner that points at the 2026-07-03 one.
 
@@ -81,6 +81,7 @@ with a banner that points at the 2026-07-03 one.
 | `superpowers/handoffs/2026-07-20-gpx-first-ui-report.md` | You want the brief for re-porting the GPX-first UI onto the studio, and the Tecopa rename. |
 | `superpowers/handoffs/2026-07-27-fonts-shipped-forever-contract-retirement.md` | You want the state after the type roles shipped and the retirement was decided. |
 | `superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md` | Picking the repo up cold. The Collector register, the terrain guard that blocks a deploy, the detail-crop regression, the copy traps, open threads, known-good state. |
+| `superpowers/handoffs/2026-09-23-open-threads.md` | Working the open threads. All ten Tecopa threads open on 2026-09-23, ordered around the customer path: the price, the demo tracks, the plate re-render, then the rest. Each has its state checked that day. |
 
 ## Assessments
 
