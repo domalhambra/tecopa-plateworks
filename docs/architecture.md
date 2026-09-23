@@ -142,7 +142,7 @@ font bindings, which is by design.
 ## The verification harness
 
 - `.venv/bin/python -m pytest -n auto -m "not slow" -q` is the fast tier. On 2026-09-08 it ran 616 tests on this Mac in under a minute: 615 passed and one failed, the documented font failure in `tests/test_bleed.py`.
-- `.venv/bin/python -m pytest -n auto -q` is the full suite. The 2026-09-01 run took 3 minutes 10 seconds on this Mac and failed eight tests. Seven were font-metric tests, across labels, bleed, oblique and the base cache, because Georgia is installed and the thresholds match DejaVu. The eighth was an MP4 test, because the bundled ffmpeg writes no `colr` box on macOS. CI is green on Ubuntu. Compare the failure set, not the totals. The seven are named in `changing-things.md` under Run the tests, as enumerated on 2026-08-13.
+- `.venv/bin/python -m pytest -n auto -q` is the full suite, about 3 minutes on this Mac. Its one Mac-only failure is an MP4 test, because the bundled ffmpeg writes no `colr` box on macOS. CI is green on Ubuntu. Compare the failure set, not the totals. `changing-things.md` under Run the tests has the history of the seven tests once blamed on fonts.
 - `tests/conftest.py` classifies `slow` tests centrally from measured durations. Re-derive after adding heavy tests with `--durations=0`.
 - The studio has no JS runner. `tests/test_static_registry.py` checks `controls.js` and the HTML as text. Everything else is a browser drive.
 - `.venv/bin/python scripts/verify_regions.py` reports every plate's hash and geometry state. Run it after any pull that touched `regions/`. Outside `.venv` the render stack is absent and the geometry row degrades to `skip`.

@@ -20,8 +20,9 @@ from PIL import Image, ImageDraw
 
 from app import render, serialize
 from app.spec import CompositionSpec, SpecError, OffDemError, BLEED_MAX_IN
+from conftest import synthetic_region
 # _cfg/_spec: local copies of the shared spec helpers (formerly in test_profile_rev)
-REGION_DIR = "regions/lassen_ca"
+REGION_DIR = synthetic_region("lassen_ca")   # never the ambient plate: see conftest
 
 def _cfg():
     return json.load(open(os.path.join(REGION_DIR, "region.json")))
@@ -43,7 +44,7 @@ def _spec(print_w_in=9, print_h_in=12, **kw):
     base.update(kw)
     return CompositionSpec(**base)
 
-REGION_DIR = "regions/lassen_ca"
+REGION_DIR = synthetic_region("lassen_ca")   # never the ambient plate: see conftest
 
 
 # ---- Task B1: the field, canvas vs trim ----

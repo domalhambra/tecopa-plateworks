@@ -36,26 +36,19 @@ useless for judging a poster by eye. Build the real DEM first (see "Build a new 
 2. Full suite: `.venv/bin/python -m pytest -n auto -q`. It renders real posters and
    films, about three minutes on the Mac. CI runs it on every push to `main`.
 3. Compare the failure set, not the totals. Totals move with every feature. The
-   Mac-only failures on 2026-09-01 were eight: seven font-metric tests, across labels,
-   bleed, oblique and one `label_place` case in `tests/test_base_cache.py`, whose MAD
-   thresholds match DejaVu metrics while the Mac has Georgia, and
-   `test_mp4_twin_is_tagged_bt709`, because the bundled ffmpeg writes no `colr` box
-   on macOS. The eight-test total was measured on 2026-09-01. The seven were last
-   enumerated on 2026-08-13, and read:
-   ```
-   test_base_cache.py::test_phase2_serves_the_knobs_phase1_could_not[label_place-anchor]
-   test_bleed.py::test_full_bleed_render_keeps_furniture_off_the_bleed_band
-   test_labels.py::test_label_placement_is_a_faithful_scale_across_dpi
-   test_labels.py::test_diagonal_range_is_dpi_stable
-   test_oblique.py::test_oblique_proof_is_a_faithful_scale_of_final
-   test_oblique.py::test_oblique_summit_marker_stays_glued
-   test_smart_labels_and_weave.py::test_smart_labels_are_dpi_stable
-   ```
-   CI on Ubuntu is green. Set `TECOPA_FONT` to a DejaVu face to confirm the font theory.
+   Mac-only failure is one test: `test_mp4_twin_is_tagged_bt709`, because the bundled
+   ffmpeg writes no `colr` box on macOS. CI on Ubuntu is green.
+   Seven more were blamed on fonts (Georgia on the Mac, DejaVu in CI) until
+   2026-09-23. The font was not the cause: bound to DejaVu, six of the seven still
+   failed. They read `regions/lassen_ca` directly, and conftest only hydrates a
+   missing DEM, so on the Mac they rendered real terrain against thresholds tuned on
+   the synthetic surface. They now render from `synthetic_region()` in
+   `tests/conftest.py` and pass on both hosts.
 4. Confirm any new failure against a clean checkout before chasing it. Most are the host.
 5. A test that passes only on a synthetic plate tests the host, not the code. Two went
-   red the moment a real DEM returned (commits `c81ca51`, `5c22096`). Construct the
-   condition a test needs. Do not inherit it from the ambient plate.
+   red the moment a real DEM returned (commits `c81ca51`, `5c22096`), and seven more
+   ran on real terrain on the Mac for weeks. Construct the condition a test needs. Do
+   not inherit it from the ambient plate: use `synthetic_region("<id>")`.
 6. `slow` is classified centrally in `tests/conftest.py` (`_SLOW_MODULES`,
    `_SLOW_TESTS`). After adding a heavy test, re-derive with `--durations=0` and add it
    there. `--strict-markers` is on, so a misspelled marker is an error.

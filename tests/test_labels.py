@@ -8,8 +8,9 @@ from PIL import Image
 
 from app import render
 from app.spec import CompositionSpec
+from conftest import synthetic_region
 
-REGION_DIR = "regions/lassen_ca"
+REGION_DIR = synthetic_region("lassen_ca")   # never the ambient plate: see conftest
 
 
 def _cfg():

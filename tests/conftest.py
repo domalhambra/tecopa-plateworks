@@ -121,6 +121,37 @@ def dem_is_synthetic(dem_path: str) -> bool:
         return ds.tags().get("synthetic") == "1"
 
 
+_SYNTH_ROOT = None
+_SYNTH_MIRRORS: dict[str, str] = {}
+
+
+def synthetic_region(rid: str, root: str = REGIONS_ROOT) -> str:
+    """A mirror of region `rid` whose DEM is ALWAYS synthetic: the plate's own files
+    symlinked, plus the harness DEM built fresh. A test whose thresholds were tuned
+    on the synthetic surface must render from this, never from `regions/<rid>`
+    directly. `_hydrate_regions` leaves a real DEM alone, so the direct path means
+    real terrain on a machine that has it and synthetic terrain in CI -- the same
+    test measuring two different pictures. One mirror per process (and so per
+    xdist worker), built on first use."""
+    global _SYNTH_ROOT
+    if rid in _SYNTH_MIRRORS:
+        return _SYNTH_MIRRORS[rid]
+    if _SYNTH_ROOT is None:
+        _SYNTH_ROOT = tempfile.mkdtemp(prefix="tecopa-synthetic-regions-")
+    src = os.path.abspath(os.path.join(root, rid))
+    with open(os.path.join(src, "region.json")) as f:
+        cfg = json.load(f)
+    dem_name = cfg.get("dem_path", "dem.tif")
+    dst = os.path.join(_SYNTH_ROOT, rid)
+    os.makedirs(dst)
+    for name in os.listdir(src):
+        if name != dem_name:
+            os.symlink(os.path.join(src, name), os.path.join(dst, name))
+    _build_synthetic_dem(dst, cfg)
+    _SYNTH_MIRRORS[rid] = dst
+    return dst
+
+
 # Hydrate at import (before any test module is collected or app.main is imported),
 # so the integration suites find a DEM without needing a session fixture to run first.
 _hydrate_regions()

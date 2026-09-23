@@ -28,8 +28,9 @@ from rasterio.transform import from_bounds as transform_from_bounds
 
 from app import render
 from app.spec import CompositionSpec, OffDemError, SpecError
+from conftest import synthetic_region
 
-REGION_DIR = "regions/lassen_ca"
+REGION_DIR = synthetic_region("lassen_ca")   # never the ambient plate: see conftest
 
 
 def _cfg(region_dir=REGION_DIR):

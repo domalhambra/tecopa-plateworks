@@ -133,8 +133,9 @@ def test_plate_fingerprint_tolerates_a_missing_asset(tmp_path):
 # ---- the key and its mask contract -------------------------------------------------
 
 from app.spec import CompositionSpec
+from conftest import synthetic_region
 
-REGION_DIR = "regions/lassen_ca"
+REGION_DIR = synthetic_region("lassen_ca")   # never the ambient plate: see conftest
 
 
 def _cfg():
