@@ -210,6 +210,14 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 | The README's import smoke line is replaced by the fast test tier. | The fast tier proves the same imports and more. | `README.md`, Prove a change |
 | The launcher's first-launch permission narrative is compressed to the rule that matters: keep the bundle id `guide.badwater.tecopa`. | A changed bundle id reads to macOS as a new app, which re-prompts for Documents access. The prompt wording is OS behavior, not a procedure. | `docs/changing-things.md`, Rebuild the macOS launcher |
 
+## 2026-09-23 (price, demo journeys)
+
+| Decision | Why | Source |
+|---|---|---|
+| The Print is $80 at 18×24, digital Poster included. The Edition N+1 reprint drops from $99 to $55. | Dom's call against the customer profile's $80 sense. The reprint must stay below a first print, and $55 keeps the old two-thirds ratio. | `marketing/landing.html` pricing band |
+| A demo destination unreachable from its trailhead is replaced by the next candidate in selection order. A plate that loses none keeps its exact trips. | A disconnected OSM pocket shipped tushar_beaver_ut with seven journeys. The selector's order is prefix-stable, so the retry cannot move an approved poster. | commit 27f0b58 |
+| A corridor plate (short side 150 km or more) composes 5 journeys at 10–20% of the short side, capped at 60 km. | Dom's taste call: at corridor scale the demo tells a drive. Only elko_bonneville qualifies. | commit 27f0b58; `CORRIDOR_*` in `scripts/track_network.py` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |
@@ -226,9 +234,9 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 | 2026-07-27 | Threading the ink support through a cache hit. | Measured, declined. | `superpowers/plans/2026-07-27-support-restricted-composite.md` |
 | 2026-08-10 | Blender as the engine. `bpy` in process. | No 3.14 wheel, no determinism contract, the film target dies. | `superpowers/assessments/2026-08-10-blender-render-viability.md` |
 | 2026-08-14 | A gitignore rule for root-level tuning images. | Per Dom. | commit 20f1cca |
-| 2026-08-16 | The print price: $80 by the profile, $149 on the page. | Dom's call. Open. | `superpowers/specs/2026-08-16-target-customer-profile-design.md` |
+| 2026-08-16 | The print price: $80 by the profile, $149 on the page. | Dom's call. Decided 2026-09-23: see that section. | `superpowers/specs/2026-08-16-target-customer-profile-design.md` |
 | 2026-08-17 | A `--repair-dem` mode that re-stamps `sources.json`. | It makes the drift gate unable to ever fire. | commit f518be8 |
 | 2026-09-01 | A git hook for the geometry gate. An override flag. A readiness cache. | The engine is the gate. A misregistered DEM has no honest render. | `superpowers/plans/2026-09-01-dem-geometry-gate.md` |
-| 2026-09-02 | Metal as a render path. | Not now: no determinism contract on the GPU, a bounded gain, no CI parity. The assessment is uncommitted pending Dom's review. | `superpowers/assessments/2026-09-02-metal-render-viability.md` |
-| 2026-09-02 | Keeping or reverting the auto-docs switch-off. | Open thread. The code has them off. | commit a3d4ba9 |
+| 2026-09-02 | Metal as a render path. | Not now: no determinism contract on the GPU, a bounded gain, no CI parity. Assessment committed in `d49fb82`. Dom accepted the verdict on 2026-09-23 and declined the optional CPU lookup table. | `superpowers/assessments/2026-09-02-metal-render-viability.md` |
+| 2026-09-02 | Keeping or reverting the auto-docs switch-off. | Kept off. Dom closed the thread on 2026-09-23. | commit a3d4ba9 |
 | 2026-09-08 | A project charter (PROJECT_CHARTER.md) and a DESIGN.md. | Deferred to Dom. Charters are hand-written, never generated. | this rollout |
