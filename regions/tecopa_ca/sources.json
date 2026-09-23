@@ -2,41 +2,41 @@
   "id": "tecopa_ca",
   "built": "2026-09-23",
   "fetch_bbox_4326": [
-    -116.42,
+    -116.5,
     35.58,
-    -115.86,
+    -115.8,
     36.32
   ],
   "crs": "EPSG:32611",
-  "rebuild": "python region_prep.py --id tecopa_ca --name <name> --bbox -116.42 35.58 -115.86 36.32 --epsg 32611 --resolution 10",
+  "rebuild": "python region_prep.py --id tecopa_ca --name <name> --bbox -116.5 35.58 -115.8 36.32 --epsg 32611 --resolution 10",
   "assets": {
     "dem.tif": {
-      "sha256": "31ff7bb569c2d48879d8389eb3b547d38a6bf87e641b290e91b388b324facdc1",
-      "bytes": 177062029
+      "sha256": "14d26669fc17fbfff787e5574ecc08ab05df50366107d47a5a11c103ebcefd07",
+      "bytes": 222130947
     },
     "hydro.json": {
-      "sha256": "3ce1acaa60d99e340ec260aab23a84ba4a4083514abe86cd95ee1c4fe0315fb4",
-      "bytes": 59301
+      "sha256": "06561394a6ba23249ce6e3beb559174f3deb4cfd842744122d394e9664bfad72",
+      "bytes": 73392
     },
     "region.json": {
-      "sha256": "2d57de890ce02ed294535ad45fc68401fa57ca7fb549c2865d2c149c0802faca",
-      "bytes": 459
+      "sha256": "f2abef44db1dcb04af033faa8d6d9cb4b589a74c39f5a9689b9eba7d51ecb07c",
+      "bytes": 463
     },
     "overview.png": {
-      "sha256": "624538d03758666afedb79344704761e2dee3b5a9d2942dce28fe9019688315f",
-      "bytes": 360871
+      "sha256": "5b6c88e5e7e64a722be6084caad6c725144abc0eabd67fac7afaff6034491df9",
+      "bytes": 445064
     },
     "landcover.tif": {
-      "sha256": "2bbac7b362d77c1e47d8e58098e903920bbe6e117ad6b313936105888eb2217d",
-      "bytes": 296984
+      "sha256": "62d64dd2c625a18c8ecf5c201a6c110e76cb3e2c3762158154a63e8a251766cd",
+      "bytes": 345983
+    },
+    "labels.json": {
+      "sha256": "4592ac410437d2bf091b2a020c11b0f138a1f54fa1dbc6dad1110317abc51b90",
+      "bytes": 11073
     },
     "playa.json": {
       "sha256": "91bbe27b03829983025621449f49bf007973dfd287d7c2d22b5d43b54dba00b1",
       "bytes": 10342
-    },
-    "labels.json": {
-      "sha256": "416b8ba677b71fb7efe858979764e9803117fbcd54950b79f7e782c007011b57",
-      "bytes": 8674
     }
   },
   "sources": [
