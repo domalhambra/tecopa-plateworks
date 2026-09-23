@@ -8,7 +8,7 @@ and for anything that touches a render, the full suite.
 ## Set up a machine
 
 1. Clone `tecopa-plateworks`. On the Mac, `python3.14 -m venv .venv`. CI installs the
-   Python named in `.python-version`, which is 3.11. A Notion thread records the mismatch.
+   Python named in `.python-version`, 3.14, the same interpreter as the Mac venv.
 2. Install in the order `.github/workflows/ci.yml` uses: `.venv/bin/pip install -r requirements-lock.txt`,
    then `.venv/bin/pip install pandas geopandas`, then `.venv/bin/pip install -r requirements-share.txt`.
    The two extras sit outside the lock on purpose, so the region-prep and MP4 tests run instead of skipping.

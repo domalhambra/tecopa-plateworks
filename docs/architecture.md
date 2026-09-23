@@ -136,7 +136,7 @@ font bindings, which is by design.
 | Plates | Five committed under `regions/`: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. Each `dem.tif` is gitignored and rebuilt with `region_prep.py`. Packing and publishing plates has never run. |
 | The landing page | `tecopa.plateworks.org`, Netlify site `tecopa-plateworks`, Cloudflare zone `plateworks.org`. Deployed by hand: render the farm, run `../marketing/build_deploy.py`, then `netlify deploy --prod`. The terrain guard refuses a region with no real terrain record in `assets/index.json`. The runbook is `../marketing/DEPLOY.md`. Plausible analytics, no CSP. |
 | The privacy page | `/privacy/`, copied verbatim into the staged root. |
-| Python | The Mac venv is Python 3.14. CI installs the version in `.python-version`, which is 3.11. A thread records the mismatch. |
+| Python | 3.14 on the Mac and in CI, which installs the version in `.python-version`. Every pin in `requirements-lock.txt` has a 3.14 wheel for `ubuntu-latest` (checked 2026-09-23). |
 | Dependencies | `requirements-lock.txt` is what CI installs, then `pandas geopandas`, then `requirements-share.txt`. `requirements.txt` holds the unpinned core minimums and `requirements-dev.txt` the test dependencies; the lock is what a machine actually installs. `requirements-regionprep.txt` goes only into `.venv-prep`. |
 
 ## The verification harness
