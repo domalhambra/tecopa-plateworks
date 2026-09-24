@@ -165,6 +165,11 @@ focus ring use `--amethyst-ink`. The contour lines and the coin edges use sectio
 stops, and the poster edge uses `--section-025`. The gold of the trails appears only
 inside the posters. No new color enters canon.
 
+The blog header and navigation keep their layout and take the page's colors: the Subscribe
+button, link and focus states, the scroll progress bar and the scheme toggle use Amethyst on
+both Tecopa pages. The mechanism is shared with the app pages: a body-class block in
+`vars.css` that overrides the site accent tokens (product pages v2 spec, decision 2a).
+
 Motion rules for every moving part:
 
 - `prefers-reduced-motion: reduce` stops all motion. The shader shows one still frame.
