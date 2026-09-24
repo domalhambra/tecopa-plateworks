@@ -214,9 +214,15 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 
 | Decision | Why | Source |
 |---|---|---|
-| The Print is $80 at 18×24, digital Poster included. The Edition N+1 reprint drops from $99 to $55. | Dom's call against the customer profile's $80 sense. The reprint must stay below a first print, and $55 keeps the old two-thirds ratio. | `marketing/landing.html` pricing band |
+| The Print is $80 at 18×24, digital Poster included. The Edition N+1 reprint drops from $99 to $55. Print price superseded 2026-09-24. | Dom's call against the customer profile's $80 sense. The reprint must stay below a first print, and $55 keeps the old two-thirds ratio. | `marketing/landing.html` pricing band |
 | A demo destination unreachable from its trailhead is replaced by the next candidate in selection order. A plate that loses none keeps its exact trips. | A disconnected OSM pocket shipped tushar_beaver_ut with seven journeys. The selector's order is prefix-stable, so the retry cannot move an approved poster. | commit 27f0b58 |
 | A corridor plate (short side 150 km or more) composes 5 journeys at 10–20% of the short side, capped at 60 km. | Dom's taste call: at corridor scale the demo tells a drive. Only elko_bonneville qualifies. | commit 27f0b58; `CORRIDOR_*` in `scripts/track_network.py` |
+
+## 2026-09-24 (print sizes)
+
+| Decision | Why | Source |
+|---|---|---|
+| The Print comes in two sizes: $90 at 18×24 and $80 at 13×19. This supersedes the 2026-09-23 $80 at 18×24. | Dom's call. The 13×19 keeps the profile's $80 entry price. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows the old price |
 
 ## Rejected and deferred
 
