@@ -22,7 +22,10 @@ PLATE_PAD_M = 1000.0      # extra ground under region_prep's 500 m grid inset
 MIN_FRAME_M = 2000.0      # a walk round the block still gets a 2 km frame
 ALBERS_EPSG = 5070
 ALBERS_ABOVE_M = 600_000.0
-COVERAGE_MIN = 0.995      # a layer counts only if it covers this share of the plate
+COVERAGE_TOLERANCE = 0.005   # a layer counts only if it covers everything the best
+                              # layer covers, within 0.5%: ocean and foreign ground
+                              # count against no layer
+US_SHARE_MIN = 0.5        # below this, the plate is mostly outside US elevation data
 STATIC_LAYERS_M = (10, 30, 60)   # py3dep's fast static tiles
 # Below 10 m the grid is fetched from the 3DEP dynamic service, which resamples the
 # finest source it holds. Plan Task 1 measured whether that is real lidar detail.
@@ -137,7 +140,21 @@ def choose_grid(need_m, coverage) -> dict:
     data it holds. grid_m is the plate's cell (its native_resolution_m). layer_m is
     the 3DEP layer the data comes from. upsample is grid_m / need_m, at least 1.
     widen is True when even the finest layer is past MAX_UPSAMPLE, so the caller
-    must widen the frame.
+    must widen the frame. us_share is the best layer's coverage share: the caller
+    warns when it is below 1.0 (ocean or a border clips the plate).
+
+    Coverage is judged relative to the best layer, not against an absolute bar: a
+    plate that reaches the Pacific or a national border can never be fully covered
+    by any layer, but a layer that covers everything any other layer covers is still
+    the right one to use (COVERAGE_TOLERANCE). A plate mostly outside US elevation
+    data (US_SHARE_MIN) is refused outright rather than quietly built from whatever
+    scrap of US ground it has.
+
+    The 60 m index layer has a known quirk: py3dep's coverage query returns no
+    outlines for it at all (share 0.0 everywhere, even well inland), although the
+    static 60 m tiles are real. Under the relative rule that reads as "uncovered",
+    so a nice grid landing on 60 m steps down to 55 m and is served dynamically
+    instead. That is acceptable: the data is the same, just fetched differently.
 
     A nice grid at or above 10 m can land on a static size (10, 30, 60) whose own
     layer isn't fully covered even when a finer layer is: region_prep would then
@@ -146,23 +163,30 @@ def choose_grid(need_m, coverage) -> dict:
     the dynamic service serves it from the finest layer that is actually covered,
     and layer_m records that layer instead of the uncovered static one."""
     coverage = {int(r): share for r, share in coverage.items()}
-    covered = sorted(r for r, share in coverage.items()
-                     if share >= COVERAGE_MIN
-                     and (USE_DYNAMIC_FINE or r in STATIC_LAYERS_M))
-    if not covered:
+    eligible = {r: share for r, share in coverage.items()
+               if USE_DYNAMIC_FINE or r in STATIC_LAYERS_M}
+    if not eligible:
         raise PlateError("No 3DEP elevation layer fully covers this ground.")
+    best = max(eligible.values())
+    if best < US_SHARE_MIN:
+        raise PlateError("Most of this plate has no US elevation data (ocean or "
+                         "across a border). Frame the tracks tighter or choose a "
+                         "smaller print.")
+    covered = sorted(r for r, share in eligible.items()
+                     if share >= best - COVERAGE_TOLERANCE)
     finest = covered[0]
     if finest > need_m:
         upsample = finest / need_m
         return {"grid_m": float(finest), "layer_m": finest, "upsample": upsample,
-                "widen": upsample > MAX_UPSAMPLE}
+                "widen": upsample > MAX_UPSAMPLE, "us_share": best}
     grid = _nice_grid(need_m, finest)
     if grid in STATIC_LAYERS_M and int(grid) not in covered:
         grid = _nice_grid(grid - 1e-6, finest)
         layer = finest
     else:
         layer = int(grid) if grid in STATIC_LAYERS_M else finest
-    return {"grid_m": grid, "layer_m": layer, "upsample": 1.0, "widen": False}
+    return {"grid_m": grid, "layer_m": layer, "upsample": 1.0, "widen": False,
+            "us_share": best}
 
 
 def widen_for_upsample(frame, layer_m, print_w_in, dpi=DPI) -> tuple:

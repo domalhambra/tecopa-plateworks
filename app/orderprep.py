@@ -195,7 +195,8 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         epsg, frame = fit["epsg"], fit["frame"]
         region = fit["region"]
         plate = {"id": region["id"], "root": tools.curated_root, "kind": "curated",
-                 "grid_m": float(region["native_resolution_m"]), "upsample": 1.0}
+                 "grid_m": float(region["native_resolution_m"]), "upsample": 1.0,
+                 "us_share": 1.0}
         log(f"Reusing curated plate {region['id']}.")
     else:
         # after the curated check: reusing a curated plate needs no prep venv
@@ -225,6 +226,9 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         if grid["upsample"] > 1.0:
             warnings.append(f"Terrain is upsampled {grid['upsample']:.2f}x "
                             f"(the limit is {MAX_UPSAMPLE:g}x).")
+        if grid["us_share"] < 0.995:
+            warnings.append(f"About {1 - grid['us_share']:.0%} of this plate has "
+                            f"no US elevation data (ocean or across a border).")
         plate, labels_note = _build(order, tools, frame, epsg, grid, env, log)
         if labels_note:
             warnings.append(labels_note)
@@ -270,7 +274,7 @@ def _build(order, tools, frame, epsg, grid, env, log):
                            env=env)
     plate = {"id": rid, "root": order.plate_root, "kind": "built",
              "grid_m": grid["grid_m"], "layer_m": grid["layer_m"],
-             "upsample": round(grid["upsample"], 3),
+             "upsample": round(grid["upsample"], 3), "us_share": grid["us_share"],
              "build_seconds": round(time.monotonic() - started, 1)}
     return plate, result["labels_note"]
 

@@ -76,7 +76,8 @@ def test_lonlat_round_trip_contains_the_input():
 
 def test_grid_under_10m_with_lidar():
     g = op.choose_grid(4.63, LIDAR)       # quarter-metre steps below 10 m
-    assert g == {"grid_m": 4.5, "layer_m": 1, "upsample": 1.0, "widen": False}
+    assert g == {"grid_m": 4.5, "layer_m": 1, "upsample": 1.0, "widen": False,
+                 "us_share": 1.0}
 
 
 def test_grid_without_lidar_upsamples_within_2x():
@@ -136,6 +137,35 @@ def test_no_coverage_is_a_plate_error():
         op.choose_grid(10.0, {1: 0.0, 3: 0.0, 10: 0.0, 30: 0.0, 60: 0.0})
 
 
+def test_plate_reaching_the_pacific_still_builds():
+    # Reno to Salt Lake's west edge sits in the ocean: no layer reaches 0.995, but
+    # 10 m covers everything 30 m does (60 m's coverage query is a known blank, see
+    # choose_grid's docstring), so 10 m is still the right layer to use.
+    g = op.choose_grid(210.7, {10: 0.9442, 30: 0.9441, 60: 0.0})
+    assert (g["grid_m"], g["layer_m"]) == (210.0, 10)
+    assert g["us_share"] == pytest.approx(0.9442)
+    assert not g["widen"]
+
+
+def test_plate_mostly_at_sea_is_a_plate_error():
+    with pytest.raises(op.PlateError, match="no US elevation data"):
+        op.choose_grid(30.0, {10: 0.3, 30: 0.3})
+
+
+def test_partial_lidar_inland_still_rejects_the_fine_layer():
+    # 1 m only reaches 90% where 10 m reaches 100%: short of 10 m's coverage even
+    # within COVERAGE_TOLERANCE, so 1 m is skipped for 10 m.
+    g = op.choose_grid(5.0, {1: 0.9, 10: 1.0})
+    assert g["layer_m"] == 10 and g["us_share"] == pytest.approx(1.0)
+
+
+def test_coastal_lidar_is_accepted_within_tolerance():
+    # 1 m falls a hair short of 10 m's own coverage, well within the 0.5% tolerance
+    # a coastline's rounding error accounts for.
+    g = op.choose_grid(5.0, {1: 0.94, 10: 0.9442})
+    assert g["layer_m"] == 1 and g["us_share"] == pytest.approx(0.9442)
+
+
 def test_dynamic_fine_off_ignores_lidar(monkeypatch):
     monkeypatch.setattr(op, "USE_DYNAMIC_FINE", False)
     g = op.choose_grid(6.0, LIDAR)
@@ -152,14 +182,16 @@ def test_static_grid_steps_down_when_its_own_layer_is_not_covered():
     # data, so it must fall back to the dynamic service on the finest layer that
     # really is covered (1 m), one quarter-metre step below the static boundary
     g = op.choose_grid(12.0, {1: 1.0, 3: 0.0, 10: 0.5, 30: 1.0, 60: 1.0})
-    assert g == {"grid_m": 9.75, "layer_m": 1, "upsample": 1.0, "widen": False}
+    assert g == {"grid_m": 9.75, "layer_m": 1, "upsample": 1.0, "widen": False,
+                 "us_share": 1.0}
 
 
 def test_static_grid_steps_down_to_the_next_static_boundary_below():
     # need 31 rounds to the 30 m static tile, but it's only 20% covered; 10 m is
     # fully covered, so the grid steps down to 25 m, served dynamically from 10 m
     g = op.choose_grid(31.0, {10: 1.0, 30: 0.2, 60: 1.0})
-    assert g == {"grid_m": 25.0, "layer_m": 10, "upsample": 1.0, "widen": False}
+    assert g == {"grid_m": 25.0, "layer_m": 10, "upsample": 1.0, "widen": False,
+                 "us_share": 1.0}
 
 
 def test_widen_for_upsample_lands_just_under_2x():

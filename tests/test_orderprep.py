@@ -13,6 +13,9 @@ from app import orderprep as op
 
 LIDAR = {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0}
 NO_LIDAR = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0}
+# A plate that clips the coast: every layer falls short of the old absolute bar,
+# but all of them agree with each other, so the plate should still build.
+COASTAL = {"1": 0.94, "3": 0.0, "10": 0.94, "30": 0.94, "60": 0.94}
 SMALL = (-116.21, 35.89, -116.17, 35.93)       # ~3.6 x 4.4 km near Tecopa
 WIDE = (-116.4, 35.7, -116.0, 36.1)            # ~36 x 44 km
 
@@ -155,6 +158,15 @@ def test_no_lidar_widens_the_frame(tmp_path, tools, monkeypatch):
     assert state["plate"]["upsample"] <= opl.MAX_UPSAMPLE
     assert any("widened" in w for w in state["warnings"])
     assert any("smaller print" in w for w in state["warnings"])
+
+
+def test_coastal_plate_warns_and_records_its_us_share(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(COASTAL))
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["plate"]["us_share"] == pytest.approx(0.94)
+    assert any("no US elevation data" in w for w in state["warnings"])
+    assert any("6%" in w for w in state["warnings"])
 
 
 def test_widening_steps_to_a_coarser_layer_at_a_coverage_edge(tmp_path, tools,
