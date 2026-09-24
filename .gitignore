@@ -54,3 +54,6 @@ assets/
 
 # Local Netlify folder
 .netlify
+
+# brainstorming visual companion sessions
+.superpowers/
