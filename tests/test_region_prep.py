@@ -441,3 +441,263 @@ def test_nlcd_fetch_raises_after_the_retries(monkeypatch, waits):
     with pytest.raises(TimeoutError):
         rp._fetch_nlcd((0, 0, 1, 1), 30, 2021)
     assert len(calls) == 3
+
+
+# ---- hole fill: the dynamic service can return empty tiles and say nothing
+# (acceptance, 2026-09-24: 12.1% of the east-west plate was NaN where ~5.6% is ocean
+# or Canada). build_dem_cog fills them from the static 3DEP tiles, window by window.
+# The static source here is a local EPSG:4269 raster, never the network. ----
+import json
+
+import rasterio
+from pyproj import Transformer
+from rasterio.transform import from_origin
+
+FIX_W, FIX_N, FIX_RES = -116.6, 36.25, 0.001        # ~100 m source cells
+FIX_COLS, FIX_ROWS = 1200, 700                       # lon -116.6..-115.4, lat 35.55..36.25
+OCEAN_LON = -116.3                                   # the source holds nothing west of it
+GRID_CRS = "EPSG:32611"
+GRID_T = from_origin(550000.0, 4000000.0, 250.0, 250.0)
+GRID_W, GRID_H, GRID_BLOCK = 300, 200, 128           # 3 x 2 blocks
+OCEAN_COLS = 20                                      # x < 555 km: lon < -116.39
+HOLE = (slice(40, 160), slice(150, 240))             # rows, cols: land, 2 blocks
+
+
+def _elev(lon, lat):
+    """A plane: average and bilinear both reproduce it, so a fill is checkable."""
+    return 1000.0 + 200.0 * (lon + 117.0) + 100.0 * (lat - 35.0)
+
+
+def _static_fixture(path):
+    lon = FIX_W + FIX_RES * (np.arange(FIX_COLS) + 0.5)
+    lat = FIX_N - FIX_RES * (np.arange(FIX_ROWS) + 0.5)
+    arr = _elev(lon[None, :], lat[:, None]).astype("float32")
+    arr[:, lon < OCEAN_LON] = -999999.0
+    with rasterio.open(path, "w", driver="GTiff", dtype="float32", count=1,
+                       width=FIX_COLS, height=FIX_ROWS, crs="EPSG:4269",
+                       transform=from_origin(FIX_W, FIX_N, FIX_RES, FIX_RES),
+                       nodata=-999999.0) as ds:
+        ds.write(arr, 1)
+    return path
+
+
+def _grid_truth():
+    cols, rows = np.meshgrid(np.arange(GRID_W) + 0.5, np.arange(GRID_H) + 0.5)
+    xs, ys = GRID_T * (cols, rows)
+    lon, lat = Transformer.from_crs(GRID_CRS, "EPSG:4269", always_xy=True).transform(xs, ys)
+    return _elev(lon, lat).astype("float32")
+
+
+def _holed_grid(path):
+    truth = _grid_truth()
+    arr = truth.copy()
+    arr[:, :OCEAN_COLS] = np.nan
+    arr[HOLE] = np.nan
+    with rasterio.open(path, "w", driver="GTiff", dtype="float32", count=1,
+                       width=GRID_W, height=GRID_H, crs=GRID_CRS, transform=GRID_T,
+                       nodata=np.nan, tiled=True, blockxsize=GRID_BLOCK,
+                       blockysize=GRID_BLOCK) as ds:
+        ds.write(arr, 1)
+    return truth, arr
+
+
+class _Spy:
+    """A dataset stand-in that records every read() and forwards the rest."""
+    def __init__(self, ds):
+        self._ds, self.reads = ds, []
+
+    def read(self, *a, **kw):
+        self.reads.append(kw.get("window"))
+        return self._ds.read(*a, **kw)
+
+    def __getattr__(self, name):
+        return getattr(self._ds, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._ds.close()
+
+
+@pytest.fixture
+def static_src(tmp_path):
+    path = _static_fixture(str(tmp_path / "static.tif"))
+    opened = []
+
+    def open_static(layer_m):
+        spy = _Spy(rasterio.open(path))
+        opened.append((layer_m, spy))
+        return spy
+    open_static.opened = opened
+    return open_static
+
+
+def test_fill_fills_a_land_hole_and_leaves_the_ocean_nan(tmp_path, static_src, capsys):
+    path = str(tmp_path / "dem.tif")
+    truth, before = _holed_grid(path)
+    with rasterio.open(path, "r+") as dst:
+        fill = rp.fill_dem_holes(dst, 250.0, open_static=static_src)
+    with rasterio.open(path) as ds:
+        after = ds.read(1)
+    assert not np.isnan(after[HOLE]).any(), "the land hole must be filled"
+    assert np.abs(after[HOLE] - truth[HOLE]).max() < 2.0
+    assert np.isnan(after[:, :OCEAN_COLS]).all(), "ocean stays NaN: the tiles hold none"
+    kept = ~np.isnan(before)
+    assert np.array_equal(after[kept], before[kept]), "finite cells are never touched"
+    hole_px = truth[HOLE].size
+    total = GRID_W * GRID_H
+    assert fill["layer_m"] == 30
+    assert fill["filled_px"] == hole_px
+    assert fill["filled_share"] == pytest.approx(hole_px / total)
+    assert fill["holes_share"] == pytest.approx((hole_px + OCEAN_COLS * GRID_H) / total)
+    assert fill["left_share"] == pytest.approx(OCEAN_COLS * GRID_H / total)
+    assert fill["stopped"] is None
+    out = capsys.readouterr().out
+    assert (f"Filled {hole_px / total:.1%} of the plate from the 3DEP 30 m tiles "
+            "(the dynamic service left holes)") in out
+
+
+def test_fill_works_block_by_block_and_reads_the_tiles_only_where_holed(
+        tmp_path, static_src):
+    path = str(tmp_path / "dem.tif")
+    _holed_grid(path)
+    with rasterio.open(path, "r+") as ds:
+        spy = _Spy(ds)
+        rp.fill_dem_holes(spy, 250.0, open_static=static_src)
+    # never the whole grid at once: every read of the plate is one block or less
+    assert spy.reads and all(w is not None for w in spy.reads)
+    assert all(w.width <= GRID_BLOCK and w.height <= GRID_BLOCK for w in spy.reads)
+    # 4 of the 6 blocks hold NaN (2 ocean, 2 hole); the other 2 cost no tile read
+    assert len(static_src.opened) == 1, "the static layer is opened once"
+    assert len(static_src.opened[0][1].reads) == 4
+
+
+def test_fill_touches_nothing_and_opens_nothing_on_a_plate_without_holes(
+        tmp_path, static_src, capsys):
+    path = str(tmp_path / "dem.tif")
+    truth = _grid_truth()
+    with rasterio.open(path, "w", driver="GTiff", dtype="float32", count=1,
+                       width=GRID_W, height=GRID_H, crs=GRID_CRS, transform=GRID_T,
+                       nodata=np.nan, tiled=True, blockxsize=GRID_BLOCK,
+                       blockysize=GRID_BLOCK) as ds:
+        ds.write(truth, 1)
+    with rasterio.open(path, "r+") as dst:
+        fill = rp.fill_dem_holes(dst, 250.0, open_static=static_src)
+    assert static_src.opened == []
+    assert fill["filled_px"] == 0 and fill["holes_share"] == 0.0
+    assert "Filled" not in capsys.readouterr().out
+
+
+def test_a_failed_fill_keeps_the_plate_and_says_so(tmp_path, waits, capsys):
+    path = str(tmp_path / "dem.tif")
+    _, before = _holed_grid(path)
+
+    def down(layer_m):
+        raise rasterio.errors.RasterioIOError("HTTP response code: 503")
+    with rasterio.open(path, "r+") as dst:
+        fill = rp.fill_dem_holes(dst, 250.0, open_static=down)
+    with rasterio.open(path) as ds:
+        after = ds.read(1)
+    assert np.array_equal(np.isnan(after), np.isnan(before))
+    assert waits == [60, 180], "the tiles get the same retries as every fetch"
+    assert fill["filled_px"] == 0 and "503" in fill["stopped"]
+    assert "Hole fill stopped" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("grid_m,layer_m", [(210.0, 30), (30.5, 30), (25.0, 10),
+                                            (4.0, 10), (1.5, 10)])
+def test_fill_layer_is_30_m_from_a_30_m_grid_up_else_10_m(grid_m, layer_m):
+    assert rp.fill_layer_m(grid_m) == layer_m
+
+
+@pytest.mark.parametrize("src_m,grid_m,decimate,resampling", [
+    (30.9, 210.0, 4, "average"),     # 1 arc-second onto the east-west grid: overview 4
+    (30.9, 1000.0, 16, "average"),
+    (10.3, 25.0, 1, "average"),      # finer than the grid, too close to decimate
+    (30.9, 45.0, 1, "average"),
+    (10.3, 4.0, 1, "bilinear"),      # coarser than the grid
+])
+def test_fill_sampling_decimates_to_the_tiles_overviews_but_stays_finer(
+        src_m, grid_m, decimate, resampling):
+    d, r = rp.fill_sampling(src_m, grid_m)
+    assert (d, r.name) == (decimate, resampling)
+    assert src_m * d * rp.FILL_MIN_SAMPLES <= grid_m or d == 1
+
+
+def test_static_layer_urls_are_the_ones_py3dep_reads():
+    base = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation"
+    assert rp.STATIC_LAYER_URLS == {10: f"{base}/13/TIFF/USGS_Seamless_DEM_13.vrt",
+                                    30: f"{base}/1/TIFF/USGS_Seamless_DEM_1.vrt"}
+
+
+# build_dem_cog end to end, with a fake dynamic fetch that leaves a hole
+DYN_BBOX = (-116.25, 35.75, -115.8, 36.1)
+
+
+class _FakeDA:
+    def __init__(self, bbox, hole=True):
+        w, s, e, n = bbox
+        res = 0.002
+        cols, rows = int(round((e - w) / res)), int(round((n - s) / res))
+        lon = w + res * (np.arange(cols) + 0.5)
+        lat = n - res * (np.arange(rows) + 0.5)
+        self.values = _elev(lon[None, :], lat[:, None]).astype("float32")
+        if hole:
+            self.values[rows // 3: rows // 2, cols // 3: cols // 2] = np.nan
+        t = from_origin(w, n, res, res)
+        self.rio = types.SimpleNamespace(transform=lambda: t,
+                                         crs=rasterio.crs.CRS.from_epsg(4326))
+
+
+def test_build_dem_cog_fills_a_dynamic_grid(tmp_path, monkeypatch, static_src):
+    monkeypatch.setattr(rp, "fetch_dem", lambda sb, res: _FakeDA(sb))
+    plan = rp.plan_build(DYN_BBOX, GRID_CRS, 250.0)
+    assert plan["dynamic"]
+    out = str(tmp_path / "dem.tif")
+    path, fill = rp.build_dem_cog(DYN_BBOX, GRID_CRS, out, plan, open_static=static_src)
+    assert path == out
+    assert fill["filled_px"] > 0 and fill["layer_m"] == 30
+    with rasterio.open(out) as ds:
+        assert not np.isnan(ds.read(1)).any()
+        assert ds.overviews(1) == [2, 4, 8, 16, 32], "overviews see the filled grid"
+
+
+def test_build_dem_cog_leaves_a_static_grid_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(rp, "fetch_dem", lambda sb, res: _FakeDA(sb))
+
+    def never(layer_m):
+        raise AssertionError("a static grid is never filled")
+    plan = rp.plan_build(DYN_BBOX, GRID_CRS, 30)
+    assert not plan["dynamic"]
+    out = str(tmp_path / "dem.tif")
+    path, fill = rp.build_dem_cog(DYN_BBOX, GRID_CRS, out, plan, open_static=never)
+    assert fill is None
+    with rasterio.open(out) as ds:
+        assert np.isnan(ds.read(1)).any(), "the hole stays: static tiles are the source"
+
+
+def test_sources_manifest_records_a_hole_fill(tmp_path):
+    fill = {"layer_m": 30, "filled_px": 64, "filled_share": 0.06413, "stopped": None}
+    m = rp.write_sources_manifest(str(tmp_path), "order_y", (-116.3, 35.8, -116.2, 35.9),
+                                  "EPSG:5070", built="2026-09-24", resolution_m=210.0,
+                                  fill=fill)
+    assert m["sources"][0]["dataset"] == "USGS 3DEP dynamic service, 210 m"
+    fills = [s for s in m["sources"] if s.get("role") == "hole fill"]
+    assert len(fills) == 1
+    f = fills[0]
+    assert f["layer_m"] == 30 and f["filled_share"] == pytest.approx(0.0641, abs=1e-4)
+    assert "USGS 3DEP 30 m" in f["dataset"] and "USGS_Seamless_DEM_1.vrt" in f["via"]
+    assert f["license"] == "Public domain (USGS)"
+    on_disk = json.load(open(tmp_path / "sources.json"))
+    assert on_disk["sources"] == m["sources"]
+
+
+@pytest.mark.parametrize("fill", [None, {"layer_m": 30, "filled_px": 0,
+                                         "filled_share": 0.0, "stopped": None}])
+def test_sources_manifest_records_no_fill_when_nothing_was_filled(tmp_path, fill):
+    m = rp.write_sources_manifest(str(tmp_path), "order_y", (-116.3, 35.8, -116.2, 35.9),
+                                  "EPSG:5070", built="2026-09-24", resolution_m=210.0,
+                                  fill=fill)
+    assert len(m["sources"]) == 3
+    assert not any(s.get("role") == "hole fill" for s in m["sources"])

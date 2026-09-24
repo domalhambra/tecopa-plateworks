@@ -586,7 +586,177 @@ def _slice_window(wminx, wminy, wmaxx, wmaxy, T, w_px, h_px):
     return Window(c0, r0, c1 - c0, r1 - r0)
 
 
-def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
+# ---- hole fill: the 3DEP dynamic service can answer a sub-request with an empty
+# tile and say nothing (acceptance, 2026-09-24: 12.1% of the east-west plate was NaN
+# where ~5.6% is ocean or Canada, in rectangular blocks over Idaho, Montana and
+# southern California). A dynamic grid's holes are filled from the static tiles,
+# which py3dep reads from these VRTs itself. Read with rasterio directly: no py3dep,
+# so the fill is testable in .venv.
+STATIC_LAYER_URLS = {
+    10: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/13/TIFF/"
+        "USGS_Seamless_DEM_13.vrt",
+    30: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/"
+        "USGS_Seamless_DEM_1.vrt",
+}
+FILL_GDAL_ENV = {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # no S3 directory listing per tile
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.vrt",
+    "GDAL_HTTP_MAX_RETRY": "4",                     # GDAL's own, under with_retries
+    "GDAL_HTTP_RETRY_DELAY": "5",
+    "VSI_CACHE": "TRUE",
+}
+# Below any US ground (Death Valley is -86 m): a leaked nodata, or an overview cell
+# averaged with the tiles' -999999 nodata, is not elevation.
+FILL_FLOOR_M = -1000.0
+# The fill decimates its read onto the tiles' own overviews (2, 4, 8), keeping at
+# least this many source cells per grid cell. Full resolution is bandwidth-bound:
+# one 512 x 95 strip of the east-west plate took 35 s through a WarpedVRT at 1
+# arc-second and 5 s from overview 4, the same ground.
+FILL_MIN_SAMPLES = 1.5
+
+
+def fill_layer_m(grid_m) -> int:
+    """The static layer a dynamic grid's holes are filled from: 30 m from a 30 m
+    grid up, else 10 m."""
+    return 30 if grid_m >= 30 else 10
+
+
+def fill_sampling(src_m, grid_m):
+    """(decimation, resampling) for reading source cells of `src_m` onto a grid of
+    `grid_m`. Decimation is the largest power of two that still leaves
+    FILL_MIN_SAMPLES source cells per grid cell, so GDAL reads the tiles'
+    overviews instead of every full-resolution cell. Average when the (decimated)
+    source is finer than the grid, bilinear when it is coarser."""
+    d = 1
+    while src_m * d * 2 * FILL_MIN_SAMPLES <= grid_m:
+        d *= 2
+    resampling = Resampling.average if src_m * d < grid_m else Resampling.bilinear
+    return d, resampling
+
+
+def _open_static_layer(layer_m):
+    return rasterio.open(STATIC_LAYER_URLS[layer_m])
+
+
+def _source_cell_m(src):
+    """The source's cell in metres, on its coarser axis (latitude for degrees)."""
+    rx, ry = abs(src.res[0]), abs(src.res[1])
+    if src.crs is not None and src.crs.is_geographic:
+        return max(rx, ry) * 111_320.0
+    return max(rx, ry)
+
+
+def _read_static(src, bounds, dst_crs, dst_transform, shape, grid_m):
+    """The static layer on exactly `shape` cells of the grid at `dst_transform`, NaN
+    where the tiles hold nothing (ocean, most of Canada and Mexico)."""
+    from rasterio.warp import reproject, transform_bounds
+    from rasterio.windows import Window
+    out = np.full(shape, np.nan, "float32")
+    d, resampling = fill_sampling(_source_cell_m(src), grid_m)
+    g = transform_bounds(dst_crs, src.crs, *bounds, densify_pts=21)
+    win = src.window(*g)
+    pad = 2 * d                      # room for the resampling kernel at the edges
+    c0 = max(0, math.floor(win.col_off) - pad)
+    r0 = max(0, math.floor(win.row_off) - pad)
+    c1 = min(src.width, math.ceil(win.col_off + win.width) + pad)
+    r1 = min(src.height, math.ceil(win.row_off + win.height) + pad)
+    if c1 <= c0 or r1 <= r0:
+        return out                   # outside the layer entirely
+    win = Window(c0, r0, c1 - c0, r1 - r0)
+    oh, ow = max(1, math.ceil(win.height / d)), max(1, math.ceil(win.width / d))
+    arr = src.read(1, window=win, out_shape=(oh, ow), resampling=Resampling.average)
+    arr = arr.astype("float32", copy=False)
+    bad = arr < FILL_FLOOR_M
+    if src.nodata is not None and not np.isnan(src.nodata):
+        bad |= arr == src.nodata
+    arr[bad] = np.nan
+    src_t = src.window_transform(win) * rasterio.Affine.scale(win.width / ow,
+                                                               win.height / oh)
+    reproject(source=arr, destination=out, src_transform=src_t, src_crs=src.crs,
+              src_nodata=np.nan, dst_transform=dst_transform, dst_crs=dst_crs,
+              dst_nodata=np.nan, resampling=resampling)
+    return out
+
+
+def fill_dem_holes(dst, grid_m, open_static=None):
+    """Fill the NaN cells of an open dem.tif (`dst`, mode r+) from the static 3DEP
+    tiles, one block at a time so memory stays bounded: a block with no NaN costs
+    nothing, and a holed block reads the tiles onto just the cells around its
+    holes. Only NaN cells change; ocean stays NaN because the tiles hold nothing
+    there either. `open_static(layer_m)` opens the static layer (a test passes a
+    local raster). A read that still fails after with_retries stops the fill: the
+    plate keeps what was filled, the build carries on, and the record says why.
+
+    Returns {layer_m, total_px, hole_px, filled_px, holes_share, filled_share,
+    left_share, stopped}: shares are of the whole grid, stopped is None or the
+    error that stopped the fill."""
+    from rasterio.errors import RasterioError
+    from rasterio.windows import Window, bounds as window_bounds, transform as window_t
+    open_static = open_static or _open_static_layer
+    layer = fill_layer_m(grid_m)
+    total = dst.width * dst.height
+    hole_px = filled_px = 0
+    stopped = None
+    held = [None]                    # the static layer, opened at the first hole
+
+    def attempt(bounds, sub_t, shape):
+        try:
+            if held[0] is None:
+                held[0] = open_static(layer)
+            return _read_static(held[0], bounds, dst.crs, sub_t, shape, grid_m)
+        except Exception:
+            if held[0] is not None:  # a broken handle is reopened on the retry
+                held[0].close()
+                held[0] = None
+            raise
+
+    try:
+        with rasterio.Env(**FILL_GDAL_ENV):
+            for _, block in dst.block_windows(1):
+                arr = dst.read(1, window=block)
+                nan = np.isnan(arr)
+                if not nan.any():
+                    continue
+                hole_px += int(nan.sum())
+                if stopped is not None:
+                    continue         # still counted, no longer filled
+                rows = np.flatnonzero(nan.any(axis=1))
+                cols = np.flatnonzero(nan.any(axis=0))
+                r0, r1, c0, c1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
+                sub = Window(block.col_off + c0, block.row_off + r0, c1 - c0, r1 - r0)
+                bounds = window_bounds(sub, dst.transform)
+                sub_t = window_t(sub, dst.transform)
+                try:
+                    static = with_retries(
+                        lambda: attempt(bounds, sub_t, (r1 - r0, c1 - c0)),
+                        f"3DEP {layer} m tiles")
+                except (OSError, RasterioError, *_transient_errors()) as ex:
+                    stopped = " ".join(f"{type(ex).__name__}: {ex}".split())
+                    print(f"  Hole fill stopped: {stopped}", flush=True)
+                    continue
+                cur = arr[r0:r1, c0:c1]
+                take = np.isnan(cur) & np.isfinite(static)
+                if take.any():
+                    dst.write(np.where(take, static, cur), 1, window=sub)
+                    filled_px += int(take.sum())
+    finally:
+        if held[0] is not None:
+            held[0].close()
+    fill = {"layer_m": layer, "total_px": total, "hole_px": hole_px,
+            "filled_px": filled_px, "holes_share": hole_px / total,
+            "filled_share": filled_px / total,
+            "left_share": (hole_px - filled_px) / total, "stopped": stopped}
+    if filled_px:
+        print(f"  Filled {fill['filled_share']:.1%} of the plate from the 3DEP "
+              f"{layer} m tiles (the dynamic service left holes)", flush=True)
+    if hole_px:
+        print(f"  {fill['left_share']:.1%} of the plate has no elevation "
+              f"(ocean or across a border{', or the fill stopped' if stopped else ''})",
+              flush=True)
+    return fill
+
+
+def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
     """Fetch 3DEP and write the region COG onto ONE shared grid, in longitude slices
     (plan['n_slices']) so peak memory stays bounded no matter the bbox size: each
     slice is fetched, warped into its window of the target grid, merged prefer-finite
@@ -594,7 +764,11 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
     whole-bbox to_cog, which held source + destination + reprojection scratch for the
     entire region simultaneously and OOM'd at corridor scale. py3dep returns CONUS
     Albers (EPSG:5070); each slice is warped straight onto the region grid, and the
-    GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming."""
+    GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming.
+
+    A dynamic grid's holes are then filled from the static tiles (fill_dem_holes),
+    before the overviews are built so they see the filled grid. Returns
+    (out_path, fill): fill is fill_dem_holes' record, None for a static grid."""
     from rasterio.warp import reproject
     w_px, h_px = plan["grid"]
     T = plan["transform"]
@@ -629,10 +803,14 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
             existing = dst.read(1, window=win)
             dst.write(np.where(np.isnan(dst_arr), existing, dst_arr), 1, window=win)
             del da, src, dst_arr, existing
+        fill = None
+        if not _is_static(res):
+            print("  Checking the dynamic grid for holes...", flush=True)
+            fill = fill_dem_holes(dst, res, open_static=open_static)
         # Overviews are the image pyramid: coarse copies for zoomed-out reads.
         dst.build_overviews([2, 4, 8, 16, 32], Resampling.average)
         dst.update_tags(ns="rio_overview", resampling="average")
-    return out_path
+    return out_path, fill
 
 def overview_png(cog_path, out_png, long_edge=1400):
     with rasterio.open(cog_path) as ds:
@@ -651,12 +829,17 @@ def overview_png(cog_path, out_png, long_edge=1400):
     return (ow, oh), (bounds.left, bounds.bottom, bounds.right, bounds.top), crs
 
 def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
-                           resolution_m=10):
+                           resolution_m=10, fill=None):
     """Record what this region was built FROM (V1-12 continuity): source datasets,
     licenses, the exact fetch bbox, and sha256 of the produced assets. The DEM itself
     is gitignored; the committed manifest lets a rebuild be verified against what was
     validated (a hash mismatch = upstream 3DEP/NHD drift, not a local mistake) and
-    tells an archival job exactly which artifacts to preserve."""
+    tells an archival job exactly which artifacts to preserve.
+
+    `fill` is build_dem_cog's hole-fill record. When it filled anything, the static
+    layer is recorded as a source of its own, right after the DEM, with role
+    "hole fill", its layer and the share of the plate it filled: the same build
+    writes it, so this is a record, never a re-stamp."""
     import datetime
     import hashlib
 
@@ -689,6 +872,17 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
              "license": "Public domain (USGS/MRLC)"},
         ],
     }
+    if fill and fill.get("filled_px"):
+        layer = fill["layer_m"]
+        entry = {"dataset": f"USGS 3DEP {layer} m DEM, filling holes the dynamic "
+                            f"service left",
+                 "via": "rasterio, " + STATIC_LAYER_URLS[layer].rsplit("/", 1)[1],
+                 "license": "Public domain (USGS)",
+                 "role": "hole fill", "layer_m": layer,
+                 "filled_share": round(float(fill["filled_share"]), 4)}
+        if fill.get("stopped"):
+            entry["stopped"] = fill["stopped"]
+        manifest["sources"].insert(1, entry)
     # labels.json is baked later (scripts/build_labels.py) and usually absent here;
     # hashed only if present, and the labels bake syncs it into this manifest itself.
     for name in ("dem.tif", "hydro.json", "region.json", "overview.png", "landcover.tif",
@@ -765,8 +959,8 @@ def main():
         print(f"  land cover failed, continuing without biome tint: {ex}")
 
     print("Fetching 3DEP DEM...")
-    cog = build_dem_cog(tuple(args.bbox), dst_crs,
-                        os.path.join(out_dir, "dem.tif"), plan)
+    cog, fill = build_dem_cog(tuple(args.bbox), dst_crs,
+                              os.path.join(out_dir, "dem.tif"), plan)
 
     print("Building aim-view overview...")
     size, bounds, crs = overview_png(cog, os.path.join(out_dir, "overview.png"))
@@ -792,7 +986,7 @@ def main():
     with open(os.path.join(out_dir, "region.json"), "w") as f:
         json.dump(region, f, indent=2)
     write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs,
-                           resolution_m=plan["resolution_m"])
+                           resolution_m=plan["resolution_m"], fill=fill)
     print(f"Region ready: {out_dir}")
 
 if __name__ == "__main__":
