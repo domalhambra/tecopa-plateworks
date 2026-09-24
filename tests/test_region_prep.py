@@ -151,3 +151,33 @@ def test_slice_window_adds_no_column_for_float_noise_on_an_exact_edge():
     T = from_origin(0.0, 1000.0, 10.0, 10.0)
     win = rp._slice_window(12340.0 - 1e-9, 0.0, 20000.0 + 1e-9, 1000.0, T, 3000, 100)
     assert (int(win.col_off), int(win.width)) == (1234, 766)
+
+
+# ---- one test for a static cell size, the one py3dep itself applies ----
+
+NEAR = (10, 10.000001, 10.00005, 9.99995, 10.0002, 30.0001, 30.001, 59.9999,
+        60.0007, 25.0, 4.0, 1.0)
+
+
+@pytest.mark.parametrize("res", NEAR)
+def test_is_static_agrees_with_py3dep(res):
+    # py3dep.get_dem: `if np.isclose(resolution, (10, 30, 60)).any():` static tiles
+    assert rp._is_static(res) == bool(np.isclose(res, (10, 30, 60)).any())
+
+
+@pytest.mark.parametrize("res,static", [(10.000001, True), (10.00005, True),
+                                        (10.0002, False), (25.0, False)])
+def test_plan_and_manifest_use_the_same_static_test(tmp_path, res, static):
+    plan = rp.plan_build(LASSEN, "EPSG:32610", resolution_m=res)
+    assert plan["dynamic"] is (not static)
+    m = rp.write_sources_manifest(str(tmp_path), "r", LASSEN, "EPSG:32610",
+                                  built="2026-09-24", resolution_m=res)
+    assert ("dynamic service" in m["sources"][0]["dataset"]) is (not static)
+
+
+def test_resolution_arg_refuses_grids_finer_than_half_a_metre():
+    assert rp._resolution_arg("0.5") == 0.5
+    assert rp._resolution_arg("1") == 1.0
+    for bad in ("0.49", "0.1", "1e-3"):
+        with pytest.raises(argparse.ArgumentTypeError, match="0.5"):
+            rp._resolution_arg(bad)

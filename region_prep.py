@@ -50,6 +50,17 @@ GRID_INSET_M = 500.0       # grid sits inside fetched data: no reproject NaN fri
 # asked, and not square, so the requested resolution understates both the pixel
 # count and the real fetch size.
 DYNAMIC_OVERSAMPLE = 1.5
+# The finest cell size a build accepts. The finest 3DEP layer is 1 m and orders
+# never ask below it; 0.5 m leaves headroom and refuses a typo like 0.05.
+MIN_RESOLUTION_M = 0.5
+
+
+def _is_static(res):
+    """True when py3dep serves `res` from its static 10/30/60 m tiles. This is
+    py3dep.get_dem's own test, np.isclose(res, (10, 30, 60)) at numpy's default
+    tolerances, so the plan's dynamic flag and the sources.json label never
+    disagree with what was actually fetched."""
+    return any(abs(res - r) <= 1e-8 + 1e-5 * r for r in DEM_RES_CHOICES)
 
 def _densified_edge(bbox_4326, n=41):
     """Lon/lat points along all four bbox edges. Meridians and parallels curve in a
@@ -107,7 +118,7 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
         if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
             lc_res = res
             break
-    dynamic = resolution_m not in DEM_RES_CHOICES
+    dynamic = not _is_static(resolution_m)
     fetch_mpx = mpx * DYNAMIC_OVERSAMPLE if dynamic else mpx
     n_slices = max(1, int(np.ceil(fetch_mpx / SLICE_BUDGET_MPX)))
     return {"resolution_m": resolution_m, "auto": auto, "dynamic": dynamic,
@@ -119,18 +130,19 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
             "est_peak_gb": fetch_mpx / n_slices * 4 * 10 / 1024}
 
 def _resolution_arg(value):
-    """--resolution: 'auto' (None) or a positive, finite number of metres. A static
-    layer (10/30/60) comes back as the int it always was, so an explicit static
-    build writes the same region.json and sources.json as before."""
+    """--resolution: 'auto' (None) or a finite number of metres, at least
+    MIN_RESOLUTION_M. A static layer (10/30/60) comes back as the int it always
+    was, so an explicit static build writes the same region.json and sources.json
+    as before."""
     if value == "auto":
         return None
     try:
         res = float(value)
     except ValueError as ex:
         raise argparse.ArgumentTypeError(f"not a number: {value!r}") from ex
-    if not math.isfinite(res) or not res > 0:
-        raise argparse.ArgumentTypeError("resolution must be 'auto' or a number "
-                                         "more than 0 m")
+    if not math.isfinite(res) or not res >= MIN_RESOLUTION_M:
+        raise argparse.ArgumentTypeError("resolution must be 'auto' or a number of "
+                                         f"at least {MIN_RESOLUTION_M:g} m")
     return int(res) if res in DEM_RES_CHOICES else res
 
 def _exterior_rings(geom):
@@ -561,7 +573,7 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
         "assets": {},
         "sources": [
             {"dataset": (f"USGS 3DEP {resolution_m:g} m DEM"
-                         if resolution_m in DEM_RES_CHOICES
+                         if _is_static(resolution_m)
                          else f"USGS 3DEP dynamic service, {resolution_m:g} m"),
              "via": "py3dep.get_dem", "license": "Public domain (USGS)"},
             {"dataset": "USGS NHD waterbodies + network flowlines",
