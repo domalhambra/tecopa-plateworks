@@ -133,6 +133,16 @@ def _nice_grid(need_m, finest) -> float:
     return max(float(finest), math.floor(need_m * 4) / 4.0)
 
 
+def reference_share(coverage) -> float:
+    """The share of the ground that is the US, by choose_grid's rule: the best share
+    among the layers at or finer than 10 m, else the best of whatever layers are
+    present (see choose_grid's docstring). `coverage` maps layer metres (int or
+    str) to share and must not be empty."""
+    coverage = {int(r): share for r, share in coverage.items()}
+    us_reference = [share for r, share in coverage.items() if r <= 10]
+    return max(us_reference) if us_reference else max(coverage.values())
+
+
 def choose_grid(need_m, coverage) -> dict:
     """The plate's grid for a print that needs `need_m` metres of ground per pixel.
     `coverage` maps 3DEP layer metres (int, or a string as JSON round-trips them) to
@@ -194,8 +204,7 @@ def choose_grid(need_m, coverage) -> dict:
     if not eligible:
         raise PlateError("No 3DEP elevation layer reports any coverage for this "
                          "ground.")
-    us_reference = {r: share for r, share in eligible.items() if r <= 10}
-    best = max(us_reference.values()) if us_reference else max(eligible.values())
+    best = reference_share(eligible)
     if best < US_SHARE_MIN:
         raise PlateError("Most of this plate has no US elevation data (ocean or "
                          "across a border). Frame the tracks tighter or choose a "
