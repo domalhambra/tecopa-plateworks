@@ -224,6 +224,7 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 |---|---|---|
 | The Print comes in two sizes: $90 at 18×24 and $80 at 13×19. This supersedes the 2026-09-23 $80 at 18×24. | Dom's call. The 13×19 keeps the profile's $80 entry price. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows the old price |
 | The Poster, the digital final, drops from $79 to $39. | Dom's call. At $79 it sat $1 below the 13×19 Print, which includes it. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $79 |
+| The Edition N+1 digital edition drops from $49 to $25. | Dom's call. At $49 it cost more than the $39 Poster, and the reprint must stay below a first year. $25 keeps the two-thirds ratio. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $49 |
 
 ## Rejected and deferred
 
