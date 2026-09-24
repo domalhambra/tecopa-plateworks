@@ -906,10 +906,13 @@ def credit_line(region) -> str:
             continue
         for token, credit in CREDIT_DATASETS:
             if token in ds:
-                parts.append(credit)
+                part = credit
                 break
         else:
-            parts.append(ds.strip())
+            part = ds.strip()
+        # a hole-filled dynamic grid records 3DEP twice; the credit names it once
+        if part not in parts:
+            parts.append(part)
     line = "".join(c for c in " - ".join(parts) if " " <= c <= "~")
     return line[:CREDIT_MAX_CHARS]
 

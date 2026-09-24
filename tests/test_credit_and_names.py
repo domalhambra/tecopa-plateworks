@@ -155,6 +155,20 @@ def test_credit_line_unrecognized_dataset_passes_through_verbatim(tmp_path):
                                 {"dataset": "Ordnance Survey OpenData (OGL v3)"}])
     assert credit_line(r) == "Terrain USGS 3DEP - Ordnance Survey OpenData (OGL v3)"
 
+def test_credit_line_names_a_hole_filled_plate_once(tmp_path):
+    # a dynamic grid whose holes were filled from the static tiles records two 3DEP
+    # sources (region_prep.write_sources_manifest); the credit names 3DEP once
+    from app.main import credit_line
+    r = _region_stub(tmp_path, [
+        {"dataset": "USGS 3DEP dynamic service, 210 m"},
+        {"dataset": "USGS 3DEP 30 m DEM, filling holes the dynamic service left",
+         "role": "hole fill", "layer_m": 30, "filled_share": 0.0641},
+        {"dataset": "USGS NHD waterbodies + network flowlines"},
+        {"dataset": "NLCD 2021 land cover (30 m)"},
+        {"dataset": "USGS GNIS Landforms"},
+    ])
+    assert credit_line(r) == LASSEN_CREDIT
+
 def test_credit_line_missing_or_empty_sources_is_blank(tmp_path):
     from app.main import credit_line
     assert credit_line(_region_stub(tmp_path, write=False)) == ""   # no sources.json
