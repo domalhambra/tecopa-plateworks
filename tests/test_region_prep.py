@@ -10,6 +10,8 @@ rp = pytest.importorskip("region_prep")
 
 LASSEN = (-120.90, 40.33, -120.50, 40.78)          # county-scale (~34 x 50 km)
 CORRIDOR = (-116.95, 39.20, -111.35, 42.05)        # elko_bonneville (~483 x 331 km)
+# a worst-case 16x20 order's widened frame: ~200 x 300 km, EPSG:32611
+ORDER_16X20 = (-117.5, 36.5, -115.2, 39.2)
 
 
 def test_auto_picks_fine_grid_for_county_scale():
@@ -56,13 +58,48 @@ def test_explicit_resolution_below_30m_still_bakes_30m_landcover():
 
 
 def test_explicit_resolution_landcover_rounds_to_the_nearest_metre():
-    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=45.6)
+    # LASSEN is small enough that 46 m land cover stays under budget: no coarsening
+    plan = rp.plan_build(LASSEN, "EPSG:32610", resolution_m=45.6)
     assert plan["landcover_resolution_m"] == 46
 
 
-def test_explicit_30m_resolution_bakes_30m_landcover():
-    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=30)
+def test_explicit_resolution_landcover_rounds_then_coarsens_when_over_budget():
+    # CORRIDOR at 45.6 m rounds to 46 m first (~75 Mpx, over budget), then doubles
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=45.6)
+    assert plan["landcover_resolution_m"] == 92
+    w, h, _ = rp.projected_grid(CORRIDOR, "EPSG:32611", plan["landcover_resolution_m"])
+    assert w * h <= rp.LANDCOVER_BUDGET_MPX * 1e6
+
+
+def test_explicit_30m_resolution_bakes_30m_landcover_when_under_budget():
+    # LASSEN's own grid at 30 m is small; nothing to coarsen
+    plan = rp.plan_build(LASSEN, "EPSG:32610", resolution_m=30)
     assert plan["landcover_resolution_m"] == 30
+
+
+def test_explicit_resolution_landcover_coarsens_when_over_budget():
+    # CORRIDOR at its own 30 m grid is ~177 Mpx of land cover -- almost 3x
+    # LANDCOVER_BUDGET_MPX -- so it coarsens, exactly like the auto path would for
+    # this same box (test_auto_coarsens_corridor_scale_and_slices_it: 60 m)
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=30)
+    assert plan["landcover_resolution_m"] == 60
+    w, h, _ = rp.projected_grid(CORRIDOR, "EPSG:32611", plan["landcover_resolution_m"])
+    assert w * h <= rp.LANDCOVER_BUDGET_MPX * 1e6
+
+
+def test_explicit_resolution_landcover_coarsens_over_a_worst_case_order_box():
+    # a ~200 x 300 km widened frame (a 16x20 order pushed past 2x upsample): the
+    # DEM's own 30 m grid would bake a ~68 Mpx land cover fetch, over budget
+    plan = rp.plan_build(ORDER_16X20, "EPSG:32611", resolution_m=30)
+    assert plan["landcover_resolution_m"] >= 60
+    w, h, _ = rp.projected_grid(ORDER_16X20, "EPSG:32611", plan["landcover_resolution_m"])
+    assert w * h <= rp.LANDCOVER_BUDGET_MPX * 1e6
+
+
+def test_explicit_210m_grid_over_a_worst_case_order_box_stays_210():
+    # already well under budget at the DEM's own grid: no coarsening needed
+    plan = rp.plan_build(ORDER_16X20, "EPSG:32611", resolution_m=210)
+    assert plan["landcover_resolution_m"] == 210
 
 
 def test_auto_landcover_choice_is_unchanged_by_the_explicit_path():

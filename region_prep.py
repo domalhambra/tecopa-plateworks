@@ -111,7 +111,10 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
     the retry budget on its own (acceptance, 2026-09-24: an 874 s corridor build
     whose land cover failed). A DEM grid finer than 30 m still bakes 30 m land
     cover -- pygeohydro.nlcd_bygeom accepts any resolution but warns below NLCD's
-    own 30 m, so nothing finer is worth fetching."""
+    own 30 m, so nothing finer is worth fetching. That floored grid can still be
+    too big on a wide plate (a corridor-scale order, or a frame widened for coarse
+    data): it then doubles until it fits LANDCOVER_BUDGET_MPX, the same spirit as
+    the auto path's own 30/60 choice."""
     auto = resolution_m is None
     if auto:
         resolution_m = DEM_RES_CHOICES[-1]
@@ -131,6 +134,14 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
                 break
     else:
         lc_res = max(30, round(resolution_m)) if resolution_m >= 30 else 30
+        # the DEM's own grid can still be too big for a huge explicit-resolution
+        # plate (a wide order widened for coarse data): coarsen in doubling steps,
+        # the same spirit as the auto path's 30/60 choice, until it fits.
+        while True:
+            wl, hl, _ = projected_grid(bbox_4326, dst_crs, lc_res)
+            if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
+                break
+            lc_res *= 2
     dynamic = not _is_static(resolution_m)
     fetch_mpx = mpx * DYNAMIC_OVERSAMPLE if dynamic else mpx
     n_slices = max(1, int(np.ceil(fetch_mpx / SLICE_BUDGET_MPX)))
