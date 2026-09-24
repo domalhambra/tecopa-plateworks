@@ -26,7 +26,7 @@ import certifi
 os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 os.environ.setdefault("SSL_CERT_DIR", "")
 
-import argparse, json, math
+import argparse, importlib, json, math, time
 import numpy as np
 import rasterio
 from rasterio.enums import Resampling
@@ -244,12 +244,55 @@ def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
                                "order": order, "name": str(row.get("gnis_name") or "")})
     return {"crs": dst_crs, "lakes": lakes, "rivers": rivers}
 
+# A 3DEP or NLCD service can be down for a minute (acceptance: the WMS answered
+# "Service is currently not available" and the same request worked minutes later).
+# A transient failure is retried after each of these waits, in seconds.
+_RETRY_WAITS = (20, 60)
+_sleep = time.sleep                  # tests swap it out
+# Errors that say "the file is not there", not "the network hiccuped".
+_LASTING_OS_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError,
+                      NotADirectoryError)
+
+
+def _transient_errors() -> tuple:
+    """The exception types worth retrying, resolved at call time. async_retriever
+    wraps only a non-200 answer (as ServiceError, not retried: a 4xx is lasting);
+    a dropped connection escapes as aiohttp's ClientError, and py3dep raises its
+    own ServiceUnavailableError (a pygeoogc subclass) for an unreadable answer."""
+    kinds = [TimeoutError, ConnectionError, OSError]
+    for mod, name in (("aiohttp", "ClientError"),
+                      ("pygeoogc.exceptions", "ServiceUnavailableError"),
+                      ("py3dep.exceptions", "ServiceUnavailableError")):
+        try:
+            kinds.append(getattr(importlib.import_module(mod), name))
+        except (ImportError, AttributeError):
+            pass
+    return tuple(kinds)
+
+
+def with_retries(fetch, service):
+    """fetch(), retried after each _RETRY_WAITS wait on a transient failure. Each
+    retry is announced on stdout, so it streams into the build's progress log. A
+    lasting error, or the last transient one, raises."""
+    transient = _transient_errors()
+    for wait in (*_RETRY_WAITS, None):
+        try:
+            return fetch()
+        except transient as ex:
+            if wait is None or isinstance(ex, _LASTING_OS_ERRORS):
+                raise
+            print(f"{service} busy, retrying in {wait:g} s "
+                  f"({type(ex).__name__}: {ex})", flush=True)
+            _sleep(wait)
+
+
 def fetch_dem(bbox, resolution_m=10):
     # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard; 30 m
     # for corridor-scale regions where 10 m would be a multi-GB build. py3dep serves
     # 10/30/60 from static tiles and any other cell size from the dynamic service.
     import py3dep
-    return py3dep.get_dem(bbox, resolution=resolution_m)  # xarray DataArray, EPSG:4326
+    # xarray DataArray, EPSG:4326
+    return with_retries(lambda: py3dep.get_dem(bbox, resolution=resolution_m), "3DEP")
 
 # The 3DEP layers an order can draw from, in metres. 3 m (1/9 arc-second) is being
 # retired and is missing in many places (Tecopa has none), so coverage is measured,

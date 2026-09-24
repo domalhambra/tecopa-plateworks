@@ -181,3 +181,104 @@ def test_resolution_arg_refuses_grids_finer_than_half_a_metre():
     for bad in ("0.49", "0.1", "1e-3"):
         with pytest.raises(argparse.ArgumentTypeError, match="0.5"):
             rp._resolution_arg(bad)
+
+
+# ---- a 3DEP fetch is retried through a brief outage (acceptance: WMS 503) ----
+import sys
+import types
+
+
+def _fake_py3dep(monkeypatch, outcomes):
+    """py3dep stand-in whose get_dem answers each call with the next outcome; an
+    Exception is raised instead. Returns the call log."""
+    exc = types.ModuleType("py3dep.exceptions")
+
+    class ServiceUnavailableError(Exception):
+        pass
+
+    class InputValueError(Exception):
+        pass
+    exc.ServiceUnavailableError = ServiceUnavailableError
+    exc.InputValueError = InputValueError
+    mod = types.ModuleType("py3dep")
+    mod.exceptions = exc
+    calls = []
+
+    def get_dem(bbox, resolution):
+        calls.append((bbox, resolution))
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, BaseException):
+            raise out
+        return out
+    mod.get_dem = get_dem
+    monkeypatch.setitem(sys.modules, "py3dep", mod)
+    monkeypatch.setitem(sys.modules, "py3dep.exceptions", exc)
+    return mod, calls
+
+
+@pytest.fixture
+def waits(monkeypatch):
+    seen = []
+    monkeypatch.setattr(rp, "_sleep", seen.append)
+    return seen
+
+
+def test_fetch_dem_retries_a_service_outage(monkeypatch, waits, capsys):
+    outcomes = []
+    mod, calls = _fake_py3dep(monkeypatch, outcomes)
+    busy = mod.exceptions.ServiceUnavailableError("Service is currently not available")
+    outcomes += [busy, busy, "dem"]
+    assert rp.fetch_dem((0, 0, 1, 1), 35) == "dem"
+    assert len(calls) == 2 + 1 and waits == list(rp._RETRY_WAITS) == [20, 60]
+    out = capsys.readouterr().out
+    assert "3DEP busy, retrying in 20 s" in out and "3DEP busy, retrying in 60 s" in out
+
+
+def test_fetch_dem_gives_up_after_two_retries(monkeypatch, waits):
+    errs = [TimeoutError("timed out")] * 3
+    _, calls = _fake_py3dep(monkeypatch, errs)
+    with pytest.raises(TimeoutError):
+        rp.fetch_dem((0, 0, 1, 1), 35)
+    assert len(calls) == 3 and waits == [20, 60]
+
+
+@pytest.mark.parametrize("make_err", [
+    lambda: ConnectionResetError(54, "Connection reset by peer"),
+    lambda: TimeoutError("The read operation timed out"),
+    lambda: OSError("network is unreachable"),
+])
+def test_fetch_dem_retries_network_errors(monkeypatch, waits, make_err):
+    _, calls = _fake_py3dep(monkeypatch, [make_err(), "dem"])
+    assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
+    assert waits == [20]
+
+
+def test_fetch_dem_retries_an_aiohttp_disconnect(monkeypatch, waits):
+    aio = types.ModuleType("aiohttp")
+
+    class ClientError(Exception):
+        pass
+
+    class ServerDisconnectedError(ClientError):
+        pass
+    aio.ClientError = ClientError
+    monkeypatch.setitem(sys.modules, "aiohttp", aio)
+    _, calls = _fake_py3dep(monkeypatch, [ServerDisconnectedError("Server disconnected"),
+                                          "dem"])
+    assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
+    assert waits == [20]
+
+
+@pytest.mark.parametrize("make_err", [
+    lambda: ValueError("bad bbox"),
+    lambda: FileNotFoundError("no such cache file"),
+    lambda: sys.modules["py3dep"].exceptions.InputValueError("resolution"),
+])
+def test_fetch_dem_raises_a_lasting_error_at_once(monkeypatch, waits, make_err):
+    outcomes = []
+    _, calls = _fake_py3dep(monkeypatch, outcomes)
+    err = make_err()
+    outcomes += [err, "dem"]
+    with pytest.raises(type(err)):
+        rp.fetch_dem((0, 0, 1, 1), 10)
+    assert len(calls) == 1 and waits == []
