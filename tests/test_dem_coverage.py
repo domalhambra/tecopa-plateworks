@@ -4,6 +4,7 @@
 # CI; the network query is checked by hand on the Mac (plan Task 4).
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from shapely.geometry import box
@@ -26,11 +27,21 @@ def test_no_cover():
     assert rp.coverage_fraction([], BBOX) == 0.0
 
 
-def test_cli_usage_error_exits_2():
-    out = subprocess.run([sys.executable, "scripts/dem_coverage.py", "1", "2"],
+SCRIPT = str(Path(__file__).resolve().parent.parent / "scripts" / "dem_coverage.py")
+
+
+@pytest.mark.parametrize("args", [
+    ["1", "2"],                                   # too few
+    ["-116.27", "35.88", "-116.24", "north"],     # not a number
+    ["-116.27", "35.88", "-116.24", "nan"],       # not a usable number
+])
+def test_cli_bad_arguments_print_usage_and_exit_2(tmp_path, args):
+    # run from elsewhere: the script must not depend on the current directory
+    out = subprocess.run([sys.executable, SCRIPT, *args], cwd=tmp_path,
                          capture_output=True, text=True)
-    assert out.returncode == 2
-    assert "usage" in out.stderr
+    assert out.returncode == 2, out.stderr
+    assert out.stderr.startswith("usage: dem_coverage.py")
+    assert "Traceback" not in out.stderr
 
 
 # ---- the index query: Esri rings, and a failed query never reads as 0.0 ----

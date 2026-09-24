@@ -8,18 +8,32 @@ subprocess, so the fetch stack never enters .venv (invariant 13).
     .venv-prep/bin/python scripts/dem_coverage.py <west> <south> <east> <north>
 """
 import json
+import math
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+USAGE = "usage: dem_coverage.py <west> <south> <east> <north>"
+
+
+def _bbox(argv):
+    """Four finite numbers, or None."""
+    if len(argv) != 4:
+        return None
+    try:
+        bbox = tuple(float(v) for v in argv)
+    except ValueError:
+        return None
+    return bbox if all(math.isfinite(v) for v in bbox) else None
+
 
 def main(argv):
-    if len(argv) != 4:
-        print("usage: dem_coverage.py <west> <south> <east> <north>", file=sys.stderr)
+    bbox = _bbox(argv)
+    if bbox is None:
+        print(USAGE, file=sys.stderr)
         return 2
     import region_prep   # sets SSL_CERT_FILE before anything imports aiohttp
-    bbox = tuple(float(v) for v in argv)
     cov = region_prep.layer_coverage(bbox)
     print(json.dumps({str(k): round(v, 4) for k, v in cov.items()}))
     return 0
