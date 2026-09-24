@@ -101,7 +101,17 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
     but is flagged when over budget), the slice count that keeps peak memory
     bounded, the landcover resolution, and honest size estimates. A resolution off
     DEM_RES_CHOICES is fetched from the dynamic service, which returns more cells
-    than asked (DYNAMIC_OVERSAMPLE), so its slices and peak are sized for that."""
+    than asked (DYNAMIC_OVERSAMPLE), so its slices and peak are sized for that.
+
+    Landcover resolution: the auto path is unchanged, picking the finest of 30/60
+    that fits LANDCOVER_BUDGET_MPX. An explicit resolution (an order plate) instead
+    bakes land cover at the DEM's own grid, floored at 30 m (NLCD's native
+    resolution): a 210 m east-west order plate then fetches 210 m land cover, not
+    a fixed 60 m WMS mosaic over a ~350 Mpx, ~50-sub-request area that can outlast
+    the retry budget on its own (acceptance, 2026-09-24: an 874 s corridor build
+    whose land cover failed). A DEM grid finer than 30 m still bakes 30 m land
+    cover -- pygeohydro.nlcd_bygeom accepts any resolution but warns below NLCD's
+    own 30 m, so nothing finer is worth fetching."""
     auto = resolution_m is None
     if auto:
         resolution_m = DEM_RES_CHOICES[-1]
@@ -112,12 +122,15 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
                 break
     w, h, transform = projected_grid(bbox_4326, dst_crs, resolution_m)
     mpx = w * h / 1e6
-    lc_res = 60
-    for res in (30, 60):
-        wl, hl, _ = projected_grid(bbox_4326, dst_crs, res)
-        if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
-            lc_res = res
-            break
+    if auto:
+        lc_res = 60
+        for res in (30, 60):
+            wl, hl, _ = projected_grid(bbox_4326, dst_crs, res)
+            if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
+                lc_res = res
+                break
+    else:
+        lc_res = max(30, round(resolution_m)) if resolution_m >= 30 else 30
     dynamic = not _is_static(resolution_m)
     fetch_mpx = mpx * DYNAMIC_OVERSAMPLE if dynamic else mpx
     n_slices = max(1, int(np.ceil(fetch_mpx / SLICE_BUDGET_MPX)))

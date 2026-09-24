@@ -37,6 +37,41 @@ def test_explicit_resolution_is_honored_but_flagged():
     assert plan["grid_mpx"] / plan["n_slices"] <= rp.SLICE_BUDGET_MPX
 
 
+# ---- explicit-resolution land cover: bakes at the DEM's own grid, floored at 30 m
+# (order plates, acceptance 2026-09-24: an 874 s east-west build whose land cover
+# failed because it stayed at a fixed 60 m WMS mosaic over a ~350 Mpx area) ----
+
+def test_explicit_coarse_resolution_bakes_landcover_at_its_own_grid():
+    # a 210 m east-west order plate: land cover should match, not sit at 60 m
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=210)
+    assert plan["landcover_resolution_m"] == 210
+
+
+def test_explicit_resolution_below_30m_still_bakes_30m_landcover():
+    # NLCD's own native resolution is 30 m; nothing finer is worth fetching
+    plan = rp.plan_build(LASSEN, "EPSG:32610", resolution_m=10)
+    assert plan["landcover_resolution_m"] == 30
+    plan = rp.plan_build(LASSEN, "EPSG:32610", resolution_m=4.5)
+    assert plan["landcover_resolution_m"] == 30
+
+
+def test_explicit_resolution_landcover_rounds_to_the_nearest_metre():
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=45.6)
+    assert plan["landcover_resolution_m"] == 46
+
+
+def test_explicit_30m_resolution_bakes_30m_landcover():
+    plan = rp.plan_build(CORRIDOR, "EPSG:32611", resolution_m=30)
+    assert plan["landcover_resolution_m"] == 30
+
+
+def test_auto_landcover_choice_is_unchanged_by_the_explicit_path():
+    # pin against the numbers from before this change: the auto path must stay
+    # exactly as today regardless of the new explicit-resolution branch
+    assert rp.plan_build(LASSEN, "EPSG:32610")["landcover_resolution_m"] == 30
+    assert rp.plan_build(CORRIDOR, "EPSG:32611")["landcover_resolution_m"] == 60
+
+
 def test_projected_grid_matches_bbox_ground_size():
     w, h, transform = rp.projected_grid(CORRIDOR, "EPSG:32611", 30)
     # the elko_bonneville region was built on exactly this logic: ~483 x 331 km
