@@ -81,7 +81,8 @@ def test_refine_after_reproof_reflects_the_new_spec():
     c = _client(); j = _upload(c)
     _proof(c, j)
     # re-proof restamps a different sheet (wider crop: the zoom cap is judged at the
-    # final dpi, and 30 km over 12 in would be finer than the plate's 10 m/px floor)
+    # final dpi, and 30 km over 12 in would be finer than the plate's 5 m/px floor,
+    # 10 m native_resolution_m at the 2x MAX_UPSAMPLE cap)
     _proof(c, j, print_w=12, print_h=16, **_crop(j, km_wide=45.0))
     body = c.post("/api/proof/refine", data={"session_id": j["session"]}).json()
     s = _wait_done(c, body["job"])

@@ -52,8 +52,9 @@ export function setMode(m) {
 
 // Reset the frame to the server-computed starter crop (clears only the crop). The
 // server sizes the starter for 18x24; if the active print size was restored to
-// something else, re-fit so the crop matches that aspect and clears ITS zoom floor
-// on entry (else a returning operator's first proof would trip the cap).
+// something else, re-fit so the crop matches that aspect and meets ITS 1x framing
+// target on entry (else a returning operator's first proof would need more than
+// the zoom cap's upsampling allows).
 export function resetFrame() {
   if (!state.starterCrop) return;
   const s = state.scale;
@@ -65,8 +66,8 @@ export function resetFrame() {
 }
 
 // Re-fit the current crop to a new print aspect: keep center, grow to the new size's
-// zoom-cap floor when the region allows, clamp inside the overview. Never leaves a
-// stale aspect mismatch.
+// 1x framing target when the region allows, clamp inside the overview. Never leaves
+// a stale aspect mismatch.
 export function refitForSize() {
   const c = cropOverviewPx(); const r = activeRegion(); const mpp = metresPerPx();
   if (!c || !r || !mpp) return;

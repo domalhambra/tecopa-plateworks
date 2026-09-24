@@ -16,7 +16,8 @@ def _spec(**kw):
     # The crop is sized ABOVE the zoom cap on purpose: ZoomTooTightError subclasses
     # SpecError, so a too-tight fixture would let the bounds tests below pass on the
     # wrong exception. 18000 m over 18 in at 96 dpi is 10.4 m/px, just clear of the
-    # 10 m data floor, so the only thing validate() can object to is the knob.
+    # 5 m floor (native_resolution_m 10 m at the 2x MAX_UPSAMPLE cap), so the only
+    # thing validate() can object to is the knob.
     base = dict(region_id="lassen_ca", crs="EPSG:32610",
                 crop=(0.0, 0.0, 18000.0, 24000.0), print_w_in=18.0, print_h_in=24.0,
                 native_resolution_m=10.0, tracks=[], hotspots=[])
