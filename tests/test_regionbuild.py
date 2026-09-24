@@ -278,3 +278,59 @@ def test_run_build_accepts_an_out_root_spelled_differently(tmp_path):
                  labels_script=_write_stub_labels(tmp_path),
                  set_progress=lambda s: None)
     assert (root / "stub_region" / "region.json").exists()
+
+
+# ---- out_root resolves against repo_root, where region_prep runs ----
+
+STUB_ORDER_FAIL = STUB_ORDER_PREP + "\nimport sys\nsys.exit(3)\n"
+
+
+def _order_build(tmp_path, regions_root, out_root, prep_body=STUB_ORDER_PREP):
+    """run_build with repo_root = tmp_path/repo, which is not the test's cwd."""
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(prep_body)
+    labels = tmp_path / "labels_argv.py"
+    labels.write_text(STUB_LABELS_ARGV)
+    env = dict(os.environ, LABELS_ARGV_OUT=str(tmp_path / "argv.json"))
+    params = dict(_params(), resolution=4.0, out_root=out_root)
+    rb.run_build(params, repo_root=str(repo), regions_root=regions_root,
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=str(labels), set_progress=lambda s: None, env=env)
+    return repo
+
+
+@pytest.mark.parametrize("regions_root,out_root", [
+    ("work/plate", "work/./plate"),               # both relative to repo_root
+    (None, "work/plate"),                         # absolute vs relative, same folder
+])
+def test_out_root_equal_relative_to_the_repo_root_builds_there(
+        tmp_path, regions_root, out_root):
+    if regions_root is None:
+        regions_root = str(tmp_path / "repo" / "work" / "plate")
+    repo = _order_build(tmp_path, regions_root, out_root)
+    plate = repo / "work" / "plate"
+    assert (plate / "stub_region" / "region.json").exists()
+    # region_prep and the labels bake both get the resolved, absolute folder
+    assert _json.load(open(tmp_path / "argv.json")) == [
+        "--root", str(plate), "stub_region"]
+
+
+@pytest.mark.parametrize("regions_root,out_root", [
+    ("work/a", "work/b"),
+    ("work/plate", None),                         # absolute out_root elsewhere
+])
+def test_out_root_different_relative_to_the_repo_root_raises(
+        tmp_path, regions_root, out_root):
+    if out_root is None:
+        out_root = str(tmp_path / "elsewhere" / "work" / "plate")
+    with pytest.raises(ValueError, match="out_root"):
+        _order_build(tmp_path, regions_root, out_root)
+
+
+def test_a_failed_order_build_sweeps_the_folder_under_the_repo_root(tmp_path):
+    with pytest.raises(RuntimeError):
+        _order_build(tmp_path, "work/plate", "work/plate", STUB_ORDER_FAIL)
+    assert (tmp_path / "repo" / "work" / "plate").is_dir()
+    assert not (tmp_path / "repo" / "work" / "plate" / "stub_region").exists()

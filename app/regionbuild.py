@@ -79,14 +79,21 @@ def run_build(params: dict, repo_root: str, regions_root: str,
     in-app build's. `out_root`, when given, must be `regions_root` (the same
     folder, however spelled): region_prep writes under out_root, and the failure
     sweep removes regions_root/<id>, so any other pairing sweeps the wrong
-    folder. A mismatch raises ValueError before anything is spawned."""
+    folder. A mismatch raises ValueError before anything is spawned. Both are
+    resolved against repo_root, where region_prep runs, and the resolved absolute
+    folder is what region_prep, the labels bake and the sweep all use."""
     rid = params["id"]
     if not re.fullmatch(r"[a-z0-9_]+", rid):
         raise ValueError(f"unsafe region id {rid!r}")
     out_root = params.get("out_root")
-    if out_root and os.path.abspath(out_root) != os.path.abspath(regions_root):
-        raise ValueError(f"out_root {out_root!r} must be regions_root "
-                         f"{regions_root!r}: a failed build sweeps regions_root")
+    sweep_root = regions_root
+    if out_root:
+        # join leaves an absolute path unchanged
+        out_root = os.path.abspath(os.path.join(repo_root, out_root))
+        if out_root != os.path.abspath(os.path.join(repo_root, regions_root)):
+            raise ValueError(f"out_root {params['out_root']!r} must be regions_root "
+                             f"{regions_root!r}: a failed build sweeps regions_root")
+        sweep_root = out_root
     w, s, e, n = params["bbox"]
     cmd = [prep_python, prep_script,
            "--id", rid, "--name", params["name"],
@@ -94,8 +101,8 @@ def run_build(params: dict, repo_root: str, regions_root: str,
            "--epsg", str(params["epsg"])]
     if params.get("resolution") is not None:
         cmd += ["--resolution", str(params["resolution"])]
-    if params.get("out_root"):
-        cmd += ["--out-root", params["out_root"]]
+    if out_root:
+        cmd += ["--out-root", out_root]
     tail: deque = deque(maxlen=10)
     proc = subprocess.Popen(cmd, cwd=repo_root, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -107,21 +114,21 @@ def run_build(params: dict, repo_root: str, regions_root: str,
             set_progress(line)
     rc = proc.wait()
     if rc != 0:
-        shutil.rmtree(os.path.join(regions_root, rid), ignore_errors=True)
+        shutil.rmtree(os.path.join(sweep_root, rid), ignore_errors=True)
         raise RuntimeError(
             f"region build failed (exit {rc}). Last output:\n" + "\n".join(tail))
     set_progress("Building place-name labels (GNIS)...")
     labels_note = None
     lab_cmd = [prep_python, labels_script]
-    if params.get("out_root"):
-        lab_cmd += ["--root", params["out_root"]]
+    if out_root:
+        lab_cmd += ["--root", out_root]
     lab_cmd.append(rid)
     lab = subprocess.run(lab_cmd, cwd=repo_root, capture_output=True, text=True,
                          env=env)
     if lab.returncode != 0:
         hint = f"python {labels_script} "
-        if params.get("out_root"):
-            hint += f"--root {params['out_root']} "
+        if out_root:
+            hint += f"--root {out_root} "
         hint += rid
         labels_note = ("Place-name labels failed to build -- the region works "
                        "without them. Rebuild later with: " + hint)
