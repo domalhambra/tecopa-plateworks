@@ -135,9 +135,14 @@ plates).
 | PT-101 Platinum | 17×22 | 16×20 | option |
 | LU-101 Luster | 4×6 | 4×6 | option |
 | Roll, 17" | 17 × any | 12×36 panoramic | later |
+| Photo lab | lab stock | 18×24 | on, sent out |
 
 Each row stores: paper name, sheet size, print size, ICC profile name, rendering
 intent, margins, whether the image rotates to feed, and the Print & Layout preset name.
+
+The PRO-1100 feeds at most 17 in wide, so an 18×24 goes to a photo lab. Its row has no
+printer preset. Finish writes the file to the lab's spec, which sub-project 4 settles.
+(Added 2026-09-24, Dom's call.)
 
 **Choosing the size:**
 
