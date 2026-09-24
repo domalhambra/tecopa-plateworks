@@ -91,12 +91,13 @@ const toCanvas = (px, py) => [px * state.scale, py * state.scale];
 const toOverview = (cx, cy) => [cx / state.scale, cy / state.scale];
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
-// Is the current crop below the zoom-cap floor for the selected print width?
+// Is the current crop below the zoom-cap floor for the selected print width? The
+// server allows r.max_upsample x finer ground than the plate (invariant 6).
 export function cropBelowFloor() {
   const c = cropOverviewPx(); const r = activeRegion(); const mpp = metresPerPx();
   if (!c || !r || !mpp) return false;
   const groundW = (c[2] - c[0]) * mpp;
-  return groundW < r.native_resolution_m * finalWidthPx();
+  return groundW < (r.native_resolution_m / (r.max_upsample || 1)) * finalWidthPx();
 }
 
 // Can NO in-region crop satisfy the zoom floor at the selected size? The largest
@@ -110,7 +111,7 @@ export function sizeInfeasibleForRegion() {
   const regW = r.bounds[2] - r.bounds[0];
   const regH = r.bounds[3] - r.bounds[1];
   const maxCropW = Math.min(regW, regH * (state.printW / state.printH));
-  return r.native_resolution_m * finalWidthPx() > maxCropW;
+  return (r.native_resolution_m / (r.max_upsample || 1)) * finalWidthPx() > maxCropW;
 }
 
 // The same zoom-floor test for an ARBITRARY output preset (a social format / device),
@@ -124,7 +125,7 @@ export function presetInfeasibleForRegion(preset) {
   const regH = r.bounds[3] - r.bounds[1];
   const aspect = preset.px[0] / preset.px[1];
   const maxCropW = Math.min(regW, regH * aspect);
-  return r.native_resolution_m * preset.px[0] > maxCropW;
+  return (r.native_resolution_m / (r.max_upsample || 1)) * preset.px[0] > maxCropW;
 }
 
 function cropAnnouncement() {

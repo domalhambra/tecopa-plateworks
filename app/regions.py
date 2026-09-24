@@ -11,6 +11,7 @@ from __future__ import annotations
 import json, os
 from pyproj import Transformer
 from app.geo import RegionGeo
+from app.spec import MAX_UPSAMPLE
 
 REGIONS_ROOT = "regions"
 
@@ -49,6 +50,7 @@ class Region:
                 "bounds": list(self.cfg["bounds"]),
                 "overview_size": list(self.cfg["overview_size"]),
                 "native_resolution_m": self.cfg["native_resolution_m"],
+                "max_upsample": MAX_UPSAMPLE,
                 "overview": f"/regions/{self.id}/overview.png",
                 "has_playa": os.path.exists(os.path.join(self.dir, "playa.json")),
                 "lonlat_bbox": list(self.lonlat_bbox)}
