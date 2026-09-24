@@ -386,6 +386,24 @@ def test_outside_the_lower_48(tmp_path, tools):
         op.prepare(str(d), tools, log=lambda s: None)
 
 
+# ---- a track file lonlat_extent silently skips must still be named, not lost ----
+
+def test_skipped_track_files_are_named_in_a_warning(tmp_path, tools):
+    d = _make_order(tmp_path)                       # good trip.gpx
+    (d / "in" / "junk.kml").write_text("not xml at all")
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert any(w == "Skipped 1 track file(s) that could not be read: junk.kml."
+              for w in state["warnings"])
+    assert "Skipped 1 track file(s)" in (d / "work" / "report.txt").read_text()
+
+
+def test_all_track_files_unreadable_still_refuses_with_no_track_points(tmp_path, tools):
+    d = _make_order(tmp_path)
+    (d / "in" / "trip.gpx").write_text("not xml at all")   # the only file, now garbage
+    with pytest.raises(od.OrderError, match="no track points"):
+        op.prepare(str(d), tools, log=lambda s: None)
+
+
 def test_coverage_failure_is_a_plate_error(tmp_path, tools):
     bad = tmp_path / "stubs" / "bad_coverage.py"
     bad.write_text('import sys\nsys.exit("boom")\n')

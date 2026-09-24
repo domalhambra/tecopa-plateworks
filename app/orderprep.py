@@ -204,9 +204,17 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     # repo even when the order folder given here is not.
     refuse_inside_repo(orders_root())
     order = load(order_dir)
-    tracks = lonlat_extent(order.payloads())["bbox"]
+    payloads = order.payloads()
+    tracks = lonlat_extent(payloads)["bbox"]
     if tracks is None:
         raise OrderError(f"no track points in {order.in_dir}")
+    # lonlat_extent merges every file's points into one bbox and skips a file it
+    # can't parse (or that has none) without a trace -- a customer's one garbage
+    # upload would otherwise vanish silently. Re-run it per file (the identical
+    # parser) to name what it dropped; the merged bbox above already proves at
+    # least one file was readable, so this is a warning, not the refusal above.
+    skipped_tracks = [name for data, name in payloads
+                      if lonlat_extent([(data, name)])["bbox"] is None]
     if not conus_covered(tracks):
         raise PlateError("These tracks are outside the lower 48. "
                          "Alaska and Hawaii come later.")
@@ -236,6 +244,9 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
 
     pw, ph = order.print_in()
     warnings = []
+    if skipped_tracks:
+        warnings.append(f"Skipped {len(skipped_tracks)} track file(s) that could "
+                        f"not be read: {', '.join(skipped_tracks)}.")
     fit = None if "frame" in manual else curated_fit(
         tracks, pw / ph, pw, curated_regions(tools.curated_root))
     if fit:
