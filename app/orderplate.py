@@ -28,7 +28,6 @@ STATIC_LAYERS_M = (10, 30, 60)   # py3dep's fast static tiles
 # finest source it holds. Plan Task 1 measured whether that is real lidar detail.
 USE_DYNAMIC_FINE = True
 CONUS = (-125.5, 24.3, -66.8, 49.5)
-_M_PER_DEG = 111320.0
 
 
 class PlateError(ValueError):
@@ -38,13 +37,6 @@ class PlateError(ValueError):
 def conus_covered(bbox) -> bool:
     w, s, e, n = bbox
     return w >= CONUS[0] and s >= CONUS[1] and e <= CONUS[2] and n <= CONUS[3]
-
-
-def order_epsg(bbox) -> int:
-    """The UTM zone of the tracks' centre; CONUS Albers when they span over 600 km."""
-    w, s, e, n = bbox
-    width_m = (e - w) * _M_PER_DEG * math.cos(math.radians((s + n) / 2.0))
-    return ALBERS_EPSG if width_m > ALBERS_ABOVE_M else utm_epsg(bbox)
 
 
 def _ring(bbox, n=41):
@@ -88,6 +80,19 @@ def track_fill(track_bounds_m, frame) -> float:
     return max(tw / (frame[2] - frame[0]), th / (frame[3] - frame[1]))
 
 
+def order_epsg(bbox, aspect) -> int:
+    """The UTM zone of the tracks' centre, unless the print's own nestled frame is
+    wider than 600 km, in which case CONUS Albers.
+
+    The 600 km line is drawn on the frame that will actually be built, in a
+    provisional UTM, not on a straight-line estimate of the tracks: a tall narrow
+    track can need Albers in landscape while staying UTM in portrait, and a track
+    under 600 km wide can still open out past it once nestled to fill the frame."""
+    utm = utm_epsg(bbox)
+    frame = nestled_frame(project_bbox(bbox, utm), aspect)
+    return ALBERS_EPSG if (frame[2] - frame[0]) > ALBERS_ABOVE_M else utm
+
+
 def widen_frame(frame, width_m) -> tuple:
     """The same centre and aspect, `width_m` wide. Never shrinks."""
     w0, h0 = frame[2] - frame[0], frame[3] - frame[1]
@@ -113,16 +118,34 @@ def _nice_floor(m) -> float:
     return step * math.floor(m / step)
 
 
+def _nice_grid(need_m, finest) -> float:
+    """The plate cell region_prep would reach for at `need_m`, ignoring whether a
+    static layer is actually covered: nice steps (5 m under 100 m, 10 m under 500 m,
+    else 50 m) at or above 10 m, quarter metres below it, never finer than `finest`."""
+    if need_m >= STATIC_LAYERS_M[0]:
+        return _nice_floor(need_m)
+    return max(float(finest), math.floor(need_m * 4) / 4.0)
+
+
 def choose_grid(need_m, coverage) -> dict:
     """The plate's grid for a print that needs `need_m` metres of ground per pixel.
-    `coverage` maps 3DEP layer metres to the share of the plate it covers.
+    `coverage` maps 3DEP layer metres (int, or a string as JSON round-trips them) to
+    the share of the plate it covers.
 
     region_prep fetches every grid at its own cell size: 10, 30 and 60 m from the
     static tiles, anything else from the dynamic service, which resamples the finest
     data it holds. grid_m is the plate's cell (its native_resolution_m). layer_m is
     the 3DEP layer the data comes from. upsample is grid_m / need_m, at least 1.
     widen is True when even the finest layer is past MAX_UPSAMPLE, so the caller
-    must widen the frame."""
+    must widen the frame.
+
+    A nice grid at or above 10 m can land on a static size (10, 30, 60) whose own
+    layer isn't fully covered even when a finer layer is: region_prep would then
+    reach for a static tile with holes in it. When that happens the grid steps down
+    to the next non-static value below that size (10 -> 9.75, 30 -> 25, 60 -> 55) so
+    the dynamic service serves it from the finest layer that is actually covered,
+    and layer_m records that layer instead of the uncovered static one."""
+    coverage = {int(r): share for r, share in coverage.items()}
     covered = sorted(r for r, share in coverage.items()
                      if share >= COVERAGE_MIN
                      and (USE_DYNAMIC_FINE or r in STATIC_LAYERS_M))
@@ -133,34 +156,40 @@ def choose_grid(need_m, coverage) -> dict:
         upsample = finest / need_m
         return {"grid_m": float(finest), "layer_m": finest, "upsample": upsample,
                 "widen": upsample > MAX_UPSAMPLE}
-    if need_m >= STATIC_LAYERS_M[0]:
-        grid = _nice_floor(need_m)
+    grid = _nice_grid(need_m, finest)
+    if grid in STATIC_LAYERS_M and int(grid) not in covered:
+        grid = _nice_grid(grid - 1e-6, finest)
+        layer = finest
     else:
-        grid = max(float(finest), math.floor(need_m * 4) / 4.0)   # quarter metres
-    layer = int(grid) if grid in STATIC_LAYERS_M else finest
+        layer = int(grid) if grid in STATIC_LAYERS_M else finest
     return {"grid_m": grid, "layer_m": layer, "upsample": 1.0, "widen": False}
 
 
 def widen_for_upsample(frame, layer_m, print_w_in, dpi=DPI) -> tuple:
     """Grow the frame until `layer_m` data is at most MAX_UPSAMPLE times too coarse.
     The 1e-6 headroom keeps validate()'s strict `<` from reading exactly 2x as too
-    tight after float round-trips."""
+    tight after float round-trips; it assumes a whole-number print width, since
+    validate() rounds to whole pixels and every paper-table size is a whole number
+    of inches."""
     width = layer_m / MAX_UPSAMPLE * print_w_in * dpi * (1.0 + 1e-6)
     return widen_frame(frame, width)
 
 
 def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions):
-    """The first curated plate that holds the nestled frame at the print's resolution
-    with no upsampling. `regions` holds dicts with id, crs ("EPSG:n"), bounds (CRS
-    metres) and native_resolution_m. Returns {"region", "frame", "need_m", "epsg"}
-    or None."""
+    """The first curated plate that holds the nestled frame's plate (the frame plus
+    its PLATE_MARGIN border) at the print's resolution with no upsampling. A built
+    plate carries that margin round the frame for oblique previews and studio frame
+    changes, so a reused plate must hold it too, not just the bare frame. `regions`
+    holds dicts with id, crs ("EPSG:n"), bounds (CRS metres) and native_resolution_m.
+    Returns {"region", "frame", "need_m", "epsg"} or None."""
     for r in regions:
         epsg = int(str(r["crs"]).split(":")[1])
         frame = nestled_frame(project_bbox(track_bbox_lonlat, epsg), aspect)
         need = needed_resolution(frame, print_w_in)
+        plate = plate_bounds(frame)
         b = r["bounds"]
-        inside = (frame[0] >= b[0] and frame[1] >= b[1]
-                  and frame[2] <= b[2] and frame[3] <= b[3])
+        inside = (plate[0] >= b[0] and plate[1] >= b[1]
+                  and plate[2] <= b[2] and plate[3] <= b[3])
         if inside and r["native_resolution_m"] <= need:
             return {"region": r, "frame": frame, "need_m": need, "epsg": epsg}
     return None

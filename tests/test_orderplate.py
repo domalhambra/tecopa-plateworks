@@ -8,6 +8,7 @@ TECOPA = (-116.3, 35.8, -116.1, 36.0)
 LIDAR = {1: 1.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 1.0}
 NO_LIDAR = {1: 0.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 1.0}
 PORTRAIT = 12 / 18
+LANDSCAPE = 18 / 12
 
 
 def test_conus_only():
@@ -17,8 +18,23 @@ def test_conus_only():
 
 
 def test_order_epsg_utm_then_albers():
-    assert op.order_epsg(TECOPA) == 32611
-    assert op.order_epsg((-120.0, 39.3, -111.9, 40.7)) == 5070     # Reno to Salt Lake, ~690 km
+    assert op.order_epsg(TECOPA, PORTRAIT) == 32611
+    assert op.order_epsg((-120.0, 39.3, -111.9, 40.7), PORTRAIT) == 5070   # Reno to SLC
+
+
+def test_order_epsg_uses_the_nestled_frame_not_a_straight_line():
+    # ~93 km wide, ~1000 km tall: the straight-line width stays under 600 km, but
+    # the portrait frame nestled round it opens out past 600 km
+    tall = (-119.0, 34.0, -118.0, 43.0)
+    assert op.order_epsg(tall, PORTRAIT) == 5070
+
+
+def test_order_epsg_depends_on_the_print_aspect():
+    # ~46 km wide, ~400 km tall: the portrait frame stays under 600 km (UTM), but a
+    # landscape print asks for a wider frame that opens past it (Albers)
+    narrow = (-117.0, 34.0, -116.5, 37.6)
+    assert op.order_epsg(narrow, PORTRAIT) == 32611
+    assert op.order_epsg(narrow, LANDSCAPE) == 5070
 
 
 def test_nestled_frame_wide_tracks():
@@ -38,6 +54,12 @@ def test_nestled_frame_tall_tracks():
 def test_nestled_frame_minimum():
     f = op.nestled_frame((0.0, 0.0, 100.0, 100.0), PORTRAIT)
     assert f[2] - f[0] == pytest.approx(op.MIN_FRAME_M)
+
+
+def test_widen_frame_never_shrinks():
+    frame = (0.0, 0.0, 1000.0, 500.0)
+    assert op.widen_frame(frame, 500.0) == frame
+    assert op.widen_frame(frame, 1000.0) == frame
 
 
 def test_plate_bounds_and_needed_resolution():
@@ -69,6 +91,12 @@ def test_grid_past_2x_asks_to_widen():
     assert g["widen"] and g["layer_m"] == 10
 
 
+def test_grid_at_exactly_2x_is_not_widened():
+    g = op.choose_grid(5.0, NO_LIDAR)     # finest covered is 10 m: exactly 2x
+    assert g["upsample"] == pytest.approx(2.0)
+    assert not g["widen"]
+
+
 def test_large_frames_get_a_grid_at_the_need():
     # 25 m and 160 m are not static tiles: the dynamic service serves them from the
     # finest covered layer, which layer_m records
@@ -83,6 +111,19 @@ def test_static_grids_record_their_own_layer():
     assert (g["grid_m"], g["layer_m"]) == (10.0, 10)
     g = op.choose_grid(31.0, NO_LIDAR)
     assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
+
+
+def test_grid_at_the_static_boundary_is_still_static():
+    g = op.choose_grid(10.0, NO_LIDAR)    # 10 m is covered outright at need == 10
+    assert (g["grid_m"], g["layer_m"], g["upsample"]) == (10.0, 10, 1.0)
+
+
+def test_grid_just_under_10m_with_and_without_lidar():
+    g = op.choose_grid(9.99, LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (9.75, 1)
+    g = op.choose_grid(9.99, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (10.0, 10)
+    assert g["upsample"] == pytest.approx(10 / 9.99)
 
 
 def test_partial_coverage_does_not_count():
@@ -101,6 +142,26 @@ def test_dynamic_fine_off_ignores_lidar(monkeypatch):
     assert g["layer_m"] == 10 and g["grid_m"] == 10.0
 
 
+def test_choose_grid_normalises_string_keys():
+    g = op.choose_grid(6.0, {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0})
+    assert g == op.choose_grid(6.0, LIDAR)
+
+
+def test_static_grid_steps_down_when_its_own_layer_is_not_covered():
+    # need 12 rounds to the 10 m static tile, but only 50% of the plate has 10 m
+    # data, so it must fall back to the dynamic service on the finest layer that
+    # really is covered (1 m), one quarter-metre step below the static boundary
+    g = op.choose_grid(12.0, {1: 1.0, 3: 0.0, 10: 0.5, 30: 1.0, 60: 1.0})
+    assert g == {"grid_m": 9.75, "layer_m": 1, "upsample": 1.0, "widen": False}
+
+
+def test_static_grid_steps_down_to_the_next_static_boundary_below():
+    # need 31 rounds to the 30 m static tile, but it's only 20% covered; 10 m is
+    # fully covered, so the grid steps down to 25 m, served dynamically from 10 m
+    g = op.choose_grid(31.0, {10: 1.0, 30: 0.2, 60: 1.0})
+    assert g == {"grid_m": 25.0, "layer_m": 10, "upsample": 1.0, "widen": False}
+
+
 def test_widen_for_upsample_lands_just_under_2x():
     f = op.widen_for_upsample((0.0, 0.0, 6000.0, 9000.0), 10, 12)
     need = op.needed_resolution(f, 12)
@@ -116,9 +177,13 @@ def _curated(native=10, bounds=(400000.0, 3800000.0, 700000.0, 4200000.0)):
 
 def test_curated_fit_reuses_a_plate_that_holds_the_print():
     tracks = (-116.4, 35.7, -116.0, 36.1)          # ~36 x 44 km: needs ~16.7 m/px at 12x18
-    fit = op.curated_fit(tracks, PORTRAIT, 12, _curated())
+    regions = _curated()
+    fit = op.curated_fit(tracks, PORTRAIT, 12, regions)
     assert fit["region"]["id"] == "big" and fit["epsg"] == 32611
     assert fit["need_m"] >= 10
+    b = regions[0]["bounds"]
+    plate = op.plate_bounds(fit["frame"])
+    assert plate[0] >= b[0] and plate[1] >= b[1] and plate[2] <= b[2] and plate[3] <= b[3]
 
 
 def test_curated_fit_refuses_coarse_or_small_plates():
@@ -126,3 +191,12 @@ def test_curated_fit_refuses_coarse_or_small_plates():
     assert op.curated_fit(tracks, PORTRAIT, 12, _curated(native=30)) is None
     assert op.curated_fit(tracks, PORTRAIT, 12,
                           _curated(bounds=(570000.0, 3960000.0, 580000.0, 3970000.0))) is None
+
+
+def test_curated_fit_requires_the_margin_not_just_the_frame():
+    # bounds that hold the bare frame exactly (with 100 m of slack) but not the
+    # PLATE_MARGIN border a reused plate must also carry
+    tracks = (-116.4, 35.7, -116.0, 36.1)
+    frame = op.nestled_frame(op.project_bbox(tracks, 32611), PORTRAIT)
+    bounds = (frame[0] - 100.0, frame[1] - 100.0, frame[2] + 100.0, frame[3] + 100.0)
+    assert op.curated_fit(tracks, PORTRAIT, 12, _curated(bounds=bounds)) is None
