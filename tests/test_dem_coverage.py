@@ -31,3 +31,86 @@ def test_cli_usage_error_exits_2():
                          capture_output=True, text=True)
     assert out.returncode == 2
     assert "usage" in out.stderr
+
+
+# ---- the index query: Esri rings, and a failed query never reads as 0.0 ----
+import io
+import json
+import urllib.error
+import urllib.request
+
+CW_OUTER = [[0, 0], [0, 4], [4, 4], [4, 0], [0, 0]]         # clockwise: outer
+CCW_HOLE = [[1, 1], [2, 1], [2, 2], [1, 2], [1, 1]]         # counter-clockwise: hole
+
+
+def test_esri_ring_with_a_hole():
+    g = rp.esri_rings_to_geom([CW_OUTER, CCW_HOLE])
+    assert g.area == pytest.approx(16 - 1)
+
+
+def test_esri_two_disjoint_outers():
+    other = [[10, 0], [10, 2], [12, 2], [12, 0], [10, 0]]   # clockwise
+    g = rp.esri_rings_to_geom([CW_OUTER, other])
+    assert g.area == pytest.approx(16 + 4)
+
+
+def _fake_urlopen(bodies):
+    """urlopen stand-in that answers each call with the next body; an Exception
+    in the list is raised instead."""
+    calls = []
+
+    def urlopen(url, context=None, timeout=None):
+        calls.append(url)
+        body = bodies[len(calls) - 1]
+        if isinstance(body, Exception):
+            raise body
+        return io.BytesIO(json.dumps(body).encode())
+    return urlopen, calls
+
+
+def test_no_features_is_zero_and_the_query_is_simplified(monkeypatch):
+    urlopen, calls = _fake_urlopen([{"features": []}] * len(rp.COVERAGE_LAYERS_M))
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    cov = rp.layer_coverage((-116.27, 35.88, -116.24, 35.91))
+    assert cov == {r: 0.0 for r in rp.COVERAGE_LAYERS_M}
+    assert all("maxAllowableOffset=0.0005" in u for u in calls)
+    assert "/MapServer/18/query" in calls[0]                 # 1 m layer
+
+
+def test_footprint_is_measured(monkeypatch):
+    square = [[-116.27, 35.88], [-116.27, 35.91], [-116.24, 35.91],
+              [-116.24, 35.88], [-116.27, 35.88]]           # clockwise, the whole bbox
+    full = {"features": [{"attributes": {"OBJECTID": 1},
+                          "geometry": {"rings": [square]}}]}
+    urlopen, _ = _fake_urlopen([full] * len(rp.COVERAGE_LAYERS_M))
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    cov = rp.layer_coverage((-116.27, 35.88, -116.24, 35.91))
+    assert cov[1] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("body", [
+    {"error": {"code": 400, "message": "Error performing query operation"}},
+    {"features": [], "exceededTransferLimit": True},
+])
+def test_a_failed_query_raises_not_zero(monkeypatch, body):
+    urlopen, _ = _fake_urlopen([body, body])
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="1 m"):
+        rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
+
+
+def test_a_5xx_is_retried_once_then_raises(monkeypatch):
+    err = urllib.error.HTTPError("u", 500, "Error performing query operation", {}, None)
+    urlopen, calls = _fake_urlopen([err, err])
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
+    assert len(calls) == 2
+
+
+def test_a_5xx_then_success_recovers(monkeypatch):
+    err = urllib.error.HTTPError("u", 503, "busy", {}, None)
+    bodies = [err] + [{"features": []}] * len(rp.COVERAGE_LAYERS_M)
+    urlopen, _ = _fake_urlopen(bodies)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert rp.layer_coverage((0.0, 0.0, 1.0, 1.0))[1] == 0.0

@@ -258,29 +258,97 @@ def coverage_fraction(footprints, bbox_4326):
     return float(unary_union(geoms).intersection(target).area / target.area)
 
 
-def layer_coverage(bbox_4326):
-    """{layer metres: covered share} for every COVERAGE_LAYERS_M layer. Queries the
-    3DEP source index over the network; a layer with no footprints is 0.0. Network
-    errors raise: a failed query must never read as 'no data here'.
+# The 3DEP elevation index, queried directly. py3dep.query_3dep_sources asks for each
+# footprint's full outline, and the server answers a large lidar footprint (the 1 m
+# one at Tecopa, OBJECTID 537) with "Error performing query operation", which py3dep
+# swallows as "no footprints" -- coverage 0.0 over real lidar. maxAllowableOffset
+# generalises the outlines (~50 m), and the server answers.
+INDEX_QUERY_URL = ("https://index.nationalmap.gov/arcgis/rest/services/"
+                   "3DEPElevationIndex/MapServer/{layer}/query")
+INDEX_LAYERS = {1: 18, 3: 19, 5: 20, 10: 21, 30: 22, 60: 23}   # py3dep's own table
+INDEX_SIMPLIFY_DEG = 0.0005
+INDEX_TIMEOUT_S = 60
 
-    query_3dep_sources itself swallows a zero-match layer (ZeroMatchedError,
-    suppressed internally) rather than raising; when every requested layer comes
-    back empty this way, its own pd.concat has nothing to concatenate and raises
-    ValueError("All objects passed were None") -- confirmed against a bbox with no
-    3DEP coverage at all (mid-Pacific). That specific, well-known failure means
-    "no layer has any footprint here", not a transport failure, so it is the one
-    exception read as all-zero; anything else (HTTP/network) still raises."""
-    import py3dep
-    names = {f"{r}m": r for r in COVERAGE_LAYERS_M}
-    try:
-        gdf = py3dep.query_3dep_sources(tuple(bbox_4326), res=list(names))
-    except ValueError as ex:
-        if "All objects passed were None" in str(ex):
-            return {r: 0.0 for r in COVERAGE_LAYERS_M}
-        raise
+
+def esri_rings_to_geom(rings):
+    """One Esri polygon (its `rings`, EPSG:4326) as a shapely geometry. Esri marks an
+    outer ring clockwise and a hole counter-clockwise, and one polygon may carry
+    several of each: the result is union(outers) minus union(holes). A generalised
+    outline can self-intersect, so each ring is repaired first."""
+    from shapely.geometry import LinearRing, Polygon
+    from shapely.ops import unary_union
+    from shapely.validation import make_valid
+    outers, holes = [], []
+    for ring in rings:
+        if len(ring) < 4:
+            continue                      # generalised away to a sliver
+        poly = make_valid(Polygon(ring))
+        (holes if LinearRing(ring).is_ccw else outers).append(poly)
+    geom = unary_union(outers)
+    if holes:
+        geom = geom.difference(unary_union(holes))
+    return geom
+
+
+def _index_features(layer_m, bbox_4326):
+    """The index features for one layer that intersect the bbox, with simplified
+    outlines. Retries once on a 5xx or a timeout. Any failure raises RuntimeError
+    naming the layer: a failed query must never read as 'no data here'."""
+    import ssl
+    import urllib.error
+    import urllib.parse
+    import urllib.request
+    query = urllib.parse.urlencode({
+        "geometry": ",".join(str(v) for v in bbox_4326),
+        "geometryType": "esriGeometryEnvelope", "inSR": 4326,
+        "spatialRel": "esriSpatialRelIntersects", "returnGeometry": "true",
+        "outSR": 4326, "maxAllowableOffset": INDEX_SIMPLIFY_DEG,
+        "outFields": "OBJECTID", "f": "json"})
+    url = INDEX_QUERY_URL.format(layer=INDEX_LAYERS[layer_m]) + "?" + query
+    ctx = ssl.create_default_context(cafile=certifi.where())
+    name = f"3DEP index layer {layer_m} m"
+    for attempt in (1, 2):
+        retry = attempt == 1
+        try:
+            with urllib.request.urlopen(url, context=ctx, timeout=INDEX_TIMEOUT_S) as r:
+                body = json.load(r)
+        except urllib.error.HTTPError as ex:
+            if retry and ex.code >= 500:
+                continue
+            raise RuntimeError(f"{name}: HTTP {ex.code}") from ex
+        except (TimeoutError, urllib.error.URLError) as ex:
+            timed_out = isinstance(getattr(ex, "reason", ex), TimeoutError)
+            if retry and timed_out:
+                continue
+            raise RuntimeError(f"{name}: {ex}") from ex
+        except ValueError as ex:          # a body that isn't JSON
+            raise RuntimeError(f"{name}: unreadable response ({ex})") from ex
+        if "error" in body:
+            code = body["error"].get("code") if isinstance(body["error"], dict) else None
+            if retry and isinstance(code, int) and code >= 500:
+                continue
+            raise RuntimeError(f"{name}: server error {body['error']}")
+        if body.get("exceededTransferLimit"):
+            raise RuntimeError(f"{name}: more footprints than one query returns")
+        features = body.get("features")
+        if features is None:
+            raise RuntimeError(f"{name}: response has no features list")
+        return features
+    raise AssertionError("unreachable")
+
+
+def layer_coverage(bbox_4326):
+    """{layer metres: covered share} for every COVERAGE_LAYERS_M layer, from the 3DEP
+    index over the network. A layer with no footprints is 0.0; a failed query raises
+    RuntimeError, never 0.0."""
     out = {}
-    for name, r in names.items():
-        geoms = [] if gdf is None else list(gdf.loc[gdf["dem_res"] == name, "geometry"])
+    for r in COVERAGE_LAYERS_M:
+        geoms = []
+        for f in _index_features(r, bbox_4326):
+            rings = (f.get("geometry") or {}).get("rings")
+            if rings is None:
+                raise RuntimeError(f"3DEP index layer {r} m: a footprint has no outline")
+            geoms.append(esri_rings_to_geom(rings))
         out[r] = coverage_fraction(geoms, bbox_4326)
     return out
 
