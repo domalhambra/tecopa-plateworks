@@ -136,19 +136,35 @@ def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
         raise PlateError(f"The 3DEP coverage check printed no result: {ex}") from ex
 
 
-def _plate_present(plate) -> bool:
+def _plate_present(plate, landcover_rebuilds=0) -> bool:
     if not plate:
         return False
     if plate.get("kind") == "curated":
         return _real_terrain(plate["root"], plate["id"]) is not None
-    return _built_complete(plate["root"], plate["id"])
+    return _built_complete(plate["root"], plate["id"], landcover_rebuilds)
 
 
-def _built_complete(root, rid) -> bool:
-    """A built plate is current only with every BUILT_PLATE_FILES file, so one that
-    lost its land cover is rebuilt by the next Prepare."""
+def _core_complete(root, rid) -> bool:
+    """The load-bearing files (not landcover.tif) are present."""
     return all(os.path.isfile(os.path.join(root, rid, name))
-               for name in BUILT_PLATE_FILES)
+               for name in CORE_PLATE_FILES)
+
+
+def _has_landcover(root, rid) -> bool:
+    return os.path.isfile(os.path.join(root, rid, "landcover.tif"))
+
+
+def _built_complete(root, rid, landcover_rebuilds=0) -> bool:
+    """A built plate is current with every BUILT_PLATE_FILES file. Missing
+    region.json or dem.tif always rebuilds. Missing only landcover.tif rebuilds
+    too, but just once (landcover_rebuilds < LANDCOVER_REBUILD_LIMIT): past the
+    limit the plate reads as current anyway, so a repeatable failure stops being
+    rebuilt on every later Prepare (see LANDCOVER_REBUILD_LIMIT)."""
+    if not _core_complete(root, rid):
+        return False
+    if _has_landcover(root, rid):
+        return True
+    return landcover_rebuilds >= LANDCOVER_REBUILD_LIMIT
 
 
 def _plan_grid(tools, frame, epsg, print_w_in, env):
@@ -192,15 +208,26 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     state = read_state(order)
     manual = state.get("manual", {})
     inputs = order.inputs_hash()
+    old_plate = state.get("plate")
+    landcover_rebuilds = state.get("landcover_rebuilds", 0)
     # A manual frame is current when it is the one the last plan started from. It is
     # not compared with state["frame"]: planning may have widened it for coarse data.
     frame_current = ("frame" not in manual
                      or list(manual["frame"]) == state.get("frame_from_manual"))
-    if (state.get("inputs_hash") == inputs and frame_current
-            and _plate_present(state.get("plate"))):
+    current = state.get("inputs_hash") == inputs and frame_current
+    if current and _plate_present(old_plate, landcover_rebuilds):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
         write_report(order, state)   # the title may have changed; it is not an input
         return state
+    # True when the only reason `current` plate above was not present is a missing
+    # landcover.tif on an otherwise-complete built plate: the one case
+    # LANDCOVER_REBUILD_LIMIT gates. Any other path here (no plate yet, inputs or
+    # frame changed, dem.tif/region.json missing) starts a fresh plate generation,
+    # which gets its own landcover retry budget (reset below).
+    gated_landcover_retry = (current and old_plate is not None
+                             and old_plate.get("kind") == "built"
+                             and _core_complete(old_plate["root"], old_plate["id"])
+                             and not _has_landcover(old_plate["root"], old_plate["id"]))
 
     pw, ph = order.print_in()
     warnings = []
@@ -212,6 +239,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         plate = {"id": region["id"], "root": tools.curated_root, "kind": "curated",
                  "grid_m": float(region["native_resolution_m"]), "upsample": 1.0,
                  "us_share": 1.0}
+        landcover_rebuilds = 0    # curated plates carry no landcover retry budget
         log(f"Reusing curated plate {region['id']}.")
     else:
         # after the curated check: reusing a curated plate needs no prep venv
@@ -247,7 +275,18 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         plate, labels_note = _build(order, tools, frame, epsg, grid, env, log)
         if labels_note:
             warnings.append(labels_note)
-        if not os.path.isfile(os.path.join(plate["root"], plate["id"], "landcover.tif")):
+        if _has_landcover(plate["root"], plate["id"]):
+            landcover_rebuilds = 0
+        elif gated_landcover_retry:
+            # this build WAS the one automatic retry LANDCOVER_REBUILD_LIMIT allows
+            landcover_rebuilds += 1
+            warnings.append(LANDCOVER_GAVE_UP_WARNING if
+                            landcover_rebuilds >= LANDCOVER_REBUILD_LIMIT
+                            else LANDCOVER_WARNING)
+        else:
+            # a fresh plate generation (new inputs/frame, or no plate before): its
+            # own retry budget starts at 0, untouched by this first failure
+            landcover_rebuilds = 0
             warnings.append(LANDCOVER_WARNING)
 
     track_m = project_bbox(tracks, epsg)
@@ -257,7 +296,8 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         "frame_from_manual": list(manual["frame"]) if "frame" in manual else None,
         "fill": round(track_fill(track_m, frame), 3),
         "need_m": round(needed_resolution(frame, pw), 3),
-        "plate": plate, "warnings": warnings})
+        "plate": plate, "warnings": warnings,
+        "landcover_rebuilds": landcover_rebuilds})
     write_report(order, state)
     return state
 

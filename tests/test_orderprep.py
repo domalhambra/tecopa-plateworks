@@ -451,6 +451,25 @@ def test_a_plate_without_land_cover_warns_and_is_rebuilt(tmp_path, tools, monkey
     assert len(_builds(d)) == 2
 
 
+def test_a_persistent_landcover_failure_stops_rebuilding_after_one_retry(
+        tmp_path, tools, monkeypatch):
+    # acceptance, 2026-09-24: a real order's land cover kept failing, and the old
+    # code rmtree'd and rebuilt the whole plate on every later Prepare forever.
+    monkeypatch.setenv("STUB_SKIP_LANDCOVER", "1")
+    d = _make_order(tmp_path)
+    op.prepare(str(d), tools, log=lambda s: None)              # build 1: fails
+    state = op.prepare(str(d), tools, log=lambda s: None)      # build 2: the one retry
+    assert len(_builds(d)) == 2
+    assert state["landcover_rebuilds"] == op.LANDCOVER_REBUILD_LIMIT
+    assert op.LANDCOVER_GAVE_UP_WARNING in state["warnings"]
+    assert LANDCOVER_WARNING not in state["warnings"]
+    lines = []
+    state = op.prepare(str(d), tools, log=lines.append)        # no further rebuild
+    assert any("Plate is current" in l for l in lines)
+    assert len(_builds(d)) == 2
+    assert op.LANDCOVER_GAVE_UP_WARNING in state["warnings"]
+
+
 @pytest.mark.parametrize("lost", ["dem.tif", "landcover.tif", "region.json"])
 def test_a_built_plate_missing_a_file_is_rebuilt(tmp_path, tools, lost):
     d = _make_order(tmp_path)
