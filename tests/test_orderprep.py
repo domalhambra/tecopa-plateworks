@@ -11,11 +11,13 @@ from app import order as od
 from app import orderplate as opl
 from app import orderprep as op
 
-LIDAR = {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0}
-NO_LIDAR = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0}
+# The static 60 m 3DEP tiles cover Alaska only: the index reads 0.0 for 60 m
+# everywhere in the lower 48, even on ground with full 1 m lidar.
+LIDAR = {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 0.0}
+NO_LIDAR = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 0.0}
 # A plate that clips the coast: every layer falls short of the old absolute bar,
 # but all of them agree with each other, so the plate should still build.
-COASTAL = {"1": 0.94, "3": 0.0, "10": 0.94, "30": 0.94, "60": 0.94}
+COASTAL = {"1": 0.94, "3": 0.0, "10": 0.94, "30": 0.94, "60": 0.0}
 SMALL = (-116.21, 35.89, -116.17, 35.93)       # ~3.6 x 4.4 km near Tecopa
 WIDE = (-116.4, 35.7, -116.0, 36.1)            # ~36 x 44 km
 
@@ -61,8 +63,8 @@ import json, os, sys
 w, s, e, n = map(float, sys.argv[1:5])
 with open(os.environ["STUB_COVERAGE_LOG"], "a") as f:
     f.write(json.dumps([w, s, e, n]) + "\\n")
-narrow = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0}
-wide = {"1": 0.0, "3": 0.0, "10": 0.9, "30": 1.0, "60": 1.0}
+narrow = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 0.0}
+wide = {"1": 0.0, "3": 0.0, "10": 0.9, "30": 1.0, "60": 0.0}
 print(json.dumps(wide if e - w > %r else narrow))
 """ % WIDE_DEG
 
@@ -169,8 +171,14 @@ def test_coastal_plate_warns_and_records_its_us_share(tmp_path, tools, monkeypat
     assert any("6%" in w for w in state["warnings"])
 
 
-def test_widening_steps_to_a_coarser_layer_at_a_coverage_edge(tmp_path, tools,
-                                                               monkeypatch):
+def test_a_coverage_dip_in_the_reference_layer_is_tolerated_not_stepped_down(
+        tmp_path, tools, monkeypatch):
+    # STUB_EDGE_COVERAGE simulates a widened frame crossing into ground where the
+    # 10 m layer's own share drops to 0.9 while 30 m stays fully covered -- the
+    # same raw shape as a border box (fact (b): a Montana/Alberta box once read
+    # {10: 0.5253, 30: 1.0}). Since 10 m is the US reference layer (orderplate's
+    # choose_grid docstring), its own dip no longer forces a step to 30 m: the
+    # plate still builds at 10 m, with a warning naming the shortfall instead.
     edge = tmp_path / "stubs" / "edge_coverage.py"
     edge.write_text(STUB_EDGE_COVERAGE)
     asked = tmp_path / "coverage_asks.jsonl"
@@ -178,14 +186,14 @@ def test_widening_steps_to_a_coarser_layer_at_a_coverage_edge(tmp_path, tools,
     tools = op.Tools(**{**tools.__dict__, "coverage_script": str(edge)})
     d = _make_order(tmp_path)
     state = op.prepare(str(d), tools, log=lambda s: None)
-    assert state["plate"]["grid_m"] == 30.0
-    assert state["plate"]["upsample"] <= opl.MAX_UPSAMPLE
+    assert (state["plate"]["grid_m"], state["plate"]["layer_m"]) == (10.0, 10)
+    assert state["plate"]["us_share"] == pytest.approx(0.9)
+    assert state["plate"]["upsample"] == pytest.approx(opl.MAX_UPSAMPLE)
     frame = state["frame"]
-    assert frame[2] - frame[0] == pytest.approx(54000.0, rel=1e-3)
-    # the warning names the layer that first forced the widening
-    assert any("10 m data" in w for w in state["warnings"])
+    assert frame[2] - frame[0] == pytest.approx(18000.0, rel=1e-3)
+    assert any("no US elevation data" in w for w in state["warnings"])
     boxes = [json.loads(l) for l in asked.read_text().splitlines()]
-    assert len(boxes) == 3
+    assert len(boxes) == 2
     assert boxes[0][2] - boxes[0][0] < WIDE_DEG < boxes[1][2] - boxes[1][0]
     # the coverage script sees the padded box the build fetches
     want = opl.to_lonlat_bbox(opl.plate_bounds(frame), state["epsg"],
@@ -417,7 +425,7 @@ def test_coverage_asks_only_for_coarse_layers_on_a_large_frame(tmp_path, tools,
     state = op.prepare(str(d), tools, log=lambda s: None)
     assert state["need_m"] >= op.COARSE_NEED_M
     args = [json.loads(l) for l in asked.read_text().splitlines()]
-    assert len(args) == 1 and args[0][4:] == ["--layers", "10,30,60"]
+    assert len(args) == 1 and args[0][4:] == ["--layers", "10,30"]
     assert state["plate"]["grid_m"] == 25.0 and state["plate"]["layer_m"] == 10
 
 

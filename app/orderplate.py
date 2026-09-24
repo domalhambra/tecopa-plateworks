@@ -140,21 +140,33 @@ def choose_grid(need_m, coverage) -> dict:
     data it holds. grid_m is the plate's cell (its native_resolution_m). layer_m is
     the 3DEP layer the data comes from. upsample is grid_m / need_m, at least 1.
     widen is True when even the finest layer is past MAX_UPSAMPLE, so the caller
-    must widen the frame. us_share is the best layer's coverage share: the caller
-    warns when it is below 1.0 (ocean or a border clips the plate).
+    must widen the frame. us_share is the reference share coverage is judged
+    against: the caller warns when it is below 1.0 (ocean or a border clips the
+    plate).
 
-    Coverage is judged relative to the best layer, not against an absolute bar: a
-    plate that reaches the Pacific or a national border can never be fully covered
-    by any layer, but a layer that covers everything any other layer covers is still
-    the right one to use (COVERAGE_TOLERANCE). A plate mostly outside US elevation
-    data (US_SHARE_MIN) is refused outright rather than quietly built from whatever
-    scrap of US ground it has.
+    Coverage is judged relative to a reference layer, not against an absolute bar:
+    a plate that reaches the Pacific or a national border can never be fully
+    covered by any layer, but a layer that covers everything the reference layer
+    covers is still the right one to use (COVERAGE_TOLERANCE). The reference is the
+    best share among the layers at or finer than 10 m that are present in
+    `coverage` (1, 3, 10): 10 m is the 1/3 arc-second nationwide layer, the honest
+    read of "how much of this plate is the US." A coarser layer (30, 60) can cover
+    Canada or Mexico too -- a Montana/Alberta border box once read {10: 0.5253,
+    30: 1.0}, and taking 30 m's 1.0 as the reference would have called the plate
+    fully covered and silently dropped 10 m detail from the US two-thirds of it.
+    When no layer at or finer than 10 m is present in `coverage` (a coarse-need
+    query that only asked for 30 m and up), the reference falls back to the best
+    share among whatever layers are present. A plate mostly outside US elevation
+    data (US_SHARE_MIN) is refused outright rather than quietly built from
+    whatever scrap of US ground it has.
 
-    The 60 m index layer has a known quirk: py3dep's coverage query returns no
-    outlines for it at all (share 0.0 everywhere, even well inland), although the
-    static 60 m tiles are real. Under the relative rule that reads as "uncovered",
-    so a nice grid landing on 60 m steps down to 55 m and is served dynamically
-    instead. That is acceptable: the data is the same, just fetched differently.
+    The static 60 m 3DEP tiles cover Alaska only (USGS_Seamless_DEM_2.vrt, lon
+    -180..-127, lat 51..72); the 3DEP index correctly reads 0.0 for the 60 m layer
+    everywhere in the lower 48, even well inland, because there is genuinely no
+    60 m tile there. A nice grid landing on 60 m therefore always steps down to
+    55 m in an order plate, served dynamically from whatever finer layer really is
+    covered -- this is required, not a cosmetic fallback: region_prep has no 60 m
+    data to reach for south of Alaska.
 
     A nice grid at or above 10 m can land on a static size (10, 30, 60) whose own
     layer isn't fully covered even when a finer layer is: region_prep would then
@@ -166,8 +178,10 @@ def choose_grid(need_m, coverage) -> dict:
     eligible = {r: share for r, share in coverage.items()
                if USE_DYNAMIC_FINE or r in STATIC_LAYERS_M}
     if not eligible:
-        raise PlateError("No 3DEP elevation layer fully covers this ground.")
-    best = max(eligible.values())
+        raise PlateError("No 3DEP elevation layer reports any coverage for this "
+                         "ground.")
+    us_reference = {r: share for r, share in eligible.items() if r <= 10}
+    best = max(us_reference.values()) if us_reference else max(eligible.values())
     if best < US_SHARE_MIN:
         raise PlateError("Most of this plate has no US elevation data (ocean or "
                          "across a border). Frame the tracks tighter or choose a "

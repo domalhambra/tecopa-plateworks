@@ -28,18 +28,33 @@ from app.regions import Region
 # One pass per 3DEP layer (region_prep.COVERAGE_LAYERS_M: 1, 3, 10, 30, 60). That
 # module needs the prep stack, so it is counted here, not imported (invariant 13).
 MAX_PLAN_PASSES = 5
-# At a need of COARSE_NEED_M or more, only the 10, 30 and 60 m layers can shape the
+# At a need of COARSE_NEED_M or more, only the 10 and 30 m layers can shape the
 # grid: the fine layers matter just above 10 m, through choose_grid's step-down
 # when the 10 m layer is uncovered, and not past 20 m. Asking for 1 m lidar over a
-# corridor-sized box times out (acceptance, Reno to Salt Lake).
+# corridor-sized box times out (acceptance, Reno to Salt Lake). 60 m is left out
+# entirely: the static 60 m 3DEP tiles cover Alaska only, so the index always
+# reads 0.0 for it in the lower 48 -- querying it wastes a request and never
+# changes the plan (region_prep.py, choose_grid's docstring in orderplate.py).
 COARSE_NEED_M = 20.0
-COARSE_LAYERS_M = (10, 30, 60)
-# A built plate is complete only with all three. Land cover is optional to
-# region_prep (the in-app build carries on without it), but a customer plate must
-# not quietly lose the biome look. Hydro with no lakes or rivers is real (desert).
-BUILT_PLATE_FILES = ("region.json", "dem.tif", "landcover.tif")
+COARSE_LAYERS_M = (10, 30)
+# A built plate is complete with all three; region.json and dem.tif are load-
+# bearing (Region.readiness needs them), landcover.tif is the optional biome look
+# and is gated separately (LANDCOVER_REBUILD_LIMIT below). Hydro with no lakes or
+# rivers is real (desert).
+CORE_PLATE_FILES = ("region.json", "dem.tif")
+BUILT_PLATE_FILES = CORE_PLATE_FILES + ("landcover.tif",)
 LANDCOVER_WARNING = ("Land cover did not download, so the biome look is not "
                      "available on this plate. Run Prepare again to retry.")
+LANDCOVER_GAVE_UP_WARNING = ("Land cover was retried once and still failed. "
+                             "The plate is kept without it.")
+# A built plate missing only landcover.tif is rebuilt automatically once
+# (state["landcover_rebuilds"] < this). A repeatable failure (the service is down,
+# not a fluke) otherwise rebuilds -- rmtree included -- on every later Prepare
+# forever, and can lose an otherwise-usable plate to a failed rebuild (acceptance,
+# 2026-09-24: an east-west order's land cover kept failing). Past the limit the
+# plate is kept as is, with a warning, and Prepare stops touching it until the
+# order's inputs actually change.
+LANDCOVER_REBUILD_LIMIT = 1
 PREP_VENV_HELP = "docs/changing-things.md › Set up a machine"
 
 

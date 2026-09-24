@@ -5,8 +5,10 @@ import pytest
 from app import orderplate as op
 
 TECOPA = (-116.3, 35.8, -116.1, 36.0)
-LIDAR = {1: 1.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 1.0}
-NO_LIDAR = {1: 0.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 1.0}
+# The static 60 m 3DEP tiles cover Alaska only: the index reads 0.0 for 60 m
+# everywhere in the lower 48, even on ground with full 1 m lidar.
+LIDAR = {1: 1.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 0.0}
+NO_LIDAR = {1: 0.0, 3: 0.0, 10: 1.0, 30: 1.0, 60: 0.0}
 PORTRAIT = 12 / 18
 LANDSCAPE = 18 / 12
 
@@ -128,7 +130,7 @@ def test_grid_just_under_10m_with_and_without_lidar():
 
 
 def test_partial_coverage_does_not_count():
-    g = op.choose_grid(4.0, {1: 0.9, 3: 0.0, 10: 1.0, 30: 1.0, 60: 1.0})
+    g = op.choose_grid(4.0, {1: 0.9, 3: 0.0, 10: 1.0, 30: 1.0, 60: 0.0})
     assert g["layer_m"] == 10
 
 
@@ -139,7 +141,7 @@ def test_no_coverage_is_a_plate_error():
 
 def test_plate_reaching_the_pacific_still_builds():
     # Reno to Salt Lake's west edge sits in the ocean: no layer reaches 0.995, but
-    # 10 m covers everything 30 m does (60 m's coverage query is a known blank, see
+    # 10 m covers everything 30 m does (60 m genuinely has no lower-48 tile, see
     # choose_grid's docstring), so 10 m is still the right layer to use.
     g = op.choose_grid(210.7, {10: 0.9442, 30: 0.9441, 60: 0.0})
     assert (g["grid_m"], g["layer_m"]) == (210.0, 10)
@@ -150,6 +152,16 @@ def test_plate_reaching_the_pacific_still_builds():
 def test_plate_mostly_at_sea_is_a_plate_error():
     with pytest.raises(op.PlateError, match="no US elevation data"):
         op.choose_grid(30.0, {10: 0.3, 30: 0.3})
+
+
+def test_border_plate_keeps_10m_even_though_30m_reads_fuller():
+    # A Montana/Alberta border box: 30 m covers Canada too, so it reads fuller than
+    # 10 m (the honest US-only reference). Taking 30 m's share as the reference
+    # would call the plate fully covered and silently drop 10 m detail from the US
+    # two-thirds of it, so the reference is 10 m's own share, not the best of all.
+    g = op.choose_grid(12.0, {1: 0.0, 3: 0.0, 10: 0.5253, 30: 1.0})
+    assert g["layer_m"] == 10
+    assert g["us_share"] == pytest.approx(0.5253)
 
 
 def test_partial_lidar_inland_still_rejects_the_fine_layer():
@@ -173,7 +185,7 @@ def test_dynamic_fine_off_ignores_lidar(monkeypatch):
 
 
 def test_choose_grid_normalises_string_keys():
-    g = op.choose_grid(6.0, {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 1.0})
+    g = op.choose_grid(6.0, {"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 0.0})
     assert g == op.choose_grid(6.0, LIDAR)
 
 
@@ -181,7 +193,7 @@ def test_static_grid_steps_down_when_its_own_layer_is_not_covered():
     # need 12 rounds to the 10 m static tile, but only 50% of the plate has 10 m
     # data, so it must fall back to the dynamic service on the finest layer that
     # really is covered (1 m), one quarter-metre step below the static boundary
-    g = op.choose_grid(12.0, {1: 1.0, 3: 0.0, 10: 0.5, 30: 1.0, 60: 1.0})
+    g = op.choose_grid(12.0, {1: 1.0, 3: 0.0, 10: 0.5, 30: 1.0, 60: 0.0})
     assert g == {"grid_m": 9.75, "layer_m": 1, "upsample": 1.0, "widen": False,
                  "us_share": 1.0}
 
@@ -189,7 +201,7 @@ def test_static_grid_steps_down_when_its_own_layer_is_not_covered():
 def test_static_grid_steps_down_to_the_next_static_boundary_below():
     # need 31 rounds to the 30 m static tile, but it's only 20% covered; 10 m is
     # fully covered, so the grid steps down to 25 m, served dynamically from 10 m
-    g = op.choose_grid(31.0, {10: 1.0, 30: 0.2, 60: 1.0})
+    g = op.choose_grid(31.0, {10: 1.0, 30: 0.2, 60: 0.0})
     assert g == {"grid_m": 25.0, "layer_m": 10, "upsample": 1.0, "widen": False,
                  "us_share": 1.0}
 
@@ -235,9 +247,10 @@ def test_curated_fit_requires_the_margin_not_just_the_frame():
 
 
 def test_choose_grid_reads_absent_layers_as_uncovered():
-    # Prepare asks only for 10, 30 and 60 m once the need is 20 m or more
-    g = op.choose_grid(25.0, {"10": 1.0, "30": 1.0, "60": 1.0})
+    # Prepare asks only for 10 and 30 m once the need is 20 m or more (60 m is
+    # never worth asking: it has no lower-48 tile at all)
+    g = op.choose_grid(25.0, {"10": 1.0, "30": 1.0})
     assert (g["grid_m"], g["layer_m"], g["widen"]) == (25.0, 10, False)
-    g = op.choose_grid(25.0, {"30": 1.0, "60": 1.0})
+    g = op.choose_grid(25.0, {"30": 1.0})
     assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
     assert g["upsample"] == pytest.approx(1.2)
