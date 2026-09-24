@@ -222,9 +222,11 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 
 | Decision | Why | Source |
 |---|---|---|
-| The Print comes in two sizes: $90 at 18×24 and $80 at 13×19. This supersedes the 2026-09-23 $80 at 18×24. | Dom's call. The 13×19 keeps the profile's $80 entry price. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows the old price |
+| The Print comes in two sizes: $90 at 18×24 and $80 at 13×19. This supersedes the 2026-09-23 $80 at 18×24. Superseded later the same day by $89 and $79. | Dom's call. The 13×19 keeps the profile's $80 entry price. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows the old price |
 | The Poster, the digital final, drops from $79 to $39. | Dom's call. At $79 it sat $1 below the 13×19 Print, which includes it. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $79 |
 | The Edition N+1 digital edition drops from $49 to $25. | Dom's call. At $49 it cost more than the $39 Poster, and the reprint must stay below a first year. $25 keeps the two-thirds ratio. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $49 |
+| The Print is $89 at 18×24 and $79 at 13×19. | Dom's call, replacing the $90 and $80 set earlier the same day. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $80 at 18×24 |
+| The plate commission is retired as a product. The $299 tier comes off the landing page. | Dom: "it's not really a thing." `marketing.md` and the landing page's coverage copy still name it. | Dom, 2026-09-24 |
 
 ## Rejected and deferred
 
