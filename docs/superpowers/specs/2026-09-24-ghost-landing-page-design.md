@@ -1,8 +1,7 @@
 # The Tecopa Landing Page on Ghost — Design
 
 **Date:** 2026-09-24
-**Status:** Draft for Dom's review (brainstorming session, 2026-09-24). Revised the same
-day after three previews.
+**Status:** Approved by Dom for build, 2026-09-24, with the theme modules in §3.1.
 **Replaces:** `marketing/landing.html` and `marketing/privacy.html` on Netlify
 **Follows:** `00-09 System/01 Docs/superpowers/specs/2026-09-14-undercurrent-ghost-pilot-design.md`
 in plateworks-os (the pilot that Dom kept on 2026-09-23), and its parent brainstorm
@@ -59,6 +58,7 @@ Dom edits the words, images and prices in Ghost Admin, with no code.
 | 13 | The theme work starts from the downloaded releases in `~/Downloads`: Moment 2.1.3 and Essence 1.1.0. |
 | 14 | The media host `media.plateworks.org` is designed but not built. See §7. |
 | 15 | The page accent is canon Amethyst, Tecopa's assigned accent in `color-standards.md`. The trail gold appears only inside the posters. |
+| 16 | The page uses the Priority Vision modules that suit it, listed in §3.1. The Undercurrent and Ignition pages share them: `00-09 System/01 Docs/superpowers/specs/2026-09-24-product-pages-v2-design.md` in plateworks-os. |
 
 ## 1. Pages and addresses
 
@@ -172,6 +172,26 @@ Motion rules for every moving part:
 - Without WebGL, the shader area shows the section's background color. Each viewer shows
   its surface image as a plain `<img>`.
 - A shader or a viewer that scrolls out of view stops drawing.
+
+### 3.1 Theme modules
+
+| Module | Source | On this page |
+|---|---|---|
+| Text mask | Essence 1.1.0 `assets/js/text-mask.js`, copied unchanged to `assets/js/product/vendor/essence/text-mask.js` | The hero title and lede rise line by line as the contour lines fade in |
+| Scroll recipes | Moment `scroll-with-attributes.js`, already loaded | The wide close-up starts full width and settles into a framed print as it scrolls in |
+| Clip reveal | Moment's reveal effects | The two side-by-side close-ups unroll from the top, like a poster opening |
+| Parallax | Moment `parallax.js`, already loaded | The terrain drifts slightly inside each close-up frame |
+| Cursor label | Moment `cursor.js`, already loaded | "Drag to turn" follows the pointer over the relief previews |
+| Rolling-letter button | Moment `button-animation.js`, already loaded | "Build your poster" rolls its letters on hover |
+
+Left out: horizontal scroll and Essence's navigation transition, which fight Moment's own
+scroll and page transitions; scroll snap, which cuts off long sections; the testimonials
+carousel, until there are customer quotes.
+
+**Licensing.** Priority Vision's licence allows derivative works for Dom's own sites. The
+Essence shader code derives from React Bits (MIT with the Commons Clause) and stays out of
+public repos. This repo is public, so the theme code lives only in `moment-theme`. The
+prototype here holds only code written for it.
 
 ## 4. The relief viewer
 
