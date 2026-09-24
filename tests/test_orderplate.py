@@ -316,3 +316,10 @@ def test_choose_grid_reads_absent_layers_as_uncovered():
     g = op.choose_grid(25.0, {"30": 1.0})
     assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
     assert g["upsample"] == pytest.approx(1.2)
+
+
+# ---- contract: STATIC_LAYERS_M is region_prep's own static-tile list, not a copy ----
+
+def test_static_layers_m_matches_region_preps_static_tiles():
+    rp = pytest.importorskip("region_prep")
+    assert op.STATIC_LAYERS_M == rp.DEM_RES_CHOICES

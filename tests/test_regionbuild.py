@@ -285,6 +285,37 @@ def test_run_build_passes_order_arguments_and_env(tmp_path):
     assert _json.load(open(tmp_path / "argv.json")) == ["--root", str(root), "stub_region"]
 
 
+STUB_PREP_ARGV = """
+import json, os, sys
+json.dump([sys.executable] + sys.argv, open(os.environ["PREP_ARGV_OUT"], "w"))
+"""
+
+
+def test_run_build_order_argv_round_trips_through_region_preps_real_parser(tmp_path):
+    # run_build's own constructed cmd is [prep_python, prep_script, "--id", ...];
+    # the stub dumps [sys.executable] + sys.argv, which is that exact list (its
+    # own sys.executable is prep_python, its own sys.argv[0] is prep_script), so
+    # argv[2:] is what a real invocation's sys.argv[1:] would be.
+    rp = pytest.importorskip("region_prep")
+    prep = tmp_path / "argv_prep.py"
+    prep.write_text(STUB_PREP_ARGV)
+    labels = tmp_path / "labels_noop.py"
+    labels.write_text("pass\n")
+    root = tmp_path / "work" / "plate"
+    argv_out = tmp_path / "prep_argv.json"
+    params = dict(_params(), resolution=4.0, out_root=str(root))
+    env = dict(os.environ, PREP_ARGV_OUT=str(argv_out))
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                prep_python=sys.executable, prep_script=str(prep),
+                labels_script=str(labels), set_progress=lambda s: None, env=env)
+    argv = _json.load(open(argv_out))
+    args = rp._parser().parse_args(argv[2:])
+    assert args.resolution == params["resolution"]
+    assert args.out_root == params["out_root"]
+    assert list(args.bbox) == list(params["bbox"])
+    assert args.epsg == params["epsg"]
+
+
 def test_run_build_refuses_an_out_root_other_than_regions_root(tmp_path):
     # the failure sweep removes regions_root/<id>; with a different out_root it
     # would remove the wrong folder and leave the partial plate behind

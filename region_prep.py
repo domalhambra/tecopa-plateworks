@@ -700,7 +700,10 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
         json.dump(manifest, f, indent=2)
     return manifest
 
-def main():
+def _parser() -> argparse.ArgumentParser:
+    """The CLI's own argument parser, split out from main() so a test can feed it
+    the exact argv an order build constructs (app/regionbuild.run_build) and prove
+    it round-trips, without spawning a subprocess."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--id", required=True)
     ap.add_argument("--name", required=True)
@@ -715,7 +718,11 @@ def main():
                          "3DEP dynamic service")
     ap.add_argument("--out-root", default="regions",
                     help="directory the region folder is written under")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = _parser().parse_args()
 
     out_dir = os.path.join(args.out_root, args.id)
     os.makedirs(out_dir, exist_ok=True)

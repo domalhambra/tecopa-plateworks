@@ -530,3 +530,10 @@ def test_a_built_plate_missing_a_file_is_rebuilt(tmp_path, tools, lost):
     (d / "work" / "plate" / state["plate"]["id"] / lost).unlink()
     op.prepare(str(d), tools, log=lambda s: None)
     assert len(_builds(d)) == 2
+
+
+# ---- contract: one _plan_grid pass per region_prep.COVERAGE_LAYERS_M layer ----
+
+def test_max_plan_passes_matches_region_preps_coverage_layers():
+    rp = pytest.importorskip("region_prep")
+    assert op.MAX_PLAN_PASSES == len(rp.COVERAGE_LAYERS_M)
