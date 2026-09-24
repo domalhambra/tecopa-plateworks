@@ -36,8 +36,10 @@ useless for judging a poster by eye. Build the real DEM first (see "Build a new 
 2. Full suite: `.venv/bin/python -m pytest -n auto -q`. It renders real posters and
    films, about three minutes on the Mac. CI runs it on every push to `main`.
 3. Compare the failure set, not the totals. Totals move with every feature. The
-   Mac-only failure is one test: `test_mp4_twin_is_tagged_bt709`, because the bundled
-   ffmpeg writes no `colr` box on macOS. CI on Ubuntu is green.
+   suite has no known Mac-only failure. `test_mp4_twin_is_tagged_bt709` failed on the
+   Mac until 2026-09-24. The one `imageio-ffmpeg` pin ships ffmpeg 7.1 on macOS and
+   7.0.2 on Linux. From 7.1 the encoder reads colour tags from the frames, not the
+   flags, so the Mac MP4 had no `colr` box. A `setparams` filter now tags the frames.
    Seven more were blamed on fonts (Georgia on the Mac, DejaVu in CI) until
    2026-09-23. The font was not the cause: bound to DejaVu, six of the seven still
    failed. They read `regions/lassen_ca` directly, and conftest only hydrates a
