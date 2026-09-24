@@ -130,7 +130,8 @@ Prepare's plate step only.
    `TECOPA_PREP_PYTHON` overrides which prep interpreter it calls.
 4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the
    print can show, up to the 2x limit. A widened frame means the data could not hold
-   the nestled look at this size, and the warning names a smaller print.
+   the nestled look at this size; the warning names it, but naming the exact smaller
+   sheet waits for the paper table (sub-project 2).
 
 Running Prepare again with the same tracks, size and orientation builds nothing. A
 changed input, or a new manual frame in `state.json`'s `manual` key, rebuilds the plate.
@@ -154,6 +155,14 @@ Traps already paid for:
   that file gets one automatic rebuild. A second failure keeps the plate and warns
   instead of rebuilding it forever. `work/build.log` keeps every build line, to read
   after a failed build sweeps the partial plate.
+- The fetch stack writes more than the HyRiver request cache under a bare `cache/`:
+  pygeoogc's own HTTP cache defaults there too (`HYRIVER_CACHE_NAME_HTTP` moves it,
+  set beside `HYRIVER_CACHE_NAME`), and pygeoogc's `ArcGISRESTful` (pynhd's NHD
+  queries) writes a retry log to a hardcoded `cache/failed_ids*.txt` with no env
+  override at all. Prepare runs the prep subprocess with its cwd at
+  `~/Tecopa Orders/_cache/` instead of the repo root, so that write lands there too;
+  every script path and `--out-root` it passes is already absolute, so this is safe.
+  The dynamic-service DEM fetch itself already follows `HYRIVER_CACHE_NAME`.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
 (stub subprocesses, no network), `tests/test_dem_coverage.py`.

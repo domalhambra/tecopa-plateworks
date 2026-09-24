@@ -28,6 +28,9 @@ Never install that stack into `.venv`. `scripts/macos/build_app.sh --install` bu
 macOS launcher, which runs the engine from this repo's `.venv` on port 8848. The full
 recipe, and what to do when a venv dies, is in `docs/changing-things.md`.
 
+An order runs with `.venv/bin/python scripts/order.py prepare "<folder>"`; see
+`docs/changing-things.md` › Run an order.
+
 ## Prove a change
 
 ```bash
