@@ -59,3 +59,23 @@ def test_update_sources_manifest_is_idempotent(tmp_path):
     assert once == twice                                   # no duplicate GNIS entry
     got = json.loads(twice)
     assert sum("GNIS" in s["dataset"] for s in got["sources"]) == 1
+
+
+def test_main_takes_a_root(monkeypatch):
+    import sys
+    from scripts import build_labels as bl
+    seen = []
+    monkeypatch.setattr(bl, "build_region", seen.append)
+    monkeypatch.setattr(sys, "argv", ["build_labels.py", "--root", "/o/work/plate", "order_x"])
+    bl.main()
+    assert seen == [os.path.join("/o/work/plate", "order_x")]
+
+
+def test_main_default_root_is_regions(monkeypatch):
+    import sys
+    from scripts import build_labels as bl
+    seen = []
+    monkeypatch.setattr(bl, "build_region", seen.append)
+    monkeypatch.setattr(sys, "argv", ["build_labels.py", "lassen_ca"])
+    bl.main()
+    assert seen == [os.path.join("regions", "lassen_ca")]

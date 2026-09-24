@@ -44,12 +44,13 @@ def refit_crop_aspect(crop, aspect, bounds, floor_w=0.0):
     and (roughly) its area, clamped inside `bounds` -- the server-side twin of the
     Frame step's refitForSize (canvas.js), used when one accepted composition is
     re-targeted at a differently-shaped sheet (wallpaper presets). `floor_w` (metres)
-    is the zoom-cap floor width for the target output (native_resolution_m * output
-    width in px): the box is grown to it so the result clears the cap whenever the
-    region can hold such a box. A region too small for a floor-sized box at this
-    aspect yields the largest in-bounds crop (best effort) and the too-tight state is
-    surfaced by the caller's validate(), same contract as starter_crop. Returns
-    (min_x, min_y, max_x, max_y) in CRS metres."""
+    is the 1x framing target width for the target output (native_resolution_m *
+    output width in px): the box is grown to it so the result meets the target
+    whenever the region can hold such a box. The zoom cap itself allows up to
+    MAX_UPSAMPLE finer than this target (app/spec.py). A region too small for a
+    floor-sized box at this aspect yields the largest in-bounds crop (best effort)
+    and the too-tight state is surfaced by the caller's validate(), same contract as
+    starter_crop. Returns (min_x, min_y, max_x, max_y) in CRS metres."""
     min_x, min_y, max_x, max_y = bounds
     reg_w, reg_h = max_x - min_x, max_y - min_y
     cx = (crop[0] + crop[2]) / 2.0
@@ -73,15 +74,16 @@ def starter_crop(region: RegionGeo, tracks_px, print_w_in, print_h_in,
     """A generous default crop (in overview px) for the Frame step: centered on the
     track centroid, aspect-locked to the print size, clamped to region bounds, and --
     WHEN the region is large enough to hold a floor-sized aspect box -- at or above the
-    zoom-cap floor at `dpi`, so the first proof clears the cap. Deliberately NOT the
-    tight track bounding box: a tight cluster blown up to print aspect would trip the
-    cap and frame cramped terrain.
+    1x framing target at `dpi`, so the first proof meets it without relying on the
+    zoom cap's upsampling. Deliberately NOT the tight track bounding box: a tight
+    cluster blown up to print aspect would trip the cap and frame cramped terrain.
 
     A region too small to hold a floor-sized box at this aspect (region width <
     native_resolution_m * round(print_w_in * dpi), or too short for the aspect height)
-    physically cannot satisfy the cap at this print size; this returns the largest
-    in-region crop (best effort) and the too-tight state is surfaced downstream (the
-    Frame red-tint and the proof's humanized 422). The two bundled regions both hold
+    misses the 1x framing target at this print size. The zoom cap itself still allows
+    up to MAX_UPSAMPLE finer (app/spec.py), so this returns the largest in-region crop
+    (best effort) and the too-tight state -- past MAX_UPSAMPLE -- is surfaced
+    downstream (the Frame red-tint and the proof's humanized 422). The two bundled regions both hold
     the 18x24 floor. tracks_px: polylines in overview px (as /api/upload returns).
     Returns (x0, y0, x1, y1) in overview pixels, ordered.
     """

@@ -52,8 +52,9 @@ export function setMode(m) {
 
 // Reset the frame to the server-computed starter crop (clears only the crop). The
 // server sizes the starter for 18x24; if the active print size was restored to
-// something else, re-fit so the crop matches that aspect and clears ITS zoom floor
-// on entry (else a returning operator's first proof would trip the cap).
+// something else, re-fit so the crop matches that aspect and meets ITS 1x framing
+// target on entry (else a returning operator's first proof would need more than
+// the zoom cap's upsampling allows).
 export function resetFrame() {
   if (!state.starterCrop) return;
   const s = state.scale;
@@ -65,8 +66,8 @@ export function resetFrame() {
 }
 
 // Re-fit the current crop to a new print aspect: keep center, grow to the new size's
-// zoom-cap floor when the region allows, clamp inside the overview. Never leaves a
-// stale aspect mismatch.
+// 1x framing target when the region allows, clamp inside the overview. Never leaves
+// a stale aspect mismatch.
 export function refitForSize() {
   const c = cropOverviewPx(); const r = activeRegion(); const mpp = metresPerPx();
   if (!c || !r || !mpp) return;
@@ -91,12 +92,13 @@ const toCanvas = (px, py) => [px * state.scale, py * state.scale];
 const toOverview = (cx, cy) => [cx / state.scale, cy / state.scale];
 const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), hi);
 
-// Is the current crop below the zoom-cap floor for the selected print width?
+// Is the current crop below the zoom-cap floor for the selected print width? The
+// server allows r.max_upsample x finer ground than the plate (invariant 6).
 export function cropBelowFloor() {
   const c = cropOverviewPx(); const r = activeRegion(); const mpp = metresPerPx();
   if (!c || !r || !mpp) return false;
   const groundW = (c[2] - c[0]) * mpp;
-  return groundW < r.native_resolution_m * finalWidthPx();
+  return groundW < (r.native_resolution_m / (r.max_upsample || 1)) * finalWidthPx();
 }
 
 // Can NO in-region crop satisfy the zoom floor at the selected size? The largest
@@ -110,7 +112,7 @@ export function sizeInfeasibleForRegion() {
   const regW = r.bounds[2] - r.bounds[0];
   const regH = r.bounds[3] - r.bounds[1];
   const maxCropW = Math.min(regW, regH * (state.printW / state.printH));
-  return r.native_resolution_m * finalWidthPx() > maxCropW;
+  return (r.native_resolution_m / (r.max_upsample || 1)) * finalWidthPx() > maxCropW;
 }
 
 // The same zoom-floor test for an ARBITRARY output preset (a social format / device),
@@ -124,7 +126,7 @@ export function presetInfeasibleForRegion(preset) {
   const regH = r.bounds[3] - r.bounds[1];
   const aspect = preset.px[0] / preset.px[1];
   const maxCropW = Math.min(regW, regH * aspect);
-  return r.native_resolution_m * preset.px[0] > maxCropW;
+  return (r.native_resolution_m / (r.max_upsample || 1)) * preset.px[0] > maxCropW;
 }
 
 function cropAnnouncement() {

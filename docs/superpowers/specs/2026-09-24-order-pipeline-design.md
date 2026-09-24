@@ -101,12 +101,16 @@ in-app build flow keeps `derive_bbox`.
 **Resolution follows the print.** Needed ground resolution = frame width ÷ (print
 width × 300).
 
-- Add 3 m and 1 m to `DEM_RES_CHOICES`. Pick the coarsest layer that meets the need.
+- The plate's grid follows the need. From 10 to 20 m and from 30 to 60 m it uses the
+  static 10 or 30 m tiles, which are more reliable than the dynamic service, so the
+  plate holds at most 4× the print's pixels. Other grids come from the 3DEP dynamic
+  service: quarter metres below 10 m (a 1 or 3 m layer must fully cover the plate),
+  and 5 m steps from 20 to 30 m and above 60 m. The static 60 m tiles cover Alaska
+  only. `DEM_RES_CHOICES` does not change.
 - Check 3DEP coverage for the layer before using it. The 3DEP service fills gaps with
-  resampled coarser data and does not say so. A layer that does not fully cover the
-  plate is not used.
-- Large frames fetch at the needed resolution. An 800 km road trip needs about
-  160 m per pixel, not 10 m. The existing `GRID_BUDGET_MPX` still applies.
+  resampled coarser data and does not say so. A layer is used only if it covers
+  everything the best layer covers, within 0.5%, so ocean and ground across a border
+  count against no layer. A plate that is mostly outside US data is refused.
 - If no layer is fine enough, allow upsampling up to 2×.
 - Past 2×, widen the frame until 2× holds. The customer's size wins over the
   nestled fill. Warn when the fill drops below 40%, and name the smaller sheet that
@@ -115,8 +119,10 @@ width × 300).
 **Projection:** the UTM zone of the frame's centre. Frames wider than 600 km use
 CONUS Albers (EPSG:5070).
 
-**Build time:** unknown. The plan for sub-project 1 measures it on three real track
-sets. The target is under 10 minutes.
+**Build time:** measured on three real track sets (Plan Task 9, 2026-09-24), all well
+under the 10-minute target: a compact home ground in 104 s, a long north–south trip in
+286 s, and an east–west road trip in 234 s. See `docs/decisions.md`, 2026-09-24 (order
+plates).
 
 ## 4. The sheet and the paper table
 
@@ -245,7 +251,7 @@ the zip in Finder. Dom makes the link with Share → Copy Link. No script makes 
 | Case | Behaviour |
 |---|---|
 | Tracks outside the lower 48 | Prepare stops and names the reason |
-| No 3DEP layer covers the plate | Use the next coarser layer that covers it. The report says so. |
+| No 3DEP layer covers the plate | A finer layer that does not cover all the US ground is skipped. A plate mostly outside US data stops Prepare. |
 | Past 2× upsampling at the ordered size | Widen the frame. Warn below 40% fill. |
 | Plate build fails | Stop. Keep the build log in `work/`. Remove the partial plate. |
 | Photo has no spot | The photo goes to the unplaced tray. Finish refuses until it is placed or dropped. |

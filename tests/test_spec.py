@@ -65,6 +65,20 @@ def test_zoom_cap_allows_exactly_native():
     assert s.ground_per_pixel(300) == 10.0
     assert s.validate(dpi=300) is s   # does not raise
 
+def test_zoom_cap_allows_up_to_2x_upsampling():
+    # Invariant 6, amended 2026-09-24: 27000 m / 5400 px = exactly 5.0 m/px on a
+    # 10 m plate is a 2x upsample, the most allowed (the cap is a strict `<`).
+    s = CompositionSpec(**base_kwargs(crop=(430000.0, 4345000.0, 457000.0, 4381000.0)))
+    assert s.ground_per_pixel(300) == 5.0
+    assert s.validate(dpi=300) is s
+
+
+def test_zoom_cap_rejects_past_2x():
+    # 26000 m / 5400 px = 4.81 m/px: past 2x on a 10 m plate
+    s = CompositionSpec(**base_kwargs(crop=(430000.0, 4345000.0, 456000.0, 4379666.67)))
+    with pytest.raises(ZoomTooTightError, match="data floor is 5 m/px"):
+        s.validate(dpi=300)
+
 def test_style_bounds_rejected():
     # style knobs outside the slider bounds 422 via SpecError, not render weirdly
     import pytest as _pt

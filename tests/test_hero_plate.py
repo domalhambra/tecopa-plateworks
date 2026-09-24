@@ -23,8 +23,9 @@ def _spec_for(region_dir=REGION_DIR, **kw):
     cfg = _cfg(region_dir)
     w, s, e, n = cfg["bounds"]
     cx, cy = (w + e) / 2, (s + n) / 2
-    # 18 x 24 km on an 18 x 24 in sheet: 10.4 m/px at 96 dpi, just clear of the plate's
-    # 10 m data floor, so the zoom cap (invariant 6) does not refuse the fixture.
+    # 18 x 24 km on an 18 x 24 in sheet: 10.4 m/px at 96 dpi, just clear of the 5 m
+    # floor (the plate's 10 m native_resolution_m at the 2x MAX_UPSAMPLE cap), so the
+    # zoom cap (invariant 6) does not refuse the fixture.
     half_w, half_h = 9000.0, 12000.0
     base = dict(region_id=cfg["id"], crs=cfg["crs"],
                 crop=(cx - half_w, cy - half_h, cx + half_w, cy + half_h),

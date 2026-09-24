@@ -129,6 +129,7 @@ def test_lonlat_extent_route_only_gpx():
 # ---- run_build: subprocess orchestration against stub scripts (no network) ----
 
 import json as _json
+import os
 import sys
 
 
@@ -188,6 +189,38 @@ def test_run_build_streams_progress_and_returns(tmp_path, monkeypatch):
     assert (tmp_path / "regions" / "stub_region" / "region.json").exists()
 
 
+def test_run_build_defaults_cwd_to_repo_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    body = "open('seen_cwd.txt', 'w').write(os.getcwd())\n" + STUB_OK
+    rb.run_build(_params(), repo_root=str(tmp_path),
+                regions_root=str(tmp_path / "regions"),
+                prep_python=sys.executable,
+                prep_script=_write_stub_prep(tmp_path, body),
+                labels_script=_write_stub_labels(tmp_path, ok=True),
+                set_progress=lambda s: None)
+    assert (tmp_path / "seen_cwd.txt").read_text() == str(tmp_path)
+
+
+def test_run_build_honours_an_explicit_cwd(tmp_path, monkeypatch):
+    # an order build (app/orderprep.py) moves the prep subprocess's cwd off the
+    # repo root, so a library's hardcoded-relative write (pygeoogc's failed_ids
+    # log) can't land inside the public repo; script paths and out_root stay
+    # absolute regardless, so this must not change where anything is written
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    body = "open('seen_cwd.txt', 'w').write(os.getcwd())\n" + STUB_OK
+    rb.run_build(_params(), repo_root=str(tmp_path),
+                regions_root=str(tmp_path / "regions"),
+                prep_python=sys.executable,
+                prep_script=_write_stub_prep(tmp_path, body),
+                labels_script=_write_stub_labels(tmp_path, ok=True),
+                set_progress=lambda s: None, cwd=str(elsewhere))
+    assert (elsewhere / "seen_cwd.txt").read_text() == str(elsewhere)
+    assert not (tmp_path / "seen_cwd.txt").exists()
+    assert (tmp_path / "regions" / "stub_region" / "region.json").exists()
+
+
 def test_run_build_failure_cleans_partial_and_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
     with pytest.raises(RuntimeError) as ei:
@@ -211,3 +244,156 @@ def test_run_build_labels_failure_is_nonfatal(tmp_path, monkeypatch):
                        set_progress=lambda s: None)
     assert res["labels_note"]                       # note, not an exception
     assert (tmp_path / "regions" / "stub_region").exists()
+
+
+STUB_ORDER_PREP = """
+import argparse, json, os
+ap = argparse.ArgumentParser()
+for a in ("--id", "--name", "--epsg", "--resolution", "--out-root"):
+    ap.add_argument(a, required=True)
+ap.add_argument("--bbox", nargs=4, type=float, required=True)
+a = ap.parse_args()
+out = os.path.join(a.out_root, a.id)
+os.makedirs(out, exist_ok=True)
+json.dump({"resolution": a.resolution},
+          open(os.path.join(out, "region.json"), "w"))
+print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
+"""
+
+STUB_LABELS_ARGV = """
+import json, os, sys
+open(os.environ["LABELS_ARGV_OUT"], "w").write(json.dumps(sys.argv[1:]))
+"""
+
+
+def test_run_build_passes_order_arguments_and_env(tmp_path):
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(STUB_ORDER_PREP)
+    labels = tmp_path / "labels_argv.py"
+    labels.write_text(STUB_LABELS_ARGV)
+    root = tmp_path / "work" / "plate"
+    params = dict(_params(), resolution=4.0, out_root=str(root))
+    env = dict(os.environ, HYRIVER_CACHE_NAME="/tmp/cache.sqlite",
+               LABELS_ARGV_OUT=str(tmp_path / "argv.json"))
+    lines = []
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=str(labels), set_progress=lines.append, env=env)
+    got = _json.load(open(root / "stub_region" / "region.json"))
+    assert got == {"resolution": "4.0"}
+    assert "cache=/tmp/cache.sqlite" in lines
+    assert _json.load(open(tmp_path / "argv.json")) == ["--root", str(root), "stub_region"]
+
+
+STUB_PREP_ARGV = """
+import json, os, sys
+json.dump([sys.executable] + sys.argv, open(os.environ["PREP_ARGV_OUT"], "w"))
+"""
+
+
+def test_run_build_order_argv_round_trips_through_region_preps_real_parser(tmp_path):
+    # run_build's own constructed cmd is [prep_python, prep_script, "--id", ...];
+    # the stub dumps [sys.executable] + sys.argv, which is that exact list (its
+    # own sys.executable is prep_python, its own sys.argv[0] is prep_script), so
+    # argv[2:] is what a real invocation's sys.argv[1:] would be.
+    rp = pytest.importorskip("region_prep")
+    prep = tmp_path / "argv_prep.py"
+    prep.write_text(STUB_PREP_ARGV)
+    labels = tmp_path / "labels_noop.py"
+    labels.write_text("pass\n")
+    root = tmp_path / "work" / "plate"
+    argv_out = tmp_path / "prep_argv.json"
+    params = dict(_params(), resolution=4.0, out_root=str(root))
+    env = dict(os.environ, PREP_ARGV_OUT=str(argv_out))
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                prep_python=sys.executable, prep_script=str(prep),
+                labels_script=str(labels), set_progress=lambda s: None, env=env)
+    argv = _json.load(open(argv_out))
+    args = rp._parser().parse_args(argv[2:])
+    assert args.resolution == params["resolution"]
+    assert args.out_root == params["out_root"]
+    assert list(args.bbox) == list(params["bbox"])
+    assert args.epsg == params["epsg"]
+
+
+def test_run_build_refuses_an_out_root_other_than_regions_root(tmp_path):
+    # the failure sweep removes regions_root/<id>; with a different out_root it
+    # would remove the wrong folder and leave the partial plate behind
+    ran = tmp_path / "ran"
+    prep = tmp_path / "touch_prep.py"
+    prep.write_text(f"open({str(ran)!r}, 'w').write('x')\n")
+    params = dict(_params(), resolution=4.0, out_root=str(tmp_path / "order" / "plate"))
+    with pytest.raises(ValueError, match="out_root"):
+        rb.run_build(params, repo_root=".", regions_root=str(tmp_path / "regions"),
+                     prep_python=sys.executable, prep_script=str(prep),
+                     labels_script=_write_stub_labels(tmp_path),
+                     set_progress=lambda s: None)
+    assert not ran.exists()                        # refused before spawning
+
+
+def test_run_build_accepts_an_out_root_spelled_differently(tmp_path):
+    root = tmp_path / "work" / "plate"
+    params = dict(_params(), resolution=4.0, out_root=str(root / ".." / "plate"))
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(STUB_ORDER_PREP)
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=_write_stub_labels(tmp_path),
+                 set_progress=lambda s: None)
+    assert (root / "stub_region" / "region.json").exists()
+
+
+# ---- out_root resolves against repo_root, where region_prep runs ----
+
+STUB_ORDER_FAIL = STUB_ORDER_PREP + "\nimport sys\nsys.exit(3)\n"
+
+
+def _order_build(tmp_path, regions_root, out_root, prep_body=STUB_ORDER_PREP):
+    """run_build with repo_root = tmp_path/repo, which is not the test's cwd."""
+    repo = tmp_path / "repo"
+    repo.mkdir(exist_ok=True)
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(prep_body)
+    labels = tmp_path / "labels_argv.py"
+    labels.write_text(STUB_LABELS_ARGV)
+    env = dict(os.environ, LABELS_ARGV_OUT=str(tmp_path / "argv.json"))
+    params = dict(_params(), resolution=4.0, out_root=out_root)
+    rb.run_build(params, repo_root=str(repo), regions_root=regions_root,
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=str(labels), set_progress=lambda s: None, env=env)
+    return repo
+
+
+@pytest.mark.parametrize("regions_root,out_root", [
+    ("work/plate", "work/./plate"),               # both relative to repo_root
+    (None, "work/plate"),                         # absolute vs relative, same folder
+])
+def test_out_root_equal_relative_to_the_repo_root_builds_there(
+        tmp_path, regions_root, out_root):
+    if regions_root is None:
+        regions_root = str(tmp_path / "repo" / "work" / "plate")
+    repo = _order_build(tmp_path, regions_root, out_root)
+    plate = repo / "work" / "plate"
+    assert (plate / "stub_region" / "region.json").exists()
+    # region_prep and the labels bake both get the resolved, absolute folder
+    assert _json.load(open(tmp_path / "argv.json")) == [
+        "--root", str(plate), "stub_region"]
+
+
+@pytest.mark.parametrize("regions_root,out_root", [
+    ("work/a", "work/b"),
+    ("work/plate", None),                         # absolute out_root elsewhere
+])
+def test_out_root_different_relative_to_the_repo_root_raises(
+        tmp_path, regions_root, out_root):
+    if out_root is None:
+        out_root = str(tmp_path / "elsewhere" / "work" / "plate")
+    with pytest.raises(ValueError, match="out_root"):
+        _order_build(tmp_path, regions_root, out_root)
+
+
+def test_a_failed_order_build_sweeps_the_folder_under_the_repo_root(tmp_path):
+    with pytest.raises(RuntimeError):
+        _order_build(tmp_path, "work/plate", "work/plate", STUB_ORDER_FAIL)
+    assert (tmp_path / "repo" / "work" / "plate").is_dir()
+    assert not (tmp_path / "repo" / "work" / "plate" / "stub_region").exists()

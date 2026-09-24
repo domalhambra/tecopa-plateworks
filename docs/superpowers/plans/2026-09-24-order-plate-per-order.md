@@ -21,8 +21,8 @@
 
 ## Decisions made while planning (they refine the spec)
 
-1. **The grid and the fetched layer are separate.** The spec said "add 3 m and 1 m to `DEM_RES_CHOICES`". That would make the in-app auto planner pick 1 m for small plates. Instead, `DEM_RES_CHOICES` stays `(10, 30, 60)`. An order passes an explicit grid (`--resolution`) and the layer to fetch (`--source-resolution`). A 25 m grid is fetched from the 10 m static layer and averaged down. The plate then holds about 1.44× the print's pixels, whatever the ground size.
-2. **Below 10 m, the grid is fetched from the 3DEP dynamic service at the grid's own cell size.** The service resamples the finest source it holds. Task 1 checks that it really delivers lidar detail. If it does not, `USE_DYNAMIC_FINE = False` and orders use the static layers with the 2× rule.
+1. **Every grid is fetched at its own cell size.** (Revised during execution, 2026-09-24.) `DEM_RES_CHOICES` stays `(10, 30, 60)` for the in-app auto planner. An order passes an explicit grid with `--resolution`. Grids of 10, 30 and 60 m use py3dep's static tiles. Any other grid (1.75 m, 4 m, 25 m, 160 m) is fetched from the 3DEP dynamic service, which resamples server-side from the best data it holds. The first version fetched a finer static layer and averaged it onto the grid locally. Review found that design unsound: a seam mask wiped out whole slices away from the UTM central meridian, and the slice planner understated memory 4–6×. It was replaced in execution. A plate stays near 1.44× the print's pixels, so it rarely needs more than one slice.
+2. **Below 10 m, the grid comes from the dynamic service only where a fine layer (1 or 3 m) fully covers the plate.** Task 1 checked that the service really delivers lidar detail (PASS by eye: crisp washes and roads at Tecopa). If it does not, `USE_DYNAMIC_FINE = False` and orders use the static layers with the 2× rule.
 3. **The 2× cap is global.** `spec.validate` and the studio's red tint allow 2×. The default framing (`starter_crop`, `refit_crop_aspect`, the studio's refit, wallpaper floors) still aims for 1×, so nothing gets softer unless someone asks for a tighter frame.
 4. **3DEP has no 3 m data at Tecopa** (index query, 2026-09-24: 1 m yes, 3 m no). The coverage check is required, not optional.
 
@@ -254,6 +254,8 @@ git commit -m "spec: the zoom cap allows 2x upsampling, so an order's terrain ca
 ---
 
 ### Task 3: `region_prep.py` fetches one layer onto a different grid
+
+> **Revised in execution (2026-09-24).** This task was built as written, then reworked after code review: `--source-resolution`, the local averaging and the seam mask were removed. What shipped: `--resolution` takes any positive finite number, `--out-root`, `DYNAMIC_OVERSAMPLE` slice sizing for non-static grids, `slice_overlap_deg`, and the "USGS 3DEP dynamic service, N m" dataset string. See decision 1. The steps below are the original record.
 
 **Goal:** `plan_build` and the CLI take a grid resolution and a separate, finer-or-equal source resolution, and write the region under any root.
 
@@ -643,7 +645,7 @@ git commit -m "region_prep: measure 3DEP coverage per layer, because the dynamic
 
 ### Task 5: `run_build` and the labels bake work outside `regions/`
 
-**Goal:** `regionbuild.run_build` passes a grid, a source layer, an output root and an environment through to `region_prep.py` and `scripts/build_labels.py`, without changing the in-app build.
+**Goal:** `regionbuild.run_build` passes a grid, an output root and an environment through to `region_prep.py` and `scripts/build_labels.py`, without changing the in-app build.
 
 **Files:**
 - Modify: `app/regionbuild.py` (`run_build`)
@@ -651,7 +653,7 @@ git commit -m "region_prep: measure 3DEP coverage per layer, because the dynamic
 - Test: `tests/test_regionbuild.py`, `tests/test_build_labels.py`
 
 **Acceptance Criteria:**
-- [ ] With `resolution`, `source_resolution` and `out_root` in `params`, the prep command carries `--resolution`, `--source-resolution` and `--out-root`, and the labels command carries `--root`.
+- [ ] With `resolution` and `out_root` in `params`, the prep command carries `--resolution` and `--out-root`, and the labels command carries `--root`.
 - [ ] Without them, both commands are exactly as today (the three existing stub tests pass unchanged).
 - [ ] `env` reaches both subprocesses.
 - [ ] `build_labels.py --root <dir> <id>` builds `<dir>/<id>`.
@@ -666,13 +668,13 @@ git commit -m "region_prep: measure 3DEP coverage per layer, because the dynamic
 STUB_ORDER_PREP = """
 import argparse, json, os
 ap = argparse.ArgumentParser()
-for a in ("--id", "--name", "--epsg", "--resolution", "--source-resolution", "--out-root"):
+for a in ("--id", "--name", "--epsg", "--resolution", "--out-root"):
     ap.add_argument(a, required=True)
 ap.add_argument("--bbox", nargs=4, type=float, required=True)
 a = ap.parse_args()
 out = os.path.join(a.out_root, a.id)
 os.makedirs(out, exist_ok=True)
-json.dump({"resolution": a.resolution, "source": a.source_resolution},
+json.dump({"resolution": a.resolution},
           open(os.path.join(out, "region.json"), "w"))
 print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
 """
@@ -689,7 +691,7 @@ def test_run_build_passes_order_arguments_and_env(tmp_path):
     labels = tmp_path / "labels_argv.py"
     labels.write_text(STUB_LABELS_ARGV)
     root = tmp_path / "work" / "plate"
-    params = dict(_params(), resolution=4.0, source_resolution=4.0, out_root=str(root))
+    params = dict(_params(), resolution=4.0, out_root=str(root))
     env = dict(os.environ, HYRIVER_CACHE_NAME="/tmp/cache.sqlite",
                LABELS_ARGV_OUT=str(tmp_path / "argv.json"))
     lines = []
@@ -697,7 +699,7 @@ def test_run_build_passes_order_arguments_and_env(tmp_path):
                  prep_python=sys.executable, prep_script=str(prep),
                  labels_script=str(labels), set_progress=lines.append, env=env)
     got = _json.load(open(root / "stub_region" / "region.json"))
-    assert got == {"resolution": "4.0", "source": "4.0"}
+    assert got == {"resolution": "4.0"}
     assert "cache=/tmp/cache.sqlite" in lines
     assert _json.load(open(tmp_path / "argv.json")) == ["--root", str(root), "stub_region"]
 ```
@@ -740,15 +742,13 @@ def run_build(params: dict, repo_root: str, regions_root: str,
               set_progress, env: dict | None = None) -> dict:
 ```
 
-Add to the docstring: "An order build adds `resolution`, `source_resolution` and `out_root` to params, and passes `env` (the shared HyRiver cache). Without them the commands are exactly the in-app build's."
+Add to the docstring: "An order build adds `resolution` and `out_root` to params, and passes `env` (the shared HyRiver cache). Without them the commands are exactly the in-app build's."
 
 After the `cmd = [...]` list, add:
 
 ```python
     if params.get("resolution") is not None:
         cmd += ["--resolution", str(params["resolution"])]
-    if params.get("source_resolution") is not None:
-        cmd += ["--source-resolution", str(params["source_resolution"])]
     if params.get("out_root"):
         cmd += ["--out-root", params["out_root"]]
 ```
@@ -794,7 +794,7 @@ Expected: all pass.
 
 ```bash
 git add app/regionbuild.py scripts/build_labels.py tests/test_regionbuild.py tests/test_build_labels.py
-git commit -m "regionbuild: pass grid, source layer, root and env through, so an order builds its plate in its own folder"
+git commit -m "regionbuild: pass grid, root and env through, so an order builds its plate in its own folder"
 ```
 
 ---
@@ -877,14 +877,13 @@ def test_lonlat_round_trip_contains_the_input():
 
 
 def test_grid_under_10m_with_lidar():
-    g = op.choose_grid(4.63, LIDAR)
-    assert g == {"grid_m": 4.0, "source_m": 4.0, "layer_m": 1, "upsample": 1.0,
-                 "widen": False}
+    g = op.choose_grid(4.63, LIDAR)       # quarter-metre steps below 10 m
+    assert g == {"grid_m": 4.5, "layer_m": 1, "upsample": 1.0, "widen": False}
 
 
 def test_grid_without_lidar_upsamples_within_2x():
     g = op.choose_grid(6.0, NO_LIDAR)
-    assert (g["grid_m"], g["source_m"], g["layer_m"]) == (10.0, 10.0, 10)
+    assert (g["grid_m"], g["layer_m"]) == (10.0, 10)
     assert g["upsample"] == pytest.approx(10 / 6)
     assert not g["widen"]
 
@@ -894,17 +893,20 @@ def test_grid_past_2x_asks_to_widen():
     assert g["widen"] and g["layer_m"] == 10
 
 
-def test_large_frame_uses_a_static_layer_under_a_coarser_grid():
+def test_large_frames_get_a_grid_at_the_need():
+    # 25 m and 160 m are not static tiles: the dynamic service serves them from the
+    # finest covered layer, which layer_m records
     g = op.choose_grid(25.0, LIDAR)
-    assert g["grid_m"] == 25.0
-    assert (g["source_m"], g["layer_m"]) == (10, 10)
+    assert (g["grid_m"], g["layer_m"]) == (25.0, 1)
     g = op.choose_grid(163.0, NO_LIDAR)
-    assert (g["grid_m"], g["source_m"]) == (160.0, 60)
+    assert (g["grid_m"], g["layer_m"]) == (160.0, 10)
 
 
-def test_12m_need_uses_the_10m_layer_even_with_lidar():
-    g = op.choose_grid(12.0, LIDAR)
-    assert (g["grid_m"], g["source_m"]) == (10.0, 10)
+def test_static_grids_record_their_own_layer():
+    g = op.choose_grid(12.0, LIDAR)       # 5 m steps from 10 m: 10 m, the static tiles
+    assert (g["grid_m"], g["layer_m"]) == (10.0, 10)
+    g = op.choose_grid(31.0, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
 
 
 def test_partial_coverage_does_not_count():
@@ -1074,34 +1076,31 @@ def _nice_floor(m) -> float:
 
 
 def choose_grid(need_m, coverage) -> dict:
-    """The plate's grid and the 3DEP layer behind it, for a print that needs `need_m`
-    metres of ground per pixel. `coverage` maps layer metres to the covered share.
+    """The plate's grid for a print that needs `need_m` metres of ground per pixel.
+    `coverage` maps 3DEP layer metres to the share of the plate it covers.
 
-    grid_m is the plate's cell (its native_resolution_m). source_m is the cell size
-    fetched. layer_m is the finest 3DEP layer the data comes from. upsample is
-    grid_m / need_m, at least 1. widen is True when even the finest layer is past
-    MAX_UPSAMPLE, so the caller must widen the frame."""
+    region_prep fetches every grid at its own cell size: 10, 30 and 60 m from the
+    static tiles, anything else from the dynamic service, which resamples the finest
+    data it holds. grid_m is the plate's cell (its native_resolution_m). layer_m is
+    the 3DEP layer the data comes from. upsample is grid_m / need_m, at least 1.
+    widen is True when even the finest layer is past MAX_UPSAMPLE, so the caller
+    must widen the frame."""
     covered = sorted(r for r, share in coverage.items()
                      if share >= COVERAGE_MIN
                      and (USE_DYNAMIC_FINE or r in STATIC_LAYERS_M))
     if not covered:
         raise PlateError("No 3DEP elevation layer fully covers this ground.")
     finest = covered[0]
-    if finest <= need_m:
-        if need_m >= STATIC_LAYERS_M[0]:
-            grid = _nice_floor(need_m)
-            source = max((r for r in covered if r in STATIC_LAYERS_M and r <= grid),
-                         default=None)
-            if source is None:
-                raise PlateError("No static 3DEP layer covers this ground.")
-            return {"grid_m": grid, "source_m": source, "layer_m": source,
-                    "upsample": 1.0, "widen": False}
-        grid = float(math.floor(need_m))
-        return {"grid_m": grid, "source_m": grid, "layer_m": finest,
-                "upsample": 1.0, "widen": False}
-    upsample = finest / need_m
-    return {"grid_m": float(finest), "source_m": float(finest), "layer_m": finest,
-            "upsample": upsample, "widen": upsample > MAX_UPSAMPLE}
+    if finest > need_m:
+        upsample = finest / need_m
+        return {"grid_m": float(finest), "layer_m": finest, "upsample": upsample,
+                "widen": upsample > MAX_UPSAMPLE}
+    if need_m >= STATIC_LAYERS_M[0]:
+        grid = _nice_floor(need_m)
+    else:
+        grid = max(float(finest), math.floor(need_m * 4) / 4.0)   # quarter metres
+    layer = int(grid) if grid in STATIC_LAYERS_M else finest
+    return {"grid_m": grid, "layer_m": layer, "upsample": 1.0, "widen": False}
 
 
 def widen_for_upsample(frame, layer_m, print_w_in, dpi=DPI) -> tuple:
@@ -1460,7 +1459,7 @@ git commit -m "order: read an order folder and keep its state, so Prepare can ru
 - Test: `tests/test_orderprep.py`
 
 **Acceptance Criteria:**
-- [ ] With lidar coverage, a 3.6 × 4.4 km track set builds a 1 m plate under `work/plate/order_<slug>/`, through the stubbed prep script.
+- [ ] With lidar coverage, a 3.6 × 4.4 km track set builds a 1.5 m plate under `work/plate/order_<slug>/`, through the stubbed prep script.
 - [ ] Without lidar, the frame widens to 18 km, the upsample is at most 2×, and the warnings name the widening and "a smaller print".
 - [ ] The build subprocess gets `HYRIVER_CACHE_NAME` pointing at `<orders root>/_cache/aiohttp_cache.sqlite`.
 - [ ] A second Prepare with the same inputs builds nothing and logs "Plate is current".
@@ -1500,15 +1499,14 @@ WIDE = (-116.4, 35.7, -116.0, 36.1)            # ~36 x 44 km
 STUB_PREP = """
 import argparse, json, os
 ap = argparse.ArgumentParser()
-for a in ("--id", "--name", "--epsg", "--resolution", "--source-resolution", "--out-root"):
+for a in ("--id", "--name", "--epsg", "--resolution", "--out-root"):
     ap.add_argument(a, required=True)
 ap.add_argument("--bbox", nargs=4, type=float, required=True)
 a = ap.parse_args()
 out = os.path.join(a.out_root, a.id)
 os.makedirs(out, exist_ok=True)
 json.dump({"id": a.id, "crs": "EPSG:" + a.epsg, "bbox": a.bbox,
-           "native_resolution_m": float(a.resolution),
-           "source_resolution_m": float(a.source_resolution)},
+           "native_resolution_m": float(a.resolution)},
           open(os.path.join(out, "region.json"), "w"))
 with open(os.path.join(a.out_root, "builds.log"), "a") as f:
     f.write(a.id + "\\n")
@@ -1565,14 +1563,14 @@ def test_builds_a_lidar_plate(tmp_path, tools):
     state = op.prepare(str(d), tools, log=lines.append)
     plate = state["plate"]
     assert plate["kind"] == "built" and plate["id"] == "order_2026_10_001_smith"
-    assert (plate["grid_m"], plate["layer_m"]) == (1.0, 1)
+    assert (plate["grid_m"], plate["layer_m"]) == (1.5, 1)
     region = json.load(open(d / "work" / "plate" / plate["id"] / "region.json"))
-    assert region["native_resolution_m"] == 1.0
+    assert region["native_resolution_m"] == 1.5
     assert f"cache={od.cache_path()}" in lines
     assert state["fill"] == pytest.approx(opl.NESTLE_FILL, abs=0.01)
     assert _snapshot(d / "in") == before
     report = (d / "work" / "report.txt").read_text()
-    assert "Plate: order_2026_10_001_smith (built), 1 m grid" in report
+    assert "Plate: order_2026_10_001_smith (built), 1.5 m grid" in report
 
 
 def test_no_lidar_widens_the_frame(tmp_path, tools, monkeypatch):
@@ -1844,7 +1842,7 @@ def _build(order, tools, frame, epsg, grid, env, log):
     params = {"id": rid, "name": order.title,
               "bbox": to_lonlat_bbox(plate_bounds(frame), epsg, pad_m=PLATE_PAD_M),
               "epsg": epsg, "resolution": grid["grid_m"],
-              "source_resolution": grid["source_m"], "out_root": order.plate_root}
+              "out_root": order.plate_root}
     os.makedirs(order.plate_root, exist_ok=True)
     shutil.rmtree(os.path.join(order.plate_root, rid), ignore_errors=True)
     log(f"Building plate {rid}: {grid['grid_m']:g} m grid from the "
@@ -1862,8 +1860,7 @@ def _build(order, tools, frame, epsg, grid, env, log):
                            labels_script=tools.labels_script, set_progress=progress,
                            env=env)
     plate = {"id": rid, "root": order.plate_root, "kind": "built",
-             "grid_m": grid["grid_m"], "source_m": grid["source_m"],
-             "layer_m": grid["layer_m"], "upsample": round(grid["upsample"], 3),
+             "grid_m": grid["grid_m"], "layer_m": grid["layer_m"], "upsample": round(grid["upsample"], 3),
              "build_seconds": round(time.monotonic() - started, 1)}
     return plate, result["labels_note"]
 
@@ -2092,9 +2089,12 @@ Traps already paid for:
 - The 3DEP dynamic service fills a missing fine layer with resampled coarse data and
   says nothing. `scripts/dem_coverage.py` measures each layer first. Tecopa has 1 m
   lidar and no 3 m data.
-- An order passes an explicit grid and source layer. `DEM_RES_CHOICES` is only the
-  in-app auto planner's list, so adding 1 m there would make small in-app plates
-  enormous.
+- An order passes an explicit grid, fetched at that cell size. `DEM_RES_CHOICES` is
+  only the in-app auto planner's list, so adding 1 m there would make small in-app
+  plates enormous. Never fetch a finer layer and average it onto a coarser grid in
+  slices: that design was built and removed (see `docs/decisions.md`, 2026-09-24).
+- The index returns HTTP 500 for the full outline of a large lidar footprint.
+  `layer_coverage` asks for outlines simplified to about 50 m.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
 (stub subprocesses, no network), `tests/test_dem_coverage.py`.
@@ -2116,7 +2116,7 @@ Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.
 | Decision | Why | Source |
 |---|---|---|
 | The zoom cap allows 2x upsampling (`MAX_UPSAMPLE`). Default framing still aims for 1x. | An order's size is what the customer paid for. Bilinear DEM reads keep 2x smooth. | Order pipeline spec, Amendments |
-| An order plate's grid and its fetched 3DEP layer are separate (`--resolution`, `--source-resolution`). `DEM_RES_CHOICES` stays 10/30/60. | Adding 1 m to the auto list would make small in-app plates enormous. A plate sized to its print stays near 1.44x the print's pixels. | Plan 2026-09-24-order-plate-per-order, decision 1 |
+| An order plate's grid follows the print, and every grid is fetched at its own cell size: 10/30/60 m from static tiles, anything else from the 3DEP dynamic service. `DEM_RES_CHOICES` stays 10/30/60. | A plate sized to its print stays near 1.44x the print's pixels. Fetching a finer layer and averaging it locally was built and removed: its seam mask failed away from UTM central meridians and its slice plan understated memory 4-6x. | Plan 2026-09-24-order-plate-per-order, decision 1 |
 | Sub-10 m grids come from the 3DEP dynamic service: [PASS or FAIL]. Laplacian ratio [ratio], NaN share [share], at the Tecopa probe bbox. | [PASS: it holds lidar detail. FAIL: `USE_DYNAMIC_FINE = False`, static layers only.] | Plan Task 1 |
 | Coverage is measured per layer before use. Tecopa has 1 m and no 3 m. | The dynamic service fills gaps silently. | Plan Task 4 |
 | Order plate build times on the Mac: home compact [s], north–south [s], east–west [s]. DEM sizes [MB each]. | The spec's target was under 10 minutes. | Plan Task 9 |
@@ -2136,12 +2136,11 @@ Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.
 with:
 
 ```markdown
-- The plate's grid follows the need: whole metres below 10 m, 5 m steps up to 100 m.
-  Below 10 m the grid comes from the 3DEP dynamic service, backed by a finer layer
-  that fully covers the plate. From 10 m up, the coarsest static layer (10, 30 or
-  60 m) at or under the grid is fetched and averaged onto it. An 800 km road trip
-  gets a 160 m grid from the 60 m layer. `DEM_RES_CHOICES` does not change.
-  (Revised during planning, 2026-09-24.)
+- The plate's grid follows the need: quarter metres below 10 m, 5 m steps up to
+  100 m. Every grid is fetched at its own cell size: 10, 30 and 60 m from the static
+  tiles, anything else from the 3DEP dynamic service. Below 10 m that needs a 1 or
+  3 m layer that fully covers the plate. An 800 km road trip gets a 160 m grid.
+  `DEM_RES_CHOICES` does not change. (Revised during execution, 2026-09-24.)
 ```
 
 - [ ] **Step 6: Run the checks**
@@ -2168,3 +2167,38 @@ These belong to later sub-projects or were left out on purpose:
 - Photos, the studio's order view and Approve (sub-project 3).
 - The TIFF, `PRINT.txt` and the soft proof (sub-project 4).
 - The customer package and the `docs/scope.md` amendment (sub-project 5).
+
+## As built (2026-09-24)
+
+Where execution diverged from the plan text above:
+
+- Decision 1 is revised: every order grid is fetched at its own cell size. There is
+  no separate "fetch fine, average onto coarse" source layer. That design was built
+  and removed (`docs/decisions.md`, 2026-09-24).
+- A need of 10-20 m or 30-60 m is served by the matching static 10 or 30 m tile, not
+  the dynamic service, because the static tiles fetch reliably and the dynamic WMS
+  does not.
+- 3DEP coverage is read relative to the 10 m US reference layer, not against an
+  absolute bar: a layer counts if it covers everything the reference covers, within
+  0.5%.
+- Coverage comes from the 3DEP index's REST endpoint, queried with outlines
+  simplified to about 50 m. The full outline of a large lidar footprint returns
+  HTTP 500.
+- A USGS outage is retried after 60 s, then 180 s, with the HyRiver request cache
+  switched off for the retry so a cached error response can't repeat.
+- Land cover bakes at the DEM's own grid (floored at 30 m), not a fixed 60 m fetch,
+  so a coarse corridor plate does not pull a huge separate land-cover mosaic.
+- A built plate missing only `landcover.tif` gets one automatic rebuild. Past that
+  it is kept as is, and Prepare warns instead of rebuilding it forever.
+- A curated plate is reused only when its DEM is real (ready, and not the synthetic
+  stand-in tests hydrate) and the frame plus its 10% plate margin fits inside it.
+- `order_epsg(bbox, aspect)` picks the projection from the width of the frame that
+  will actually be built, in a provisional UTM, not from a straight-line estimate of
+  the tracks.
+- A need below 10 m uses quarter-metre grid steps, not the plan's flat "10, 3, 1 m"
+  layer list.
+- `work/build.log` keeps every line of a build, so a failed build can be read after
+  the partial plate is swept.
+- A manual frame in `state.json` is current only when it matches
+  `state["frame_from_manual"]`, the frame the last plan actually started from
+  (planning can widen a manual frame for coarse data).

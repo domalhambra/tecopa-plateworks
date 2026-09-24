@@ -57,7 +57,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `crs` — projected CRS of all coordinates, e.g. `"EPSG:32610"`
 - `crop` — `[min_x, min_y, max_x, max_y]` in CRS meters; maps to the full sheet
 - `print_w_in`, `print_h_in` — sheet size in inches (a wallpaper derives these from device px / ppi)
-- `native_resolution_m` — the plate's data floor in meters/pixel (the zoom cap is judged against it)
+- `native_resolution_m` — the plate's ground resolution in meters/pixel; the zoom cap allows up to `MAX_UPSAMPLE` (2x) finer than this before it refuses
 - `tracks` — list of (N, 2) coordinate arrays in CRS meters
 - `track_days` — journey identity parallel to `tracks`, or `null` (each track its own journey)
 - `hotspots` — list of `{"x", "y", "weight"}` dicts, optionally `"label"`, `"icon"`, `"photo"` (embedded JPEG data URI — see Privacy)

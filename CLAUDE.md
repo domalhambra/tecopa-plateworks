@@ -15,6 +15,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | The tests, a Mac-only failure | Run the tests |
 | A pull touching `regions/`, a 503 naming drift | Repair an orphaned DEM |
 | A plate, `region_prep.py`, labels, playa | `docs/superpowers/specs/2026-07-19-gpx-first-region-creation-design.md`, then Build a new plate |
+| An order, `scripts/order.py` | `docs/superpowers/specs/2026-09-24-order-pipeline-design.md`, then Run an order |
 | A relief technique | `docs/relief-passes.md` (its corrections blockquote governs), then Add a relief technique |
 | What the product is for, what stays out | `docs/scope.md` |
 | A spec field, `STYLE_BOUNDS`, `app/static/controls.js` | Add a spec knob or studio control |
@@ -38,7 +39,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 3. **Determinism within a build.** Same spec, seed, and build give identical bytes, so the proof predicts the print.
 4. **One projection, the region CRS metres.** Tracks are reprojected on arrival.
 5. **`app/geo.py` is the only coordinate source.** Prove the chain before tuning looks.
-6. **The zoom cap at the final dpi.** A 422 on a large print of a small plate is correct.
+6. **The zoom cap at the final dpi, at most 2× upsampled.** A 422 past 2× (`MAX_UPSAMPLE`, `app/spec.py`) is correct. Default framing still aims for 1×.
 7. **The forever-contract is retired.** `engine_version` records cross-build drift. No new revs, and never reintroduce omit-at-default. `serialize.spec_from_json` stays read-tolerant. A plate mismatch refuses with 422 unless `allow_plate_mismatch=true`. A relief pass is a no-op at its pre-feature default.
 8. **`provenance.spec_from_manifest` is the one untrusted-manifest door.** Every verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect` is the exception: it builds no spec.
 9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` and the bundle id are name-neutral.

@@ -68,23 +68,55 @@ def unique_id(slug: str, existing) -> str:
 
 def run_build(params: dict, repo_root: str, regions_root: str,
               prep_python: str, prep_script: str, labels_script: str,
-              set_progress) -> dict:
+              set_progress, env: dict | None = None, cwd: str | None = None) -> dict:
     """Spawn region_prep in the prep venv, stream its stdout into set_progress,
     then run the GNIS labels build (non-fatal). Raises RuntimeError with the last
     output lines on prep failure -- after sweeping the partial region dir so a
     retry starts clean. The id is trusted here only as far as its shape: callers
-    (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this."""
+    (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this.
+    An order build adds `resolution` and `out_root` to params, and passes `env`
+    (the shared HyRiver cache). Without them the commands are exactly the
+    in-app build's. `out_root`, when given, must be `regions_root` (the same
+    folder, however spelled): region_prep writes under out_root, and the failure
+    sweep removes regions_root/<id>, so any other pairing sweeps the wrong
+    folder. A mismatch raises ValueError before anything is spawned. Both are
+    resolved against repo_root, where region_prep runs, and the resolved absolute
+    folder is what region_prep, the labels bake and the sweep all use.
+
+    `cwd`, when given, is the working directory both subprocesses run in instead
+    of `repo_root`. Only an order build passes it (app/orderprep.py): it moves a
+    fetch-stack library's own hardcoded-relative write (pygeoogc's
+    ArcGISRESTful.failed_path, "cache/failed_ids*.txt" -- no env override exists
+    for it) off the public repo's cache/ dir. It is safe only because an order
+    build's script paths and out_root are already absolute, so nothing here
+    depends on the process's cwd to find anything; the in-app build never passes
+    it and keeps running with cwd=repo_root exactly as before."""
     rid = params["id"]
     if not re.fullmatch(r"[a-z0-9_]+", rid):
         raise ValueError(f"unsafe region id {rid!r}")
+    out_root = params.get("out_root")
+    sweep_root = regions_root
+    if out_root:
+        # join leaves an absolute path unchanged
+        out_root = os.path.abspath(os.path.join(repo_root, out_root))
+        if out_root != os.path.abspath(os.path.join(repo_root, regions_root)):
+            raise ValueError(f"out_root {params['out_root']!r} must be regions_root "
+                             f"{regions_root!r}: a failed build sweeps regions_root")
+        sweep_root = out_root
     w, s, e, n = params["bbox"]
     cmd = [prep_python, prep_script,
            "--id", rid, "--name", params["name"],
            "--bbox", str(w), str(s), str(e), str(n),
            "--epsg", str(params["epsg"])]
+    if params.get("resolution") is not None:
+        cmd += ["--resolution", str(params["resolution"])]
+    if out_root:
+        cmd += ["--out-root", out_root]
+    run_cwd = cwd or repo_root
     tail: deque = deque(maxlen=10)
-    proc = subprocess.Popen(cmd, cwd=repo_root, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    proc = subprocess.Popen(cmd, cwd=run_cwd, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env=env)
     for line in proc.stdout:
         line = line.rstrip()
         if line:
@@ -92,15 +124,22 @@ def run_build(params: dict, repo_root: str, regions_root: str,
             set_progress(line)
     rc = proc.wait()
     if rc != 0:
-        shutil.rmtree(os.path.join(regions_root, rid), ignore_errors=True)
+        shutil.rmtree(os.path.join(sweep_root, rid), ignore_errors=True)
         raise RuntimeError(
             f"region build failed (exit {rc}). Last output:\n" + "\n".join(tail))
     set_progress("Building place-name labels (GNIS)...")
     labels_note = None
-    lab = subprocess.run([prep_python, labels_script, rid], cwd=repo_root,
-                         capture_output=True, text=True)
+    lab_cmd = [prep_python, labels_script]
+    if out_root:
+        lab_cmd += ["--root", out_root]
+    lab_cmd.append(rid)
+    lab = subprocess.run(lab_cmd, cwd=run_cwd, capture_output=True, text=True,
+                         env=env)
     if lab.returncode != 0:
+        hint = f"python {labels_script} "
+        if out_root:
+            hint += f"--root {out_root} "
+        hint += rid
         labels_note = ("Place-name labels failed to build -- the region works "
-                       "without them. Rebuild later with: "
-                       f"python {labels_script} {rid}")
+                       "without them. Rebuild later with: " + hint)
     return {"labels_note": labels_note}

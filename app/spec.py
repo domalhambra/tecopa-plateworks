@@ -31,6 +31,11 @@ MAX_OUTPUT_PIXELS = 120_000_000
 # ppi instead (see final_dpi()).
 FINAL_DPI = 300
 
+# Invariant 6: a final may ask for up to MAX_UPSAMPLE times finer ground than the plate
+# holds. render.py reads the DEM bilinear, so a 2x upsample stays smooth; past 2x the
+# relief goes soft and the cap refuses. Default framing still aims for 1x.
+MAX_UPSAMPLE = 2.0
+
 OUTPUT_KINDS = ("print", "wallpaper")
 # Plausible physical screen densities: an FHD desktop sits near 92 ppi, a phone OLED
 # near 500. Outside this range px/ppi stops describing a real piece of glass.
@@ -372,16 +377,19 @@ class CompositionSpec:
             raise SpecError(
                 f"crop aspect {crop_ar:.3f} doesn't match print aspect {print_ar:.3f}; "
                 f"the picture would be stretched -- re-frame the crop")
-        # zoom cap (invariant 6): never request finer ground detail than the data
-        # holds, judged on BOTH axes (x-only let a tall thin crop bypass it). Judged
-        # on the TRIM px, not the canvas: bleed grows canvas AND ground together, so
-        # the ratio is bleed-invariant -- toggling bleed can't flip a crop across the
-        # cap. The MP ceiling above stays on the canvas (that is what gets allocated).
+        # zoom cap (invariant 6): never request more than MAX_UPSAMPLE times finer
+        # ground than the data holds, judged on BOTH axes (x-only let a tall thin crop
+        # bypass it). Judged on the TRIM px, not the canvas: bleed grows canvas AND
+        # ground together, so the ratio is bleed-invariant -- toggling bleed can't
+        # flip a crop across the cap. The MP ceiling above stays on the canvas (that
+        # is what gets allocated).
         tw_px = max(1, round(self.print_w_in * dpi))
         th_px = max(1, round(self.print_h_in * dpi))
         gpp = min(cw / tw_px, ch / th_px)
-        if gpp < self.native_resolution_m:
+        floor_m = self.native_resolution_m / MAX_UPSAMPLE
+        if gpp < floor_m:
             raise ZoomTooTightError(
-                f"{gpp:.1f} m/px requested, "
-                f"data floor is {self.native_resolution_m} m/px")
+                f"{gpp:.3g} m/px requested, data floor is {floor_m:g} m/px "
+                f"({self.native_resolution_m:g} m plate, at most "
+                f"{MAX_UPSAMPLE:g}x upsampled)")
         return self
