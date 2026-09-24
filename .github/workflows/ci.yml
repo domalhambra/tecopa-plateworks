@@ -23,7 +23,7 @@ jobs:
     # less; keep headroom over the full run so a hang still can't run forever.
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
