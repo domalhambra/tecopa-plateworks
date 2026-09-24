@@ -23,6 +23,12 @@ from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, PlateError,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
                             to_lonlat_bbox, track_fill, widen_for_upsample)
 from app.regionbuild import run_build
+from app.regions import Region
+
+# One pass per 3DEP layer (region_prep.COVERAGE_LAYERS_M: 1, 3, 10, 30, 60). That
+# module needs the prep stack, so it is counted here, not imported (invariant 13).
+MAX_PLAN_PASSES = 5
+PREP_VENV_HELP = "docs/changing-things.md › Set up a machine"
 
 
 @dataclass(frozen=True)
@@ -37,27 +43,50 @@ class Tools:
 
 
 def default_tools(repo_root: str) -> Tools:
-    return Tools(prep_python=os.path.join(repo_root, ".venv-prep", "bin", "python"),
-                 prep_script=os.path.join(repo_root, "region_prep.py"),
-                 labels_script=os.path.join(repo_root, "scripts", "build_labels.py"),
+    """The real tools. TECOPA_PREP_PYTHON, TECOPA_PREP_SCRIPT and TECOPA_LABELS_SCRIPT
+    move them, with app/main.py's names and defaults. main.py's paths are relative to
+    the server's cwd, the repo root; here a relative path is joined to `repo_root`."""
+    def env_path(var, default):
+        return os.path.join(repo_root, os.environ.get(var, default))
+    return Tools(prep_python=env_path("TECOPA_PREP_PYTHON", ".venv-prep/bin/python"),
+                 prep_script=env_path("TECOPA_PREP_SCRIPT", "region_prep.py"),
+                 labels_script=env_path("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py"),
                  coverage_script=os.path.join(repo_root, "scripts", "dem_coverage.py"),
                  repo_root=repo_root,
                  curated_root=os.path.join(repo_root, "regions"))
 
 
+def _real_terrain(root: str, rid: str):
+    """The plate's Region if its DEM is ready (present, bounds and CRS matching
+    region.json) and real, else None. A customer must never get invented terrain:
+    tests/conftest.py hydrates synthetic stand-ins into a checkout missing its real
+    DEMs, marked with the GeoTIFF tag synthetic=1, and a stand-in reads as ready."""
+    try:
+        region = Region(rid, root)
+        if not region.readiness().get("ready"):
+            return None
+        import rasterio
+        dem = os.path.join(region.dir, region.cfg.get("dem_path", "dem.tif"))
+        with rasterio.open(dem) as ds:
+            if ds.tags().get("synthetic") == "1":   # tests/conftest.py's mark
+                return None
+    except Exception:            # a malformed region.json or an unreadable DEM
+        return None
+    return region
+
+
 def curated_regions(root: str) -> list:
-    """Curated plates with a DEM on disk, as the dicts curated_fit reads."""
+    """Curated plates with real, ready terrain, as the dicts curated_fit reads."""
     out = []
     if not os.path.isdir(root):
         return out
     for rid in sorted(os.listdir(root)):
-        path = os.path.join(root, rid, "region.json")
-        if not os.path.isfile(path):
+        if not os.path.isfile(os.path.join(root, rid, "region.json")):
             continue
-        with open(path) as f:
-            cfg = json.load(f)
-        if not os.path.exists(os.path.join(root, rid, cfg.get("dem_path", "dem.tif"))):
+        region = _real_terrain(root, rid)
+        if region is None:
             continue
+        cfg = region.cfg
         out.append({"id": rid, "crs": cfg["crs"], "bounds": cfg["bounds"],
                     "native_resolution_m": cfg["native_resolution_m"]})
     return out
@@ -76,22 +105,39 @@ def read_coverage(tools: Tools, bbox, env) -> dict:
 
 
 def _plate_present(plate) -> bool:
-    return bool(plate) and os.path.isfile(
-        os.path.join(plate["root"], plate["id"], "region.json"))
+    if not plate:
+        return False
+    if plate.get("kind") == "curated":
+        return _real_terrain(plate["root"], plate["id"]) is not None
+    return os.path.isfile(os.path.join(plate["root"], plate["id"], "region.json"))
 
 
 def _plan_grid(tools, frame, epsg, print_w_in, env):
-    """The grid for the frame, widening the frame once if the data is too coarse.
-    Coverage is read again for the widened plate, which covers more ground."""
-    for _ in range(2):
+    """The grid for the frame, widening the frame until the data holds it.
+
+    Coverage is read again for each widened plate, which covers more ground. At a
+    coverage edge the wider plate can lose a layer, and the next coarser layer then
+    asks for another widening (the spec's Errors table). Each widening moves to a
+    coarser layer, so one pass per layer is enough. Returns the frame, the grid and
+    the layer that first forced a widening (None if none did): the warning names
+    that one, since a finer layer can come back into cover on the larger plate."""
+    forced_by = None
+    for _ in range(MAX_PLAN_PASSES):
         cov = read_coverage(tools, to_lonlat_bbox(plate_bounds(frame), epsg,
                                                   pad_m=PLATE_PAD_M), env)
         grid = choose_grid(needed_resolution(frame, print_w_in), cov)
         if not grid["widen"]:
-            return frame, grid
-        frame = widen_for_upsample(frame, grid["layer_m"], print_w_in)
+            return frame, grid, forced_by
+        if forced_by is None:
+            forced_by = grid["layer_m"]
+        wider = widen_for_upsample(frame, grid["layer_m"], print_w_in)
+        if wider[2] - wider[0] <= frame[2] - frame[0]:
+            raise PlateError(f"The frame did not grow when widened for the "
+                             f"{grid['layer_m']:g} m layer, so the terrain data "
+                             f"stays too coarse for this print size.")
+        frame = wider
     raise PlateError("The terrain data is still too coarse for this print size "
-                     "after the frame was widened.")
+                     f"after {MAX_PLAN_PASSES} widenings.")
 
 
 def prepare(order_dir: str, tools: Tools, log=print) -> dict:
@@ -112,6 +158,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     if (state.get("inputs_hash") == inputs and frame_current
             and _plate_present(state.get("plate"))):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
+        write_report(order, state)   # the title may have changed; it is not an input
         return state
 
     pw, ph = order.print_in()
@@ -125,18 +172,25 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
                  "grid_m": float(region["native_resolution_m"]), "upsample": 1.0}
         log(f"Reusing curated plate {region['id']}.")
     else:
+        # after the curated check: reusing a curated plate needs no prep venv
+        if not os.path.exists(tools.prep_python):
+            raise PlateError(f"The prep venv is missing: {tools.prep_python}. "
+                             f"Set it up with {PREP_VENV_HELP}.")
         if "frame" in manual:
             epsg = state.get("epsg") or order_epsg(tracks, pw / ph)
             planned = tuple(manual["frame"])
         else:
             epsg = order_epsg(tracks, pw / ph)
             planned = nestled_frame(project_bbox(tracks, epsg), pw / ph)
-        env = dict(os.environ, HYRIVER_CACHE_NAME=cache_path())
-        os.makedirs(os.path.dirname(cache_path()), exist_ok=True)
-        frame, grid = _plan_grid(tools, planned, epsg, pw, env)
-        if frame != planned:
+        # absolute: a relative TECOPA_ORDERS_DIR would resolve against the
+        # subprocess's cwd (the repo root), not ours
+        cache = os.path.abspath(cache_path())
+        env = dict(os.environ, HYRIVER_CACHE_NAME=cache)
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        frame, grid, forced_by = _plan_grid(tools, planned, epsg, pw, env)
+        if forced_by is not None:
             fill = track_fill(project_bbox(tracks, epsg), frame)
-            note = (f"The terrain here is {grid['layer_m']:g} m data, too coarse for a "
+            note = (f"The terrain here is {forced_by:g} m data, too coarse for a "
                     f"nestled {pw:g}x{ph:g}. The frame was widened, and the tracks now "
                     f"fill {fill:.0%} of it.")
             if fill < FILL_WARN:
@@ -162,6 +216,9 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
 
 
 def _build(order, tools, frame, epsg, grid, env, log):
+    """Build the order's plate under work/plate/<order id>/. region.json keeps the
+    name as it was at build time, and a title change does not rebuild the plate, so
+    later steps must take the title from order.title, never from region.json."""
     rid = order.id
     params = {"id": rid, "name": order.title,
               "bbox": to_lonlat_bbox(plate_bounds(frame), epsg, pad_m=PLATE_PAD_M),

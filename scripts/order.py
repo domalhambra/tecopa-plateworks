@@ -15,7 +15,8 @@ from app.orderplate import PlateError  # noqa: E402
 from app.orderprep import default_tools, prepare  # noqa: E402
 
 
-def main(argv=None) -> int:
+def main(argv=None, tools=None) -> int:
+    """`tools` is for tests only: stub subprocesses in place of the real ones."""
     ap = argparse.ArgumentParser(prog="order.py", description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("prepare", help="build or reuse the order's plate and frame the tracks")
@@ -23,7 +24,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     folder = os.path.abspath(os.path.expanduser(args.folder))
     try:
-        prepare(folder, default_tools(ROOT))
+        prepare(folder, tools or default_tools(ROOT))
     except (OrderError, PlateError, RuntimeError) as ex:
         print(f"prepare stopped: {ex}", file=sys.stderr)
         return 1
