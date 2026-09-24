@@ -65,6 +65,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-08-15-real-network-demo-tracks.md` | Changing `scripts/track_network.py` or `scripts/fetch_track_network.py`. The build record of the demo-track spec. |
 | `superpowers/plans/2026-08-16-collector-register-copy-rework.md` | Editing landing copy. The final copy verbatim, plus the four dated in-place amendments it makes to `marketing.md`. |
 | `superpowers/plans/2026-09-01-dem-geometry-gate.md` | Changing `_ready_or_503` or readiness. Why there is no override, no hook, and no cache. |
+| `superpowers/plans/2026-09-24-order-plate-per-order.md` | Changing how an order's plate is planned or built. Build plan for sub-project 1 of the order pipeline. |
 
 ## Handoffs
 
