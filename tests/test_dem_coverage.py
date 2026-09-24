@@ -207,3 +207,22 @@ def test_each_request_times_out_at_30_s(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
     assert seen and set(seen) == {30}
+
+
+def test_esri_island_filling_most_of_its_moat_keeps_the_hole_on_the_outer():
+    # the island is over half the hole's area, but smaller than the hole: the
+    # hole belongs to the land around it, never to the island inside it
+    rings = [_cw_square(0, 0, 10, 10),          # outer, 100
+             _ccw_square(1, 1, 9, 9),           # moat, 64
+             _cw_square(2, 2, 8, 8)]            # island, 36
+    assert rp.esri_rings_to_geom(rings).area == pytest.approx(100 - 64 + 36)
+
+
+def test_esri_three_nesting_levels():
+    rings = [_cw_square(0, 0, 20, 20),          # 400
+             _ccw_square(2, 2, 18, 18),         # hole 256
+             _cw_square(4, 4, 16, 16),          # island 144
+             _ccw_square(6, 6, 14, 14),         # its lake 64
+             _cw_square(8, 8, 12, 12)]          # an island in that, 16
+    assert rp.esri_rings_to_geom(rings).area == pytest.approx(
+        400 - 256 + 144 - 64 + 16)

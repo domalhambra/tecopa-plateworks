@@ -305,11 +305,11 @@ def esri_rings_to_geom(rings):
     """One Esri polygon (its `rings`, EPSG:4326) as a shapely geometry. Esri marks an
     outer ring clockwise and a hole counter-clockwise, and one polygon may carry
     several of each, nested: an island can sit inside a lake inside land. Each hole
-    belongs to the smallest outer that holds most of it; each outer minus its own
-    holes is one polygon, and the result is their union. Orientation is read from
-    the ring as given (_signed_area), then the ring is repaired, since a generalised
-    outline can self-intersect. A polygon with no clockwise ring at all is read as
-    all outers: some servers flip orientation."""
+    belongs to the smallest outer larger than it that holds most of it; each outer
+    minus its own holes is one polygon, and the result is their union. Orientation
+    is read from the ring as given (_signed_area), then the ring is repaired, since
+    a generalised outline can self-intersect. A polygon with no clockwise ring at
+    all is read as all outers: some servers flip orientation."""
     from shapely.geometry import Polygon
     from shapely.ops import unary_union
     from shapely.validation import make_valid
@@ -328,7 +328,9 @@ def esri_rings_to_geom(rings):
         if not is_hole:
             continue
         for i, outer in enumerate(outers):         # smallest first
-            if outer.intersection(hole).area >= 0.5 * hole.area:
+            # an outer no larger than the hole is an island inside it, not its land
+            if (outer.area > hole.area
+                    and outer.intersection(hole).area >= 0.5 * hole.area):
                 own[i].append(hole)
                 break                               # a hole in no outer cuts nothing
     return unary_union([outer.difference(unary_union(h)) if h else outer
