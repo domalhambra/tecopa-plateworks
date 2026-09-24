@@ -65,7 +65,7 @@ coins are marketing images too. Two refusals:
 - **`synthetic: true`** → exit 1. The plate must be rebuilt from real 3DEP
   terrain and the farm re-run. Override: `--allow-synthetic`.
 - **no usable `terrain` record** → exit 1. What the assets were rendered from is
-  unrecorded. Note a restage-only run (`--only detail/model/mockups/coin`)
+  unrecorded. Note a restage-only run (`--only detail/model/mockups/coin/relief`)
   opens no DEM and so stamps nothing — it deliberately preserves any prior
   record rather than clobbering it, but it cannot create one. A DEM that was
   opened and could not be read is stamped `"synthetic": null`, which lands here
