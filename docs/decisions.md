@@ -214,7 +214,7 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 
 | Decision | Why | Source |
 |---|---|---|
-| The Print is $80 at 18×24, digital Poster included. The Edition N+1 reprint drops from $99 to $55. Print price superseded 2026-09-24. | Dom's call against the customer profile's $80 sense. The reprint must stay below a first print, and $55 keeps the old two-thirds ratio. | `marketing/landing.html` pricing band |
+| The Print is $80 at 18×24, digital Poster included. The Edition N+1 reprint drops from $99 to $55. Print and reprint prices superseded 2026-09-24. | Dom's call against the customer profile's $80 sense. The reprint must stay below a first print, and $55 keeps the old two-thirds ratio. | `marketing/landing.html` pricing band |
 | A demo destination unreachable from its trailhead is replaced by the next candidate in selection order. A plate that loses none keeps its exact trips. | A disconnected OSM pocket shipped tushar_beaver_ut with seven journeys. The selector's order is prefix-stable, so the retry cannot move an approved poster. | commit 27f0b58 |
 | A corridor plate (short side 150 km or more) composes 5 journeys at 10–20% of the short side, capped at 60 km. | Dom's taste call: at corridor scale the demo tells a drive. Only elko_bonneville qualifies. | commit 27f0b58; `CORRIDOR_*` in `scripts/track_network.py` |
 
@@ -227,6 +227,7 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 | The Edition N+1 digital edition drops from $49 to $25. | Dom's call. At $49 it cost more than the $39 Poster, and the reprint must stay below a first year. $25 keeps the two-thirds ratio. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $49 |
 | The Print is $89 at 18×24 and $79 at 13×19. | Dom's call, replacing the $90 and $80 set earlier the same day. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $80 at 18×24 |
 | The plate commission is retired as a product. The $299 tier comes off the landing page. | Dom: "it's not really a thing." `marketing.md` and the landing page's coverage copy still name it. | Dom, 2026-09-24 |
+| The Edition N+1 reprint is $69 at 18×24 and $59 at 13×19. | Dom's call. Each reprint stays below its size's first print. | Dom, 2026-09-24; `marketing/landing.html` pricing band still shows $55 |
 
 ## Rejected and deferred
 
