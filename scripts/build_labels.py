@@ -11,6 +11,7 @@ region without a rebuild.
 
     python scripts/build_labels.py                 # every region under regions/
     python scripts/build_labels.py rifle_aspen     # one region
+    python scripts/build_labels.py --root <dir> <id>   # a plate outside regions/ (orders)
 """
 # certifi BEFORE any network import, same reason and ordering as region_prep.py and
 # fetch_track_network.py: this Mac's framework Python ships no root certificates, so
@@ -147,9 +148,14 @@ def build_region(region_dir):
 
 
 def main():
+    args = sys.argv[1:]
     root = "regions"
-    ids = sys.argv[1:] or sorted(d for d in os.listdir(root)
-                                 if os.path.isdir(os.path.join(root, d)))
+    if args[:1] == ["--root"]:
+        if len(args) < 2:
+            sys.exit("usage: build_labels.py [--root DIR] [id ...]")
+        root, args = args[1], args[2:]
+    ids = args or sorted(d for d in os.listdir(root)
+                         if os.path.isdir(os.path.join(root, d)))
     for rid in ids:
         build_region(os.path.join(root, rid))
 

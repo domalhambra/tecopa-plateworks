@@ -68,12 +68,15 @@ def unique_id(slug: str, existing) -> str:
 
 def run_build(params: dict, repo_root: str, regions_root: str,
               prep_python: str, prep_script: str, labels_script: str,
-              set_progress) -> dict:
+              set_progress, env: dict | None = None) -> dict:
     """Spawn region_prep in the prep venv, stream its stdout into set_progress,
     then run the GNIS labels build (non-fatal). Raises RuntimeError with the last
     output lines on prep failure -- after sweeping the partial region dir so a
     retry starts clean. The id is trusted here only as far as its shape: callers
-    (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this."""
+    (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this.
+    An order build adds `resolution` and `out_root` to params, and passes `env`
+    (the shared HyRiver cache). Without them the commands are exactly the
+    in-app build's."""
     rid = params["id"]
     if not re.fullmatch(r"[a-z0-9_]+", rid):
         raise ValueError(f"unsafe region id {rid!r}")
@@ -82,9 +85,14 @@ def run_build(params: dict, repo_root: str, regions_root: str,
            "--id", rid, "--name", params["name"],
            "--bbox", str(w), str(s), str(e), str(n),
            "--epsg", str(params["epsg"])]
+    if params.get("resolution") is not None:
+        cmd += ["--resolution", str(params["resolution"])]
+    if params.get("out_root"):
+        cmd += ["--out-root", params["out_root"]]
     tail: deque = deque(maxlen=10)
     proc = subprocess.Popen(cmd, cwd=repo_root, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+                            stderr=subprocess.STDOUT, text=True, bufsize=1,
+                            env=env)
     for line in proc.stdout:
         line = line.rstrip()
         if line:
@@ -97,10 +105,17 @@ def run_build(params: dict, repo_root: str, regions_root: str,
             f"region build failed (exit {rc}). Last output:\n" + "\n".join(tail))
     set_progress("Building place-name labels (GNIS)...")
     labels_note = None
-    lab = subprocess.run([prep_python, labels_script, rid], cwd=repo_root,
-                         capture_output=True, text=True)
+    lab_cmd = [prep_python, labels_script]
+    if params.get("out_root"):
+        lab_cmd += ["--root", params["out_root"]]
+    lab_cmd.append(rid)
+    lab = subprocess.run(lab_cmd, cwd=repo_root, capture_output=True, text=True,
+                         env=env)
     if lab.returncode != 0:
+        hint = f"python {labels_script} "
+        if params.get("out_root"):
+            hint += f"--root {params['out_root']} "
+        hint += rid
         labels_note = ("Place-name labels failed to build -- the region works "
-                       "without them. Rebuild later with: "
-                       f"python {labels_script} {rid}")
+                       "without them. Rebuild later with: " + hint)
     return {"labels_note": labels_note}

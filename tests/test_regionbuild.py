@@ -129,6 +129,7 @@ def test_lonlat_extent_route_only_gpx():
 # ---- run_build: subprocess orchestration against stub scripts (no network) ----
 
 import json as _json
+import os
 import sys
 
 
@@ -211,3 +212,42 @@ def test_run_build_labels_failure_is_nonfatal(tmp_path, monkeypatch):
                        set_progress=lambda s: None)
     assert res["labels_note"]                       # note, not an exception
     assert (tmp_path / "regions" / "stub_region").exists()
+
+
+STUB_ORDER_PREP = """
+import argparse, json, os
+ap = argparse.ArgumentParser()
+for a in ("--id", "--name", "--epsg", "--resolution", "--out-root"):
+    ap.add_argument(a, required=True)
+ap.add_argument("--bbox", nargs=4, type=float, required=True)
+a = ap.parse_args()
+out = os.path.join(a.out_root, a.id)
+os.makedirs(out, exist_ok=True)
+json.dump({"resolution": a.resolution},
+          open(os.path.join(out, "region.json"), "w"))
+print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
+"""
+
+STUB_LABELS_ARGV = """
+import json, os, sys
+open(os.environ["LABELS_ARGV_OUT"], "w").write(json.dumps(sys.argv[1:]))
+"""
+
+
+def test_run_build_passes_order_arguments_and_env(tmp_path):
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(STUB_ORDER_PREP)
+    labels = tmp_path / "labels_argv.py"
+    labels.write_text(STUB_LABELS_ARGV)
+    root = tmp_path / "work" / "plate"
+    params = dict(_params(), resolution=4.0, out_root=str(root))
+    env = dict(os.environ, HYRIVER_CACHE_NAME="/tmp/cache.sqlite",
+               LABELS_ARGV_OUT=str(tmp_path / "argv.json"))
+    lines = []
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=str(labels), set_progress=lines.append, env=env)
+    got = _json.load(open(root / "stub_region" / "region.json"))
+    assert got == {"resolution": "4.0"}
+    assert "cache=/tmp/cache.sqlite" in lines
+    assert _json.load(open(tmp_path / "argv.json")) == ["--root", str(root), "stub_region"]
