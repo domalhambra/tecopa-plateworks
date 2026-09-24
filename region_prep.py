@@ -11,8 +11,9 @@ Usage:
 
 Resolution is picked automatically from the bbox (finest of 10/30/60 m whose grid
 fits the budget) and the DEM is always fetched in memory-bounded slices; pass an
-explicit --resolution only to override the planner. The plan (grid, file size,
-slice count) prints before anything is fetched.
+explicit --resolution only to override the planner. An order plate passes
+--resolution, --source-resolution and --out-root together (app/orderprep.py). The
+plan (grid, file size, slice count) prints before anything is fetched.
 """
 import os
 import certifi
@@ -68,11 +69,15 @@ def projected_grid(bbox_4326, dst_crs, resolution_m):
     h = int((maxy - miny) // resolution_m)
     return w, h, from_origin(minx, miny + h * resolution_m, resolution_m, resolution_m)
 
-def plan_build(bbox_4326, dst_crs, resolution_m=None):
+def plan_build(bbox_4326, dst_crs, resolution_m=None, source_resolution_m=None):
     """Everything main() needs to know before fetching: the DEM resolution (auto =
     finest of DEM_RES_CHOICES whose grid fits GRID_BUDGET_MPX; explicit overrides
     but is flagged when over budget), the slice count that keeps peak memory
-    bounded, the landcover resolution, and honest size estimates."""
+    bounded, the landcover resolution, and honest size estimates.
+
+    `source_resolution_m` is the 3DEP layer fetched; it defaults to the grid. An order
+    plate fetches a finer layer and averages it onto a coarser grid, so the slices are
+    sized by whichever of the two grids holds more cells."""
     auto = resolution_m is None
     if auto:
         resolution_m = DEM_RES_CHOICES[-1]
@@ -83,20 +88,49 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
                 break
     w, h, transform = projected_grid(bbox_4326, dst_crs, resolution_m)
     mpx = w * h / 1e6
+    source = resolution_m if source_resolution_m is None else source_resolution_m
+    if source > resolution_m:
+        raise ValueError(f"source layer {source} m is coarser than the "
+                         f"{resolution_m} m grid; fetch a finer layer or coarsen the grid")
+    if source == resolution_m:
+        src_mpx = mpx
+    else:
+        sw, sh, _ = projected_grid(bbox_4326, dst_crs, source)
+        src_mpx = sw * sh / 1e6
     lc_res = 60
     for res in (30, 60):
         wl, hl, _ = projected_grid(bbox_4326, dst_crs, res)
         if wl * hl <= LANDCOVER_BUDGET_MPX * 1e6:
             lc_res = res
             break
-    n_slices = max(1, int(np.ceil(mpx / SLICE_BUDGET_MPX)))
+    n_slices = max(1, int(np.ceil(max(mpx, src_mpx) / SLICE_BUDGET_MPX)))
     return {"resolution_m": resolution_m, "auto": auto,
+            "source_resolution_m": source, "source_mpx": src_mpx,
             "grid": (w, h), "transform": transform, "grid_mpx": mpx,
             "over_budget": mpx > GRID_BUDGET_MPX,
             "n_slices": n_slices,
             "landcover_resolution_m": lc_res,
             "est_dem_mb": mpx * 4,           # float32; terrain barely deflates
-            "est_peak_gb": mpx / n_slices * 4 * 10 / 1024}
+            "est_peak_gb": max(mpx, src_mpx) / n_slices * 4 * 10 / 1024}
+
+def warp_resampling(grid_m, source_m):
+    """Average when the grid is coarser than the source: many source cells fall in
+    one grid cell, and bilinear would sample a few of them and alias the ridgelines.
+    Bilinear otherwise (equal cells, or the 2x upsample an order may need)."""
+    return Resampling.average if grid_m > source_m * 1.01 else Resampling.bilinear
+
+
+def _resolution_arg(value):
+    """--resolution: 'auto' (None) or a positive number of metres."""
+    if value == "auto":
+        return None
+    try:
+        res = float(value)
+    except ValueError as ex:
+        raise argparse.ArgumentTypeError(f"not a number: {value!r}") from ex
+    if not res > 0:
+        raise argparse.ArgumentTypeError("resolution must be 'auto' or more than 0 m")
+    return res
 
 def _exterior_rings(geom):
     if geom.geom_type == "Polygon":
@@ -249,13 +283,17 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
     whole-bbox to_cog, which held source + destination + reprojection scratch for the
     entire region simultaneously and OOM'd at corridor scale. py3dep returns CONUS
     Albers (EPSG:5070); each slice is warped straight onto the region grid, and the
-    GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming."""
+    GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming. The
+    source layer fetched is plan['source_resolution_m'], which may be finer than the
+    grid (plan['resolution_m']); warp_resampling picks average vs. bilinear for the
+    gap between the two."""
     from pyproj import Transformer
     from rasterio.warp import reproject
     from rasterio.windows import from_bounds as win_from_bounds
     w_px, h_px = plan["grid"]
     T = plan["transform"]
     res = plan["resolution_m"]
+    source_res = plan["source_resolution_m"]
     n = plan["n_slices"]
     fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
     profile = dict(driver="GTiff", dtype="float32", count=1,
@@ -275,7 +313,7 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
             if n > 1:
                 print(f"  slice {i + 1}/{n}: fetching 3DEP "
                       f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
-            da = fetch_dem(sb, res)
+            da = fetch_dem(sb, source_res)
             src = np.asarray(da.values, dtype="float32")
             if src.ndim == 3:
                 src = src[0]
@@ -293,7 +331,7 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
                       src_nodata=np.nan,
                       dst_transform=rasterio.windows.transform(win, T),
                       dst_crs=dst_crs, dst_nodata=np.nan,
-                      resampling=Resampling.bilinear)
+                      resampling=warp_resampling(res, source_res))
             existing = dst.read(1, window=win)
             dst.write(np.where(np.isnan(dst_arr), existing, dst_arr), 1, window=win)
             del da, src, dst_arr, existing
@@ -319,7 +357,7 @@ def overview_png(cog_path, out_png, long_edge=1400):
     return (ow, oh), (bounds.left, bounds.bottom, bounds.right, bounds.top), crs
 
 def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
-                           resolution_m=10):
+                           resolution_m=10, source_resolution_m=None):
     """Record what this region was built FROM (V1-12 continuity): source datasets,
     licenses, the exact fetch bbox, and sha256 of the produced assets. The DEM itself
     is gitignored; the committed manifest lets a rebuild be verified against what was
@@ -335,17 +373,22 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
                 h.update(chunk)
         return h.hexdigest()
 
+    source = resolution_m if source_resolution_m is None else source_resolution_m
+    rebuild = (f"python region_prep.py --id {region_id} --name <name> "
+               f"--bbox {' '.join(str(v) for v in bbox_4326)} "
+               f"--epsg {dst_crs.split(':')[1]} --resolution {resolution_m}")
+    if source != resolution_m:
+        rebuild += f" --source-resolution {source}"
+
     manifest = {
         "id": region_id,
         "built": built or datetime.date.today().isoformat(),
         "fetch_bbox_4326": list(bbox_4326),
         "crs": dst_crs,
-        "rebuild": (f"python region_prep.py --id {region_id} --name <name> "
-                    f"--bbox {' '.join(str(v) for v in bbox_4326)} "
-                    f"--epsg {dst_crs.split(':')[1]} --resolution {resolution_m}"),
+        "rebuild": rebuild,
         "assets": {},
         "sources": [
-            {"dataset": f"USGS 3DEP {resolution_m} m DEM", "via": "py3dep.get_dem",
+            {"dataset": f"USGS 3DEP {source:g} m DEM", "via": "py3dep.get_dem",
              "license": "Public domain (USGS)"},
             {"dataset": "USGS NHD waterbodies + network flowlines",
              "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
@@ -374,22 +417,28 @@ def main():
                     help="west south east north (lon/lat)")
     ap.add_argument("--epsg", type=int, required=True,
                     help="projected CRS for the region, e.g. a local UTM zone")
-    ap.add_argument("--resolution", default="auto", choices=("auto", "10", "30", "60"),
-                    help="DEM grid in metres; 'auto' (default) picks the finest that "
-                         "fits the grid budget, so a huge bbox can't OOM the build")
+    ap.add_argument("--resolution", default=None, type=_resolution_arg,
+                    help="DEM grid in metres, or 'auto' (default): the finest of "
+                         "10/30/60 that fits the grid budget, so a huge bbox can't "
+                         "OOM the build")
+    ap.add_argument("--source-resolution", type=float, default=None,
+                    help="3DEP layer to fetch, in metres; defaults to the grid. Order "
+                         "plates fetch a finer layer and average it onto the grid")
+    ap.add_argument("--out-root", default="regions",
+                    help="directory the region folder is written under")
     args = ap.parse_args()
 
-    out_dir = os.path.join("regions", args.id)
+    out_dir = os.path.join(args.out_root, args.id)
     os.makedirs(out_dir, exist_ok=True)
     dst_crs = f"EPSG:{args.epsg}"
 
     # Plan first, fetch second: the operator sees the full cost of this bbox --
     # resolution, grid, disk, slices, peak memory -- before a byte is downloaded.
-    plan = plan_build(tuple(args.bbox), dst_crs,
-                      None if args.resolution == "auto" else int(args.resolution))
+    plan = plan_build(tuple(args.bbox), dst_crs, args.resolution, args.source_resolution)
     gw, gh = plan["grid"]
     print(f"Build plan: {plan['resolution_m']} m"
-          f"{' (auto)' if plan['auto'] else ''} -> grid {gw}x{gh} "
+          f"{' (auto)' if plan['auto'] else ''}"
+          f" from the {plan['source_resolution_m']:g} m layer -> grid {gw}x{gh} "
           f"({plan['grid_mpx']:.0f} Mpx), dem.tif ~{plan['est_dem_mb']:.0f} MB, "
           f"{plan['n_slices']} slice(s), peak ~{plan['est_peak_gb']:.1f} GB RAM, "
           f"landcover @ {plan['landcover_resolution_m']} m")
@@ -441,6 +490,7 @@ def main():
         "dem_path": "dem.tif", "overview_path": "overview.png",
         "hydro_path": "hydro.json",
         "native_resolution_m": plan["resolution_m"],
+        "source_resolution_m": plan["source_resolution_m"],
         # absolute color scale + fixed light keep every crop consistent (invariant 4):
         "elevation_min": emin, "elevation_max": emax,
         "light_azimuth": 315, "light_altitude": 45, "z_factor": 1.0,
@@ -448,7 +498,8 @@ def main():
     with open(os.path.join(out_dir, "region.json"), "w") as f:
         json.dump(region, f, indent=2)
     write_sources_manifest(out_dir, args.id, tuple(args.bbox), dst_crs,
-                           resolution_m=plan["resolution_m"])
+                           resolution_m=plan["resolution_m"],
+                           source_resolution_m=plan["source_resolution_m"])
     print(f"Region ready: {out_dir}")
 
 if __name__ == "__main__":
