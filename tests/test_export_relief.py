@@ -212,3 +212,56 @@ def test_a_missing_source_render_is_an_error_and_writes_nothing(tmp_path):
     with pytest.raises(er.ReliefError):
         _export(assets, out)
     assert not out.exists()
+
+
+# ---- the asset farm calls it for every region -------------------------------------
+
+from scripts import render_asset_farm as farm  # noqa: E402
+
+
+def test_relief_is_a_default_farm_tier():
+    assert "relief" in farm.DEFAULT_TIERS
+    assert "relief" in farm.RESTAGE_TIERS      # it restages renders: no DEM needed
+
+
+def test_the_farm_writes_relief_into_a_subfolder_and_keeps_the_coin_film(tmp_path):
+    assets = _region(tmp_path)
+    src = assets / RID
+    (src / "coin.webp").write_bytes(b"the coin-spin film")    # the farm's own coin.webp
+    made = farm._relief(str(src), RID, er.load_index(str(assets)))
+    assert sorted(os.path.basename(p) for p in made) == sorted(EXPECTED)
+    assert all(os.path.dirname(p) == str(src / "relief") for p in made)
+    assert (src / "coin.webp").read_bytes() == b"the coin-spin film"
+
+
+def test_the_farm_skips_a_refused_region_without_failing_it(tmp_path, capsys):
+    assets = _region(tmp_path, terrain={"synthetic": True, "sha256": "0" * 64, "bytes": 1})
+    src = assets / RID
+    assert farm._relief(str(src), RID, er.load_index(str(assets))) == []
+    assert not (src / "relief").exists()
+    assert "relief" in capsys.readouterr().out
+
+
+def test_the_gate_sees_the_terrain_this_run_stamped():
+    real = {"synthetic": False, "sha256": "a" * 64, "bytes": 1}
+    fake = {"synthetic": True, "sha256": "b" * 64, "bytes": 1}
+    prior = {RID: {"name": "Lassen", "assets": [], "terrain": real}}
+    # a run that opened a synthetic DEM overrides yesterday's real record
+    assert farm._gate_index(prior, RID, fake)[RID]["terrain"] == fake
+    # a restage-only run opens no DEM and carries the prior record forward
+    assert farm._gate_index(prior, RID, None)[RID]["terrain"] == real
+    # a first render has no prior record: this run's stamp is the only one
+    assert farm._gate_index({}, RID, real)[RID]["terrain"] == real
+    assert farm._gate_index({}, RID, None).get(RID, {}).get("terrain") is None
+
+
+def test_farm_only_relief_exports_every_asked_region(tmp_path, monkeypatch):
+    assets = _region(tmp_path)
+    monkeypatch.setattr("sys.argv", ["render_asset_farm", "--regions", RID,
+                                     "--out", str(assets), "--only", "relief"])
+    assert farm.main() == 0
+    assert sorted(os.listdir(assets / RID / "relief")) == sorted(EXPECTED)
+    index = json.loads((assets / "index.json").read_text())
+    assert index[RID]["terrain"] == REAL                     # carried, not clobbered
+    recorded = {os.path.basename(p) for p in index[RID]["assets"]}
+    assert set(EXPECTED) <= recorded

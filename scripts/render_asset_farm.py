@@ -30,6 +30,10 @@ produces, per region:
   coin.webp / coin.mp4  the coin spin: the GLB's own plate mesh turning once under a
                         spotlight, as a looping social video (mp4 needs the share
                         extra) -- the feed-postable twin of the orbitable plate
+  relief/               the Ghost landing page's relief-viewer images, from
+                        scripts/export_relief.py: coin.webp + coin-h.png, the poster
+                        pair, wall.webp, detail.webp. Refused, and skipped, for a
+                        region with no real terrain record (invariant 11)
   lightsweep.mp4        (--only lightsweep; slow) the turntable: the sun walks the
                         azimuth circle and only the land relights -- the terrain itself
                         reads as 3D
@@ -94,6 +98,13 @@ NETWORK_CACHE = os.path.join("cache", "networks")
 # bare sunlit slope over the journeys). INK_BLOCK is the cell the mask is summed into.
 INK_TOL = 24
 INK_BLOCK = 32
+# What a plain run renders. lightsweep re-renders ~60 frames per region (minutes on
+# real DEMs), so it is opt-in via --only.
+DEFAULT_TIERS = frozenset({"poster", "wallpapers", "film", "editions", "mockups",
+                           "model", "detail", "coin", "relief"})
+# Tiers that restage already-rendered finals: no DEM, no tracks, so --only <these>
+# works on any machine holding yesterday's assets.
+RESTAGE_TIERS = frozenset({"mockups", "model", "detail", "coin", "relief"})
 
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
@@ -569,6 +580,34 @@ def _coin(out_dir):
     return made
 
 
+def _relief(out_dir, rid, index):
+    """The relief viewer's web images, into <out_dir>/relief/ (the farm's coin.webp
+    is the coin-spin film, so the exporter's own coin.webp must not land beside it).
+    Restages poster.png and detail.png like the model tier -- no DEM needed.
+
+    `index` is what the terrain gate reads: this run's stamp merged over the prior
+    index (_gate_index). A refusal skips the tier with a message rather than failing
+    the region: a --synthetic-dem preview renders everything else and is correctly
+    denied marketing images."""
+    from scripts.export_relief import ReliefError, export_region
+    try:
+        return export_region(out_dir, os.path.join(out_dir, "relief"), rid, index)
+    except ReliefError as ex:
+        print(f"  ! relief skipped: {ex}")
+        return []
+
+
+def _gate_index(prior: dict, rid: str, terrain: dict | None) -> dict:
+    """The index as the relief gate must see it mid-run: the farm writes index.json
+    only after every region, so a first render has no record on disk yet. Same rules
+    as the file the run will write (_merge_index): a DEM this run opened wins, and a
+    restage-only run carries the prior record forward."""
+    fresh = {"assets": []}
+    if terrain:
+        fresh["terrain"] = terrain
+    return _merge_index({rid: fresh}, prior)
+
+
 def _lightsweep(region, tracks, spots, out_dir):
     """The turntable: the composition re-rendered around the azimuth circle (the
     terrain itself reads as 3D -- only the light moves). Needs the DEM; minutes on
@@ -696,7 +735,8 @@ def main():
                     help="wallpaper preset ids")
     ap.add_argument("--only", nargs="*",
                     choices=["poster", "wallpapers", "film", "editions",
-                             "mockups", "lightsweep", "model", "detail", "coin"],
+                             "mockups", "lightsweep", "model", "detail", "coin",
+                             "relief"],
                     help="render only these deliverables (default: all but lightsweep)")
     ap.add_argument("--quick", action="store_true",
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
@@ -712,10 +752,7 @@ def main():
 
     regions = discover()
     ids = args.regions or list(regions)
-    # lightsweep re-renders ~60 frames per region (minutes on real DEMs), so it is
-    # opt-in via --only; everything else ships by default
-    want = set(args.only) if args.only else {"poster", "wallpapers", "film", "editions",
-                                             "mockups", "model", "detail", "coin"}
+    want = set(args.only) if args.only else set(DEFAULT_TIERS)
     if args.quick:
         # quick drops the slow renders -- unless they were EXPLICITLY asked for
         for slow in ("film", "lightsweep"):
@@ -723,6 +760,16 @@ def main():
                 want.discard(slow)
 
     index = {}
+    idx_path = os.path.join(args.out, "index.json")
+    prior = {}
+    if os.path.exists(idx_path):
+        try:
+            with open(idx_path) as f:
+                prior = json.load(f)
+        except (OSError, ValueError):
+            prior = {}
+    if not isinstance(prior, dict):
+        prior = {}
     # Every region that was ASKED FOR and did not render, with why. The farm used to
     # print "! <rid> failed:" and then exit 0, so a run that lost a whole plate was
     # indistinguishable from a clean one to anything reading the status code -- which
@@ -736,9 +783,7 @@ def main():
             print(f"! unknown region {rid!r} (built: {', '.join(regions)})")
             failed.append((rid, "unknown region")); continue
         print(f"\n=== {rid} — {region.name} ===")
-        # mockups/model/detail/coin stage already-rendered finals: they need no DEM
-        # and no tracks, so --only mockups works on any machine with yesterday's assets
-        needs_render = bool(want - {"mockups", "model", "detail", "coin"})
+        needs_render = bool(want - RESTAGE_TIERS)
         terrain = None
         if needs_render:
             why = _ensure_dem(region, args.synthetic_dem)
@@ -780,6 +825,9 @@ def main():
             if "coin" in want:
                 for p in _coin(out_dir):
                     print(f"  coin        turntable  {p}"); made.append(p)
+            if "relief" in want:
+                for p in _relief(out_dir, rid, _gate_index(prior, rid, terrain)):
+                    print(f"  relief      web image  {p}"); made.append(p)
             if "lightsweep" in want:
                 for p in _lightsweep(region, tracks, spots, out_dir):
                     print(f"  lightsweep  {p}"); made.append(p)
@@ -799,16 +847,8 @@ def main():
                 index[rid]["terrain"] = terrain
 
     if index:
-        idx_path = os.path.join(args.out, "index.json")
         os.makedirs(args.out, exist_ok=True)
         total = sum(len(v["assets"]) for v in index.values())
-        prior = {}
-        if os.path.exists(idx_path):
-            try:
-                with open(idx_path) as f:
-                    prior = json.load(f)
-            except (OSError, ValueError):
-                prior = {}
         with open(idx_path, "w") as f:
             json.dump(_merge_index(index, prior), f, indent=2)
         print(f"\nwrote {total} assets across {len(index)} region(s) -> {idx_path}")
