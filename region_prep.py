@@ -267,7 +267,7 @@ INDEX_QUERY_URL = ("https://index.nationalmap.gov/arcgis/rest/services/"
                    "3DEPElevationIndex/MapServer/{layer}/query")
 INDEX_LAYERS = {1: 18, 3: 19, 5: 20, 10: 21, 30: 22, 60: 23}   # py3dep's own table
 INDEX_SIMPLIFY_DEG = 0.0005
-INDEX_TIMEOUT_S = 60
+INDEX_TIMEOUT_S = 30
 
 
 def _signed_area(ring):
@@ -325,8 +325,10 @@ def esri_rings_to_geom(rings):
 
 def _index_features(layer_m, bbox_4326):
     """The index features for one layer that intersect the bbox, with simplified
-    outlines. Retries once on a 5xx or a timeout. Any failure raises RuntimeError
-    naming the layer: a failed query must never read as 'no data here'."""
+    outlines. Retries once on a 5xx, a timeout or a dropped connection; a 4xx is
+    not retried. Any failure raises RuntimeError naming the layer: a failed query
+    must never read as 'no data here'."""
+    import http.client
     import ssl
     import urllib.error
     import urllib.parse
@@ -349,11 +351,12 @@ def _index_features(layer_m, bbox_4326):
             if retry and ex.code >= 500:
                 continue
             raise RuntimeError(f"{name}: HTTP {ex.code}") from ex
-        except (TimeoutError, urllib.error.URLError) as ex:
-            timed_out = isinstance(getattr(ex, "reason", ex), TimeoutError)
-            if retry and timed_out:
+        except (OSError, http.client.HTTPException) as ex:
+            # a timeout, a reset or dropped connection (often raised from
+            # getresponse, not urlopen's own URLError), a truncated body
+            if retry:
                 continue
-            raise RuntimeError(f"{name}: {ex}") from ex
+            raise RuntimeError(f"{name}: {type(ex).__name__}: {ex}") from ex
         except ValueError as ex:          # a body that isn't JSON
             raise RuntimeError(f"{name}: unreadable response ({ex})") from ex
         if "error" in body:

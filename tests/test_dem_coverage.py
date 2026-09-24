@@ -148,3 +148,51 @@ def test_esri_self_intersecting_outer_is_repaired():
     bowtie = [[0, 0], [0, 2], [2, 0], [2, 2], [0, 0]]   # two triangles, 1 each
     g = rp.esri_rings_to_geom([bowtie])
     assert g.is_valid and g.area == pytest.approx(2.0)
+
+
+# ---- dropped connections: retried once, and the failure names the layer ----
+import http.client
+
+
+@pytest.mark.parametrize("make_err", [
+    lambda: http.client.RemoteDisconnected("Remote end closed connection"),
+    lambda: ConnectionResetError(54, "Connection reset by peer"),
+    lambda: http.client.IncompleteRead(b""),
+    lambda: TimeoutError("timed out"),
+])
+def test_a_dropped_connection_is_retried_once_then_recovers(monkeypatch, make_err):
+    bodies = [make_err()] + [{"features": []}] * len(rp.COVERAGE_LAYERS_M)
+    urlopen, calls = _fake_urlopen(bodies)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    assert rp.layer_coverage((0.0, 0.0, 1.0, 1.0))[1] == 0.0
+    assert len(calls) == len(rp.COVERAGE_LAYERS_M) + 1
+
+
+def test_a_connection_dropped_twice_raises_naming_the_layer(monkeypatch):
+    errs = [ConnectionResetError(54, "Connection reset by peer"),
+            http.client.RemoteDisconnected("Remote end closed connection")]
+    urlopen, calls = _fake_urlopen(errs)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="3DEP index layer 1 m"):
+        rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
+    assert len(calls) == 2
+
+
+def test_a_4xx_is_not_retried(monkeypatch):
+    err = urllib.error.HTTPError("u", 404, "Not Found", {}, None)
+    urlopen, calls = _fake_urlopen([err, {"features": []}])
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="1 m: HTTP 404"):
+        rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
+    assert len(calls) == 1
+
+
+def test_each_request_times_out_at_30_s(monkeypatch):
+    seen = []
+
+    def urlopen(url, context=None, timeout=None):
+        seen.append(timeout)
+        return io.BytesIO(b'{"features": []}')
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
+    assert seen and set(seen) == {30}
