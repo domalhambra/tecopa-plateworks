@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import tomllib
 from dataclasses import dataclass
 
@@ -141,6 +142,9 @@ def read_state(order: Order) -> dict:
             return json.load(f)
     except FileNotFoundError:
         return {}
+    except ValueError as ex:
+        raise OrderError(f"work/state.json is not readable ({ex}). "
+                         "Fix or delete it, then run Prepare again.") from ex
 
 
 def write_state(order: Order, updates: dict) -> dict:
@@ -162,8 +166,17 @@ def set_manual(order: Order, key: str, value) -> dict:
 
 
 def _dump(order: Order, state: dict) -> None:
+    """Write through a unique temp file, so two writers at once (Prepare and the
+    studio) never share a temp name, and a reader never sees half a file."""
     os.makedirs(order.work_dir, exist_ok=True)
-    tmp = order.state_path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f, indent=2)
-    os.replace(tmp, order.state_path)
+    fd, tmp = tempfile.mkstemp(dir=order.work_dir, prefix="state.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(state, f, indent=2)
+        os.replace(tmp, order.state_path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        raise

@@ -105,8 +105,10 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     state = read_state(order)
     manual = state.get("manual", {})
     inputs = order.inputs_hash()
+    # A manual frame is current when it is the one the last plan started from. It is
+    # not compared with state["frame"]: planning may have widened it for coarse data.
     frame_current = ("frame" not in manual
-                     or list(manual["frame"]) == list(state.get("frame", [])))
+                     or list(manual["frame"]) == state.get("frame_from_manual"))
     if (state.get("inputs_hash") == inputs and frame_current
             and _plate_present(state.get("plate"))):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
@@ -151,6 +153,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     state = write_state(order, {
         "inputs_hash": inputs, "epsg": epsg, "print_in": [pw, ph],
         "frame": list(frame), "track_bounds_m": list(track_m),
+        "frame_from_manual": list(manual["frame"]) if "frame" in manual else None,
         "fill": round(track_fill(track_m, frame), 3),
         "need_m": round(needed_resolution(frame, pw), 3),
         "plate": plate, "warnings": warnings})

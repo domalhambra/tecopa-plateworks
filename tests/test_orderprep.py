@@ -91,6 +91,7 @@ def test_builds_a_lidar_plate(tmp_path, tools):
     assert _snapshot(d / "in") == before
     report = (d / "work" / "report.txt").read_text()
     assert "Plate: order_2026_10_001_smith (built), 1.5 m grid" in report
+    assert state["frame_from_manual"] is None
 
 
 def test_no_lidar_widens_the_frame(tmp_path, tools, monkeypatch):
@@ -134,6 +135,31 @@ def test_manual_frame_is_kept(tmp_path, tools):
     assert state["manual"]["frame"] == manual
     op.prepare(str(d), tools, log=lambda s: None)
     assert len(_builds(d)) == 2
+
+
+def test_widened_manual_frame_stays_current(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_LIDAR))
+    d = _make_order(tmp_path)
+    epsg = opl.order_epsg(SMALL, 12 / 18)
+    small = [float(v) for v in opl.nestled_frame(opl.project_bbox(SMALL, epsg), 12 / 18)]
+    od.set_manual(od.load(str(d)), "frame", small)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["frame"][2] - state["frame"][0] == pytest.approx(18000.0, rel=1e-3)
+    assert state["manual"]["frame"] == small
+    assert state["frame_from_manual"] == small
+    lines = []
+    op.prepare(str(d), tools, log=lines.append)
+    assert any("Plate is current" in l for l in lines)
+    assert len(_builds(d)) == 1
+
+
+def test_cli_reports_a_corrupt_state(tmp_path, tools, capsys):
+    from scripts import order as order_cli
+    d = _make_order(tmp_path)
+    (d / "work").mkdir()
+    (d / "work" / "state.json").write_text("{not json")
+    assert order_cli.main(["prepare", str(d)]) == 1
+    assert "prepare stopped: work/state.json is not readable" in capsys.readouterr().err
 
 
 def test_reuses_a_curated_plate(tmp_path, tools):

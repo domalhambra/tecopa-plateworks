@@ -1,4 +1,6 @@
 # tests/test_order.py
+import os
+
 import pytest
 
 from app import order as od
@@ -69,7 +71,30 @@ def test_write_state_keeps_manual(tmp_path):
     s = od.read_state(o)
     assert s["manual"] == {"frame": [1, 2, 3, 4]}
     assert s["frame"] == [0, 0, 1, 1]
-    assert not (tmp_path / "2026-10-001-smith" / "work" / "state.json.tmp").exists()
+    assert list((tmp_path / "2026-10-001-smith" / "work").glob("state.*.tmp")) == []
+
+
+def test_read_state_refuses_a_corrupt_file(tmp_path):
+    o = od.load(str(_order(tmp_path)))
+    os.makedirs(o.work_dir, exist_ok=True)
+    with open(o.state_path, "w") as f:
+        f.write('{"frame": [0, 0,')
+    with pytest.raises(od.OrderError, match="work/state.json is not readable"):
+        od.read_state(o)
+
+
+def test_failed_state_write_leaves_no_tmp(tmp_path, monkeypatch):
+    o = od.load(str(_order(tmp_path)))
+    od.write_state(o, {"frame": [0, 0, 1, 1]})
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(od.json, "dump", boom)
+    with pytest.raises(OSError, match="disk full"):
+        od.write_state(o, {"frame": [0, 0, 2, 2]})
+    monkeypatch.undo()
+    assert list((tmp_path / "2026-10-001-smith" / "work").glob("state.*.tmp")) == []
+    assert od.read_state(o)["frame"] == [0, 0, 1, 1]
 
 
 def test_inputs_hash_follows_tracks_and_size(tmp_path):
