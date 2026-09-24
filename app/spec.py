@@ -389,7 +389,7 @@ class CompositionSpec:
         floor_m = self.native_resolution_m / MAX_UPSAMPLE
         if gpp < floor_m:
             raise ZoomTooTightError(
-                f"{gpp:.1f} m/px requested, data floor is {floor_m:g} m/px "
+                f"{gpp:.3g} m/px requested, data floor is {floor_m:g} m/px "
                 f"({self.native_resolution_m:g} m plate, at most "
                 f"{MAX_UPSAMPLE:g}x upsampled)")
         return self
