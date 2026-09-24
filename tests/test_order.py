@@ -111,3 +111,36 @@ def test_orders_root_env(monkeypatch, tmp_path):
     monkeypatch.setenv("TECOPA_ORDERS_DIR", str(tmp_path))
     assert od.orders_root() == str(tmp_path)
     assert od.cache_path() == str(tmp_path / "_cache" / "aiohttp_cache.sqlite")
+
+
+# ---- an order folder must live outside the repo, which is public ----
+
+def test_load_refuses_a_folder_inside_the_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path))
+    inside = _order(tmp_path)
+    with pytest.raises(od.OrderError, match="Order folders must live outside the "
+                                            "repo, which is public"):
+        od.load(str(inside))
+
+
+def test_load_refuses_the_repo_root_itself(tmp_path, monkeypatch):
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path))
+    with pytest.raises(od.OrderError, match="Use ~/Tecopa Orders"):
+        od.load(str(tmp_path))
+
+
+def test_load_allows_a_folder_outside_the_patched_repo(tmp_path, monkeypatch):
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path / "repo"))
+    outside = _order(tmp_path / "orders")
+    od.load(str(outside))   # must not raise
+
+
+def test_refuse_inside_repo_follows_symlinks(tmp_path, monkeypatch):
+    real_repo = tmp_path / "repo"
+    real_repo.mkdir()
+    monkeypatch.setattr(od, "_repo_root", lambda: str(real_repo))
+    link = tmp_path / "link-to-repo"
+    link.symlink_to(real_repo)
+    inside = _order(link)
+    with pytest.raises(od.OrderError, match="Order folders must live outside"):
+        od.load(str(inside))

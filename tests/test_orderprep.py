@@ -243,6 +243,18 @@ def test_relative_orders_root_gives_the_build_an_absolute_cache(tmp_path, tools,
     assert cache == ["cache=" + str(tmp_path / "orders" / "_cache" / "aiohttp_cache.sqlite")]
 
 
+def test_prepare_refuses_an_orders_root_inside_the_repo(tmp_path, tmp_path_factory,
+                                                         tools, monkeypatch):
+    # the order folder itself is outside the patched repo, so only the orders_root()
+    # (TECOPA_ORDERS_DIR, set by the `tools` fixture under tmp_path) check can catch this
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path))
+    external = tmp_path_factory.mktemp("external")
+    d = _make_order(external)
+    with pytest.raises(od.OrderError, match="Order folders must live outside the "
+                                            "repo, which is public"):
+        op.prepare(str(d), tools, log=lambda s: None)
+
+
 def test_missing_prep_venv_is_a_plate_error(tmp_path, tools):
     tools = op.Tools(**{**tools.__dict__,
                         "prep_python": str(tmp_path / "no-venv" / "bin" / "python")})

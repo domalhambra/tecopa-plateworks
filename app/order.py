@@ -42,6 +42,23 @@ def cache_path() -> str:
     return os.path.join(orders_root(), "_cache", "aiohttp_cache.sqlite")
 
 
+def _repo_root() -> str:
+    """This checkout's root: the parent of the `app` package dir. A test
+    monkeypatches this to point the inside-the-repo check at a throwaway tmp dir."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def refuse_inside_repo(path) -> None:
+    """Raise OrderError if `path` resolves (realpath, so a symlink can't dodge it)
+    inside this repo. The repo is public; an order folder holds a customer's
+    private tracks and photos, and TECOPA_ORDERS_DIR must not point into it either."""
+    repo = os.path.realpath(_repo_root())
+    real = os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+    if real == repo or real.startswith(repo + os.sep):
+        raise OrderError(f"Order folders must live outside the repo, which is "
+                         f"public: {path}. Use ~/Tecopa Orders.")
+
+
 def parse_size(text) -> tuple:
     """'12x18' -> (12.0, 18.0), short side first."""
     m = _SIZE.match(str(text))
@@ -116,6 +133,7 @@ class Order:
 
 def load(folder) -> Order:
     folder = os.path.abspath(os.path.expanduser(str(folder)))
+    refuse_inside_repo(folder)
     toml_path = os.path.join(folder, "order.toml")
     if not os.path.isfile(toml_path):
         raise OrderError(f"no order.toml in {folder}")

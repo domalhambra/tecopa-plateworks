@@ -17,7 +17,8 @@ import time
 from dataclasses import dataclass
 
 from app.ingest import lonlat_extent
-from app.order import OrderError, cache_path, load, read_state, write_state
+from app.order import (OrderError, cache_path, load, orders_root, read_state,
+                       refuse_inside_repo, write_state)
 from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, PlateError,
                             choose_grid, conus_covered, curated_fit, needed_resolution,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
@@ -197,6 +198,11 @@ def _plan_grid(tools, frame, epsg, print_w_in, env):
 
 
 def prepare(order_dir: str, tools: Tools, log=print) -> dict:
+    # load() already refuses an order folder inside the repo; TECOPA_ORDERS_DIR
+    # (orders_root(), which cache_path() derives from) is a separate setting and
+    # needs its own check, so a customer's orders can't be pointed into the public
+    # repo even when the order folder given here is not.
+    refuse_inside_repo(orders_root())
     order = load(order_dir)
     tracks = lonlat_extent(order.payloads())["bbox"]
     if tracks is None:
