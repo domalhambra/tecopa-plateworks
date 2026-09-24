@@ -2,6 +2,8 @@
 # The build planner: resolution auto-selection, memory-bounding slice counts, and
 # grid geometry -- all pure logic (pyproj + numpy, no fetch stack), so the guard
 # against another 15.8 GB accidental build runs in the core CI env.
+import os
+
 import numpy as np
 import pytest
 rp = pytest.importorskip("region_prep")
@@ -229,9 +231,9 @@ def test_fetch_dem_retries_a_service_outage(monkeypatch, waits, capsys):
     busy = mod.exceptions.ServiceUnavailableError("Service is currently not available")
     outcomes += [busy, busy, "dem"]
     assert rp.fetch_dem((0, 0, 1, 1), 35) == "dem"
-    assert len(calls) == 2 + 1 and waits == list(rp._RETRY_WAITS) == [20, 60]
+    assert len(calls) == 2 + 1 and waits == list(rp._RETRY_WAITS) == [60, 180]
     out = capsys.readouterr().out
-    assert "3DEP busy, retrying in 20 s" in out and "3DEP busy, retrying in 60 s" in out
+    assert "3DEP busy, retrying in 60 s" in out and "3DEP busy, retrying in 180 s" in out
 
 
 def test_fetch_dem_gives_up_after_two_retries(monkeypatch, waits):
@@ -239,7 +241,7 @@ def test_fetch_dem_gives_up_after_two_retries(monkeypatch, waits):
     _, calls = _fake_py3dep(monkeypatch, errs)
     with pytest.raises(TimeoutError):
         rp.fetch_dem((0, 0, 1, 1), 35)
-    assert len(calls) == 3 and waits == [20, 60]
+    assert len(calls) == 3 and waits == [60, 180]
 
 
 @pytest.mark.parametrize("make_err", [
@@ -250,7 +252,7 @@ def test_fetch_dem_gives_up_after_two_retries(monkeypatch, waits):
 def test_fetch_dem_retries_network_errors(monkeypatch, waits, make_err):
     _, calls = _fake_py3dep(monkeypatch, [make_err(), "dem"])
     assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
-    assert waits == [20]
+    assert waits == [60]
 
 
 def test_fetch_dem_retries_an_aiohttp_disconnect(monkeypatch, waits):
@@ -266,7 +268,57 @@ def test_fetch_dem_retries_an_aiohttp_disconnect(monkeypatch, waits):
     _, calls = _fake_py3dep(monkeypatch, [ServerDisconnectedError("Server disconnected"),
                                           "dem"])
     assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
-    assert waits == [20]
+    assert waits == [60]
+
+
+def test_fetch_dem_collapses_a_multiline_error_into_one_retry_line(monkeypatch, waits,
+                                                                   capsys):
+    # an XML/HTML error body wrapped in an exception message must not break the
+    # single-line retry log into several ragged lines
+    err = TimeoutError("Service is\n  currently\tnot available\n\nplease retry")
+    _, calls = _fake_py3dep(monkeypatch, [err, "dem"])
+    assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
+    out = capsys.readouterr().out
+    lines = [l for l in out.splitlines() if "retrying" in l]
+    assert len(lines) == 1
+    assert "\n" not in lines[0] and "\t" not in lines[0]
+    assert "Service is currently not available please retry" in lines[0]
+
+
+def test_with_retries_disables_the_hyriver_cache_only_on_a_retry(monkeypatch, waits):
+    seen = []
+
+    def fetch():
+        seen.append(os.environ.get("HYRIVER_CACHE_DISABLE"))
+        if len(seen) < 2:
+            raise TimeoutError("busy")
+        return "ok"
+    assert rp.with_retries(fetch, "3DEP") == "ok"
+    assert seen == [None, "true"]
+    assert os.environ.get("HYRIVER_CACHE_DISABLE") is None
+
+
+def test_with_retries_restores_a_prior_cache_disable_value(monkeypatch, waits):
+    monkeypatch.setenv("HYRIVER_CACHE_DISABLE", "false")
+    seen = []
+
+    def fetch():
+        seen.append(os.environ.get("HYRIVER_CACHE_DISABLE"))
+        if len(seen) < 3:
+            raise TimeoutError("busy")
+        return "ok"
+    assert rp.with_retries(fetch, "3DEP") == "ok"
+    assert seen == ["false", "true", "true"]
+    assert os.environ.get("HYRIVER_CACHE_DISABLE") == "false"
+
+
+def test_with_retries_restores_the_cache_flag_even_when_every_attempt_fails(monkeypatch,
+                                                                            waits):
+    def fetch():
+        raise TimeoutError("still busy")
+    with pytest.raises(TimeoutError):
+        rp.with_retries(fetch, "3DEP")
+    assert os.environ.get("HYRIVER_CACHE_DISABLE") is None
 
 
 @pytest.mark.parametrize("make_err", [
@@ -307,9 +359,9 @@ def test_nlcd_fetch_retries_a_disconnect(monkeypatch, waits, capsys):
     calls = _fake_nlcd(monkeypatch, [ConnectionResetError("Server disconnected"),
                                      TimeoutError("timed out"), {"cover": "ds"}])
     assert rp._fetch_nlcd((0, 0, 1, 1), 30, 2021) == {"cover": "ds"}
-    assert len(calls) == 3 and waits == [20, 60]
+    assert len(calls) == 3 and waits == [60, 180]
     assert calls[0][1:] == (30, {"cover": [2021]})
-    assert "NLCD busy, retrying in 20 s" in capsys.readouterr().out
+    assert "NLCD busy, retrying in 60 s" in capsys.readouterr().out
 
 
 def test_nlcd_fetch_raises_after_the_retries(monkeypatch, waits):

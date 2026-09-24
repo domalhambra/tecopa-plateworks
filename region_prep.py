@@ -244,10 +244,11 @@ def bake_hydro(waterbodies, flowlines, dst_crs, simplify_m=30.0, min_order=3):
                                "order": order, "name": str(row.get("gnis_name") or "")})
     return {"crs": dst_crs, "lakes": lakes, "rivers": rivers}
 
-# A 3DEP or NLCD service can be down for a minute (acceptance: the WMS answered
-# "Service is currently not available" and the same request worked minutes later).
-# A transient failure is retried after each of these waits, in seconds.
-_RETRY_WAITS = (20, 60)
+# A 3DEP or NLCD service can be down for longer than a minute (acceptance,
+# 2026-09-24: USGS services were intermittently down for more than 80 s; the old
+# (20, 60) waits gave up too soon). A transient failure is retried after each of
+# these waits, in seconds.
+_RETRY_WAITS = (60, 180)
 _sleep = time.sleep                  # tests swap it out
 # Errors that say "the file is not there", not "the network hiccuped".
 _LASTING_OS_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError,
@@ -272,18 +273,40 @@ def _transient_errors() -> tuple:
 
 def with_retries(fetch, service):
     """fetch(), retried after each _RETRY_WAITS wait on a transient failure. Each
-    retry is announced on stdout, so it streams into the build's progress log. A
-    lasting error, or the last transient one, raises."""
+    retry is announced on stdout (whitespace collapsed to one line, so a
+    multi-line service error can't break the build log into ragged lines), so it
+    streams into the build's progress log. A lasting error, or the last transient
+    one, raises.
+
+    A retry runs with HYRIVER_CACHE_DISABLE set, restored to whatever it was
+    right after: a service that fails as an HTTP 200 carrying an XML error body
+    is not a network error async_retriever would retry on its own, and HyRiver's
+    on-disk cache stores that 200 for a week, so a retry with caching left on
+    would just replay the same bad body forever instead of asking again. The
+    first attempt keeps the normal cache, so a routine (non-retried) build still
+    benefits from it."""
     transient = _transient_errors()
+    is_retry = False
     for wait in (*_RETRY_WAITS, None):
+        prev = None
+        if is_retry:
+            prev = os.environ.get("HYRIVER_CACHE_DISABLE")
+            os.environ["HYRIVER_CACHE_DISABLE"] = "true"
         try:
             return fetch()
         except transient as ex:
             if wait is None or isinstance(ex, _LASTING_OS_ERRORS):
                 raise
-            print(f"{service} busy, retrying in {wait:g} s "
-                  f"({type(ex).__name__}: {ex})", flush=True)
+            msg = f"{service} busy, retrying in {wait:g} s ({type(ex).__name__}: {ex})"
+            print(" ".join(msg.split()), flush=True)
             _sleep(wait)
+        finally:
+            if is_retry:
+                if prev is None:
+                    os.environ.pop("HYRIVER_CACHE_DISABLE", None)
+                else:
+                    os.environ["HYRIVER_CACHE_DISABLE"] = prev
+        is_retry = True
 
 
 def fetch_dem(bbox, resolution_m=10):
