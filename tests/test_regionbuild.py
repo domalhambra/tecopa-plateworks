@@ -251,3 +251,30 @@ def test_run_build_passes_order_arguments_and_env(tmp_path):
     assert got == {"resolution": "4.0"}
     assert "cache=/tmp/cache.sqlite" in lines
     assert _json.load(open(tmp_path / "argv.json")) == ["--root", str(root), "stub_region"]
+
+
+def test_run_build_refuses_an_out_root_other_than_regions_root(tmp_path):
+    # the failure sweep removes regions_root/<id>; with a different out_root it
+    # would remove the wrong folder and leave the partial plate behind
+    ran = tmp_path / "ran"
+    prep = tmp_path / "touch_prep.py"
+    prep.write_text(f"open({str(ran)!r}, 'w').write('x')\n")
+    params = dict(_params(), resolution=4.0, out_root=str(tmp_path / "order" / "plate"))
+    with pytest.raises(ValueError, match="out_root"):
+        rb.run_build(params, repo_root=".", regions_root=str(tmp_path / "regions"),
+                     prep_python=sys.executable, prep_script=str(prep),
+                     labels_script=_write_stub_labels(tmp_path),
+                     set_progress=lambda s: None)
+    assert not ran.exists()                        # refused before spawning
+
+
+def test_run_build_accepts_an_out_root_spelled_differently(tmp_path):
+    root = tmp_path / "work" / "plate"
+    params = dict(_params(), resolution=4.0, out_root=str(root / ".." / "plate"))
+    prep = tmp_path / "order_prep.py"
+    prep.write_text(STUB_ORDER_PREP)
+    rb.run_build(params, repo_root=".", regions_root=str(root),
+                 prep_python=sys.executable, prep_script=str(prep),
+                 labels_script=_write_stub_labels(tmp_path),
+                 set_progress=lambda s: None)
+    assert (root / "stub_region" / "region.json").exists()

@@ -76,10 +76,17 @@ def run_build(params: dict, repo_root: str, regions_root: str,
     (the build endpoint) enforce ^[a-z0-9_]+$ before ever reaching this.
     An order build adds `resolution` and `out_root` to params, and passes `env`
     (the shared HyRiver cache). Without them the commands are exactly the
-    in-app build's."""
+    in-app build's. `out_root`, when given, must be `regions_root` (the same
+    folder, however spelled): region_prep writes under out_root, and the failure
+    sweep removes regions_root/<id>, so any other pairing sweeps the wrong
+    folder. A mismatch raises ValueError before anything is spawned."""
     rid = params["id"]
     if not re.fullmatch(r"[a-z0-9_]+", rid):
         raise ValueError(f"unsafe region id {rid!r}")
+    out_root = params.get("out_root")
+    if out_root and os.path.abspath(out_root) != os.path.abspath(regions_root):
+        raise ValueError(f"out_root {out_root!r} must be regions_root "
+                         f"{regions_root!r}: a failed build sweeps regions_root")
     w, s, e, n = params["bbox"]
     cmd = [prep_python, prep_script,
            "--id", rid, "--name", params["name"],
