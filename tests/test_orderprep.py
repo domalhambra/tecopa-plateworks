@@ -34,6 +34,33 @@ json.dump({"id": a.id, "crs": "EPSG:" + a.epsg, "bbox": a.bbox,
            "native_resolution_m": float(a.resolution)},
           open(os.path.join(out, "region.json"), "w"))
 open(os.path.join(out, "dem.tif"), "wb").close()
+# STUB_DEM_HOLES writes a real 200 x 200 DEM over the plate instead of an empty file:
+# "edge" leaves the west 4% NaN (outside the frame), "frame" a 30 x 30 block at the
+# centre (inside it), "none" no NaN at all.
+holes = os.environ.get("STUB_DEM_HOLES")
+if holes:
+    import numpy as np, rasterio
+    from pyproj import Transformer
+    from rasterio.transform import from_bounds
+    fwd = Transformer.from_crs("EPSG:4326", "EPSG:" + a.epsg, always_xy=True)
+    w, s, e, n = a.bbox
+    xs, ys = fwd.transform([w, e, w, e], [s, s, n, n])
+    arr = np.full((200, 200), 900.0, "float32")
+    if holes == "edge":
+        arr[:, :8] = np.nan
+    elif holes == "frame":
+        arr[85:115, 85:115] = np.nan
+    with rasterio.open(os.path.join(out, "dem.tif"), "w", driver="GTiff",
+                       dtype="float32", count=1, width=200, height=200,
+                       crs="EPSG:" + a.epsg, nodata=np.nan,
+                       transform=from_bounds(min(xs), min(ys), max(xs), max(ys),
+                                             200, 200)) as ds:
+        ds.write(arr, 1)
+# STUB_FILL is a hole-fill source entry, written into sources.json as region_prep does
+if os.environ.get("STUB_FILL"):
+    json.dump({"sources": [{"dataset": "USGS 3DEP dynamic service"},
+                           json.loads(os.environ["STUB_FILL"])]},
+              open(os.path.join(out, "sources.json"), "w"))
 if not os.environ.get("STUB_SKIP_LANDCOVER"):
     open(os.path.join(out, "landcover.tif"), "wb").close()
 with open(os.path.join(a.out_root, "builds.log"), "a") as f:
@@ -537,3 +564,142 @@ def test_a_built_plate_missing_a_file_is_rebuilt(tmp_path, tools, lost):
 def test_max_plan_passes_matches_region_preps_coverage_layers():
     rp = pytest.importorskip("region_prep")
     assert op.MAX_PLAN_PASSES == len(rp.COVERAGE_LAYERS_M)
+
+
+# ---- the hole check: after a build, the plate's NaN share is measured, not assumed.
+# The 3DEP dynamic service can leave holes and say nothing (acceptance, 2026-09-24:
+# 12.1% of the east-west plate was NaN where the index expected 5.6%). ----
+FILL = {"dataset": "USGS 3DEP 30 m DEM, filling holes the dynamic service left",
+        "via": "rasterio, USGS_Seamless_DEM_1.vrt", "license": "Public domain (USGS)",
+        "role": "hole fill", "layer_m": 30, "filled_share": 0.0641}
+
+
+def test_holes_outside_the_frame_warn_about_the_plate(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "edge")
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    plate = state["plate"]
+    assert plate["nan_share"] == pytest.approx(0.04, abs=0.002)
+    assert plate["frame_nan_share"] == 0.0
+    holes = [w for w in state["warnings"] if "of the plate has no elevation" in w]
+    assert holes == ["4.0% of the plate has no elevation data, where the 3DEP index "
+                     "expects 0.0% (ocean or across a border): the terrain service "
+                     "left holes. None of them is inside the frame."]
+    assert not any("HOLES IN THE PRINT" in w for w in state["warnings"])
+    # a frame with no NaN needs no second coverage query
+    assert len(asked.read_text().splitlines()) == 1
+    report = (d / "work" / "report.txt").read_text()
+    assert "No elevation: 4.0% of the plate, 0.0% of the frame" in report
+
+
+def test_holes_inside_the_frame_warn_loudly(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "frame")
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    frame_share = state["plate"]["frame_nan_share"]
+    assert frame_share > 0.01
+    loud = [w for w in state["warnings"] if w.startswith("HOLES IN THE PRINT")]
+    assert loud == [f"HOLES IN THE PRINT: {frame_share:.1%} of the frame has no "
+                    "elevation data, where the 3DEP index expects 0.0%. Do not print "
+                    "this plate: delete work/plate/ and run Prepare again."]
+    # the frame's own expected share comes from a coverage query of the frame
+    boxes = [json.loads(l) for l in asked.read_text().splitlines()]
+    assert len(boxes) == 2
+    want = opl.to_lonlat_bbox(state["frame"], state["epsg"])
+    assert [float(v) for v in boxes[1][:4]] == pytest.approx(list(want))
+    assert "HOLES IN THE PRINT" in (d / "work" / "report.txt").read_text()
+
+
+def test_expected_ocean_raises_no_hole_warning(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(COASTAL))
+    monkeypatch.setenv("STUB_DEM_HOLES", "edge")
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["plate"]["nan_share"] == pytest.approx(0.04, abs=0.002)
+    assert not any("of the plate has no elevation" in w for w in state["warnings"])
+    assert not any("HOLES IN THE PRINT" in w for w in state["warnings"])
+    assert any("no US elevation data" in w for w in state["warnings"])
+
+
+def test_a_whole_plate_raises_no_hole_warning(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "none")
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert (state["plate"]["nan_share"], state["plate"]["frame_nan_share"]) == (0.0, 0.0)
+    assert state["warnings"] == []
+    report = (d / "work" / "report.txt").read_text()
+    assert "No elevation: 0.0% of the plate, 0.0% of the frame" in report
+    assert "Hole fill" not in report
+
+
+def test_a_hole_fill_is_reported_from_sources_json(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "none")
+    monkeypatch.setenv("STUB_FILL", json.dumps(FILL))
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["plate"]["hole_fill"] == {"layer_m": 30, "filled_share": 0.0641}
+    report = (d / "work" / "report.txt").read_text()
+    assert ("Hole fill: 6.4% of the plate from the 3DEP 30 m tiles "
+            "(the dynamic service left holes)") in report
+
+
+def test_an_unreadable_dem_skips_the_hole_check(tmp_path, tools):
+    # the default stub writes an empty dem.tif: the check logs and moves on
+    d = _make_order(tmp_path)
+    lines = []
+    state = op.prepare(str(d), tools, log=lines.append)
+    assert "nan_share" not in state["plate"]
+    assert any("Could not measure the plate's holes" in l for l in lines)
+
+
+def _dem(path, arr, bounds, epsg=32611):
+    import rasterio
+    from rasterio.transform import from_bounds
+    h, w = arr.shape
+    with rasterio.open(path, "w", driver="GTiff", dtype="float32", count=1,
+                       width=w, height=h, crs=f"EPSG:{epsg}", nodata=float("nan"),
+                       transform=from_bounds(*bounds, w, h)) as ds:
+        ds.write(arr, 1)
+
+
+def test_nan_shares_reads_the_plate_and_the_frame(tmp_path):
+    import numpy as np
+    arr = np.full((400, 400), 500.0, "float32")
+    arr[:, :40] = np.nan                        # 10% of the plate, west of the frame
+    arr[200:240, 200:240] = np.nan              # inside the frame
+    path = str(tmp_path / "dem.tif")
+    _dem(path, arr, (0.0, 0.0, 4000.0, 4000.0))
+    plate, frame = op.nan_shares(path, (1000.0, 1000.0, 3000.0, 3000.0))
+    assert plate == pytest.approx(0.11, abs=0.005)
+    assert frame == pytest.approx(0.04, abs=0.005)
+
+
+def test_a_failed_frame_coverage_check_still_warns_loudly(tmp_path, tools):
+    import numpy as np
+    arr = np.full((200, 200), 500.0, "float32")
+    arr[90:110, 90:110] = np.nan
+    plate_dir = tmp_path / "plate" / "p"
+    plate_dir.mkdir(parents=True)
+    _dem(str(plate_dir / "dem.tif"), arr, (500000.0, 4000000.0, 520000.0, 4020000.0))
+    bad = tmp_path / "stubs" / "bad_coverage.py"
+    bad.write_text("import sys\nsys.exit('index down')\n")
+    tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
+    plate = {"id": "p", "root": str(tmp_path / "plate"), "us_share": 1.0}
+    warnings = op.check_holes(tools, plate, (505000.0, 4005000.0, 515000.0, 4015000.0),
+                              32611, 25.0, dict(os.environ), log=lambda s: None)
+    loud = [w for w in warnings if w.startswith("HOLES IN THE PRINT")]
+    assert len(loud) == 1 and "could not be checked" in loud[0]
+
+
+def test_report_lines_are_absent_from_an_old_state(tmp_path, tools):
+    # a state written before the hole check has none of its keys
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    for key in ("nan_share", "frame_nan_share", "hole_fill"):
+        state["plate"].pop(key, None)
+    text = op.write_report(od.load(str(d)), state)
+    assert "No elevation" not in text and "Hole fill" not in text

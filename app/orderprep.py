@@ -1,8 +1,9 @@
 # app/orderprep.py
 """Prepare, step 1 of an order (order pipeline spec, section 2). Sub-project 1 ships
 the plate: read the tracks, frame them nestled, reuse a curated plate that already
-holds the print, or build one under work/plate/. Writes work/state.json and
-work/report.txt. Later sub-projects add the paper table, photos and the proof.
+holds the print, or build one under work/plate/. A built plate's holes are measured
+before anything trusts it (check_holes). Writes work/state.json and work/report.txt.
+Later sub-projects add the paper table, photos and the proof.
 
 The fetch stack runs only as .venv-prep subprocesses (invariant 13): the coverage
 query (scripts/dem_coverage.py) and the build (region_prep.py and
@@ -22,7 +23,8 @@ from app.order import (OrderError, cache_path, load, orders_root, read_state,
 from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, PlateError,
                             choose_grid, conus_covered, curated_fit, needed_resolution,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
-                            to_lonlat_bbox, track_fill, widen_for_upsample)
+                            reference_share, to_lonlat_bbox, track_fill,
+                            widen_for_upsample)
 from app.regionbuild import run_build
 from app.regions import Region
 
@@ -56,6 +58,16 @@ LANDCOVER_GAVE_UP_WARNING = ("Land cover was retried once and still failed. "
 # order's inputs actually change.
 LANDCOVER_REBUILD_LIMIT = 1
 PREP_VENV_HELP = "docs/changing-things.md › Set up a machine"
+# After a build the plate's no-data share is measured, not assumed: the 3DEP dynamic
+# service can leave holes and say nothing (acceptance, 2026-09-24: 12.1% of the
+# east-west plate was NaN where the index expected 5.6%). region_prep fills them
+# from the static tiles; this is the check that the fill worked. A share more than
+# HOLE_TOLERANCE past what the 3DEP index expects is a hole. The index is read on a
+# lon/lat box in degrees, with outlines generalised to about 50 m, so a point of
+# slack keeps a coastline from reading as a hole. A frame the index calls wholly US
+# gets no slack: any no-data cell in it is a hole.
+HOLE_TOLERANCE = 0.01
+HOLE_DECIMATE = 8           # the share is read from every 8th cell each way
 
 
 @dataclass(frozen=True)
@@ -305,6 +317,13 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
                                     cwd=cache_dir)
         if labels_note:
             warnings.append(labels_note)
+        for note in check_holes(tools, plate, frame, epsg,
+                                needed_resolution(frame, pw), env, log):
+            # a hole in the print leads the list; a hole outside it follows
+            if note.startswith("HOLES IN THE PRINT"):
+                warnings.insert(0, note)
+            else:
+                warnings.append(note)
         if _has_landcover(plate["root"], plate["id"]):
             landcover_rebuilds = 0
         elif gated_landcover_retry:
@@ -367,6 +386,103 @@ def _build(order, tools, frame, epsg, grid, env, log, cwd=None):
     return plate, result["labels_note"]
 
 
+def nan_shares(dem_path, frame, decimate=HOLE_DECIMATE) -> tuple:
+    """(plate, frame): the share of dem.tif's cells, and of the cells inside `frame`
+    (metres, the plate's CRS), with no elevation. Both are decimated reads, every
+    `decimate`th cell each way, so a corridor-sized plate is never read whole."""
+    import math
+
+    import numpy as np
+    import rasterio
+    from rasterio.windows import Window, from_bounds
+    with rasterio.open(dem_path) as ds:
+        plate = ds.read(1, out_shape=(max(1, ds.height // decimate),
+                                      max(1, ds.width // decimate)))
+        f = from_bounds(*frame, transform=ds.transform)
+        c0, r0 = max(0, math.floor(f.col_off)), max(0, math.floor(f.row_off))
+        c1 = min(ds.width, math.ceil(f.col_off + f.width))
+        r1 = min(ds.height, math.ceil(f.row_off + f.height))
+        win = Window(c0, r0, c1 - c0, r1 - r0)
+        inside = ds.read(1, window=win, out_shape=(max(1, (r1 - r0) // decimate),
+                                                   max(1, (c1 - c0) // decimate)))
+    return float(np.isnan(plate).mean()), float(np.isnan(inside).mean())
+
+
+def hole_fill_record(plate_dir):
+    """{layer_m, filled_share} from the plate's sources.json when region_prep filled
+    holes (the source with role "hole fill"), else None. Tolerant of an old or
+    missing sources.json."""
+    try:
+        with open(os.path.join(plate_dir, "sources.json")) as f:
+            sources = json.load(f).get("sources", [])
+    except (OSError, ValueError, AttributeError):
+        return None
+    for s in sources if isinstance(sources, list) else []:
+        if isinstance(s, dict) and s.get("role") == "hole fill":
+            try:
+                return {"layer_m": int(s["layer_m"]),
+                        "filled_share": float(s["filled_share"])}
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
+
+def check_holes(tools, plate, frame, epsg, need_m, env, log=print) -> list:
+    """Measure a freshly built plate's holes and return the warnings they earn.
+    Records nan_share, frame_nan_share and, when region_prep filled holes,
+    hole_fill on `plate`. The plate is compared with 1 - us_share, what the 3DEP
+    index expects to be ocean or across a border. The frame, when it has any
+    no-data cell, is compared with its own share, from one more coverage query of
+    the frame's box. An unreadable dem.tif is logged and skips the check."""
+    plate_dir = os.path.join(plate["root"], plate["id"])
+    fill = hole_fill_record(plate_dir)
+    if fill:
+        plate["hole_fill"] = fill
+    try:
+        plate_nan, frame_nan = nan_shares(os.path.join(plate_dir, "dem.tif"), frame)
+    except Exception as ex:          # an unreadable or empty dem.tif
+        log(f"Could not measure the plate's holes: {type(ex).__name__}: {ex}")
+        return []
+    plate_nan, frame_nan = round(plate_nan, 4), round(frame_nan, 4)
+    plate["nan_share"], plate["frame_nan_share"] = plate_nan, frame_nan
+    warnings = []
+    frame_hole = None
+    if frame_nan > 0:
+        try:
+            cov = read_coverage(tools, to_lonlat_bbox(frame, epsg), env,
+                                layers=COARSE_LAYERS_M if need_m >= COARSE_NEED_M
+                                else None)
+            if not cov:
+                raise PlateError("the coverage check returned no layers")
+            expected = round(1.0 - reference_share(cov), 4)
+        except PlateError as ex:
+            reason = " ".join(str(ex).split())[:200]
+            frame_hole = (f"HOLES IN THE PRINT: {frame_nan:.1%} of the frame has no "
+                          f"elevation data, and the share the 3DEP index expects "
+                          f"could not be checked ({reason}). Look at the proof "
+                          f"before printing; if the holes are over land, delete "
+                          f"work/plate/ and run Prepare again.")
+        else:
+            slack = HOLE_TOLERANCE if expected > 0 else 0.0
+            if frame_nan > expected + slack:
+                frame_hole = (f"HOLES IN THE PRINT: {frame_nan:.1%} of the frame "
+                              f"has no elevation data, where the 3DEP index expects "
+                              f"{expected:.1%}. Do not print this plate: delete "
+                              f"work/plate/ and run Prepare again.")
+    plate_expected = round(1.0 - plate["us_share"], 4)
+    if plate_nan > plate_expected + HOLE_TOLERANCE:
+        note = (f"{plate_nan:.1%} of the plate has no elevation data, where the 3DEP "
+                f"index expects {plate_expected:.1%} (ocean or across a border): the "
+                f"terrain service left holes.")
+        if frame_hole is None:
+            note += (" None of them is inside the frame." if frame_nan == 0 else
+                     " The frame's own share is within what the index expects.")
+        warnings.append(note)
+    if frame_hole:
+        warnings.append(frame_hole)
+    return warnings
+
+
 def write_report(order, state) -> str:
     plate, frame = state["plate"], state["frame"]
     grid = f"{plate['grid_m']:g} m grid"
@@ -378,6 +494,14 @@ def write_report(order, state) -> str:
              f"Frame: {(frame[2] - frame[0]) / 1000:.1f} x "
              f"{(frame[3] - frame[1]) / 1000:.1f} km, tracks fill {state['fill']:.0%}",
              f"Upsampling: {plate['upsample']:.2f}x (limit {MAX_UPSAMPLE:g}x)"]
+    fill = plate.get("hole_fill")
+    if fill:
+        lines.append(f"Hole fill: {fill['filled_share']:.1%} of the plate from the "
+                     f"3DEP {fill['layer_m']:g} m tiles (the dynamic service left "
+                     f"holes)")
+    if plate.get("nan_share") is not None:
+        lines.append(f"No elevation: {plate['nan_share']:.1%} of the plate, "
+                     f"{plate.get('frame_nan_share', 0.0):.1%} of the frame")
     if plate.get("build_seconds") is not None:
         lines.append(f"Build time: {plate['build_seconds']:.0f} s")
     if state["warnings"]:
