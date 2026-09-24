@@ -246,6 +246,68 @@ def test_curated_fit_requires_the_margin_not_just_the_frame():
     assert op.curated_fit(tracks, PORTRAIT, 12, _curated(bounds=bounds)) is None
 
 
+def test_mid_grid_prefers_static_10m():
+    # need 12 and need 19.9 both fall in static 10 m's span [10, 20]: the static
+    # tile is preferred over the dynamic service, whether or not finer lidar is
+    # covered too (lidar cannot beat a covered static pick for need >= 10).
+    for coverage in (LIDAR, NO_LIDAR):
+        g = op.choose_grid(12.0, coverage)
+        assert (g["grid_m"], g["layer_m"], g["upsample"], g["widen"]) == (
+            10.0, 10, 1.0, False)
+        g = op.choose_grid(19.9, coverage)
+        assert (g["grid_m"], g["layer_m"], g["upsample"], g["widen"]) == (
+            10.0, 10, 1.0, False)
+
+
+def test_mid_grid_prefers_static_30m():
+    # need 31, 37 and 59 all fall in static 30 m's span [30, 60].
+    for coverage in (LIDAR, NO_LIDAR):
+        for need in (31.0, 37.0, 59.0):
+            g = op.choose_grid(need, coverage)
+            assert (g["grid_m"], g["layer_m"], g["upsample"], g["widen"]) == (
+                30.0, 30, 1.0, False)
+
+
+def test_mid_grid_gap_between_static_bands_stays_dynamic():
+    # need 20.5 and 29 fall between 10 m's span (up to 20) and 30 m's span (from
+    # 30): no static layer's span holds them, so the old nice-floor path on the
+    # dynamic service still applies, unchanged by the static preference.
+    g = op.choose_grid(20.5, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (20.0, 10)
+    g = op.choose_grid(29.0, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (25.0, 10)
+
+
+def test_mid_grid_past_static_30_span_steps_down_as_before():
+    # need 61 is just past 30 m's span (up to 60): nice-floor would land exactly on
+    # the 60 m static size, but the 60 m tiles are Alaska-only (uncovered here), so
+    # the existing step-down still serves it dynamically at 55 m from 10 m.
+    g = op.choose_grid(61.0, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (55.0, 10)
+
+
+def test_large_grid_stays_dynamic_past_both_static_spans():
+    g = op.choose_grid(210.0, NO_LIDAR)
+    assert (g["grid_m"], g["layer_m"]) == (210.0, 10)
+
+
+def test_static_preference_never_picks_60m_in_the_lower_48():
+    # 60 m reads 0.0 everywhere south of Alaska, so even a need whose nice-floor
+    # value would land on 60 m never gets a static 60 m pick -- STATIC_SPAN's
+    # candidate layers are only 10 and 30.
+    g = op.choose_grid(55.0, NO_LIDAR)      # squarely inside 30 m's span [30, 60]
+    assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
+
+
+def test_static_preference_falls_through_when_its_own_layer_is_uncovered():
+    # need 12 rounds into static 10 m's span, but here only 1 m and 30 m are
+    # covered (10 m itself reads short of the reference), so the static
+    # preference cannot pick 10 m and falls back to the existing step-down path,
+    # same as test_static_grid_steps_down_when_its_own_layer_is_not_covered.
+    g = op.choose_grid(12.0, {1: 1.0, 3: 0.0, 10: 0.5, 30: 1.0, 60: 0.0})
+    assert (g["grid_m"], g["layer_m"]) == (9.75, 1)
+
+
 def test_choose_grid_reads_absent_layers_as_uncovered():
     # Prepare asks only for 10 and 30 m once the need is 20 m or more (60 m is
     # never worth asking: it has no lower-48 tile at all)

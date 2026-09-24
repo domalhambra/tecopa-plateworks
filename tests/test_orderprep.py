@@ -359,9 +359,13 @@ def test_curated_plate_without_a_dem_is_not_reused(tmp_path, tools):
     big.mkdir()
     json.dump({"crs": "EPSG:32611", "bounds": [400000.0, 3800000.0, 700000.0, 4200000.0],
                "native_resolution_m": 10}, open(big / "region.json", "w"))
-    d = _make_order(tmp_path, bbox=WIDE)
+    d = _make_order(tmp_path, bbox=WIDE)                    # need ~16.9 m at 12x18
     state = op.prepare(str(d), tools, log=lambda s: None)
     assert state["plate"]["kind"] == "built"
+    # 16.9 falls in static 10 m's span (choose_grid's STATIC_SPAN): the static tile
+    # is preferred over region_prep's own lidar, so the plate lands on 10 m static
+    # rather than the dynamic service's nice-floor 15 m.
+    assert (state["plate"]["grid_m"], state["plate"]["layer_m"]) == (10.0, 10)
 
 
 def test_outside_the_lower_48(tmp_path, tools):

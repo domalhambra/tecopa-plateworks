@@ -27,6 +27,9 @@ COVERAGE_TOLERANCE = 0.005   # a layer counts only if it covers everything the b
                               # count against no layer
 US_SHARE_MIN = 0.5        # below this, the plate is mostly outside US elevation data
 STATIC_LAYERS_M = (10, 30, 60)   # py3dep's fast static tiles
+# A covered static layer serves needs up to this multiple of its own cell before
+# choose_grid falls back to the dynamic service; see choose_grid's docstring.
+STATIC_SPAN = 2.0
 # Below 10 m the grid is fetched from the 3DEP dynamic service, which resamples the
 # finest source it holds. Plan Task 1 measured whether that is real lidar detail.
 USE_DYNAMIC_FINE = True
@@ -144,6 +147,17 @@ def choose_grid(need_m, coverage) -> dict:
     against: the caller warns when it is below 1.0 (ocean or a border clips the
     plate).
 
+    For need_m >= 10, a covered static layer (10 or 30 m; never 60, Alaska-only in
+    the lower 48) is preferred whenever it can serve the need without upsampling
+    past STATIC_SPAN: the largest such L with L <= need_m <= STATIC_SPAN * L is
+    used exactly, as its own layer. The static tiles are COGs and fetch reliably;
+    the dynamic WMS (elevation.nationalmap.gov) does not -- a real 35 m order plate
+    failed it three times running even with generous retries, while static fetches
+    never have. Since STATIC_SPAN is 2.0, a plate built this way holds at most 4x
+    the print's pixel count (2x per side). When no covered static layer's span
+    holds the need, grid selection falls back to the nice-floor path below,
+    unchanged.
+
     Coverage is judged relative to a reference layer, not against an absolute bar:
     a plate that reaches the Pacific or a national border can never be fully
     covered by any layer, but a layer that covers everything the reference layer
@@ -193,6 +207,13 @@ def choose_grid(need_m, coverage) -> dict:
         upsample = finest / need_m
         return {"grid_m": float(finest), "layer_m": finest, "upsample": upsample,
                 "widen": upsample > MAX_UPSAMPLE, "us_share": best}
+    if need_m >= STATIC_LAYERS_M[0]:
+        static_pick = max((L for L in STATIC_LAYERS_M[:-1]
+                           if L in covered and L <= need_m <= STATIC_SPAN * L),
+                          default=None)
+        if static_pick is not None:
+            return {"grid_m": float(static_pick), "layer_m": static_pick,
+                    "upsample": 1.0, "widen": False, "us_share": best}
     grid = _nice_grid(need_m, finest)
     if grid in STATIC_LAYERS_M and int(grid) not in covered:
         grid = _nice_grid(grid - 1e-6, finest)

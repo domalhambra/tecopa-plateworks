@@ -42,7 +42,6 @@ COARSE_LAYERS_M = (10, 30)
 # and is gated separately (LANDCOVER_REBUILD_LIMIT below). Hydro with no lakes or
 # rivers is real (desert).
 CORE_PLATE_FILES = ("region.json", "dem.tif")
-BUILT_PLATE_FILES = CORE_PLATE_FILES + ("landcover.tif",)
 LANDCOVER_WARNING = ("Land cover did not download, so the biome look is not "
                      "available on this plate. Run Prepare again to retry.")
 LANDCOVER_GAVE_UP_WARNING = ("Land cover was retried once and still failed. "
@@ -155,8 +154,8 @@ def _has_landcover(root, rid) -> bool:
 
 
 def _built_complete(root, rid, landcover_rebuilds=0) -> bool:
-    """A built plate is current with every BUILT_PLATE_FILES file. Missing
-    region.json or dem.tif always rebuilds. Missing only landcover.tif rebuilds
+    """A built plate is current with every CORE_PLATE_FILES file, plus landcover.tif.
+    Missing region.json or dem.tif always rebuilds. Missing only landcover.tif rebuilds
     too, but just once (landcover_rebuilds < LANDCOVER_REBUILD_LIMIT): past the
     limit the plate reads as current anyway, so a repeatable failure stops being
     rebuilt on every later Prepare (see LANDCOVER_REBUILD_LIMIT)."""
