@@ -1,0 +1,559 @@
+<title>Tecopa Landing Preview</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+:root{
+  --ground:#eaeee9; --ground-2:#dee4dd; --ground-3:#d2d9d2; --paper:#f4f8f3;
+  --ink:#1b1e26; --mute:#565b67; --rule:#c6cec4;
+  --contour:#bcc6b8; --contour-major:#a9926a;
+  --accent:#7a5418; --accent-ink:#f4f8f3; --trail:#c99a45;
+  --edge-poster:#efe8d8; --edge-coin:#a88b58;
+  --sans:"Fira Sans","Hermes Maia",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --serif:"Source Serif 4","Valkyrie",Georgia,"Times New Roman",serif;
+  --measure:62ch;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#101319; --ground-2:#1b1e26; --ground-3:#262a33; --paper:#1b1e26;
+    --ink:#eff3ee; --mute:#adb3bf; --rule:#2c323d;
+    --contour:#252c37; --contour-major:#6b5a3a;
+    --accent:#d9b26a; --accent-ink:#101319; --trail:#d9b26a;
+    --edge-poster:#d9d2c2; --edge-coin:#8c744a;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#101319; --ground-2:#1b1e26; --ground-3:#262a33; --paper:#1b1e26;
+  --ink:#eff3ee; --mute:#adb3bf; --rule:#2c323d;
+  --contour:#252c37; --contour-major:#6b5a3a;
+  --accent:#d9b26a; --accent-ink:#101319; --trail:#d9b26a;
+  --edge-poster:#d9d2c2; --edge-coin:#8c744a;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font:400 18px/1.6 var(--serif);margin:0}
+a{color:inherit;text-decoration-color:var(--trail);text-underline-offset:3px}
+a:focus-visible,button:focus-visible,canvas:focus-visible,summary:focus-visible{outline:2px solid var(--trail);outline-offset:3px;border-radius:4px}
+h1,h2,h3{font-family:var(--sans);font-weight:600;letter-spacing:-.01em;text-wrap:balance;margin:0}
+.eyebrow{font:500 12px/1.2 var(--sans);letter-spacing:.14em;text-transform:uppercase;color:var(--mute);margin:0 0 14px}
+.wrap{max-width:1120px;margin:0 auto;padding-inline:20px}
+section{padding-block:88px}
+.lede{font-size:clamp(18px,2vw,21px);color:var(--mute);max-width:var(--measure);margin:18px 0 0}
+
+/* blog chrome, as it wraps the page on Ghost */
+.chrome{border-bottom:1px solid var(--rule);background:var(--ground)}
+.chrome .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-block:14px;font:500 14px/1 var(--sans)}
+.chrome nav{display:flex;gap:22px;color:var(--mute)}
+.chrome nav a{text-decoration:none}
+.draft-note{font:500 12px/1.4 var(--sans);background:var(--ground-2);color:var(--mute);text-align:center;padding:8px 16px;margin:0}
+
+/* hero */
+.hero{position:relative;overflow:hidden;padding-block:72px 64px;isolation:isolate}
+#contours{position:absolute;inset:0;width:100%;height:100%;z-index:-1;display:block}
+.hero-grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:48px;align-items:center}
+.hero h1{font-size:clamp(40px,6.2vw,76px);line-height:1.02}
+.hero h1 em{font-family:var(--serif);font-style:italic;font-weight:400;color:var(--trail)}
+.order{display:flex;flex-wrap:wrap;align-items:center;gap:12px 18px;margin-top:32px}
+.btn{display:inline-flex;align-items:center;gap:10px;background:var(--accent);color:var(--accent-ink);font:600 16px/1 var(--sans);padding:16px 22px;border-radius:999px;text-decoration:none;border:0;cursor:pointer}
+.btn svg{width:18px;height:18px}
+.addr{font:400 14px/1.4 var(--sans);color:var(--mute);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.addr code{font:500 14px/1 var(--sans);color:var(--ink);user-select:all}
+.copy{font:500 12px/1 var(--sans);background:transparent;color:var(--mute);border:1px solid var(--rule);border-radius:999px;padding:6px 10px;cursor:pointer}
+.stage{position:relative}
+.relief{position:relative;width:100%;touch-action:pan-y}
+.relief canvas{display:block;width:100%;height:100%;cursor:grab}
+.relief canvas:active{cursor:grabbing}
+.relief img.fallback{display:block;width:100%;height:100%;object-fit:contain}
+.hero .relief{aspect-ratio:4/4.4;max-height:640px}
+.caption{font:400 13px/1.4 var(--sans);color:var(--mute);display:flex;justify-content:space-between;gap:12px;margin-top:6px}
+.caption b{font-weight:600;color:var(--ink)}
+
+/* poster wall */
+.wall{background:var(--ground-2);padding-block:88px 0}
+.wall-head{display:flex;justify-content:space-between;align-items:end;gap:24px;flex-wrap:wrap}
+.wall-head h2{font-size:clamp(28px,3.6vw,42px)}
+.wall-head p{max-width:40ch;color:var(--mute);margin:0}
+.tilt{height:560px;overflow:hidden;margin-top:48px;position:relative;
+  -webkit-mask-image:linear-gradient(to bottom,transparent,#000 12%,#000 88%,transparent);
+          mask-image:linear-gradient(to bottom,transparent,#000 12%,#000 88%,transparent)}
+.tilt-inner{display:flex;gap:18px;justify-content:center;transform:rotate(-9deg) scale(1.18);transform-origin:50% 40%;margin-top:-140px}
+.col{display:flex;flex-direction:column;gap:18px;width:clamp(150px,22vw,250px);flex:none;will-change:transform}
+.col img{width:100%;height:auto;display:block;border-radius:3px;box-shadow:0 10px 30px rgba(0,0,0,.28);background:var(--ground-3)}
+
+/* look closer */
+.head h2{font-size:clamp(30px,4vw,48px)}
+.look-hero{margin:48px 0 0}
+.look-hero img,.look-pair img{width:100%;display:block;border-radius:3px;box-shadow:0 22px 50px rgba(0,0,0,.22)}
+figcaption{font:400 14px/1.5 var(--sans);color:var(--mute);margin-top:12px}
+.look-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:28px;margin-top:28px}
+.look-pair figure{margin:0}
+.fills{background:var(--paper)}
+.fills-grid{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr);gap:56px;align-items:center}
+.fills-grid img{width:100%;max-width:380px;display:block;border-radius:3px;box-shadow:0 18px 40px rgba(0,0,0,.2);justify-self:center}
+.fills-grid h2{font-size:clamp(26px,3vw,36px)}
+.fills-grid p{margin:14px 0 0;max-width:48ch}
+
+/* steps */
+.steps{background:var(--ground)}
+.step-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:32px;list-style:none;padding:0;margin:48px 0 0;counter-reset:s}
+.step-list li{counter-increment:s;border-top:2px solid var(--trail);padding-top:18px}
+.step-list li::before{content:counter(s);font:600 44px/1 var(--sans);color:var(--trail);display:block;margin-bottom:12px;font-variant-numeric:tabular-nums}
+.step-list h3{font-size:21px}
+.step-list p{margin:8px 0 0;color:var(--mute);font-size:17px}
+
+/* coins */
+.coins{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:28px 24px;margin-top:48px}
+.coin .relief{aspect-ratio:1/1}
+.coin .caption{justify-content:center}
+
+/* film */
+.film-grid{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:56px;align-items:center}
+.film video{width:100%;max-width:420px;display:block;border-radius:4px;box-shadow:0 18px 40px rgba(0,0,0,.22);background:var(--ground-3)}
+
+/* prices */
+.prices{background:var(--ground-2)}
+.price-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:40px;margin-top:40px}
+.price-grid h3{font-size:15px;letter-spacing:.12em;text-transform:uppercase;color:var(--mute);font-weight:500;margin-bottom:8px}
+table{width:100%;border-collapse:collapse;font-family:var(--sans)}
+td{padding:14px 0;border-bottom:1px solid var(--rule);font-size:17px}
+td:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;font-size:20px}
+td small{display:block;color:var(--mute);font-size:14px;font-weight:400}
+.price-note{color:var(--mute);margin-top:28px;max-width:var(--measure)}
+
+/* order page */
+#order{padding-block:56px 88px}
+.order-wrap{max-width:760px}
+.back{font:500 14px/1 var(--sans);color:var(--mute);text-decoration:none;display:inline-flex;gap:6px;margin-bottom:28px}
+#order h1{font-size:clamp(38px,5.4vw,60px);line-height:1.05}
+.order-steps{list-style:none;padding:0;margin:40px 0 0;display:grid;gap:36px;counter-reset:o}
+.order-steps>li{counter-increment:o;display:grid;grid-template-columns:44px minmax(0,1fr);gap:18px}
+.order-steps>li::before{content:counter(o);font:600 26px/1.2 var(--sans);color:var(--trail);font-variant-numeric:tabular-nums}
+.order-steps h2{font-size:22px}
+.order-steps p{margin:8px 0 0}
+.sizes{margin-top:12px}
+.sizes td{font-size:16px}
+.email-card{margin-top:14px;background:var(--paper);border:1px solid var(--rule);border-radius:8px;padding:20px;display:grid;gap:14px;justify-items:start}
+.email-card pre{margin:0;width:100%;font:400 14px/1.6 var(--sans);white-space:pre-wrap;color:var(--mute);background:var(--ground);border-radius:6px;padding:14px}
+
+/* faq */
+.faq{max-width:780px}
+details{border-bottom:1px solid var(--rule);padding-block:6px}
+summary{font:500 19px/1.4 var(--sans);cursor:pointer;padding:16px 0;list-style:none;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--trail);font-weight:400;font-size:24px;line-height:1}
+details[open] summary::after{content:"\2212"}
+details p{margin:0 0 18px;max-width:var(--measure);color:var(--mute)}
+
+footer{border-top:1px solid var(--rule);padding-block:28px 40px;font:400 14px/1.6 var(--sans);color:var(--mute)}
+footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
+footer nav{display:flex;gap:18px}
+
+@media (max-width:820px){
+  section{padding-block:64px}
+  .hero-grid,.film-grid,.fills-grid,.price-grid,.look-pair{grid-template-columns:1fr;gap:32px}
+  .step-list{grid-template-columns:1fr}
+  .coins{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .tilt{height:420px}
+  .hero .relief{aspect-ratio:1/1}
+}
+@media (prefers-reduced-motion:reduce){ .col{will-change:auto} }
+</style>
+
+<div class="chrome"><div class="wrap"><span>Plateworks</span><nav><a href="#">Blog</a><a href="#">About</a><a href="#">Tecopa</a></nav></div></div>
+<p class="draft-note">Preview of the Ghost landing page. Draft copy for review. Stand-in fonts: Fira Sans for Hermes Maia, Source Serif for Valkyrie.</p>
+
+<main id="landing">
+<header class="hero">
+  <canvas id="contours" aria-hidden="true"></canvas>
+  <div class="wrap hero-grid">
+    <div>
+      <p class="eyebrow">Tecopa Plateworks</p>
+      <h1>A poster of <em>everywhere you've been</em></h1>
+      <p class="lede">The ridges you climbed, the lakes you camped beside, the miles in between. Your trips, traced in gold across the ground they crossed, printed to hang where you'll see them every day.</p>
+      <div class="order">
+        <a class="btn" href="#order" data-evt="Build Click">Build your poster
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></a>
+      </div>
+    </div>
+    <div class="stage">
+      <div class="relief" data-relief-surface="media/lassen_ca-poster.webp" data-relief-height="media/lassen_ca-poster-h.png" data-relief-shape="poster" data-relief-aspect="0.8082" data-relief-alt="A poster of Lassen County, California, in relief: six trips drawn over the terrain."></div>
+      <p class="caption"><span><b>Lassen County, California</b> &middot; six days, 153 miles</span><span>Drag to turn</span></p>
+    </div>
+  </div>
+</header>
+
+<section class="wall" aria-labelledby="wall-h">
+  <div class="wrap wall-head">
+    <div><h2 id="wall-h">Posters I've made</h2></div>
+    <p>Every one is real country and real trips, lit so the mountains stand up off the paper.</p>
+  </div>
+  <div class="tilt" aria-hidden="true"><div class="tilt-inner" id="tilt"></div></div>
+</section>
+
+<section aria-labelledby="look-h">
+  <div class="wrap">
+    <div class="head"><h2 id="look-h">Up close</h2>
+      <p class="lede">Every ridge throws its shadow. Every creek finds its way down. Your trips run through it all in gold.</p></div>
+    <figure class="look-hero"><img src="media/rifle_aspen-detail.webp" alt="Close view of the Rifle to Aspen poster: a gold trail loops through deeply shaded canyons and pale ridgelines." loading="lazy">
+      <figcaption>Rifle to Aspen, Colorado</figcaption></figure>
+    <div class="look-pair">
+      <figure><img src="media/tushar_beaver_ut-detail.webp" alt="Close view of the Tushar Mountains poster: trails climb toward Shelly Baldy Peak, with a photo pinned beside Puffer Lake." loading="lazy">
+        <figcaption>Shelly Baldy Peak and Puffer Lake, Utah. Your photos hang beside the spots where you took them.</figcaption></figure>
+      <figure><img src="media/lassen_ca-detail.webp" alt="Close view of the Lassen County poster: a gold loop around Ridenoure Reservoir, with creeks winding across the flats." loading="lazy">
+        <figcaption>Ridenoure Reservoir, Lassen County, California</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section aria-labelledby="ground-h">
+  <div class="wrap">
+    <div class="head"><h2 id="ground-h">See the relief</h2>
+      <p class="lede">Six pieces of country, raised so you can see the land rise and fall. Drag one to turn it in the light.</p></div>
+    <div class="coins">
+      <div class="coin"><div class="relief" data-relief-surface="media/lassen_ca-coin.webp" data-relief-height="media/lassen_ca-coin-h.png" data-relief-shape="disc" data-relief-alt="Lassen County, California, as a relief coin."></div><p class="caption"><b>Lassen County, CA</b></p></div>
+      <div class="coin"><div class="relief" data-relief-surface="media/susanville_reno-coin.webp" data-relief-height="media/susanville_reno-coin-h.png" data-relief-shape="disc" data-relief-alt="Susanville to Reno as a relief coin."></div><p class="caption"><b>Susanville to Reno</b></p></div>
+      <div class="coin"><div class="relief" data-relief-surface="media/tecopa_ca-coin.webp" data-relief-height="media/tecopa_ca-coin-h.png" data-relief-shape="disc" data-relief-alt="Tecopa, California, as a relief coin."></div><p class="caption"><b>Tecopa, CA</b></p></div>
+      <div class="coin"><div class="relief" data-relief-surface="media/rifle_aspen-coin.webp" data-relief-height="media/rifle_aspen-coin-h.png" data-relief-shape="disc" data-relief-alt="Rifle to Aspen, Colorado, as a relief coin."></div><p class="caption"><b>Rifle to Aspen, CO</b></p></div>
+      <div class="coin"><div class="relief" data-relief-surface="media/tushar_beaver_ut-coin.webp" data-relief-height="media/tushar_beaver_ut-coin-h.png" data-relief-shape="disc" data-relief-alt="The Tushar Mountains, Utah, as a relief coin."></div><p class="caption"><b>Tushar Mountains, UT</b></p></div>
+      <div class="coin"><div class="relief" data-relief-surface="media/elko_bonneville-coin.webp" data-relief-height="media/elko_bonneville-coin-h.png" data-relief-shape="disc" data-relief-alt="Elko to Bonneville as a relief coin."></div><p class="caption"><b>Elko to Bonneville</b></p></div>
+    </div>
+  </div>
+</section>
+
+<section class="film" aria-labelledby="film-h" style="background:var(--paper)">
+  <div class="wrap film-grid">
+    <video src="media/lassen-film.mp4" autoplay muted loop playsinline aria-label="The Lassen County poster drawing itself, trip by trip."></video>
+    <div><h2 id="film-h" style="font-size:clamp(28px,3.4vw,40px)">Watch a poster come together</h2>
+      <p class="lede">Each trip on the Lassen County poster draws in, one after another.</p></div>
+  </div>
+</section>
+
+<section class="steps" aria-labelledby="how-h">
+  <div class="wrap">
+    <div class="head"><h2 id="how-h">How it works</h2></div>
+    <ol class="step-list">
+      <li><h3>Send your trips</h3><p>Email me your tracks from onX, Gaia or your watch, with any photos you want on the map. <a href="#order">Here's what to send.</a></p></li>
+      <li><h3>See your poster</h3><p>I make your map and send it to you before anything prints.</p></li>
+      <li><h3>Say yes</h3><p>Nothing prints until you say yes. Then it's printed and on its way to your wall.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section class="prices" aria-labelledby="price-h">
+  <div class="wrap">
+    <div class="head"><h2 id="price-h">Prices</h2></div>
+    <div class="price-grid">
+      <div><h3>Your first poster</h3>
+        <table><tbody>
+          <tr><td>Print, 13&times;19</td><td>$79</td></tr>
+          <tr><td>Print, 18&times;24</td><td>$89</td></tr>
+          <tr><td>Digital poster<small>for your screens, no print</small></td><td>$39</td></tr>
+        </tbody></table></div>
+      <div><h3>Next year</h3>
+        <table><tbody>
+          <tr><td>Print, 13&times;19</td><td>$59</td></tr>
+          <tr><td>Print, 18&times;24</td><td>$69</td></tr>
+          <tr><td>Digital poster</td><td>$25</td></tr>
+        </tbody></table></div>
+    </div>
+    <p class="price-note">You pay after you've seen your poster and said yes. <a href="#order">Build your poster</a></p>
+  </div>
+</section>
+
+<section class="fills" aria-labelledby="fills-h">
+  <div class="wrap fills-grid">
+    <img src="media/susanville_reno-wall.webp" alt="The Susanville to Reno poster." loading="lazy">
+    <div><h2 id="fills-h">Add next year's trips</h2>
+      <p>The list isn't finished, and the map doesn't have to be. Send next season's tracks and they join this year's, on the same ground.</p></div>
+  </div>
+</section>
+
+<section style="padding-top:24px" aria-labelledby="faq-h">
+  <div class="wrap faq">
+    <h2 id="faq-h" style="font-size:clamp(28px,3.4vw,40px);margin-bottom:12px">Questions</h2>
+    <details><summary>How do I get my tracks out of onX or Gaia?</summary><p>Both apps let you export GPX in bulk from their websites. If a menu has moved or you get stuck, email me and I'll walk you through it.</p></details>
+    <details><summary>Will it look this good on my wall?</summary><p>You see the exact poster before it prints, at full size, with your tracks and photos on it. If something's off, I fix it. Nothing prints until you say yes.</p></details>
+    <details><summary>What happens after I email my tracks?</summary><p>I build the map around your ground and send you a proof. You ask for changes or say yes, then I send a payment link. Your tracks and photos go to one place: the person who makes your poster.</p></details>
+    <details><summary>Where can you map?</summary><p>Anywhere in the lower 48. Alaska and Hawaii are coming later.</p></details>
+    <details><summary>Can I make my own?</summary><p>Yes. The program that draws these is free, and <a href="https://github.com/domalhambra/tecopa-plateworks">it's on GitHub</a>. Most people have me do it.</p></details>
+  </div>
+</section>
+
+</main>
+
+<main id="order" hidden>
+  <div class="wrap order-wrap">
+    <a class="back" href="#top">&larr; Tecopa Plateworks</a>
+    <p class="eyebrow">Tecopa Plateworks</p>
+    <h1>Build your poster</h1>
+    <p class="lede">You send me your trips, and I make the poster. It takes a few minutes on your end.</p>
+
+    <ol class="order-steps">
+      <li><div>
+        <h2>Gather your tracks</h2>
+        <p>Export your trips from onX, Gaia, Strava or your watch. GPX, KML and KMZ files all work. Send as many as you like, from anywhere in the lower 48.</p>
+      </div></li>
+
+      <li><div>
+        <h2>Pick your photos</h2>
+        <p>Choose the photos you want on the map: the shed, the summit, the camp. Photos straight from your phone work best, because they remember where they were taken. This step is optional.</p>
+      </div></li>
+
+      <li><div>
+        <h2>Choose a size</h2>
+        <table class="sizes"><tbody>
+          <tr><td>Print, 13&times;19</td><td>$79</td></tr>
+          <tr><td>Print, 18&times;24</td><td>$89</td></tr>
+          <tr><td>Digital poster<small>for your screens, no print</small></td><td>$39</td></tr>
+        </tbody></table>
+      </div></li>
+
+      <li><div>
+        <h2>Email me</h2>
+        <p>Attach your tracks and photos, and tell me the size and the title you want on the poster.</p>
+        <div class="email-card">
+          <a class="btn" href="mailto:badwaterguidance@gmail.com?subject=Build%20my%20poster&amp;body=Size%3A%2013%C3%9719%2C%2018%C3%9724%2C%20or%20digital%0ATitle%20for%20the%20poster%3A%0AAnything%20I%20should%20know%3A%0A%0A(Attach%20your%20tracks%20and%20photos.)" data-evt="Order Email Click">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18v12H3z"/><path d="m3 7 9 7 9-7"/></svg>
+            Start the email</a>
+          <span class="addr">Or write to <code id="order-addr">badwaterguidance@gmail.com</code><button class="copy" type="button" data-copy="order-addr">Copy</button></span>
+          <pre id="order-template">Size: 13&times;19, 18&times;24, or digital
+Title for the poster:
+Anything I should know:
+
+(Attach your tracks and photos.)</pre>
+          <span class="addr"><button class="copy" type="button" data-copy="order-template">Copy this outline</button></span>
+        </div>
+      </div></li>
+
+      <li><div>
+        <h2>See it, then say yes</h2>
+        <p>I send you your poster before anything prints. Ask for changes, or say yes. Nothing prints until you do.</p>
+      </div></li>
+
+      <li><div>
+        <h2>Pay, and it's on its way</h2>
+        <p>Once you say yes, I email you a secure payment link. Pay by card through Stripe, or with PayPal. Then your poster is printed and shipped.</p>
+      </div></li>
+    </ol>
+  </div>
+</main>
+
+<footer><div class="wrap"><nav><a href="#">Privacy</a><a href="#">Support</a></nav><span>Trail geometry &copy; OpenStreetMap contributors. Elevation: USGS 3DEP.</span></div></footer>
+
+<script>
+(function(){
+"use strict";
+var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+function css(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function rgb(hex){ hex = hex.replace("#",""); if(hex.length===3) hex = hex.split("").map(function(c){return c+c;}).join(""); var n = parseInt(hex,16); return [(n>>16&255)/255,(n>>8&255)/255,(n&255)/255]; }
+
+/* copy buttons */
+Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function(btn){
+  btn.addEventListener("click", function(){
+    var el=document.getElementById(btn.dataset.copy), label=btn.textContent;
+    function done(){ btn.textContent="Copied"; setTimeout(function(){ btn.textContent=label; },1600); }
+    function fallback(){ var r=document.createRange(); r.selectNodeContents(el); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); btn.textContent="Selected"; setTimeout(function(){ btn.textContent=label; },2400); }
+    try { navigator.clipboard.writeText(el.textContent).then(done,fallback); } catch(e){ fallback(); }
+  });
+});
+
+/* two pages in one preview: the landing page, and the order page at #order */
+function route(){
+  var order = location.hash === "#order";
+  document.getElementById("landing").hidden = order;
+  document.getElementById("order").hidden = !order;
+  window.scrollTo(0,0);
+}
+addEventListener("hashchange", route);
+document.getElementById("order").hidden = location.hash !== "#order";
+document.getElementById("landing").hidden = location.hash === "#order";
+
+/* ---------- contour shader ---------- */
+(function contours(){
+  var cv = document.getElementById("contours");
+  var gl = cv.getContext("webgl", {antialias:false, premultipliedAlpha:false});
+  if(!gl) return;
+  var deriv = gl.getExtension("OES_standard_derivatives");
+  var vs = "attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}";
+  var fs = (deriv ? "#extension GL_OES_standard_derivatives : enable\n" : "") +
+  "precision highp float;uniform vec2 R;uniform float T;uniform vec3 B,L,M;\n"+
+  "float h2(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}\n"+
+  "float n2(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);return mix(mix(h2(i),h2(i+vec2(1,0)),u.x),mix(h2(i+vec2(0,1)),h2(i+vec2(1,1)),u.x),u.y);}\n"+
+  "float fb(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n2(p);p=p*2.03+vec2(1.7,9.2);a*=.5;}return v;}\n"+
+  "void main(){vec2 uv=gl_FragCoord.xy/R.y;vec2 q=uv*1.35+vec2(T*.010,T*.004);\n"+
+  "float h=fb(q+.45*vec2(fb(q*.6+T*.006),fb(q*.6-T*.005)));float n=h*16.;\n"+
+  (deriv ? "float w=fwidth(n);" : "float w=.04;") +
+  "float d=abs(n-floor(n+.5));float line=1.-smoothstep(0.,w*1.1,d);\n"+
+  "float major=1.-step(.5,mod(floor(n+.5),5.));\n"+
+  "vec3 c=mix(B,mix(L,M,major),line*(.8+.2*major));gl_FragColor=vec4(c,1.);}";
+  function sh(t,s){ var o = gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o); return gl.getShaderParameter(o, gl.COMPILE_STATUS) ? o : null; }
+  var v = sh(gl.VERTEX_SHADER, vs), f = sh(gl.FRAGMENT_SHADER, fs);
+  if(!v || !f) return;
+  var pr = gl.createProgram(); gl.attachShader(pr,v); gl.attachShader(pr,f); gl.linkProgram(pr);
+  if(!gl.getProgramParameter(pr, gl.LINK_STATUS)) return;
+  gl.useProgram(pr);
+  var buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
+  var loc = gl.getAttribLocation(pr,"p"); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  var uR = gl.getUniformLocation(pr,"R"), uT = gl.getUniformLocation(pr,"T"), uB = gl.getUniformLocation(pr,"B"), uL = gl.getUniformLocation(pr,"L"), uM = gl.getUniformLocation(pr,"M");
+  var visible = true, t0 = performance.now(), frozenT = 37.0;
+  function colors(){ gl.uniform3fv(uB, rgb(css("--ground"))); gl.uniform3fv(uL, rgb(css("--contour"))); gl.uniform3fv(uM, rgb(css("--contour-major"))); }
+  function size(){ var dpr = Math.min(window.devicePixelRatio||1, 1.5); var w = Math.round(cv.clientWidth*dpr), h = Math.round(cv.clientHeight*dpr); if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; gl.viewport(0,0,w,h); } gl.uniform2f(uR, w, h); }
+  function draw(t){ size(); gl.uniform1f(uT, t); gl.drawArrays(gl.TRIANGLES,0,3); }
+  function loop(now){ if(!visible || reduce.matches) return; draw(frozenT + (now - t0)/1000); requestAnimationFrame(loop); }
+  function start(){ colors(); if(reduce.matches) draw(frozenT); else requestAnimationFrame(loop); }
+  new IntersectionObserver(function(e){ var was = visible; visible = e[0].isIntersecting; if(visible && !was) start(); }).observe(cv);
+  window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function(){ colors(); if(reduce.matches) draw(frozenT); });
+  new MutationObserver(function(){ colors(); if(reduce.matches) draw(frozenT); }).observe(document.documentElement, {attributes:true, attributeFilter:["data-theme"]});
+  window.addEventListener("resize", function(){ if(reduce.matches) draw(frozenT); });
+  reduce.addEventListener("change", start);
+  start();
+})();
+
+/* ---------- poster wall ---------- */
+(function wall(){
+  var imgs = ["lassen_ca","elko_bonneville","tecopa_ca","susanville_reno","rifle_aspen","tushar_beaver_ut"];
+  var host = document.getElementById("tilt"), cols = [], i, j;
+  for(i=0;i<4;i++){ var c = document.createElement("div"); c.className="col"; host.appendChild(c); cols.push(c);
+    for(j=0;j<5;j++){ var im = document.createElement("img"); im.alt=""; im.decoding="async"; im.src = "media/"+imgs[(i*2+j)%imgs.length]+"-wall.webp"; c.appendChild(im); } }
+  var speeds = [-0.10, 0.07, -0.05, 0.11], ticking = false;
+  function apply(){ ticking = false; if(reduce.matches){ cols.forEach(function(c){ c.style.transform=""; }); return; }
+    var r = host.getBoundingClientRect(), y = (innerHeight - r.top);
+    cols.forEach(function(c,k){ c.style.transform = "translate3d(0,"+(y*speeds[k]).toFixed(1)+"px,0)"; }); }
+  addEventListener("scroll", function(){ if(!ticking){ ticking = true; requestAnimationFrame(apply); } }, {passive:true});
+  reduce.addEventListener("change", apply); apply();
+})();
+
+/* ---------- relief viewer ---------- */
+var VS = "attribute vec3 aP;attribute vec3 aN;attribute vec2 aU;attribute float aK;uniform mat4 uM,uPV;varying vec3 vN;varying vec2 vU;varying float vK;"+
+  "void main(){vN=(uM*vec4(aN,0.)).xyz;vU=aU;vK=aK;gl_Position=uPV*uM*vec4(aP,1.);}";
+var FS = "precision mediump float;uniform sampler2D uT;uniform vec3 uE;varying vec3 vN;varying vec2 vU;varying float vK;"+
+  "void main(){vec3 n=normalize(vN);vec3 L=normalize(vec3(-.45,.55,.75));float d=max(dot(n,L),0.);"+
+  "vec3 tex=texture2D(uT,vU).rgb;vec3 c=vK>.5?tex*(.74+.36*d):uE*(.52+.48*d);gl_FragColor=vec4(c,1.);}";
+
+function mul(a,b){ var o=new Float32Array(16); for(var c=0;c<4;c++) for(var r=0;r<4;r++){ var s=0; for(var k=0;k<4;k++) s+=a[k*4+r]*b[c*4+k]; o[c*4+r]=s; } return o; }
+function persp(f,asp,n,fa){ var t=1/Math.tan(f/2), o=new Float32Array(16); o[0]=t/asp; o[5]=t; o[10]=(fa+n)/(n-fa); o[11]=-1; o[14]=2*fa*n/(n-fa); return o; }
+function trans(z){ var o=new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,z,1]); return o; }
+function rx(a){ var c=Math.cos(a), s=Math.sin(a); return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]); }
+function ry(a){ var c=Math.cos(a), s=Math.sin(a); return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]); }
+
+function loadImage(src){ return new Promise(function(res,rej){ var im=new Image(); im.decoding="async"; im.onload=function(){res(im);}; im.onerror=rej; im.src=src; }); }
+
+function heightField(img){
+  var w=img.naturalWidth, h=img.naturalHeight, c=document.createElement("canvas"); c.width=w; c.height=h;
+  var x=c.getContext("2d", {willReadFrequently:true}); x.drawImage(img,0,0);
+  var d=x.getImageData(0,0,w,h).data, H=new Float32Array(w*h), T=new Float32Array(w*h), i, pass, xx, yy;
+  for(i=0;i<w*h;i++) H[i]=d[i*4]/255;
+  for(pass=0;pass<3;pass++){ // box blur, radius 2: luminance is noisy, the relief should read as land
+    for(yy=0;yy<h;yy++) for(xx=0;xx<w;xx++){ var s=0,n=0; for(var k=-2;k<=2;k++){ var q=xx+k; if(q<0||q>=w) continue; s+=H[yy*w+q]; n++; } T[yy*w+xx]=s/n; }
+    for(yy=0;yy<h;yy++) for(xx=0;xx<w;xx++){ var s2=0,n2=0; for(var k2=-2;k2<=2;k2++){ var q2=yy+k2; if(q2<0||q2>=h) continue; s2+=T[q2*w+xx]; n2++; } H[yy*w+xx]=s2/n2; }
+  }
+  return function(u,v){ u=Math.min(1,Math.max(0,u))*(w-1); v=Math.min(1,Math.max(0,v))*(h-1);
+    var x0=Math.floor(u), y0=Math.floor(v), x1=Math.min(w-1,x0+1), y1=Math.min(h-1,y0+1), fx=u-x0, fy=v-y0;
+    return (H[y0*w+x0]*(1-fx)+H[y0*w+x1]*fx)*(1-fy)+(H[y1*w+x0]*(1-fx)+H[y1*w+x1]*fx)*fy; };
+}
+
+function buildMesh(shape, aspect, hf){
+  var P=[],N=[],U=[],K=[],I=[], a, b, depth, thick;
+  if(shape==="disc"){ a=b=1; depth=0.085; thick=0.13; } else { if(aspect>=1){ a=1; b=1/aspect; } else { a=aspect; b=1; } depth=0.05; thick=0.035; }
+  function vert(x,y,z,nx,ny,nz,u,v,k){ P.push(x,y,z); N.push(nx,ny,nz); U.push(u,v); K.push(k); return P.length/3-1; }
+  function uvOf(x,y){ return [(x+a)/(2*a), (b-y)/(2*b)]; }
+  function top(x,y){ var t=uvOf(x,y), e=1/300, z=hf(t[0],t[1])*depth;
+    var dzdx=depth*(hf(t[0]+e,t[1])-hf(t[0]-e,t[1]))/(2*e*2*a), dzdy=depth*(hf(t[0],t[1]-e)-hf(t[0],t[1]+e))/(2*e*2*b);
+    var l=Math.hypot(dzdx,dzdy,1); return vert(x,y,z,-dzdx/l,-dzdy/l,1/l,t[0],t[1],1); }
+  var rim=[]; // boundary as [x,y,nx,ny] with top z
+  if(shape==="disc"){
+    var R=70, S=160, ctr=top(0,0), ring=[], r, s;
+    for(r=1;r<=R;r++){ ring[r]=[]; for(s=0;s<S;s++){ var ang=s/S*Math.PI*2, rr=r/R; ring[r].push(top(Math.cos(ang)*rr, Math.sin(ang)*rr)); } }
+    for(s=0;s<S;s++) I.push(ctr, ring[1][s], ring[1][(s+1)%S]);
+    for(r=1;r<R;r++) for(s=0;s<S;s++){ var p0=ring[r][s], p1=ring[r][(s+1)%S], q0=ring[r+1][s], q1=ring[r+1][(s+1)%S]; I.push(p0,q0,q1, p0,q1,p1); }
+    for(s=0;s<=S;s++){ var an=s/S*Math.PI*2; rim.push([Math.cos(an),Math.sin(an),Math.cos(an),Math.sin(an)]); }
+  } else {
+    var nx = aspect>=1 ? 190 : Math.round(190*aspect), ny = aspect>=1 ? Math.round(190/aspect) : 190, gi, gj, g=[];
+    for(gj=0;gj<=ny;gj++){ g[gj]=[]; for(gi=0;gi<=nx;gi++) g[gj].push(top(-a+2*a*gi/nx, b-2*b*gj/ny)); }
+    for(gj=0;gj<ny;gj++) for(gi=0;gi<nx;gi++){ var v00=g[gj][gi], v10=g[gj][gi+1], v01=g[gj+1][gi], v11=g[gj+1][gi+1]; I.push(v00,v01,v11, v00,v11,v10); }
+    var sides=[[a,b,-a,b,0,1,nx],[-a,b,-a,-b,-1,0,ny],[-a,-b,a,-b,0,-1,nx],[a,-b,a,b,1,0,ny]];
+    sides.forEach(function(sd){ var seg=[]; for(var k=0;k<=sd[6];k++){ var f=k/sd[6]; seg.push([sd[0]+(sd[2]-sd[0])*f, sd[1]+(sd[3]-sd[1])*f, sd[4], sd[5]]); } rim.push(seg); });
+  }
+  function wall(list){ for(var k=0;k<list.length-1;k++){ var p=list[k], q=list[k+1];
+      var tp=uvOf(p[0],p[1]), tq=uvOf(q[0],q[1]);
+      var a0=vert(p[0],p[1],hf(tp[0],tp[1])*depth,p[2],p[3],0,0,0,0), a1=vert(p[0],p[1],-thick,p[2],p[3],0,0,0,0);
+      var b0=vert(q[0],q[1],hf(tq[0],tq[1])*depth,q[2],q[3],0,0,0,0), b1=vert(q[0],q[1],-thick,q[2],q[3],0,0,0,0);
+      I.push(a0,a1,b1, a0,b1,b0); } }
+  if(shape==="disc") wall(rim); else rim.forEach(wall);
+  // base
+  if(shape==="disc"){ var bc=vert(0,0,-thick,0,0,-1,0,0,0), bs=[]; for(var s3=0;s3<160;s3++){ var an3=s3/160*Math.PI*2; bs.push(vert(Math.cos(an3),Math.sin(an3),-thick,0,0,-1,0,0,0)); } for(s3=0;s3<160;s3++) I.push(bc, bs[(s3+1)%160], bs[s3]); }
+  else { var c0=vert(-a,b,-thick,0,0,-1,0,0,0), c1=vert(a,b,-thick,0,0,-1,0,0,0), c2=vert(a,-b,-thick,0,0,-1,0,0,0), c3=vert(-a,-b,-thick,0,0,-1,0,0,0); I.push(c0,c1,c2, c0,c2,c3); }
+  return {P:new Float32Array(P),N:new Float32Array(N),U:new Float32Array(U),K:new Float32Array(K),I:new Uint16Array(I),a:a,b:b,depth:depth,thick:thick};
+}
+
+function Viewer(el){
+  var shape=el.dataset.reliefShape||"disc", aspect=parseFloat(el.dataset.reliefAspect||"1"), alt=el.dataset.reliefAlt||"";
+  var canvas=document.createElement("canvas"); canvas.setAttribute("role","img"); canvas.setAttribute("aria-label", alt+" Use the arrow keys to turn it."); canvas.tabIndex=0;
+  var gl=canvas.getContext("webgl",{antialias:true, alpha:true, premultipliedAlpha:true});
+  function fallback(){ var im=document.createElement("img"); im.className="fallback"; im.src=el.dataset.reliefSurface; im.alt=alt; el.innerHTML=""; el.appendChild(im); }
+  if(!gl){ fallback(); return; }
+  el.appendChild(canvas);
+  function sh(t,s){ var o=gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o); return o; }
+  var pr=gl.createProgram(); gl.attachShader(pr,sh(gl.VERTEX_SHADER,VS)); gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,FS)); gl.linkProgram(pr);
+  if(!gl.getProgramParameter(pr,gl.LINK_STATUS)){ fallback(); return; }
+  var mesh=null, count=0, ready=false, visible=false, running=false, dragging=false;
+  var rest = shape==="disc" ? {pitch:-0.62} : {pitch:-0.22};
+  var phase = Math.random()*6.28, yaw = 0, pitch=rest.pitch, lastX=0, lastY=0, released=0, t0=performance.now();
+  var uM=gl.getUniformLocation(pr,"uM"), uPV=gl.getUniformLocation(pr,"uPV"), uE=gl.getUniformLocation(pr,"uE");
+  Promise.all([loadImage(el.dataset.reliefSurface), loadImage(el.dataset.reliefHeight)]).then(function(r){
+    var surf=r[0], hf=heightField(r[1]);
+    if(shape==="poster" && !el.dataset.reliefAspect) aspect=surf.naturalWidth/surf.naturalHeight;
+    mesh=buildMesh(shape,aspect,hf); gl.useProgram(pr);
+    function attr(name,data,n){ var b=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,b); gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW); var l=gl.getAttribLocation(pr,name); gl.enableVertexAttribArray(l); gl.vertexAttribPointer(l,n,gl.FLOAT,false,0,0); }
+    attr("aP",mesh.P,3); attr("aN",mesh.N,3); attr("aU",mesh.U,2); attr("aK",mesh.K,1);
+    var ib=gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,mesh.I,gl.STATIC_DRAW); count=mesh.I.length;
+    var tx=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,tx); gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,surf);
+    var pot=function(n){return (n&(n-1))===0;};
+    if(pot(surf.naturalWidth)&&pot(surf.naturalHeight)){ gl.generateMipmap(gl.TEXTURE_2D); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR); }
+    else gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.enable(gl.DEPTH_TEST); gl.enable(gl.CULL_FACE);
+    ready=true; draw(performance.now()); kick();
+  }).catch(fallback);
+  function draw(now){
+    if(!ready) return;
+    var dpr=Math.min(window.devicePixelRatio||1,2), w=Math.max(1,Math.round(canvas.clientWidth*dpr)), h=Math.max(1,Math.round(canvas.clientHeight*dpr));
+    if(canvas.width!==w||canvas.height!==h){ canvas.width=w; canvas.height=h; }
+    gl.viewport(0,0,w,h); gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+    var fov=0.52, asp=w/h, tf=Math.tan(fov/2), ext=1.08;
+    var dist=Math.max(ext*mesh.b/tf, ext*mesh.a/(tf*asp)) + 0.25;
+    var pv=mul(persp(fov,asp,0.1,50), trans(-dist));
+    var m=mul(rx(pitch), ry(yaw));
+    gl.uniformMatrix4fv(uPV,false,pv); gl.uniformMatrix4fv(uM,false,m);
+    gl.uniform3fv(uE, rgb(css(shape==="disc" ? "--edge-coin" : "--edge-poster")));
+    gl.drawElements(gl.TRIANGLES,count,gl.UNSIGNED_SHORT,0);
+  }
+  var last=performance.now();
+  function frame(now){
+    var dt=Math.min(0.05,(now-last)/1000); last=now;
+    if(!dragging){
+      var idle = now-released > 900;
+      var amp = shape==="disc" ? 0.5 : 0.32, target = reduce.matches ? 0 : amp*Math.sin((now-t0)/1000*0.45 + (shape==="disc" ? phase : 0));
+      if(idle){ yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw)); yaw += (target-yaw)*Math.min(1,dt*1.6); }
+      if(idle) pitch += (rest.pitch-pitch)*Math.min(1,dt*2.2);
+    }
+    draw(now);
+    var settled = reduce.matches && !dragging && Math.abs(rest.pitch-pitch)<0.002 && Math.abs(yaw)<0.002;
+    if(visible && !settled){ requestAnimationFrame(frame); } else running=false;
+  }
+  function kick(){ if(!running && visible && ready){ running=true; last=performance.now(); requestAnimationFrame(frame); } }
+  new IntersectionObserver(function(e){ visible=e[0].isIntersecting; kick(); },{rootMargin:"80px"}).observe(el);
+  canvas.addEventListener("pointerdown",function(e){ dragging=true; lastX=e.clientX; lastY=e.clientY; canvas.setPointerCapture(e.pointerId); kick(); });
+  canvas.addEventListener("pointermove",function(e){ if(!dragging) return; yaw+=(e.clientX-lastX)*0.011; pitch=Math.max(-1.25,Math.min(0.55,pitch+(e.clientY-lastY)*0.009)); lastX=e.clientX; lastY=e.clientY; });
+  function up(){ if(dragging){ dragging=false; released=performance.now(); kick(); } }
+  canvas.addEventListener("pointerup",up); canvas.addEventListener("pointercancel",up);
+  canvas.addEventListener("keydown",function(e){ var k={ArrowLeft:[-.18,0],ArrowRight:[.18,0],ArrowUp:[0,-.12],ArrowDown:[0,.12]}[e.key]; if(!k) return; e.preventDefault(); yaw+=k[0]; pitch=Math.max(-1.25,Math.min(0.55,pitch+k[1])); released=performance.now(); kick(); });
+  addEventListener("resize",function(){ draw(performance.now()); });
+  reduce.addEventListener("change",kick);
+}
+Array.prototype.forEach.call(document.querySelectorAll(".relief"), function(el){ Viewer(el); });
+})();
+</script>

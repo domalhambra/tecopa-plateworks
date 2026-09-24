@@ -38,7 +38,8 @@ Undated documents that still govern something. Each is path-checked.
 | `superpowers/specs/2026-08-16-target-customer-profile-design.md` | Editing any customer-facing sentence. Canon for the Home-Ground Collector: his four doubts, the seven register rules, the say-instead table. Gated by `tests/test_marketing_page.py`. |
 | `superpowers/specs/2026-09-08-documentation-layout-design.md` | Changing how this repo is documented. The tier, what moved where, and what was deferred to Dom. |
 | `superpowers/specs/2026-09-24-order-pipeline-design.md` | Working on customer orders: the order folder, plate per order, nestled framing, the paper table, photo placement, the print TIFF, the customer package. |
-| `superpowers/specs/2026-09-24-ghost-landing-page-design.md` | Working on the landing page: the move to Ghost, the `custom-tecopa` template, the relief viewer and exporter, the live honesty tests. Draft for Dom's review. |
+| `superpowers/specs/2026-09-24-ghost-landing-page-design.md` | Working on the landing page: the move to Ghost, the order page, the `custom-tecopa` template, the relief viewer and exporter, the live honesty tests. Draft for Dom's review. |
+| `superpowers/prototypes/2026-09-24-ghost-landing-preview.html` | Porting the landing page's shader, poster wall or relief viewer into the theme. The working prototype the spec approves. Its media files are not committed: the relief exporter makes them. |
 
 ## Plans
 
