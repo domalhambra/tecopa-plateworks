@@ -189,6 +189,38 @@ def test_run_build_streams_progress_and_returns(tmp_path, monkeypatch):
     assert (tmp_path / "regions" / "stub_region" / "region.json").exists()
 
 
+def test_run_build_defaults_cwd_to_repo_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    body = "open('seen_cwd.txt', 'w').write(os.getcwd())\n" + STUB_OK
+    rb.run_build(_params(), repo_root=str(tmp_path),
+                regions_root=str(tmp_path / "regions"),
+                prep_python=sys.executable,
+                prep_script=_write_stub_prep(tmp_path, body),
+                labels_script=_write_stub_labels(tmp_path, ok=True),
+                set_progress=lambda s: None)
+    assert (tmp_path / "seen_cwd.txt").read_text() == str(tmp_path)
+
+
+def test_run_build_honours_an_explicit_cwd(tmp_path, monkeypatch):
+    # an order build (app/orderprep.py) moves the prep subprocess's cwd off the
+    # repo root, so a library's hardcoded-relative write (pygeoogc's failed_ids
+    # log) can't land inside the public repo; script paths and out_root stay
+    # absolute regardless, so this must not change where anything is written
+    monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    body = "open('seen_cwd.txt', 'w').write(os.getcwd())\n" + STUB_OK
+    rb.run_build(_params(), repo_root=str(tmp_path),
+                regions_root=str(tmp_path / "regions"),
+                prep_python=sys.executable,
+                prep_script=_write_stub_prep(tmp_path, body),
+                labels_script=_write_stub_labels(tmp_path, ok=True),
+                set_progress=lambda s: None, cwd=str(elsewhere))
+    assert (elsewhere / "seen_cwd.txt").read_text() == str(elsewhere)
+    assert not (tmp_path / "seen_cwd.txt").exists()
+    assert (tmp_path / "regions" / "stub_region" / "region.json").exists()
+
+
 def test_run_build_failure_cleans_partial_and_raises(tmp_path, monkeypatch):
     monkeypatch.setenv("STUB_REGIONS_ROOT", str(tmp_path / "regions"))
     with pytest.raises(RuntimeError) as ei:

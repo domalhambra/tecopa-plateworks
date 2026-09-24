@@ -271,8 +271,21 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         # absolute: a relative TECOPA_ORDERS_DIR would resolve against the
         # subprocess's cwd (the repo root), not ours
         cache = os.path.abspath(cache_path())
-        env = dict(os.environ, HYRIVER_CACHE_NAME=cache)
-        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        cache_dir = os.path.dirname(cache)
+        os.makedirs(cache_dir, exist_ok=True)
+        # async_retriever's own request cache (py3dep) follows HYRIVER_CACHE_NAME
+        # above; pygeoogc's separate HTTP cache (pynhd/pygeohydro's NHD and NLCD
+        # REST calls) defaults under the repo's own cache/ too, and needs its own
+        # env var to move (.venv-prep/.../pygeoogc/utils.py, HYRIVER_CACHE_NAME_HTTP).
+        env = dict(os.environ, HYRIVER_CACHE_NAME=cache,
+                   HYRIVER_CACHE_NAME_HTTP=os.path.join(cache_dir, "http_cache.sqlite"))
+        # pygeoogc.core.ArcGISRESTful (pynhd's NHD queries) writes a retry log to a
+        # hardcoded "cache/failed_ids*.txt", relative to the process's cwd, with no
+        # env override at all (docs/changing-things.md, Run an order). _build below
+        # runs the prep subprocess with its cwd here instead of the repo root, so
+        # that write lands beside the shared cache too; pre-create the folder so a
+        # retry never meets a missing directory.
+        os.makedirs(os.path.join(cache_dir, "cache"), exist_ok=True)
         frame, grid, forced_by = _plan_grid(tools, planned, epsg, pw, env)
         if forced_by is not None:
             fill = track_fill(project_bbox(tracks, epsg), frame)
@@ -288,7 +301,8 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         if grid["us_share"] < 0.995:
             warnings.append(f"About {1 - grid['us_share']:.0%} of this plate has "
                             f"no US elevation data (ocean or across a border).")
-        plate, labels_note = _build(order, tools, frame, epsg, grid, env, log)
+        plate, labels_note = _build(order, tools, frame, epsg, grid, env, log,
+                                    cwd=cache_dir)
         if labels_note:
             warnings.append(labels_note)
         if _has_landcover(plate["root"], plate["id"]):
@@ -318,10 +332,13 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     return state
 
 
-def _build(order, tools, frame, epsg, grid, env, log):
+def _build(order, tools, frame, epsg, grid, env, log, cwd=None):
     """Build the order's plate under work/plate/<order id>/. region.json keeps the
     name as it was at build time, and a title change does not rebuild the plate, so
-    later steps must take the title from order.title, never from region.json."""
+    later steps must take the title from order.title, never from region.json.
+    `cwd`, when given, is the folder the prep subprocess runs in (see the comment
+    above the env dict in prepare()) -- everything it reads or writes is already
+    an absolute path, so this only affects a library's own relative writes."""
     rid = order.id
     params = {"id": rid, "name": order.title,
               "bbox": to_lonlat_bbox(plate_bounds(frame), epsg, pad_m=PLATE_PAD_M),
@@ -342,7 +359,7 @@ def _build(order, tools, frame, epsg, grid, env, log):
                            regions_root=order.plate_root,
                            prep_python=tools.prep_python, prep_script=tools.prep_script,
                            labels_script=tools.labels_script, set_progress=progress,
-                           env=env)
+                           env=env, cwd=cwd)
     plate = {"id": rid, "root": order.plate_root, "kind": "built",
              "grid_m": grid["grid_m"], "layer_m": grid["layer_m"],
              "upsample": round(grid["upsample"], 3), "us_share": grid["us_share"],

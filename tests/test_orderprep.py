@@ -39,6 +39,8 @@ if not os.environ.get("STUB_SKIP_LANDCOVER"):
 with open(os.path.join(a.out_root, "builds.log"), "a") as f:
     f.write(a.id + "\\n")
 print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
+print("cache_http=" + os.environ.get("HYRIVER_CACHE_NAME_HTTP", ""))
+print("prep_cwd=" + os.getcwd())
 """
 # Prints STUB_COVERAGE, less any layer a --layers list leaves out, and logs its
 # arguments when STUB_COVERAGE_LOG is set.
@@ -241,6 +243,23 @@ def test_relative_orders_root_gives_the_build_an_absolute_cache(tmp_path, tools,
     op.prepare(str(d), tools, log=lines.append)
     cache = [l for l in lines if l.startswith("cache=")]
     assert cache == ["cache=" + str(tmp_path / "orders" / "_cache" / "aiohttp_cache.sqlite")]
+
+
+def test_prep_env_and_cwd_move_the_hyriver_and_failed_ids_caches(tmp_path, tools):
+    # pygeoogc's own HTTP cache (NHD/NLCD REST calls) has an env override
+    # (HYRIVER_CACHE_NAME_HTTP); its ArcGISRESTful retry log does not, and is
+    # hardcoded relative to cwd ("cache/failed_ids*.txt") -- see
+    # docs/changing-things.md, Run an order.
+    d = _make_order(tmp_path)
+    lines = []
+    op.prepare(str(d), tools, log=lines.append)
+    cache_dir = str(tmp_path / "orders" / "_cache")
+    http = [l for l in lines if l.startswith("cache_http=")]
+    cwd = [l for l in lines if l.startswith("prep_cwd=")]
+    assert http == ["cache_http=" + os.path.join(cache_dir, "http_cache.sqlite")]
+    assert cwd == ["prep_cwd=" + cache_dir]
+    # pre-created so the library's relative write never hits a missing directory
+    assert os.path.isdir(os.path.join(cache_dir, "cache"))
 
 
 def test_prepare_refuses_an_orders_root_inside_the_repo(tmp_path, tmp_path_factory,
