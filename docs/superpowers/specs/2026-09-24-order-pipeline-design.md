@@ -119,8 +119,10 @@ width × 300).
 **Projection:** the UTM zone of the frame's centre. Frames wider than 600 km use
 CONUS Albers (EPSG:5070).
 
-**Build time:** unknown. The plan for sub-project 1 measures it on three real track
-sets. The target is under 10 minutes.
+**Build time:** measured on three real track sets (Plan Task 9, 2026-09-24), all well
+under the 10-minute target: a compact home ground in 104 s, a long north–south trip in
+286 s, and an east–west road trip in 234 s. See `docs/decisions.md`, 2026-09-24 (order
+plates).
 
 ## 4. The sheet and the paper table
 

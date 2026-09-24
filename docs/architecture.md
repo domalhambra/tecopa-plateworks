@@ -58,6 +58,9 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ marketing/
 | `app/timelapse.py` | The film: frames, pacing, APNG, the WebP and MP4 share twins. | `tests/test_timelapse.py`, `tests/test_mockups_api.py` |
 | `app/mockups.py` | In-app mockup renders behind `/api/mockups/submit`. | `tests/test_mockups_api.py` (through the endpoint) |
 | `app/regions.py` | `discover` over `regions/`, `Region.meta()`, `Region.readiness()`. Auto-detect from track points is `_best_region` in `app/main.py`. | `tests/test_regions.py`, `tests/test_readyz.py` |
+| `app/order.py` | One order folder: `order.toml`, the track files in `in/`, `work/state.json` and its `manual` key. `orders_root`, `cache_path`. | `tests/test_order.py` |
+| `app/orderplate.py` | Pure plate planning for an order: nestled framing, projection, `choose_grid` from 3DEP coverage, widening, curated reuse. | `tests/test_orderplate.py` |
+| `app/orderprep.py` | Prepare: reuse or build the order's plate through `.venv-prep` subprocesses, write state and the report. `scripts/order.py` is its command line. | `tests/test_orderprep.py` |
 | `app/regionbuild.py` | GPX-first planning (bbox, UTM zone, US coverage) and the `region_prep.py` subprocess behind `/api/regions/build`. | `tests/test_regionbuild.py`, `tests/test_region_endpoints.py` |
 | `app/plates.py` | `.venv/bin/python -m app.plates install` places a `.trailplate.zip`. `verify` checks a poster PNG against the installed plate. | `tests/test_plates.py` |
 | `app/store.py` | Session persistence: `MemoryStore` by default, `SqliteStore` with `TECOPA_STORE=sqlite`. | `tests/test_server_foundation.py` |

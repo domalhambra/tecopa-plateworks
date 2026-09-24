@@ -15,6 +15,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | The tests, a Mac-only failure | Run the tests |
 | A pull touching `regions/`, a 503 naming drift | Repair an orphaned DEM |
 | A plate, `region_prep.py`, labels, playa | `docs/superpowers/specs/2026-07-19-gpx-first-region-creation-design.md`, then Build a new plate |
+| An order, `scripts/order.py` | `docs/superpowers/specs/2026-09-24-order-pipeline-design.md`, then Run an order |
 | A relief technique | `docs/relief-passes.md` (its corrections blockquote governs), then Add a relief technique |
 | What the product is for, what stays out | `docs/scope.md` |
 | A spec field, `STYLE_BOUNDS`, `app/static/controls.js` | Add a spec knob or studio control |

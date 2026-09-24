@@ -2167,3 +2167,38 @@ These belong to later sub-projects or were left out on purpose:
 - Photos, the studio's order view and Approve (sub-project 3).
 - The TIFF, `PRINT.txt` and the soft proof (sub-project 4).
 - The customer package and the `docs/scope.md` amendment (sub-project 5).
+
+## As built (2026-09-24)
+
+Where execution diverged from the plan text above:
+
+- Decision 1 is revised: every order grid is fetched at its own cell size. There is
+  no separate "fetch fine, average onto coarse" source layer. That design was built
+  and removed (`docs/decisions.md`, 2026-09-24).
+- A need of 10-20 m or 30-60 m is served by the matching static 10 or 30 m tile, not
+  the dynamic service, because the static tiles fetch reliably and the dynamic WMS
+  does not.
+- 3DEP coverage is read relative to the 10 m US reference layer, not against an
+  absolute bar: a layer counts if it covers everything the reference covers, within
+  0.5%.
+- Coverage comes from the 3DEP index's REST endpoint, queried with outlines
+  simplified to about 50 m. The full outline of a large lidar footprint returns
+  HTTP 500.
+- A USGS outage is retried after 60 s, then 180 s, with the HyRiver request cache
+  switched off for the retry so a cached error response can't repeat.
+- Land cover bakes at the DEM's own grid (floored at 30 m), not a fixed 60 m fetch,
+  so a coarse corridor plate does not pull a huge separate land-cover mosaic.
+- A built plate missing only `landcover.tif` gets one automatic rebuild. Past that
+  it is kept as is, and Prepare warns instead of rebuilding it forever.
+- A curated plate is reused only when its DEM is real (ready, and not the synthetic
+  stand-in tests hydrate) and the frame plus its 10% plate margin fits inside it.
+- `order_epsg(bbox, aspect)` picks the projection from the width of the frame that
+  will actually be built, in a provisional UTM, not from a straight-line estimate of
+  the tracks.
+- A need below 10 m uses quarter-metre grid steps, not the plan's flat "10, 3, 1 m"
+  layer list.
+- `work/build.log` keeps every line of a build, so a failed build can be read after
+  the partial plate is swept.
+- A manual frame in `state.json` is current only when it matches
+  `state["frame_from_manual"]`, the frame the last plan actually started from
+  (planning can widen a manual frame for coarse data).

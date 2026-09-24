@@ -117,6 +117,47 @@ Tests: `tests/test_region_prep.py` (the pure planner, so it runs in `.venv` and 
 `tests/test_hydro.py` (skips without `geopandas`), `tests/test_regionbuild.py`,
 `tests/test_region_endpoints.py`.
 
+## Run an order
+
+Read `superpowers/specs/2026-09-24-order-pipeline-design.md` first. Sub-project 1 ships
+Prepare's plate step only.
+
+1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
+   inside the repo: it is public. Put the customer's GPX, KML or KMZ files in `in/`.
+2. Write `order.toml`: `title` (required), `size` such as `"12x18"` (short side at most
+   17 in, the PRO-1100's width), `orientation` (`portrait` or `landscape`).
+3. Run `.venv/bin/python scripts/order.py prepare "<folder>"`. It needs `.venv-prep`.
+   `TECOPA_PREP_PYTHON` overrides which prep interpreter it calls.
+4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the
+   print can show, up to the 2x limit. A widened frame means the data could not hold
+   the nestled look at this size, and the warning names a smaller print.
+
+Running Prepare again with the same tracks, size and orientation builds nothing. A
+changed input, or a new manual frame in `state.json`'s `manual` key, rebuilds the plate.
+`in/` is never written. The plate lives in `work/plate/<id>/`. The HyRiver request
+cache is `~/Tecopa Orders/_cache/`. It holds NHD, NLCD and dynamic-service requests,
+and it grows large: 880 MB after a handful of orders. Delete it any time. The static
+10, 30 and 60 m tiles are read by GDAL and are not cached.
+
+Traps already paid for:
+
+- The 3DEP dynamic service fills a missing fine layer with resampled coarse data and
+  says nothing. `scripts/dem_coverage.py` measures each layer first. Tecopa has 1 m
+  lidar and no 3 m data.
+- An order passes an explicit grid, fetched at that cell size. `DEM_RES_CHOICES` is
+  only the in-app auto planner's list, so adding 1 m there would make small in-app
+  plates enormous. Never fetch a finer layer and average it onto a coarser grid in
+  slices: that design was built and removed (see `docs/decisions.md`, 2026-09-24).
+- The index returns HTTP 500 for the full outline of a large lidar footprint.
+  `layer_coverage` asks for outlines simplified to about 50 m.
+- A plate counts as complete only once `landcover.tif` lands. A plate missing just
+  that file gets one automatic rebuild. A second failure keeps the plate and warns
+  instead of rebuilding it forever. `work/build.log` keeps every build line, to read
+  after a failed build sweeps the partial plate.
+
+Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
+(stub subprocesses, no network), `tests/test_dem_coverage.py`.
+
 ## Add a relief technique
 
 Read `relief-passes.md` first. Its body predates the forever-contract retirement. The
