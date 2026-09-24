@@ -10,7 +10,7 @@ in plateworks-os (the pilot that Dom kept on 2026-09-23), and its parent brainst
 **Sells:** the concierge service in `2026-09-24-order-pipeline-design.md`
 **Prices:** `docs/decisions.md`, 2026-09-24
 **Prototype:** `../prototypes/2026-09-24-ghost-landing-preview.html`. Dom approved its
-direction at version 3 of the preview artifact.
+direction at version 4 of the preview artifact.
 
 **Repos and systems touched:**
 
@@ -22,8 +22,7 @@ direction at version 3 of the preview artifact.
   code injection, and `redirects.yaml`.
 - Cloudflare zone `plateworks.org`: one redirect rule.
 - plateworks-hd: `scripts/verify-redirects.ts` and a Tecopa URL list.
-- plateworks-os: `properties.md`, and `color-standards.md` if the trail accent is kept
-  (§3).
+- plateworks-os: `properties.md`.
 
 ## Goal
 
@@ -59,6 +58,7 @@ Dom edits the words, images and prices in Ghost Admin, with no code.
 | 12 | A preview has the shape of a coin or of a poster. The hero shows a poster in relief. |
 | 13 | The theme work starts from the downloaded releases in `~/Downloads`: Moment 2.1.3 and Essence 1.1.0. |
 | 14 | The media host `media.plateworks.org` is designed but not built. See §7. |
+| 15 | The page accent is canon Amethyst, Tecopa's assigned accent in `color-standards.md`. The trail gold appears only inside the posters. |
 
 ## 1. Pages and addresses
 
@@ -158,11 +158,12 @@ Rules that carry over from the blog folder's `CLAUDE.md`:
 - Test every changed part before packaging.
 - `npm run verify` passes: the build, gscan and the biome lint.
 
-**The trail accent.** The prototype uses a gold taken from the poster trails
-(`#c99a45` light, `#d9b26a` dark) for the italic in the title, the step numbers and the
-contour index lines, and a darker `#7a5418` for the button. None of these is a canon
-color. The plan either maps them to existing canon tokens or adds a Tecopa trail token
-through `color-standards.md`. Dom decides which.
+**Colors.** The page accent is canon Amethyst, Tecopa's assigned accent
+(`color-standards.md`, §Tecopa Plateworks: Amethyst). The button uses `--amethyst-fill`
+and `--amethyst-on-fill`. The title italic, the step numbers, link underlines and the
+focus ring use `--amethyst-ink`. The contour lines and the coin edges use section-ramp
+stops, and the poster edge uses `--section-025`. The gold of the trails appears only
+inside the posters. No new color enters canon.
 
 Motion rules for every moving part:
 
@@ -286,7 +287,7 @@ Invariant 11 says every claim on the page has a test. Today the tests read
 
 1. **Exporter.** `export_relief.py` and its tests, then the asset farm call.
 2. **Theme.** A branch in `moment-theme`: the template, the viewer, the shader, and the
-   styles, ported from the prototype. Settle the trail accent (§3). Test every part on a
+   styles, ported from the prototype. Test every part on a
    draft page, then upload.
 3. **Content.** The images, the film, and the landing, order and privacy pages as
    drafts. Dom reads them.
@@ -320,6 +321,5 @@ Netlify site changed.
 - Ghost's size limits for a theme upload and for a video upload. Check before step 2
   and step 4.
 - Memory use of seven WebGL viewers on a phone.
-- The trail accent: canon tokens or a new Tecopa token (§3).
 - The order of the six coins, and which region's poster is the hero. The prototype uses
   Lassen County.

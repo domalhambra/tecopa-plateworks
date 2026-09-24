@@ -6,9 +6,10 @@
 :root{
   --ground:#eaeee9; --ground-2:#dee4dd; --ground-3:#d2d9d2; --paper:#f4f8f3;
   --ink:#1b1e26; --mute:#565b67; --rule:#c6cec4;
-  --contour:#bcc6b8; --contour-major:#a9926a;
-  --accent:#7a5418; --accent-ink:#f4f8f3; --trail:#c99a45;
-  --edge-poster:#efe8d8; --edge-coin:#a88b58;
+  /* canon: section ramp for neutrals, amethyst (Tecopa's accent) for the rest */
+  --contour:#B8C5C2; --contour-major:#9FA8B1;
+  --accent:#8466A4; --accent-ink:#FFFFFF; --trail:#715491;
+  --edge-poster:#F4F8F3; --edge-coin:#505561;
   --sans:"Fira Sans","Hermes Maia",system-ui,-apple-system,"Segoe UI",sans-serif;
   --serif:"Source Serif 4","Valkyrie",Georgia,"Times New Roman",serif;
   --measure:62ch;
@@ -18,18 +19,18 @@
     color-scheme:dark;
     --ground:#101319; --ground-2:#1b1e26; --ground-3:#262a33; --paper:#1b1e26;
     --ink:#eff3ee; --mute:#adb3bf; --rule:#2c323d;
-    --contour:#252c37; --contour-major:#6b5a3a;
-    --accent:#d9b26a; --accent-ink:#101319; --trail:#d9b26a;
-    --edge-poster:#d9d2c2; --edge-coin:#8c744a;
+    --contour:#262A33; --contour-major:#363A45;
+    --accent:#9C80BD; --accent-ink:#020306; --trail:#BC9FDE;
+    --edge-poster:#F4F8F3; --edge-coin:#6D727E;
   }
 }
 :root[data-theme="dark"]{
   color-scheme:dark;
   --ground:#101319; --ground-2:#1b1e26; --ground-3:#262a33; --paper:#1b1e26;
   --ink:#eff3ee; --mute:#adb3bf; --rule:#2c323d;
-  --contour:#252c37; --contour-major:#6b5a3a;
-  --accent:#d9b26a; --accent-ink:#101319; --trail:#d9b26a;
-  --edge-poster:#d9d2c2; --edge-coin:#8c744a;
+  --contour:#262A33; --contour-major:#363A45;
+  --accent:#9C80BD; --accent-ink:#020306; --trail:#BC9FDE;
+  --edge-poster:#F4F8F3; --edge-coin:#6D727E;
 }
 *{box-sizing:border-box}
 body{background:var(--ground);color:var(--ink);font:400 18px/1.6 var(--serif);margin:0}
@@ -161,7 +162,7 @@ footer nav{display:flex;gap:18px}
 </style>
 
 <div class="chrome"><div class="wrap"><span>Plateworks</span><nav><a href="#">Blog</a><a href="#">About</a><a href="#">Tecopa</a></nav></div></div>
-<p class="draft-note">Preview of the Ghost landing page. Draft copy for review. Stand-in fonts: Fira Sans for Hermes Maia, Source Serif for Valkyrie.</p>
+<p class="draft-note">Preview of the Ghost landing page. Draft copy for review. Stand-in fonts: Fira Sans for Hermes Maia, Source Serif for Valkyrie. Colors: canon Amethyst and the section ramp.</p>
 
 <main id="landing">
 <header class="hero">
