@@ -466,17 +466,24 @@ def fetch_hydro(bbox):
         print(f"  no flowlines: {ex}")
     return wb, fl
 
+def _fetch_nlcd(bbox, resolution_m, year):
+    """The NLCD request, retried through a brief outage like the DEM fetch
+    (acceptance: "Server disconnected"). Still a failure after the retries: the
+    caller decides whether land cover is optional."""
+    import geopandas as gpd
+    import pygeohydro
+    from shapely.geometry import box
+    geom = gpd.GeoSeries([box(*bbox)], crs=4326)
+    return with_retries(lambda: pygeohydro.nlcd_bygeom(
+        geom, resolution=resolution_m, years={"cover": [year]}), "NLCD")
+
+
 def bake_landcover(bbox, dst_crs, out_path, resolution_m=30, year=2021):
     """Fetch NLCD land cover for the bbox and write it as a compact uint8 GeoTIFF in
     the region CRS (~0.5 MB per county-scale region -- committed, unlike the DEM).
     Drives the optional biome tint: hue from land cover, lightness from elevation.
     NLCD is US-only, public domain (USGS/MRLC)."""
-    import geopandas as gpd
-    import pygeohydro
-    from shapely.geometry import box
-    geom = gpd.GeoSeries([box(*bbox)], crs=4326)
-    ds = pygeohydro.nlcd_bygeom(geom, resolution=resolution_m,
-                                years={"cover": [year]})
+    ds = _fetch_nlcd(bbox, resolution_m, year)
     da = (list(ds.values())[0] if isinstance(ds, dict) else ds)[f"cover_{year}"]
     da = da.rio.reproject(dst_crs, resolution=resolution_m,
                           resampling=Resampling.nearest, nodata=0)

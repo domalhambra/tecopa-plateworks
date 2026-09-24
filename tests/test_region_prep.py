@@ -282,3 +282,38 @@ def test_fetch_dem_raises_a_lasting_error_at_once(monkeypatch, waits, make_err):
     with pytest.raises(type(err)):
         rp.fetch_dem((0, 0, 1, 1), 10)
     assert len(calls) == 1 and waits == []
+
+
+# ---- NLCD goes through the same retry (acceptance: "Server disconnected") ----
+def _fake_nlcd(monkeypatch, outcomes):
+    gpd = types.ModuleType("geopandas")
+    gpd.GeoSeries = lambda geoms, crs: ("series", crs)
+    ph = types.ModuleType("pygeohydro")
+    calls = []
+
+    def nlcd_bygeom(geom, resolution, years):
+        calls.append((geom, resolution, years))
+        out = outcomes[len(calls) - 1]
+        if isinstance(out, BaseException):
+            raise out
+        return out
+    ph.nlcd_bygeom = nlcd_bygeom
+    monkeypatch.setitem(sys.modules, "geopandas", gpd)
+    monkeypatch.setitem(sys.modules, "pygeohydro", ph)
+    return calls
+
+
+def test_nlcd_fetch_retries_a_disconnect(monkeypatch, waits, capsys):
+    calls = _fake_nlcd(monkeypatch, [ConnectionResetError("Server disconnected"),
+                                     TimeoutError("timed out"), {"cover": "ds"}])
+    assert rp._fetch_nlcd((0, 0, 1, 1), 30, 2021) == {"cover": "ds"}
+    assert len(calls) == 3 and waits == [20, 60]
+    assert calls[0][1:] == (30, {"cover": [2021]})
+    assert "NLCD busy, retrying in 20 s" in capsys.readouterr().out
+
+
+def test_nlcd_fetch_raises_after_the_retries(monkeypatch, waits):
+    calls = _fake_nlcd(monkeypatch, [TimeoutError("timed out")] * 3)
+    with pytest.raises(TimeoutError):
+        rp._fetch_nlcd((0, 0, 1, 1), 30, 2021)
+    assert len(calls) == 3

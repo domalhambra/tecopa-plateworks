@@ -28,6 +28,9 @@ os.makedirs(out, exist_ok=True)
 json.dump({"id": a.id, "crs": "EPSG:" + a.epsg, "bbox": a.bbox,
            "native_resolution_m": float(a.resolution)},
           open(os.path.join(out, "region.json"), "w"))
+open(os.path.join(out, "dem.tif"), "wb").close()
+if not os.environ.get("STUB_SKIP_LANDCOVER"):
+    open(os.path.join(out, "landcover.tif"), "wb").close()
 with open(os.path.join(a.out_root, "builds.log"), "a") as f:
     f.write(a.id + "\\n")
 print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
@@ -404,3 +407,34 @@ def test_coverage_asks_only_for_coarse_layers_on_a_large_frame(tmp_path, tools,
     args = [json.loads(l) for l in asked.read_text().splitlines()]
     assert len(args) == 1 and args[0][4:] == ["--layers", "10,30,60"]
     assert state["plate"]["grid_m"] == 25.0 and state["plate"]["layer_m"] == 10
+
+
+LANDCOVER_WARNING = ("Land cover did not download, so the biome look is not available "
+                     "on this plate. Run Prepare again to retry.")
+
+
+def test_a_plate_without_land_cover_warns_and_is_rebuilt(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_SKIP_LANDCOVER", "1")
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert LANDCOVER_WARNING in state["warnings"]
+    assert LANDCOVER_WARNING in (d / "work" / "report.txt").read_text()
+    monkeypatch.delenv("STUB_SKIP_LANDCOVER")
+    lines = []
+    state = op.prepare(str(d), tools, log=lines.append)
+    assert not any("Plate is current" in l for l in lines)
+    assert len(_builds(d)) == 2
+    assert LANDCOVER_WARNING not in state["warnings"]
+    lines = []
+    op.prepare(str(d), tools, log=lines.append)
+    assert any("Plate is current" in l for l in lines)
+    assert len(_builds(d)) == 2
+
+
+@pytest.mark.parametrize("lost", ["dem.tif", "landcover.tif", "region.json"])
+def test_a_built_plate_missing_a_file_is_rebuilt(tmp_path, tools, lost):
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    (d / "work" / "plate" / state["plate"]["id"] / lost).unlink()
+    op.prepare(str(d), tools, log=lambda s: None)
+    assert len(_builds(d)) == 2

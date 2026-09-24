@@ -34,6 +34,12 @@ MAX_PLAN_PASSES = 5
 # corridor-sized box times out (acceptance, Reno to Salt Lake).
 COARSE_NEED_M = 20.0
 COARSE_LAYERS_M = (10, 30, 60)
+# A built plate is complete only with all three. Land cover is optional to
+# region_prep (the in-app build carries on without it), but a customer plate must
+# not quietly lose the biome look. Hydro with no lakes or rivers is real (desert).
+BUILT_PLATE_FILES = ("region.json", "dem.tif", "landcover.tif")
+LANDCOVER_WARNING = ("Land cover did not download, so the biome look is not "
+                     "available on this plate. Run Prepare again to retry.")
 PREP_VENV_HELP = "docs/changing-things.md › Set up a machine"
 
 
@@ -120,7 +126,14 @@ def _plate_present(plate) -> bool:
         return False
     if plate.get("kind") == "curated":
         return _real_terrain(plate["root"], plate["id"]) is not None
-    return os.path.isfile(os.path.join(plate["root"], plate["id"], "region.json"))
+    return _built_complete(plate["root"], plate["id"])
+
+
+def _built_complete(root, rid) -> bool:
+    """A built plate is current only with every BUILT_PLATE_FILES file, so one that
+    lost its land cover is rebuilt by the next Prepare."""
+    return all(os.path.isfile(os.path.join(root, rid, name))
+               for name in BUILT_PLATE_FILES)
 
 
 def _plan_grid(tools, frame, epsg, print_w_in, env):
@@ -215,6 +228,8 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         plate, labels_note = _build(order, tools, frame, epsg, grid, env, log)
         if labels_note:
             warnings.append(labels_note)
+        if not os.path.isfile(os.path.join(plate["root"], plate["id"], "landcover.tif")):
+            warnings.append(LANDCOVER_WARNING)
 
     track_m = project_bbox(tracks, epsg)
     state = write_state(order, {
