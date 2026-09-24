@@ -114,3 +114,37 @@ def test_a_5xx_then_success_recovers(monkeypatch):
     urlopen, _ = _fake_urlopen(bodies)
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     assert rp.layer_coverage((0.0, 0.0, 1.0, 1.0))[1] == 0.0
+
+
+def _cw_square(x0, y0, x1, y1):
+    return [[x0, y0], [x0, y1], [x1, y1], [x1, y0], [x0, y0]]
+
+
+def _ccw_square(x0, y0, x1, y1):
+    return list(reversed(_cw_square(x0, y0, x1, y1)))
+
+
+def test_esri_island_inside_a_hole_is_kept():
+    rings = [_cw_square(0, 0, 10, 10),          # outer, 100
+             _ccw_square(2, 2, 8, 8),           # hole, 36
+             _cw_square(4, 4, 6, 6)]            # island in the hole, 4
+    assert rp.esri_rings_to_geom(rings).area == pytest.approx(100 - 36 + 4)
+
+
+def test_esri_hole_only_cuts_its_own_outer():
+    # a second outer overlapping the first's hole is not cut by that hole
+    rings = [_cw_square(0, 0, 10, 10), _ccw_square(2, 2, 8, 8),
+             _cw_square(20, 0, 30, 10)]
+    assert rp.esri_rings_to_geom(rings).area == pytest.approx(64 + 100)
+
+
+def test_esri_all_counter_clockwise_rings_are_outers():
+    # some servers flip orientation: with no clockwise ring, every ring is an outer
+    rings = [_ccw_square(0, 0, 4, 4), _ccw_square(10, 0, 12, 2)]
+    assert rp.esri_rings_to_geom(rings).area == pytest.approx(16 + 4)
+
+
+def test_esri_self_intersecting_outer_is_repaired():
+    bowtie = [[0, 0], [0, 2], [2, 0], [2, 2], [0, 0]]   # two triangles, 1 each
+    g = rp.esri_rings_to_geom([bowtie])
+    assert g.is_valid and g.area == pytest.approx(2.0)

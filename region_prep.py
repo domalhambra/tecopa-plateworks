@@ -270,24 +270,57 @@ INDEX_SIMPLIFY_DEG = 0.0005
 INDEX_TIMEOUT_S = 60
 
 
+def _signed_area(ring):
+    """Shoelace area of a ring as given: negative when clockwise. Defined for any
+    ring, even a self-intersecting one (the net of its lobes), unlike an
+    orientation test on the repaired shape: make_valid re-orients what it rebuilds."""
+    xs = np.asarray([p[0] for p in ring], dtype=float)
+    ys = np.asarray([p[1] for p in ring], dtype=float)
+    return 0.5 * float(np.sum(xs[:-1] * ys[1:] - xs[1:] * ys[:-1]))
+
+
+def _polygonal(geom):
+    """The polygonal part of a make_valid result (which can carry stray lines)."""
+    from shapely.geometry import MultiPolygon
+    if geom.geom_type in ("Polygon", "MultiPolygon"):
+        return geom
+    parts = [g for g in getattr(geom, "geoms", [])
+             if g.geom_type in ("Polygon", "MultiPolygon")]
+    return MultiPolygon([p for g in parts for p in getattr(g, "geoms", [g])])
+
+
 def esri_rings_to_geom(rings):
     """One Esri polygon (its `rings`, EPSG:4326) as a shapely geometry. Esri marks an
     outer ring clockwise and a hole counter-clockwise, and one polygon may carry
-    several of each: the result is union(outers) minus union(holes). A generalised
-    outline can self-intersect, so each ring is repaired first."""
-    from shapely.geometry import LinearRing, Polygon
+    several of each, nested: an island can sit inside a lake inside land. Each hole
+    belongs to the smallest outer that holds most of it; each outer minus its own
+    holes is one polygon, and the result is their union. Orientation is read from
+    the ring as given (_signed_area), then the ring is repaired, since a generalised
+    outline can self-intersect. A polygon with no clockwise ring at all is read as
+    all outers: some servers flip orientation."""
+    from shapely.geometry import Polygon
     from shapely.ops import unary_union
     from shapely.validation import make_valid
-    outers, holes = [], []
+    parsed = []
     for ring in rings:
         if len(ring) < 4:
             continue                      # generalised away to a sliver
-        poly = make_valid(Polygon(ring))
-        (holes if LinearRing(ring).is_ccw else outers).append(poly)
-    geom = unary_union(outers)
-    if holes:
-        geom = geom.difference(unary_union(holes))
-    return geom
+        poly = _polygonal(make_valid(Polygon(ring)))
+        if not poly.is_empty:
+            parsed.append((_signed_area(ring) > 0, poly))   # (is_hole, shape)
+    if not any(not is_hole for is_hole, _ in parsed):
+        parsed = [(False, poly) for _, poly in parsed]
+    outers = sorted((p for is_hole, p in parsed if not is_hole), key=lambda p: p.area)
+    own = [[] for _ in outers]
+    for is_hole, hole in parsed:
+        if not is_hole:
+            continue
+        for i, outer in enumerate(outers):         # smallest first
+            if outer.intersection(hole).area >= 0.5 * hole.area:
+                own[i].append(hole)
+                break                               # a hole in no outer cuts nothing
+    return unary_union([outer.difference(unary_union(h)) if h else outer
+                        for outer, h in zip(outers, own)])
 
 
 def _index_features(layer_m, bbox_4326):
