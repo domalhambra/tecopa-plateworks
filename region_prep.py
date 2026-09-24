@@ -237,6 +237,51 @@ def fetch_dem(bbox, resolution_m=10):
     import py3dep
     return py3dep.get_dem(bbox, resolution=resolution_m)  # xarray DataArray, EPSG:4326
 
+# The 3DEP layers an order can draw from, in metres. 3 m (1/9 arc-second) is being
+# retired and is missing in many places (Tecopa has none), so coverage is measured,
+# never assumed.
+COVERAGE_LAYERS_M = (1, 3, 10, 30, 60)
+
+
+def coverage_fraction(footprints, bbox_4326):
+    """Share of the bbox (EPSG:4326) inside the union of the 3DEP source footprints
+    (shapely geometries, EPSG:4326). Measured in degrees: only the ratio matters, and
+    on a plate-sized box the distortion is well under 1%."""
+    from shapely.geometry import box
+    from shapely.ops import unary_union
+    target = box(*bbox_4326)
+    geoms = list(footprints)
+    if not geoms:
+        return 0.0
+    return float(unary_union(geoms).intersection(target).area / target.area)
+
+
+def layer_coverage(bbox_4326):
+    """{layer metres: covered share} for every COVERAGE_LAYERS_M layer. Queries the
+    3DEP source index over the network; a layer with no footprints is 0.0. Network
+    errors raise: a failed query must never read as 'no data here'.
+
+    query_3dep_sources itself swallows a zero-match layer (ZeroMatchedError,
+    suppressed internally) rather than raising; when every requested layer comes
+    back empty this way, its own pd.concat has nothing to concatenate and raises
+    ValueError("All objects passed were None") -- confirmed against a bbox with no
+    3DEP coverage at all (mid-Pacific). That specific, well-known failure means
+    "no layer has any footprint here", not a transport failure, so it is the one
+    exception read as all-zero; anything else (HTTP/network) still raises."""
+    import py3dep
+    names = {f"{r}m": r for r in COVERAGE_LAYERS_M}
+    try:
+        gdf = py3dep.query_3dep_sources(tuple(bbox_4326), res=list(names))
+    except ValueError as ex:
+        if "All objects passed were None" in str(ex):
+            return {r: 0.0 for r in COVERAGE_LAYERS_M}
+        raise
+    out = {}
+    for name, r in names.items():
+        geoms = [] if gdf is None else list(gdf.loc[gdf["dem_res"] == name, "geometry"])
+        out[r] = coverage_fraction(geoms, bbox_4326)
+    return out
+
 def fetch_hydro(bbox):
     """Fetch NHD waterbodies + network flowlines for the bbox (EPSG:4326).
     Returns (waterbodies_gdf_or_None, flowlines_gdf_or_None); tolerant of gaps."""
