@@ -111,6 +111,10 @@ width × 300).
   resampled coarser data and does not say so. A layer is used only if it covers
   everything the best layer covers, within 0.5%, so ocean and ground across a border
   count against no layer. A plate that is mostly outside US data is refused.
+- The dynamic service can also return an empty tile and say nothing (acceptance,
+  2026-09-24). `region_prep.py` fills a dynamic grid's holes from the static 10 or
+  30 m tiles and records the fill in `sources.json`. After the build, Prepare measures
+  the plate's and the frame's no-data share against the 3DEP index (see Errors).
 - If no layer is fine enough, allow upsampling up to 2×.
 - Past 2×, widen the frame until 2× holds. The customer's size wins over the
   nestled fill. Warn when the fill drops below 40%, and name the smaller sheet that
@@ -259,6 +263,7 @@ the zip in Finder. Dom makes the link with Share → Copy Link. No script makes 
 | No 3DEP layer covers the plate | A finer layer that does not cover all the US ground is skipped. A plate mostly outside US data stops Prepare. |
 | Past 2× upsampling at the ordered size | Widen the frame. Warn below 40% fill. |
 | Plate build fails | Stop. Keep the build log in `work/`. Remove the partial plate. |
+| The dynamic service leaves holes | `region_prep.py` fills them from the static 10 or 30 m tiles. The report names the fill's layer and share. A plate still more than 1 point past the index's own ocean and border share gets a warning. No-data in the frame past the frame's own share leads the warnings as `HOLES IN THE PRINT`. |
 | Photo has no spot | The photo goes to the unplaced tray. Finish refuses until it is placed or dropped. |
 | Photo too small | Warning in the report and in the studio |
 | State changed after approval | Finish refuses and asks for a new approval |

@@ -68,7 +68,8 @@ pull pairs a new `region.json` with the old local DEM. This recurs.
 2. In `.venv-prep`, call `region_prep.build_dem_cog` with a plan from
    `region_prep.plan_build`. Do not call `region_prep.main`: it refetches NHD and NLCD
    too, and upstream drift turns a restoration into a new plate version.
-3. `build_dem_cog` does not write `sources.json`. Run `scripts/verify_regions.py` again
+3. `build_dem_cog` returns the path and a hole-fill record (`None` on the static
+   grids every curated plate uses). It does not write `sources.json`. Run `scripts/verify_regions.py` again
    and read the sha256 verdict. What it finds is a decision, not a cleanup.
 4. Match: the exact plate is back. Done.
 5. Differ: USGS re-tiled and you built a new plate version. Leave the sidecar alone.
@@ -133,7 +134,12 @@ Prepare's plate step only.
 4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the
    print can show, up to the 2x limit. A widened frame means the data could not hold
    the nestled look at this size; the warning names it, but naming the exact smaller
-   sheet waits for the paper table (sub-project 2).
+   sheet waits for the paper table (sub-project 2). "No elevation" is the measured
+   share of the plate and of the frame with no data. "Hole fill" means the dynamic
+   service left holes and region_prep filled them from the static tiles. A warning
+   that the plate has no elevation past what the 3DEP index expects means holes the
+   fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
+   frame: do not print; delete the plate under work/plate/ and run Prepare again.
 
 Running Prepare again with the same tracks, size and orientation builds nothing. A
 changed input, or a new manual frame in `state.json`'s `manual` key, rebuilds the plate.
@@ -151,6 +157,17 @@ Traps already paid for:
   only the in-app auto planner's list, so adding 1 m there would make small in-app
   plates enormous. Never fetch a finer layer and average it onto a coarser grid in
   slices: that design was built and removed (see `docs/decisions.md`, 2026-09-24).
+  The hole fill is not that design. It reads the static tiles onto NaN cells only,
+  block by block, on the one shared grid.
+- The dynamic service can also answer a sub-request with an empty tile and say
+  nothing: the east-west acceptance plate came back 12.1% NaN where the index expects
+  5.6%. `us_share` comes from index footprints, not from the data, so it cannot see
+  this. `region_prep.fill_dem_holes` fills a dynamic grid's NaN cells from the static
+  10 or 30 m tiles before the overviews are built, and records the fill in
+  `sources.json` as a source with role `hole fill`. It reads the tiles' overviews, not
+  every full-resolution cell: a full-resolution read was 7x slower. A fill that still
+  fails after the retries keeps the plate and says so. Prepare's `check_holes` then
+  measures what is left.
 - The index returns HTTP 500 for the full outline of a large lidar footprint.
   `layer_coverage` asks for outlines simplified to about 50 m.
 - A plate counts as complete only once `landcover.tif` lands. A plate missing just
