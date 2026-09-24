@@ -105,3 +105,49 @@ def test_sources_manifest_names_the_dynamic_service(tmp_path):
     assert m["sources"][0]["dataset"] == "USGS 3DEP dynamic service, 25 m"
     assert "--resolution 25.0" in m["rebuild"]
     assert "--source-resolution" not in m["rebuild"]
+
+
+# ---- slice windows: together they must cover the whole grid ----
+
+@pytest.mark.parametrize("bbox,crs,res", [
+    (LASSEN, "EPSG:32610", None),          # auto, one slice
+    (CORRIDOR, "EPSG:32611", None),        # auto, 5 slices at 30 m
+    (LASSEN, "EPSG:32610", 4.0),           # a 4-slice fine (dynamic) grid
+    (LASSEN, "EPSG:32610", 2.0),           # 16 slices
+    (CORRIDOR, "EPSG:32611", 10),          # the corridor at 10 m, 40 slices
+])
+def test_slice_windows_cover_every_column_and_row(bbox, crs, res):
+    plan = rp.plan_build(bbox, crs, res)
+    w_px, h_px = plan["grid"]
+    T = plan["transform"]
+    cols = np.zeros(w_px, bool)
+    rows = np.zeros(h_px, bool)
+    extents = rp._slice_extents(bbox, crs, plan)
+    assert len(extents) == plan["n_slices"]
+    for _, ext in extents:
+        win = rp._slice_window(*ext, T, w_px, h_px)
+        c0, r0 = int(win.col_off), int(win.row_off)
+        c1, r1 = c0 + int(win.width), r0 + int(win.height)
+        assert 0 <= c0 < c1 <= w_px and 0 <= r0 < r1 <= h_px
+        cols[c0:c1] = True
+        rows[r0:r1] = True
+    assert cols.all(), f"columns never written: {np.flatnonzero(~cols)[:10]}"
+    assert rows.all(), f"rows never written: {np.flatnonzero(~rows)[:10]}"
+
+
+def test_slice_window_reaches_the_east_edge_from_a_fractional_start():
+    # grid 3000 x 100 at 10 m; a slice starting 1234.7 cells in and running to the
+    # east edge. Rounding offset and length apart ended it one column short.
+    from rasterio.transform import from_origin
+    T = from_origin(0.0, 1000.0, 10.0, 10.0)
+    win = rp._slice_window(12347.0, 0.0, 30000.0, 1000.0, T, 3000, 100)
+    assert int(win.col_off) == 1234
+    assert int(win.col_off) + int(win.width) == 3000
+    assert (int(win.row_off), int(win.height)) == (0, 100)
+
+
+def test_slice_window_adds_no_column_for_float_noise_on_an_exact_edge():
+    from rasterio.transform import from_origin
+    T = from_origin(0.0, 1000.0, 10.0, 10.0)
+    win = rp._slice_window(12340.0 - 1e-9, 0.0, 20000.0 + 1e-9, 1000.0, T, 3000, 100)
+    assert (int(win.col_off), int(win.width)) == (1234, 766)

@@ -390,6 +390,49 @@ def bake_landcover(bbox, dst_crs, out_path, resolution_m=30, year=2021):
         f.write(arr, 1)
     return out_path
 
+def _slice_extents(bbox_4326, dst_crs, plan):
+    """Each longitude slice build_dem_cog fetches, as (fetch bbox in lon/lat with the
+    slice_overlap_deg buffer, projected extent clipped to the grid as
+    (wminx, wminy, wmaxx, wmaxy)). Pure: no fetch."""
+    from pyproj import Transformer
+    w_px, h_px = plan["grid"]
+    T = plan["transform"]
+    n = plan["n_slices"]
+    overlap = slice_overlap_deg(plan["resolution_m"])
+    fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
+    edges = np.linspace(bbox_4326[0], bbox_4326[2], n + 1)
+    minx, maxy = T.c, T.f
+    out = []
+    for i in range(n):
+        sb = (float(edges[i]) - overlap, bbox_4326[1],
+              float(edges[i + 1]) + overlap, bbox_4326[3])
+        sxs, sys_ = fwd.transform(*_densified_edge(sb, n=21))
+        out.append((sb, (max(minx, float(np.min(sxs))),
+                         max(maxy - h_px * T.a, float(np.min(sys_))),
+                         min(minx + w_px * T.a, float(np.max(sxs))),
+                         min(maxy, float(np.max(sys_))))))
+    return out
+
+
+# Float noise on an extent that sits exactly on a cell edge must not add a column.
+_WINDOW_EPS_PX = 1e-6
+
+
+def _slice_window(wminx, wminy, wmaxx, wmaxy, T, w_px, h_px):
+    """The integer window of the grid (transform T, w_px x h_px) that a slice's
+    projected extent covers: start floored, end ceiled, clipped to the grid.
+    Rounding the offset and the length apart (rasterio's round_offsets then
+    round_lengths) could end a window one column short, and the last slice then
+    left the grid's east column NaN."""
+    from rasterio.windows import Window, from_bounds
+    f = from_bounds(wminx, wminy, wmaxx, wmaxy, transform=T)
+    c0 = max(0, math.floor(f.col_off + _WINDOW_EPS_PX))
+    c1 = min(w_px, math.ceil(f.col_off + f.width - _WINDOW_EPS_PX))
+    r0 = max(0, math.floor(f.row_off + _WINDOW_EPS_PX))
+    r1 = min(h_px, math.ceil(f.row_off + f.height - _WINDOW_EPS_PX))
+    return Window(c0, r0, c1 - c0, r1 - r0)
+
+
 def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
     """Fetch 3DEP and write the region COG onto ONE shared grid, in longitude slices
     (plan['n_slices']) so peak memory stays bounded no matter the bbox size: each
@@ -399,29 +442,21 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
     entire region simultaneously and OOM'd at corridor scale. py3dep returns CONUS
     Albers (EPSG:5070); each slice is warped straight onto the region grid, and the
     GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming."""
-    from pyproj import Transformer
     from rasterio.warp import reproject
-    from rasterio.windows import from_bounds as win_from_bounds
     w_px, h_px = plan["grid"]
     T = plan["transform"]
     res = plan["resolution_m"]
     n = plan["n_slices"]
-    overlap = slice_overlap_deg(res)
-    fwd = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
     profile = dict(driver="GTiff", dtype="float32", count=1,
                    height=h_px, width=w_px, crs=dst_crs, transform=T,
                    nodata=np.nan, tiled=True, blockxsize=512, blockysize=512,
                    compress="deflate", BIGTIFF="IF_SAFER")
-    edges = np.linspace(bbox_4326[0], bbox_4326[2], n + 1)
-    minx, maxy = T.c, T.f
     # create the nodata-filled target, then reopen r+ ("w" datasets are write-only
     # in rasterio, and the slice-overlap merge must read back what's written)
     with rasterio.open(out_path, "w", **profile):
         pass
     with rasterio.open(out_path, "r+") as dst:
-        for i in range(n):
-            sb = (float(edges[i]) - overlap, bbox_4326[1],
-                  float(edges[i + 1]) + overlap, bbox_4326[3])
+        for i, (sb, extent) in enumerate(_slice_extents(bbox_4326, dst_crs, plan)):
             if n > 1:
                 print(f"  slice {i + 1}/{n}: fetching 3DEP "
                       f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
@@ -430,13 +465,7 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan):
             if src.ndim == 3:
                 src = src[0]
             # destination window on the shared grid = this slice's projected extent
-            sxs, sys_ = fwd.transform(*_densified_edge(sb, n=21))
-            wminx = max(minx, float(np.min(sxs)))
-            wmaxx = min(minx + w_px * res, float(np.max(sxs)))
-            wminy = max(maxy - h_px * res, float(np.min(sys_)))
-            wmaxy = min(maxy, float(np.max(sys_)))
-            win = win_from_bounds(wminx, wminy, wmaxx, wmaxy,
-                                  transform=T).round_offsets().round_lengths()
+            win = _slice_window(*extent, T, w_px, h_px)
             dst_arr = np.full((int(win.height), int(win.width)), np.nan, "float32")
             reproject(source=src, destination=dst_arr,
                       src_transform=da.rio.transform(), src_crs=da.rio.crs,
