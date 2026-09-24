@@ -322,7 +322,7 @@ INDEX_QUERY_URL = ("https://index.nationalmap.gov/arcgis/rest/services/"
                    "3DEPElevationIndex/MapServer/{layer}/query")
 INDEX_LAYERS = {1: 18, 3: 19, 5: 20, 10: 21, 30: 22, 60: 23}   # py3dep's own table
 INDEX_SIMPLIFY_DEG = 0.0005
-INDEX_TIMEOUT_S = 30
+INDEX_TIMEOUT_S = 60        # 30 s timed out on a corridor-sized box
 
 
 def _signed_area(ring):
@@ -430,12 +430,18 @@ def _index_features(layer_m, bbox_4326):
     raise AssertionError("unreachable")
 
 
-def layer_coverage(bbox_4326):
-    """{layer metres: covered share} for every COVERAGE_LAYERS_M layer, from the 3DEP
-    index over the network. A layer with no footprints is 0.0; a failed query raises
-    RuntimeError, never 0.0."""
+def layer_coverage(bbox_4326, layers=COVERAGE_LAYERS_M):
+    """{layer metres: covered share} for each of `layers` (a subset of
+    COVERAGE_LAYERS_M), from the 3DEP index over the network. A layer with no
+    footprints is 0.0; a failed query raises RuntimeError, never 0.0. Asking for
+    fewer layers matters on a big box: the 1 m footprint query over a corridor
+    times out, and a print that coarse cannot use lidar anyway."""
+    unknown = [r for r in layers if r not in COVERAGE_LAYERS_M]
+    if unknown:
+        raise ValueError(f"not a 3DEP coverage layer: {unknown}; "
+                         f"choose from {list(COVERAGE_LAYERS_M)}")
     out = {}
-    for r in COVERAGE_LAYERS_M:
+    for r in layers:
         geoms = []
         for f in _index_features(r, bbox_4326):
             rings = (f.get("geometry") or {}).get("rings")

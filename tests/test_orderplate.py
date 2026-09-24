@@ -200,3 +200,12 @@ def test_curated_fit_requires_the_margin_not_just_the_frame():
     frame = op.nestled_frame(op.project_bbox(tracks, 32611), PORTRAIT)
     bounds = (frame[0] - 100.0, frame[1] - 100.0, frame[2] + 100.0, frame[3] + 100.0)
     assert op.curated_fit(tracks, PORTRAIT, 12, _curated(bounds=bounds)) is None
+
+
+def test_choose_grid_reads_absent_layers_as_uncovered():
+    # Prepare asks only for 10, 30 and 60 m once the need is 20 m or more
+    g = op.choose_grid(25.0, {"10": 1.0, "30": 1.0, "60": 1.0})
+    assert (g["grid_m"], g["layer_m"], g["widen"]) == (25.0, 10, False)
+    g = op.choose_grid(25.0, {"30": 1.0, "60": 1.0})
+    assert (g["grid_m"], g["layer_m"]) == (30.0, 30)
+    assert g["upsample"] == pytest.approx(1.2)

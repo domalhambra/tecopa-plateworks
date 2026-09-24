@@ -198,7 +198,8 @@ def test_a_4xx_is_not_retried(monkeypatch):
     assert len(calls) == 1
 
 
-def test_each_request_times_out_at_30_s(monkeypatch):
+def test_each_request_times_out_at_60_s(monkeypatch):
+    # 30 s was too short for a corridor-sized box (acceptance, Reno to Salt Lake)
     seen = []
 
     def urlopen(url, context=None, timeout=None):
@@ -206,7 +207,51 @@ def test_each_request_times_out_at_30_s(monkeypatch):
         return io.BytesIO(b'{"features": []}')
     monkeypatch.setattr(urllib.request, "urlopen", urlopen)
     rp.layer_coverage((0.0, 0.0, 1.0, 1.0))
-    assert seen and set(seen) == {30}
+    assert seen and set(seen) == {60}
+
+
+def test_only_the_asked_layers_are_queried(monkeypatch):
+    urlopen, calls = _fake_urlopen([{"features": []}] * 3)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    cov = rp.layer_coverage((0.0, 0.0, 1.0, 1.0), layers=(10, 30, 60))
+    assert cov == {10: 0.0, 30: 0.0, 60: 0.0}
+    assert [u.split("/MapServer/")[1].split("/")[0] for u in calls] == ["21", "22", "23"]
+
+
+def test_an_unknown_layer_is_refused():
+    with pytest.raises(ValueError, match="5"):
+        rp.layer_coverage((0.0, 0.0, 1.0, 1.0), layers=(5, 10))
+
+
+@pytest.mark.parametrize("args", [
+    ["-116.27", "35.88", "-116.24", "35.91", "--layers", "5,10"],   # not a layer
+    ["-116.27", "35.88", "-116.24", "35.91", "--layers", "10,x"],   # not a number
+    ["-116.27", "35.88", "-116.24", "35.91", "--layers"],           # no value
+    ["-116.27", "35.88", "-116.24", "35.91", "--layers", ""],       # empty list
+])
+def test_cli_bad_layers_print_usage_and_exit_2(tmp_path, args):
+    out = subprocess.run([sys.executable, SCRIPT, *args], cwd=tmp_path,
+                         capture_output=True, text=True)
+    assert out.returncode == 2, out.stderr
+    assert out.stderr.startswith("usage: dem_coverage.py")
+
+
+@pytest.mark.parametrize("argv, want", [
+    (["-116.27", "35.88", "-116.24", "35.91"], (1, 3, 10, 30, 60)),
+    (["-116.27", "35.88", "-116.24", "35.91", "--layers", "10,30,60"], (10, 30, 60)),
+    (["--layers", "30,10", "-116.27", "35.88", "-116.24", "35.91"], (10, 30)),
+])
+def test_cli_passes_the_layers_through(monkeypatch, capsys, argv, want):
+    from scripts import dem_coverage as dc
+    seen = {}
+
+    def fake(bbox, layers=rp.COVERAGE_LAYERS_M):
+        seen["bbox"], seen["layers"] = bbox, tuple(layers)
+        return {r: 1.0 for r in layers}
+    monkeypatch.setattr(rp, "layer_coverage", fake)
+    assert dc.main(argv) == 0
+    assert seen == {"bbox": (-116.27, 35.88, -116.24, 35.91), "layers": want}
+    assert json.loads(capsys.readouterr().out) == {str(r): 1.0 for r in want}
 
 
 def test_esri_island_filling_most_of_its_moat_keeps_the_hole_on_the_outer():

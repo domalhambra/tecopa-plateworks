@@ -28,6 +28,12 @@ from app.regions import Region
 # One pass per 3DEP layer (region_prep.COVERAGE_LAYERS_M: 1, 3, 10, 30, 60). That
 # module needs the prep stack, so it is counted here, not imported (invariant 13).
 MAX_PLAN_PASSES = 5
+# At a need of COARSE_NEED_M or more, only the 10, 30 and 60 m layers can shape the
+# grid: the fine layers matter just above 10 m, through choose_grid's step-down
+# when the 10 m layer is uncovered, and not past 20 m. Asking for 1 m lidar over a
+# corridor-sized box times out (acceptance, Reno to Salt Lake).
+COARSE_NEED_M = 20.0
+COARSE_LAYERS_M = (10, 30, 60)
 PREP_VENV_HELP = "docs/changing-things.md › Set up a machine"
 
 
@@ -92,9 +98,14 @@ def curated_regions(root: str) -> list:
     return out
 
 
-def read_coverage(tools: Tools, bbox, env) -> dict:
-    run = subprocess.run([tools.prep_python, tools.coverage_script, *map(str, bbox)],
-                         cwd=tools.repo_root, capture_output=True, text=True, env=env)
+def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
+    """{layer metres: covered share}, for `layers` only when given. choose_grid
+    reads a layer left out as uncovered."""
+    cmd = [tools.prep_python, tools.coverage_script, *map(str, bbox)]
+    if layers:
+        cmd += ["--layers", ",".join(str(r) for r in layers)]
+    run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
+                         env=env)
     if run.returncode != 0:
         raise PlateError("The 3DEP coverage check failed:\n" + run.stderr[-800:])
     try:
@@ -123,9 +134,11 @@ def _plan_grid(tools, frame, epsg, print_w_in, env):
     that one, since a finer layer can come back into cover on the larger plate."""
     forced_by = None
     for _ in range(MAX_PLAN_PASSES):
+        need = needed_resolution(frame, print_w_in)
         cov = read_coverage(tools, to_lonlat_bbox(plate_bounds(frame), epsg,
-                                                  pad_m=PLATE_PAD_M), env)
-        grid = choose_grid(needed_resolution(frame, print_w_in), cov)
+                                                  pad_m=PLATE_PAD_M), env,
+                            layers=COARSE_LAYERS_M if need >= COARSE_NEED_M else None)
+        grid = choose_grid(need, cov)
         if not grid["widen"]:
             return frame, grid, forced_by
         if forced_by is None:

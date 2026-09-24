@@ -32,7 +32,19 @@ with open(os.path.join(a.out_root, "builds.log"), "a") as f:
     f.write(a.id + "\\n")
 print("cache=" + os.environ.get("HYRIVER_CACHE_NAME", ""))
 """
-STUB_COVERAGE = 'import os\nprint(os.environ["STUB_COVERAGE"])\n'
+# Prints STUB_COVERAGE, less any layer a --layers list leaves out, and logs its
+# arguments when STUB_COVERAGE_LOG is set.
+STUB_COVERAGE = """
+import json, os, sys
+if os.environ.get("STUB_COVERAGE_LOG"):
+    with open(os.environ["STUB_COVERAGE_LOG"], "a") as f:
+        f.write(json.dumps(sys.argv[1:]) + "\\n")
+cov = json.loads(os.environ["STUB_COVERAGE"])
+if "--layers" in sys.argv:
+    keep = sys.argv[sys.argv.index("--layers") + 1].split(",")
+    cov = {k: v for k, v in cov.items() if k in keep}
+print(json.dumps(cov))
+"""
 STUB_LABELS = "import sys\nsys.exit(0)\n"
 # Coverage that depends on the box it is asked about: past WIDE_DEG of longitude the
 # 10 m layer stops covering the plate. Every box asked about is logged, so a test can
@@ -371,3 +383,24 @@ def test_cli_prepares_an_order(tmp_path, tools, capsys):
     assert order_cli.main(["prepare", str(d)], tools=tools) == 0
     out = capsys.readouterr().out
     assert "Plate: order_2026_10_001_smith (built), 1.5 m grid" in out
+
+
+def test_coverage_asks_for_all_layers_when_lidar_can_matter(tmp_path, tools, monkeypatch):
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path)                       # need ~1.7 m
+    op.prepare(str(d), tools, log=lambda s: None)
+    args = [json.loads(l) for l in asked.read_text().splitlines()]
+    assert len(args) == 1 and "--layers" not in args[0] and len(args[0]) == 4
+
+
+def test_coverage_asks_only_for_coarse_layers_on_a_large_frame(tmp_path, tools,
+                                                               monkeypatch):
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=WIDE, size="8x10")   # 60 km over 2400 px: 25 m
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["need_m"] >= op.COARSE_NEED_M
+    args = [json.loads(l) for l in asked.read_text().splitlines()]
+    assert len(args) == 1 and args[0][4:] == ["--layers", "10,30,60"]
+    assert state["plate"]["grid_m"] == 25.0 and state["plate"]["layer_m"] == 10
