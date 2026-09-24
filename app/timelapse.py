@@ -507,8 +507,14 @@ def _mp4_stream(exe, size, ticks) -> bytes:
                # (the scale filter, full-range RGB in, limited-range 709 out) and TAG
                # the stream to match, or the twin's hues drift from the APNG/poster.
                # bitexact never suppressed these tags; they were simply never set.
+               # setparams stamps the tags on the FRAMES too: from ffmpeg 7.1 the
+               # encoder takes primaries/trc from the frames, not the flags below, and
+               # raw rgb24 frames carry none -- the macOS wheel (7.1) wrote no `colr`
+               # box while the Linux wheel (7.0.2) honoured the flags.
                "-vf", ("scale=in_range=full:out_range=limited:out_color_matrix=bt709,"
-                       "format=yuv420p"),
+                       "format=yuv420p,"
+                       "setparams=color_primaries=bt709:color_trc=bt709:"
+                       "colorspace=bt709:range=tv"),
                "-color_primaries", "bt709", "-color_trc", "bt709",
                "-colorspace", "bt709", "-color_range", "tv",
                # determinism: one x264 thread (threading reorders rate-control state),
