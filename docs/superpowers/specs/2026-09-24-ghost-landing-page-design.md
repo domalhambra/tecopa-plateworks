@@ -2,6 +2,7 @@
 
 **Date:** 2026-09-24
 **Status:** Approved by Dom for build, 2026-09-24, with the theme modules in §3.1.
+**Amended 2026-09-26 (Dom):** Tecopa orders are paid by an LZ Books invoice, like every Plateworks order. Rows 5 and step 6 say so, and the page copy was reworded to match.
 **Replaces:** `marketing/landing.html` and `marketing/privacy.html` on Netlify
 **Follows:** `00-09 System/01 Docs/superpowers/specs/2026-09-14-undercurrent-ghost-pilot-design.md`
 in plateworks-os (the pilot that Dom kept on 2026-09-23), and its parent brainstorm
@@ -47,7 +48,7 @@ Dom edits the words, images and prices in Ghost Admin, with no code.
 | 2 | The landing page leads with the beauty of the maps. It says nothing about files, formats, or share images. |
 | 3 | Headings name the section plainly: "Prices," "How it works," "Up close." No comma-and-twist headings. This rule is now in `voice-principles.md`, Anti-patterns. |
 | 4 | The call to action is "Build your poster." It opens a separate order page. |
-| 5 | A customer orders by email to `badwaterguidance@gmail.com`. After the customer says yes to the proof, Dom sends a payment link by Stripe or PayPal. LegalZoom also offers payment links; Dom decides later whether to use it. No page takes payment, and no page has a form. |
+| 5 | A customer orders by email to `badwaterguidance@gmail.com`. After the customer says yes to the proof, Dom sends an invoice from LegalZoom's LZ Books, and the customer pays it by card. No page takes payment, and no page has a form. |
 | 6 | The region-request form is removed. Every track in the lower 48 gets its own plate. |
 | 7 | The plate commission is removed. |
 | 8 | The line "I look over every sheet before it ships" is removed. A print lab makes the 18×24. |
@@ -119,7 +120,7 @@ Title "Build your poster". Six numbered steps, because ordering is a real sequen
 4. Email me: a "Start the email" button, the address as selectable text with a copy
    button, and an outline to copy (size, title, notes).
 5. See it, then say yes. Nothing prints until you do.
-6. Pay, and it's on its way: a payment link by Stripe or PayPal.
+6. Pay, and it's on its way: an invoice, paid by card.
 
 The email button is a `mailto:` link with a subject and the outline as its body. The
 button and the address sit in an HTML card inside `<!--email_off-->` markers, so
