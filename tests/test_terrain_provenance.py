@@ -1,4 +1,4 @@
-# The landing page's footer promises every image on it is the engine's own render. A
+# The Tecopa pages promise every image on them is the engine's own render. A
 # synthetic stand-in DEM (tests/conftest.py hydrates one for any plate missing its real
 # 3DEP terrain) renders *cleanly* -- correct hillshade, palette, place labels, route ink.
 # Nothing in the picture betrays that the landforms are invented, so nothing downstream
@@ -9,11 +9,10 @@
 # time -- a machine can render from a stand-in and obtain the real DEM afterwards, at
 # which point the file on disk says "real" while the posters are still invented (the same
 # shape as the documented lassen_ca orphan bug). So: the farm stamps the DEM it consumed
-# into assets/index.json, and build_deploy refuses to publish what that record does not
-# vouch for.
+# into assets/index.json, and build_deploy.terrain_guard refuses to publish what that
+# record does not vouch for.
 import hashlib
 import json
-import os
 import pathlib
 
 import numpy as np
@@ -148,84 +147,59 @@ def test_a_restage_only_farm_run_keeps_the_terrain_record_it_could_not_stamp(tmp
     assert any(p.endswith("detail.png") for p in entry["assets"])
 
 
-# --- 3. the deploy refuses what the record does not vouch for ------------------------
+# --- 3. the guard refuses what the record does not vouch for -------------------------
+# terrain_guard is called directly: the Netlify deploy that once wrapped it retired on
+# 2026-09-26, and scripts/export_relief.py now calls it the same way, with the index it
+# read and the regions it is about to publish.
 
 REAL = {"synthetic": False, "sha256": "20cec75c", "bytes": 192087365}
 SYNTH = {"synthetic": True, "sha256": "deadbeef", "bytes": 4096}
 
-DERIVED = ["poster.png", "edition_1.png", "edition_2.png", "edition_3.png",
-           "wallpaper_iphone.png", "detail.png"]
-COPIED = ["film.webp", "mockup_plate.glb", "mockup_plate_1080x1080.jpg"]
 
-PAGE = """<html><body>
-{imgs}
-<video src="../assets/lassen_ca/film.png"></video>
-<div data-plate="lassen_ca"><model-viewer
-  src="../assets/lassen_ca/mockup_plate.glb"></model-viewer></div>
-<div data-plate="tushar_beaver_ut"><model-viewer
-  src="../assets/tushar_beaver_ut/mockup_plate.glb"></model-viewer></div>
-</body></html>"""
+def _index(**terrain) -> dict:
+    """An index.json dict: region -> its terrain record, or no record for None."""
+    out = {}
+    for rid, rec in terrain.items():
+        entry = {"name": rid, "assets": []}
+        if rec is not None:
+            entry["terrain"] = rec
+        out[rid] = entry
+    return out
 
 
-def _fake_repo(tmp_path, index: dict, coin_regions=("tushar_beaver_ut",)) -> pathlib.Path:
-    """A minimal repo root the real build_deploy can run against end to end."""
-    repo = tmp_path / "repo"
-    (repo / "marketing" / "vendor").mkdir(parents=True)
-    (repo / "marketing" / "favicon.svg").write_text("<svg/>")
-    (repo / "marketing" / "privacy.html").write_text("<html>privacy</html>")
-    (repo / "marketing" / "landing.html").write_text(PAGE.format(
-        imgs="\n".join(f'<img src="../assets/lassen_ca/{n}">' for n in DERIVED)))
-    lassen = repo / "assets" / "lassen_ca"
-    lassen.mkdir(parents=True)
-    for name in DERIVED:
-        Image.new("RGB", (60, 40), (118, 110, 98)).save(lassen / name)
-    for name in COPIED:
-        (lassen / name).write_bytes(b"asset-bytes")
-    for rid in coin_regions:
-        (repo / "assets" / rid).mkdir(parents=True, exist_ok=True)
-        (repo / "assets" / rid / "mockup_plate.glb").write_bytes(b"glb")
-    (repo / "assets" / "index.json").write_text(json.dumps(index))
-    return repo
+def _guard(index, regions=("lassen_ca",), **overrides):
+    return build_deploy.terrain_guard(index, set(regions), **overrides)
 
 
-def _run(repo, tmp_path, monkeypatch, *extra):
-    monkeypatch.setattr(build_deploy, "REPO", repo)
-    monkeypatch.setattr("sys.argv", ["build_deploy", "--out",
-                                     str(tmp_path / "out"), *extra])
-    return build_deploy.main()
-
-
-def test_deploy_refuses_a_region_rendered_from_synthetic_terrain(tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": SYNTH},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch) == 1
+def test_the_guard_refuses_a_region_rendered_from_synthetic_terrain(capsys):
+    assert _guard(_index(lassen_ca=SYNTH)) == 1
     err = capsys.readouterr().err
     assert "lassen_ca" in err and "synthetic" in err.lower()
 
 
-def test_deploy_refuses_a_region_with_no_terrain_record_at_all(tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": []},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch) == 1
+def test_the_guard_refuses_a_region_with_no_terrain_record_at_all(capsys):
+    assert _guard(_index(lassen_ca=None)) == 1
     err = capsys.readouterr().err
     assert "lassen_ca" in err
     assert "render_asset_farm.py" in err, "the refusal must name the re-render command"
 
 
-def test_deploy_refuses_when_the_index_is_missing_entirely(tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {})
-    (repo / "assets" / "index.json").unlink()
-    assert _run(repo, tmp_path, monkeypatch) == 1
+def test_the_guard_refuses_when_the_index_is_missing_entirely(tmp_path, capsys):
+    # the reader export_relief uses: an absent index.json reads as {}, which vouches
+    # for nothing
+    from scripts import export_relief as er
+    index = er.load_index(str(tmp_path))
+    assert index == {}
+    assert _guard(index) == 1
     assert "lassen_ca" in capsys.readouterr().err
 
 
-def test_the_guard_covers_a_region_that_only_contributes_a_coin(tmp_path, monkeypatch, capsys):
-    # --region lassen_ca is clean; tushar_beaver_ut is published ONLY as a plate-card GLB
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": REAL},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": SYNTH}})
-    assert _run(repo, tmp_path, monkeypatch) == 1
+def test_the_guard_covers_every_region_it_is_given_not_only_the_first(capsys):
+    # lassen_ca is clean; tushar_beaver_ut goes out only as a coin, and is synthetic
+    index = _index(lassen_ca=REAL, tushar_beaver_ut=SYNTH)
+    assert _guard(index, ("lassen_ca", "tushar_beaver_ut")) == 1
     err = capsys.readouterr().err
-    assert "tushar_beaver_ut" in err
+    assert "tushar_beaver_ut" in err and "lassen_ca" not in err
 
 
 # A malformed record must route to the UNVERIFIED refusal, never read as a promise of
@@ -245,106 +219,45 @@ MALFORMED_TERRAIN = [
 
 
 @pytest.mark.parametrize("bad", MALFORMED_TERRAIN)
-def test_a_malformed_terrain_record_is_not_a_promise_of_real_terrain(
-        bad, tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": bad},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch) == 1
+def test_a_malformed_terrain_record_is_not_a_promise_of_real_terrain(bad, capsys):
+    assert _guard(_index(lassen_ca=bad, tushar_beaver_ut=REAL),
+                  ("lassen_ca", "tushar_beaver_ut")) == 1
     err = capsys.readouterr().err
     assert "lassen_ca" in err and "UNVERIFIED" in err
 
 
 @pytest.mark.parametrize("bad", MALFORMED_TERRAIN)
-def test_a_malformed_terrain_record_is_waved_through_by_the_unverified_override(
-        bad, tmp_path, monkeypatch):
+def test_a_malformed_terrain_record_is_waved_through_by_the_unverified_override(bad):
     # it refuses as UNVERIFIED, so that is the override that must open it -- not
-    # --allow-synthetic, which is a different admission
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": bad},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch, "--allow-synthetic") == 1
-    assert _run(repo, tmp_path, monkeypatch, "--allow-unverified-terrain") == 0
+    # allow_synthetic, which is a different admission
+    index = _index(lassen_ca=bad, tushar_beaver_ut=REAL)
+    regions = ("lassen_ca", "tushar_beaver_ut")
+    assert _guard(index, regions, allow_synthetic=True) == 1
+    assert _guard(index, regions, allow_unverified=True) == 0
 
 
-def test_the_plate_card_predicate_is_written_once():
-    """The guard's coverage set and the copy loop's strip condition are the same
-    question: which plate cards have a rendered coin? Excluding a GLB-less region from
-    the guard is only correct because that same region's <model-viewer> is stripped.
-    Two copies of the predicate can drift apart and silently publish an unguarded coin,
-    so the card regex lives in exactly one place."""
-    src = (REPO / "marketing" / "build_deploy.py").read_text(encoding="utf-8")
-    assert src.count('data-plate=') == 1, "the plate-card regex is duplicated"
-
-
-def test_plate_coins_maps_every_card_to_its_rendered_coin_or_none(tmp_path):
-    repo = _fake_repo(tmp_path, {}, coin_regions=("tushar_beaver_ut",))
-    html = (repo / "marketing" / "landing.html").read_text(encoding="utf-8")
-    coins = build_deploy.plate_coins(repo, html)
-    assert set(coins) == {"lassen_ca", "tushar_beaver_ut"}
-    assert coins["tushar_beaver_ut"] == repo / "assets" / "tushar_beaver_ut" / "mockup_plate.glb"
-
-    (repo / "assets" / "tushar_beaver_ut" / "mockup_plate.glb").unlink()
-    assert build_deploy.plate_coins(repo, html)["tushar_beaver_ut"] is None
-
-
-def test_a_stripped_coin_is_not_guarded(tmp_path, monkeypatch):
-    # a plate card whose GLB was never rendered gets its <model-viewer> stripped, so
-    # nothing of that region is published -- guarding it would block a clean deploy
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": REAL}},
-                      coin_regions=())
-    assert _run(repo, tmp_path, monkeypatch) == 0
-
-
-def test_a_clean_index_deploys(tmp_path, monkeypatch):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": REAL},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch) == 0
-    assert (tmp_path / "out" / "index.html").is_file()
-    assert (tmp_path / "out" / "assets" / "lassen_ca" / "poster.jpg").is_file()
-
-
-def test_the_privacy_page_ships_beside_the_landing_page(tmp_path, monkeypatch):
-    # marketing/privacy.html is the site's second page, published at /privacy/ from
-    # the same staged root -- verbatim, since it carries no asset references to rewrite
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": REAL},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch) == 0
-    published = tmp_path / "out" / "privacy" / "index.html"
-    assert published.is_file(), "the privacy page did not reach the deploy root"
-    assert published.read_text() == (repo / "marketing" / "privacy.html").read_text()
+def test_a_clean_index_passes_silently(capsys):
+    assert _guard(_index(lassen_ca=REAL, tushar_beaver_ut=REAL),
+                  ("lassen_ca", "tushar_beaver_ut")) == 0
+    assert capsys.readouterr().err == ""
 
 
 # --- 4. the overrides open the door, loudly -----------------------------------------
 
-def test_allow_synthetic_publishes_and_warns(tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": SYNTH},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch, "--allow-synthetic") == 0
-    err = capsys.readouterr().err
-    assert "WARNING" in err and "lassen_ca" in err
-    assert (tmp_path / "out" / "index.html").is_file()
-
-
-def test_allow_unverified_terrain_publishes_and_warns(tmp_path, monkeypatch, capsys):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": []},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch, "--allow-unverified-terrain") == 0
+def test_allow_synthetic_publishes_and_warns(capsys):
+    assert _guard(_index(lassen_ca=SYNTH), allow_synthetic=True) == 0
     err = capsys.readouterr().err
     assert "WARNING" in err and "lassen_ca" in err
 
 
-def test_each_override_opens_only_its_own_door(tmp_path, monkeypatch):
-    # --allow-unverified-terrain must not wave through a KNOWN-synthetic plate
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": SYNTH},
-                                 "tushar_beaver_ut": {"name": "T", "assets": [], "terrain": REAL}})
-    assert _run(repo, tmp_path, monkeypatch, "--allow-unverified-terrain") == 1
-    repo2 = _fake_repo(tmp_path / "b", {"lassen_ca": {"name": "L", "assets": []},
-                                        "tushar_beaver_ut": {"name": "T", "assets": [],
-                                                             "terrain": REAL}})
-    assert _run(repo2, tmp_path / "b", monkeypatch, "--allow-synthetic") == 1
+def test_allow_unverified_publishes_and_warns(capsys):
+    assert _guard(_index(lassen_ca=None), allow_unverified=True) == 0
+    err = capsys.readouterr().err
+    assert "WARNING" in err and "lassen_ca" in err
 
 
-def test_the_guard_runs_before_anything_is_written(tmp_path, monkeypatch):
-    repo = _fake_repo(tmp_path, {"lassen_ca": {"name": "L", "assets": [], "terrain": SYNTH}},
-                      coin_regions=())
-    assert _run(repo, tmp_path, monkeypatch) == 1
-    assert not (tmp_path / "out").exists(), "a refused deploy left a partial root behind"
+def test_each_override_opens_only_its_own_door():
+    # allow_unverified must not wave through a KNOWN-synthetic plate, and
+    # allow_synthetic must not wave through an unrecorded one
+    assert _guard(_index(lassen_ca=SYNTH), allow_unverified=True) == 1
+    assert _guard(_index(lassen_ca=None), allow_synthetic=True) == 1

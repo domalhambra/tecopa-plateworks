@@ -76,8 +76,8 @@ class ReliefRefused(ReliefError):
 def load_index(assets_dir: str) -> dict:
     """`<assets_dir>/index.json`, or {} when absent or malformed.
 
-    The same reading as `build_deploy.load_index`, for any farm output root rather
-    than only the repo's `assets/`. {} vouches for nothing, so the gate refuses.
+    Any farm output root, not only the repo's `assets/`. {} vouches for nothing,
+    so the gate refuses.
     """
     try:
         with open(os.path.join(assets_dir, "index.json")) as f:

@@ -89,7 +89,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
-| `marketing/build_deploy.py` | The terrain guard, which `scripts/export_relief.py` runs. Its staged-root builder served the Netlify landing, retired 2026-09-26. | `tests/test_terrain_provenance.py` |
+| `marketing/build_deploy.py` | `terrain_guard` alone: refuses any region whose images were rendered from synthetic or unrecorded terrain. `scripts/export_relief.py` runs it per region. The name is kept from the retired Netlify builder (tag `landing-final-2026-09-26`). | `tests/test_terrain_provenance.py`, `tests/test_export_relief.py` |
 | `tests/conftest.py` | Synthetic DEM hydration, per-worker stores, the central `slow` classification. | none. It is the harness itself. |
 | `tests/fixtures/` | `sample.gpx` and the seven `manifest_*_v1.json` read-tolerance inputs. | none |
 
