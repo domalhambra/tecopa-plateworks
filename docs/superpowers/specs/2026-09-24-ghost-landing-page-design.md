@@ -4,6 +4,7 @@
 **Status:** Approved by Dom for build, 2026-09-24, with the theme modules in §3.1.
 **Live 2026-09-26:** steps 3 to 6 of §9 are done on Dom's go-ahead. The three pages are published on www.plateworks.org, the Cloudflare rule and the `redirects.yaml` entry are in, `verify-redirects.ts` passes 111/111 with the Tecopa pair, and the live tests pass 14/14. Ghost accepted the film, so §7's media host is not needed. `marketing/build_deploy.py` was slimmed to the terrain guard the same day (`21b034e`).
 **Amended 2026-09-26 (Dom):** Tecopa orders are paid by an LZ Books invoice, like every Plateworks order. Rows 5 and step 6 say so, and the page copy was reworded to match.
+**Amended 2026-09-26 (Dom), later:** no Plausible script. The blog-wide one was removed because its Plausible site was gone; Ghost's built-in analytics counts the pages, and the privacy page (§6) says so.
 **Replaces:** `marketing/landing.html` and `marketing/privacy.html` on Netlify
 **Follows:** `00-09 System/01 Docs/superpowers/specs/2026-09-14-undercurrent-ghost-pilot-design.md`
 in plateworks-os (the pilot that Dom kept on 2026-09-23), and its parent brainstorm

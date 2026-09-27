@@ -180,10 +180,13 @@ def test_privacy_page_carries_its_furniture():
 
 def test_privacy_page_names_every_host_the_pages_load():
     page = privacy()
-    assert "Plausible" in page
+    # The site-wide Plausible script came off on 2026-09-26: Ghost's own
+    # analytics counts the visits, and the page must not claim otherwise.
+    assert "Ghost's built-in analytics" in page
+    assert "Plausible" not in page
     for host in NAMED_HOSTS:
         assert host in page, f"privacy page no longer names {host}"
-    allowed = NAMED_HOSTS | {"plausible.io", "www.plateworks.org"}
+    allowed = NAMED_HOSTS | {"www.plateworks.org"}
     for path in ("/tecopa/", "/tecopa-build/", "/tecopa-privacy-policy/"):
         loaded = set(re.findall(
             r'<(?:script|link|img|iframe|source|video)[^>]+?(?:src|href)="https?://([^/"]+)', fetch(path)))

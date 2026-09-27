@@ -252,6 +252,7 @@ This section supersedes the 2026-06-29 row in invariant 6's history ("Never requ
 | `marketing/landing.html`, `marketing/privacy.html` and the vendored model-viewer folder are removed, at tag `landing-final-2026-09-26`. `marketing/build_deploy.py` keeps the terrain guard; its staged-root builder is left for a separate change, because its tests also cover the guard. | The guard protects invariant 11 and deserves its own careful change. | this cutover |
 | The honesty tests fetch the published pages and carry the `live` marker, skipped unless a run selects `-m live`. | The page no longer lives in the repo; the default and CI runs stay offline. | landing spec §8 |
 | The pages are counted by the blog-wide Plausible script, as Undercurrent's are; no per-site script or `evt()` helper. | Undercurrent's pattern. The `data-evt` attributes stay for a later events setup. | this cutover |
+| Superseded the same evening: the blog-wide Plausible script is removed, and Ghost's built-in analytics alone counts the pages. The privacy page says so, and its test pins it. | The script's Plausible site no longer existed, so it counted nothing and 404ed on every page. Dom relies on Ghost's analytics. | Dom, 2026-09-26 |
 
 ## Rejected and deferred
 
