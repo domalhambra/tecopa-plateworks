@@ -323,3 +323,12 @@ def test_choose_grid_reads_absent_layers_as_uncovered():
 def test_static_layers_m_matches_region_preps_static_tiles():
     rp = pytest.importorskip("region_prep")
     assert op.STATIC_LAYERS_M == rp.DEM_RES_CHOICES
+
+
+# ---- contract: region_prep's auto step down from 60 m is the order plates' own ----
+
+def test_region_preps_60m_step_matches_the_order_step_down():
+    # need 61: nice-floor lands on 60, uncovered in the lower 48, so choose_grid
+    # steps down; the in-app auto planner must land on the same grid
+    rp = pytest.importorskip("region_prep")
+    assert op.choose_grid(61.0, NO_LIDAR)["grid_m"] == rp.STEP_BELOW_60M_M

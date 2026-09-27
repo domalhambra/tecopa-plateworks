@@ -39,6 +39,31 @@ def test_explicit_resolution_is_honored_but_flagged():
     assert plan["grid_mpx"] / plan["n_slices"] <= rp.SLICE_BUDGET_MPX
 
 
+# ---- the auto planner's coarsest choice: the static 60 m tiles
+# (USGS_Seamless_DEM_2.vrt) cover Alaska only, so a 60 m auto pick anywhere else
+# would fetch an empty DEM ----
+
+# ~470 x 445 km of the Great Basin, inside CONUS: 30 m is ~246 Mpx, over
+# GRID_BUDGET_MPX, so the auto planner reaches its coarsest choice
+GREAT_BASIN = (-120.0, 36.0, -114.5, 40.0)
+# ~490 x 445 km of interior Alaska, inside the 60 m tiles: 30 m is ~271 Mpx
+INTERIOR_ALASKA = (-155.0, 62.0, -145.0, 66.0)
+
+
+def test_auto_steps_60m_down_to_55m_outside_the_alaska_tiles():
+    plan = rp.plan_build(GREAT_BASIN, "EPSG:32611")
+    assert plan["auto"] and plan["resolution_m"] == 55
+    assert plan["dynamic"] is True      # served by the dynamic service, holes filled
+    assert not plan["over_budget"]
+
+
+def test_auto_still_picks_60m_inside_the_alaska_tiles():
+    # control: where the 60 m tiles exist, the planner keeps them
+    plan = rp.plan_build(INTERIOR_ALASKA, "EPSG:32606")
+    assert plan["auto"] and plan["resolution_m"] == 60
+    assert plan["dynamic"] is False
+
+
 # ---- explicit-resolution land cover: bakes at the DEM's own grid, floored at 30 m
 # (order plates, acceptance 2026-09-24: an 874 s east-west build whose land cover
 # failed because it stayed at a fixed 60 m WMS mosaic over a ~350 Mpx area) ----

@@ -142,7 +142,8 @@ def test_build_unknown_job_404():
 
 def test_build_rejects_over_budget_bbox():
     # A US-covered but corridor-scale box: bbox_covered passes, but plan_build's
-    # auto path is over budget even at 60 m -> 422, before any job is submitted.
+    # auto path is over budget even at its coarsest (55 m in the lower 48) -> 422,
+    # before any job is submitted.
     huge = {"id": "conus_scale", "name": "Too Big",
             "bbox": [-125.4, 24.4, -66.9, 49.4], "epsg": 32614}
     r = client.post("/api/regions/build", json=huge)

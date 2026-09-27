@@ -111,6 +111,9 @@ Traps already paid for:
   Keep both orderings when adding network code.
 - py3dep returns EPSG:5070 in metres, not 4326. `plan_build` sizes the job before any
   fetch so a corridor-scale bbox cannot exhaust memory (the 15.8 GB lesson).
+- The static 60 m tiles cover Alaska only. Outside them `plan_build`'s auto choice
+  steps 60 m down to 55 m, served dynamically, as an order plate does. An explicit
+  `--resolution 60` is not stepped down.
 - Region data is read by the render from the region folder. It never rides on the spec.
 - For out-of-plate test coordinates use Virginia, about -79.5, 37.8. `elko_bonneville`
   is corridor-scale and swallows most western points that look outside.

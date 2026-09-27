@@ -3,6 +3,7 @@
 **Date:** 2026-07-19
 **Status:** Approved by Dom (brainstorming session)
 **Branch:** `gpx-first-flow` (stacked on `macos-launcher-app` — depends on the Tecopa Printworks rebrand)
+**Amended 2026-09-27:** the static 60 m tiles cover Alaska only. Outside them, `plan_build`'s auto choice steps 60 m down to 55 m, from the 3DEP dynamic service, the same step an order plate takes. Where §3, §4 and the error table say 60 m, read the planner's coarsest choice: 55 m outside Alaska.
 
 ## Goal
 

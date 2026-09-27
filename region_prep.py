@@ -10,7 +10,8 @@ Usage:
         --epsg 32610
 
 Resolution is picked automatically from the bbox (finest of 10/30/60 m whose grid
-fits the budget) and the DEM is always fetched in memory-bounded slices; pass an
+fits the budget; 60 m steps down to 55 m outside Alaska, where the 60 m tiles end)
+and the DEM is always fetched in memory-bounded slices; pass an
 explicit --resolution only to override the planner. An order plate passes
 --resolution and --out-root together (app/orderprep.py); a resolution off 10/30/60
 is fetched from the 3DEP dynamic service at that cell size. The plan (grid, file
@@ -40,6 +41,12 @@ from PIL import Image
 # the whole source + reprojection scratch + the NLCD tile merge in RAM at once and
 # OOMs. The planner makes the cost visible up front; the slicer bounds the peak.
 DEM_RES_CHOICES = (10, 30, 60)
+# The static 60 m tiles (USGS_Seamless_DEM_2.vrt) cover Alaska only, lon -180..-127,
+# lat 51..72. Outside them a 60 m auto pick would fetch an empty DEM, so it steps
+# down to STEP_BELOW_60M_M, served by the dynamic service: the same step an order
+# plate takes (app/orderplate.choose_grid, 60 -> 55; tests/test_orderplate.py pins it).
+STATIC_60M_EXTENT = (-180.0, 51.0, -127.0, 72.0)
+STEP_BELOW_60M_M = 55
 GRID_BUDGET_MPX = 200      # auto-resolution ceiling for the projected DEM grid
 SLICE_BUDGET_MPX = 40      # max Mpx fetched + warped at once (bounds peak RSS)
 LANDCOVER_BUDGET_MPX = 60  # ceiling for the (uint8) landcover grid
@@ -61,6 +68,11 @@ def _is_static(res):
     tolerances, so the plan's dynamic flag and the sources.json label never
     disagree with what was actually fetched."""
     return any(abs(res - r) <= 1e-8 + 1e-5 * r for r in DEM_RES_CHOICES)
+
+def _inside(bbox_4326, extent):
+    """True when the lon/lat bbox sits wholly inside `extent` (w, s, e, n)."""
+    w, s, e, n = bbox_4326
+    return w >= extent[0] and s >= extent[1] and e <= extent[2] and n <= extent[3]
 
 def _densified_edge(bbox_4326, n=41):
     """Lon/lat points along all four bbox edges. Meridians and parallels curve in a
@@ -97,8 +109,9 @@ def slice_overlap_deg(resolution_m):
 
 def plan_build(bbox_4326, dst_crs, resolution_m=None):
     """Everything main() needs to know before fetching: the DEM resolution (auto =
-    finest of DEM_RES_CHOICES whose grid fits GRID_BUDGET_MPX; explicit overrides
-    but is flagged when over budget), the slice count that keeps peak memory
+    finest of DEM_RES_CHOICES whose grid fits GRID_BUDGET_MPX, with 60 m stepping
+    down to STEP_BELOW_60M_M outside STATIC_60M_EXTENT; explicit overrides but is
+    flagged when over budget), the slice count that keeps peak memory
     bounded, the landcover resolution, and honest size estimates. A resolution off
     DEM_RES_CHOICES is fetched from the dynamic service, which returns more cells
     than asked (DYNAMIC_OVERSAMPLE), so its slices and peak are sized for that.
@@ -123,6 +136,8 @@ def plan_build(bbox_4326, dst_crs, resolution_m=None):
             if w * h <= GRID_BUDGET_MPX * 1e6:
                 resolution_m = res
                 break
+        if resolution_m == 60 and not _inside(bbox_4326, STATIC_60M_EXTENT):
+            resolution_m = STEP_BELOW_60M_M
     w, h, transform = projected_grid(bbox_4326, dst_crs, resolution_m)
     mpx = w * h / 1e6
     if auto:
@@ -908,7 +923,8 @@ def _parser() -> argparse.ArgumentParser:
     ap.add_argument("--resolution", default=None, type=_resolution_arg,
                     help="DEM grid in metres, or 'auto' (default): the finest of "
                          "10/30/60 that fits the grid budget, so a huge bbox can't "
-                         "OOM the build. Any other cell size is fetched from the "
+                         "OOM the build; 60 becomes 55 outside Alaska, where the "
+                         "60 m tiles end. Any other cell size is fetched from the "
                          "3DEP dynamic service")
     ap.add_argument("--out-root", default="regions",
                     help="directory the region folder is written under")
