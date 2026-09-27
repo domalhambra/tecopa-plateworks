@@ -21,7 +21,7 @@ pytestmark = pytest.mark.live
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 SITE = "https://www.plateworks.org"
-ORDER_EMAIL = "badwaterguidance@gmail.com"
+ORDER_EMAIL = "lab@plateworks.org"
 
 
 @lru_cache(maxsize=None)

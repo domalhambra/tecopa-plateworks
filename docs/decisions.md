@@ -253,6 +253,7 @@ This section supersedes the 2026-06-29 row in invariant 6's history ("Never requ
 | The honesty tests fetch the published pages and carry the `live` marker, skipped unless a run selects `-m live`. | The page no longer lives in the repo; the default and CI runs stay offline. | landing spec §8 |
 | The pages are counted by the blog-wide Plausible script, as Undercurrent's are; no per-site script or `evt()` helper. | Undercurrent's pattern. The `data-evt` attributes stay for a later events setup. | this cutover |
 | Superseded the same evening: the blog-wide Plausible script is removed, and Ghost's built-in analytics alone counts the pages. The privacy page says so, and its test pins it. | The script's Plausible site no longer existed, so it counted nothing and 404ed on every page. Dom relies on Ghost's analytics. | Dom, 2026-09-26 |
+| Orders go to lab@plateworks.org, not the Gmail address: the order page's button and address, and the privacy page's contact. | Dom: every Plateworks order goes to the Lab's address. The live test pins it. | this change |
 
 ## Rejected and deferred
 
