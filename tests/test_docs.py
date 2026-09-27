@@ -33,6 +33,10 @@ def test_docs_are_indexed_and_every_quoted_path_exists():
             # docs_check's own default excuses SESSION_LOG.md, the Notion-offline
             # fallback. This repo has one and it is tracked, so it is left out here:
             # excusing it would hide a real deletion later.
+            # Removed 2026-09-26 when the landing moved to Ghost (tag
+            # landing-final-2026-09-26). decisions.md keeps them as history.
+            "marketing/landing.html",
+            "marketing/privacy.html",
             # Gitignored runtime folders. They exist on Dom's Mac after a run
             # and never in a fresh clone. The docs name all four, and quote
             # assets/index.json under one of them.

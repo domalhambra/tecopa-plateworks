@@ -36,7 +36,7 @@ regions/<id>/  (region.json, dem.tif, hydro.json, │  labels.json, landcover.ti
 
 app/main.py: the endpoints, three ThreadJobQueue instances (render, region build, proof refine)
 app/static/: the single-window studio, 22 ES modules, no build step
-scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ marketing/build_deploy.py ──▶ Netlify, by hand
+scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ Ghost, by the blog's pages script
 ```
 
 ## Module map
@@ -89,9 +89,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ marketing/
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
-| `marketing/landing.html`, `marketing/privacy.html` | The landing page and the privacy page. | `tests/test_marketing_page.py` |
-| `marketing/build_deploy.py` | The staged deploy root and the terrain guard. | `tests/test_terrain_provenance.py` |
-| `marketing/vendor/model-viewer.min.js` | The vendored `<model-viewer>` for the orbitable plate. | none |
+| `marketing/build_deploy.py` | The terrain guard, which `scripts/export_relief.py` runs. Its staged-root builder served the Netlify landing, retired 2026-09-26. | `tests/test_terrain_provenance.py` |
 | `tests/conftest.py` | Synthetic DEM hydration, per-worker stores, the central `slow` classification. | none. It is the harness itself. |
 | `tests/fixtures/` | `sample.gpx` and the seven `manifest_*_v1.json` read-tolerance inputs. | none |
 
@@ -138,8 +136,8 @@ font bindings, which is by design.
 |---|---|
 | The studio | `uvicorn app.main:app --reload` on port 8000 for development. The macOS launcher runs the engine from this repo's `.venv` on port 8848 and logs to `~/Library/Logs/TecopaPlateworks.log`. Build it with `scripts/macos/build_app.sh --install`. A `git pull` updates it with no rebuild. |
 | Plates | Five committed under `regions/`: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. Each `dem.tif` is gitignored and rebuilt with `region_prep.py`. Packing and publishing plates has never run. |
-| The landing page | `tecopa.plateworks.org`, Netlify site `tecopa-plateworks`, Cloudflare zone `plateworks.org`. Deployed by hand: render the farm, run `../marketing/build_deploy.py`, then `netlify deploy --prod`. The terrain guard refuses a region with no real terrain record in `assets/index.json`. The runbook is `../marketing/DEPLOY.md`. Plausible analytics, no CSP. |
-| The privacy page | `/privacy/`, copied verbatim into the staged root. |
+| The landing page | Ghost pages on www.plateworks.org since 2026-09-26: `/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's ghost-tecopa-pages script. `tecopa.plateworks.org` is a Cloudflare 301 to `/tecopa/` with the path kept. The Netlify site `tecopa-plateworks` still holds the last deploy as the rollback: delete the Cloudflare rule to serve it again. |
+| The privacy page | `/tecopa-privacy-policy/`. Ghost's redirects file sends `/tecopa/privacy/` there. |
 | Python | 3.14 on the Mac and in CI, which installs the version in `.python-version`. Every pin in `requirements-lock.txt` has a 3.14 wheel for `ubuntu-latest` (checked 2026-09-23). |
 | Dependencies | `requirements-lock.txt` is what CI installs, then `pandas geopandas`, then `requirements-share.txt`. `requirements.txt` holds the unpinned core minimums and `requirements-dev.txt` the test dependencies; the lock is what a machine actually installs. `requirements-regionprep.txt` goes only into `.venv-prep`. |
 
@@ -151,7 +149,7 @@ font bindings, which is by design.
 - The studio has no JS runner. `tests/test_static_registry.py` checks `controls.js` and the HTML as text. Everything else is a browser drive.
 - `.venv/bin/python scripts/verify_regions.py` reports every plate's hash and geometry state. Run it after any pull that touched `regions/`. Outside `.venv` the render stack is absent and the geometry row degrades to `skip`.
 - `scripts/macos/smoke_test.sh` drives the launcher end to end and needs a human for two macOS prompts.
-- The marketing page is gated by `tests/test_marketing_page.py` (the Collector register, the privacy claims) and the deploy by the terrain guard in `../marketing/build_deploy.py`.
+- The published pages are gated by `tests/test_marketing_page.py` (the Collector register, the prices, the privacy claims), run with `-m live`, and the relief images by the terrain guard in `../marketing/build_deploy.py`.
 
 ## Cross-repo dependencies
 

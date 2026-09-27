@@ -1,5 +1,13 @@
 # Deploying the landing page
 
+> **Retired 2026-09-26.** The landing page moved to Ghost (spec
+> `docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md`), and
+> `tecopa.plateworks.org` is a Cloudflare 301 to www.plateworks.org/tecopa/. The Netlify
+> site keeps the last deploy as the rollback, and `landing.html` is at tag
+> `landing-final-2026-09-26`. What still holds below: the asset farm and the terrain
+> guard, which `scripts/export_relief.py` runs before any image reaches Ghost. The
+> deploy steps are history.
+
 `tecopa.plateworks.org` (Netlify site `tecopa-plateworks`,
 `1902a58d-74a9-4def-8b4e-d93793f81ac4`, Cloudflare zone `plateworks.org`).
 

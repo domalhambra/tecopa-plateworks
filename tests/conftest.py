@@ -267,6 +267,12 @@ _SLOW_TESTS = {
 
 
 def pytest_collection_modifyitems(config, items):
+    # The live tier fetches the published pages; it runs only when asked for.
+    if "live" not in (config.getoption("markexpr") or ""):
+        skip_live = pytest.mark.skip(reason="live: run with -m live")
+        for it in items:
+            if it.get_closest_marker("live"):
+                it.add_marker(skip_live)
     for it in items:
         stem = it.path.stem                          # e.g. "test_main"
         base = getattr(it, "originalname", None) or it.name.split("[")[0]  # strip params

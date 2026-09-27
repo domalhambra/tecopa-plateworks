@@ -23,7 +23,8 @@ Unnamed sections below are in `docs/changing-things.md`.
 | `engine_version`, `spec_from_json`, a reprint promise | `docs/superpowers/specs/2026-07-27-retire-the-forever-contract-design.md` |
 | A font or type role | Bind fonts per role, then `00_Resources/typography-standards.md` |
 | Anything under `app/static/` | Work on the studio front end |
-| The farm, the landing page, Netlify | `marketing/DEPLOY.md`, then Add a region to the farm and deploy the landing page |
+| The farm, the relief images, the terrain guard | `marketing/DEPLOY.md`, then Add a region to the farm and publish its relief images |
+| The Tecopa pages on Ghost | `docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md`, then Edit landing or privacy copy |
 | A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
 | The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` |
 | The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
@@ -44,7 +45,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 8. **`provenance.spec_from_manifest` is the one untrusted-manifest door.** Every verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect` is the exception: it builds no spec.
 9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` and the bundle id are name-neutral.
 10. **Never commit a font.** The repo is public and MB Type is licensed. `.gitignore` blocks font files (commit 39ad08c).
-11. **Marketing honesty.** Every marketing image is an engine render of real country: `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test. Plates are free.
+11. **Marketing honesty.** Every marketing image is an engine render of real country: the terrain guard in `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test in `tests/test_marketing_page.py`, run with `-m live` against the published pages. Plates are free.
 12. **Never re-stamp `sources.json`** to silence the drift gate. The mismatch is the only record that a plate was swapped.
 13. **Two venvs.** Never install the region-prep stack into `.venv`: it pulled numpy, scipy and rasterio past their pins for six weeks. `region_prep.py` runs in `.venv-prep`.
 14. **Words.** Tecopa Plateworks in full, never bare Plateworks. Plate, proof, edition, share copy, save file.
@@ -55,7 +56,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 - `.venv/bin/python -m pytest -n auto -m "not slow" -q` before any claim of done, the full suite before a push to `main`. Compare the failure set, not the totals.
 - `ready: True` does not mean real terrain: `tests/conftest.py` hydrates a synthetic DEM. After a pull touching `regions/`, run `.venv/bin/python scripts/verify_regions.py`.
 - No JS test runner. `node --check` each module, match every `$('id')` to the HTML, drive the browser.
-- Only the landing page deploys, by hand. FastAPI auto-docs are off (commit a3d4ba9).
+- Nothing here deploys. The landing, order and privacy pages are Ghost pages on www.plateworks.org since 2026-09-26, built by the blog folder's ghost-tecopa-pages script. FastAPI auto-docs are off (commit a3d4ba9).
 - TDD, and granular present-tense commits that say why. Cloud sessions squash-merge from `claude/**`; the Mac commits to `main` only when green.
 - `tests/test_docs.py` holds this file under 2,000 tokens.
 

@@ -254,42 +254,46 @@ There is no JS runner.
 
 `app.js` routes, `viewer.js` owns proof zoom and pan, `statusbar.js` prints the truth line.
 
-## Add a region to the farm and deploy the landing page
+## Add a region to the farm and publish its relief images
 
-The runbook is `../marketing/DEPLOY.md`. The page deploys by hand from a staged root,
-never from git, because its images are engine renders under `assets/` (gitignored).
+The Tecopa pages are Ghost pages on www.plateworks.org since 2026-09-26. Their images
+are engine renders under `assets/` (gitignored), exported for the web and uploaded to
+Ghost by the blog folder's ghost-tecopa-pages script.
 
 1. `.venv/bin/python scripts/render_asset_farm.py --regions <ids>` on real DEMs. The
    farm stamps the terrain it opened into `assets/index.json`.
    `elko_bonneville` needs its own run with `--dpi 250`: at the default 300 dpi its
    poster is 160 MP and the 120 MP output ceiling refuses it.
-2. `python3 marketing/build_deploy.py` writes the staged root. The terrain guard refuses
-   any published region whose record is synthetic or missing. Never weaken it: a
-   synthetic plate renders cleanly, so nothing else can tell. The guard does carry an
-   `--allow-synthetic` override, and `../marketing/DEPLOY.md` says not to reach for it.
-   Re-render the plate from real terrain instead.
-3. `netlify deploy --prod --dir=<staged root> --site=1902a58d-74a9-4def-8b4e-d93793f81ac4`
-   with `NETLIFY_AUTH_TOKEN` exported.
-4. Verify: `curl -sI https://tecopa.plateworks.org` and `/privacy/` both answer 200,
-   and every `/assets/...` reference in the deployed page answers 200.
+2. `.venv/bin/python scripts/export_relief.py <ids>` writes each region's web images to
+   `assets/<region>/relief/`. It runs the terrain guard in `marketing/build_deploy.py`
+   and refuses any region whose record is synthetic or missing. Never weaken the guard:
+   a synthetic plate renders cleanly, so nothing else can tell.
+3. Copy the images into the Ghost media folder, named `<region>-coin.webp`,
+   `<region>-coin-h.png` and so on, as the script's header lists them.
+4. Run the script on local Ghost, read the pages, then run it with `--live` and the
+   live site. It uploads only new or changed files.
+5. `.venv/bin/python -m pytest -m live tests/test_marketing_page.py`. A new region
+   without a coin on the page turns `test_every_built_plate_is_on_the_page` red.
 
-Tests: `tests/test_terrain_provenance.py`, `tests/test_asset_farm_gate.py`. The Mac's
-local netlify.toml, under its gitignored .netlify folder, still names `Badwater Trails`
-as the publish path. It is machine state, not a repo file, and the deploy passes `--dir`.
+Tests: `tests/test_terrain_provenance.py`, `tests/test_asset_farm_gate.py`,
+`tests/test_export_relief.py`. The Netlify landing retired on 2026-09-26 (tag
+`landing-final-2026-09-26`); `marketing/DEPLOY.md` keeps the farm and the guard.
 
 ## Edit landing or privacy copy
 
 Read `superpowers/specs/2026-08-16-target-customer-profile-design.md` first. Customer
 copy answers to the Collector register, and `tests/test_marketing_page.py` enforces it:
-`BUILDER_REGISTER` bans the builder's vocabulary and four customer anchors are pinned.
+`BUILDER_REGISTER` bans the builder's vocabulary and three customer anchors are pinned.
 
-1. Edit `marketing/landing.html` or `marketing/privacy.html`.
-2. Keep every pinned phrase on one line. The tests match literal substrings against the
-   raw file, so a wrap inside an anchor makes it unsatisfiable.
-3. Count `2.6` with `grep -cF`. The bare dot matches `236px` in the CSS.
-4. A landing-page change turns `test_privacy_page_describes_what_the_landing_page_actually_does`
-   red until the privacy copy follows. The `Last updated YYYY-MM-DD.` line is only checked
-   for its shape, so bump its date by hand.
+1. The copy lives in the blog folder's ghost-tecopa-pages script: `landing()`,
+   `order()` and `privacy()`. Edit it there, not in Ghost Admin: a re-run replaces the
+   page and backs up the old one.
+2. Run the script on local Ghost and read the page. Then run it with `--live`.
+3. Run the live tests: `.venv/bin/python -m pytest -m live tests/test_marketing_page.py`.
+   They fetch the published pages. Keep every pinned phrase intact.
+4. A change to what a page loads turns `test_privacy_page_names_every_host_the_pages_load`
+   red until the privacy copy names the new host. Bump `PRIVACY_DATE` in the script
+   whenever the privacy facts change.
 5. Every marketing image is an engine render, and every claim has a test. A deleted
    test is a deleted claim. Plates are free, always. The name is always the full
    compound Tecopa Plateworks.

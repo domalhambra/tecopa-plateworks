@@ -1,29 +1,15 @@
 # Marketing assets
 
-The outward-facing companion to `docs/marketing.md` (the strategy) — the actual page and
-the renderer that feeds it.
+The outward-facing companion to `docs/marketing.md` (the strategy): the renderer that
+feeds the Tecopa pages.
 
-## `landing.html`
+## The landing page
 
-A single-file landing page built on the plan in `docs/marketing.md`: a gallery-wall
-treatment (the product's own posters hung as framed prints on a dark topographic ground),
-the message ladder, the three pillars, the "the poster is the save file" editions triptych,
-the print/wallpaper/film formats, the region plates, a trust strip, and an FAQ. Palette and
-type are pulled from the render engine itself — the route-ink gold, terrain olive, and the
-Georgia cartouche face the posters actually use.
-
-It references rendered imagery under `assets/` (relative `../assets/...`), so it comes alive
-once you render the asset farm:
-
-```
-./.venv/bin/python scripts/render_asset_farm.py            # real 3DEP DEMs
-./.venv/bin/python scripts/render_asset_farm.py --synthetic-dem   # local preview, no real DEM
-python -m http.server            # then open http://localhost:8000/marketing/landing.html
-```
-
-Currently the page images the **Lassen** plate; render the other regions and swap in their
-posters to feature them. `assets/` is gitignored (generated, and synthetic-DEM previews are
-not real terrain), so the imagery is never committed — only the page and the renderer are.
+The landing, order and privacy pages moved to Ghost on 2026-09-26: www.plateworks.org
+`/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's
+ghost-tecopa-pages script. The single-file `landing.html` and `privacy.html` that lived
+here are at tag `landing-final-2026-09-26`. The farm below still feeds the pages,
+through `scripts/export_relief.py`.
 
 ## `scripts/render_asset_farm.py`
 

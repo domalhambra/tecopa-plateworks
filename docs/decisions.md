@@ -243,6 +243,16 @@ plate holds `region.json`, `overview.png`, `hydro.json`, `sources.json`, `labels
 
 This section supersedes the 2026-06-29 row in invariant 6's history ("Never request finer ground detail than the data holds"): the zoom cap now allows requesting up to 2x finer than the plate's own data, so that line no longer holds without the 2x qualifier above. The 2026-06-29 row is left as written.
 
+## 2026-09-26 (the Ghost cutover)
+
+| Decision | Why | Source |
+|---|---|---|
+| Tecopa orders are paid by an LZ Books invoice, like every Plateworks order. The order page and FAQ say "invoice". | Dom: "Tecopa will use LegalZoom Books actually." One way to pay across the workshop. | Dom, 2026-09-26; landing spec, Amended line |
+| The landing, order and privacy pages are live on Ghost, and `tecopa.plateworks.org` is a Cloudflare 301 to www.plateworks.org/tecopa/ with the path kept. The Netlify site stays as the rollback. | Spec §9 steps 3 to 7, on Dom's go-ahead after he read the pages. | Dom, 2026-09-26 |
+| `marketing/landing.html`, `marketing/privacy.html` and the vendored model-viewer folder are removed, at tag `landing-final-2026-09-26`. `marketing/build_deploy.py` keeps the terrain guard; its staged-root builder is left for a separate change, because its tests also cover the guard. | The guard protects invariant 11 and deserves its own careful change. | this cutover |
+| The honesty tests fetch the published pages and carry the `live` marker, skipped unless a run selects `-m live`. | The page no longer lives in the repo; the default and CI runs stay offline. | landing spec §8 |
+| The pages are counted by the blog-wide Plausible script, as Undercurrent's are; no per-site script or `evt()` helper. | Undercurrent's pattern. The `data-evt` attributes stay for a later events setup. | this cutover |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

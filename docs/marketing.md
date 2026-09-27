@@ -1,5 +1,11 @@
 # Tecopa Plateworks marketing plan — one story, told three times
 
+> **Amended 2026-09-26.** The landing page is on Ghost (www.plateworks.org/tecopa/,
+> spec `superpowers/specs/2026-09-24-ghost-landing-page-design.md`). The plate commission
+> and the region-request form are retired (`decisions.md`, 2026-09-24), and orders are
+> paid by an LZ Books invoice. The Landing page blueprint below describes the retired
+> Netlify page; read it as history.
+
 Tecopa Plateworks's feature list reads as thirteen things: GPX import, relief posters,
 contours, biome tint, place names, markers, icons, pinned photos, wallpapers, device
 bundles, time-lapse films, reprinting, editions. Nobody buys thirteen things. The fix

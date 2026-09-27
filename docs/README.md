@@ -115,7 +115,7 @@ Red-team passes and viability studies. Each is a dated record.
 | Document | Read when |
 |---|---|
 | `../marketing/DEPLOY.md` | Deploying the landing page. The manual deploy, the four transforms, the terrain guard, the steps, and the Netlify gotchas. |
-| `../marketing/README.md` | Working on the landing page itself, after `marketing.md`. What `landing.html` holds, what `scripts/render_asset_farm.py` produces for it, and the three tiers of the social-preview suite. |
+| `../marketing/README.md` | Working on the asset farm, after `marketing.md`. What `scripts/render_asset_farm.py` produces and the three tiers of the social-preview suite. The landing page itself moved to Ghost on 2026-09-26. |
 
 ## Canon that lives outside this repo
 

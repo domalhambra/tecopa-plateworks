@@ -51,17 +51,18 @@ studio has no JS runner: `node --check` each module, then drive the browser.
 
 ## Ship it
 
-Only the landing page ships, by hand, from a staged root. The engine runs locally and
-the launcher is a personal build.
+Nothing here deploys. The engine runs locally and the launcher is a personal build. The
+Tecopa pages are Ghost pages on www.plateworks.org, and their images are engine renders:
 
 ```bash
 .venv/bin/python scripts/render_asset_farm.py --regions <ids>   # engine renders of real terrain
-python3 marketing/build_deploy.py                               # the staged root. The terrain guard refuses a synthetic region
-netlify deploy --prod --dir=<staged root> --site=1902a58d-74a9-4def-8b4e-d93793f81ac4
+.venv/bin/python scripts/export_relief.py <ids>                  # web images. The terrain guard refuses a synthetic region
 ```
 
-The runbook is `marketing/DEPLOY.md`. Every image on the page is an engine render, and
-every claim on it has a test behind it (`tests/test_marketing_page.py`).
+The blog folder's ghost-tecopa-pages script uploads them and builds the pages. The
+runbook is Add a region to the farm and publish its relief images, in
+`docs/changing-things.md`. Every claim on the pages has a test behind it
+(`tests/test_marketing_page.py`, run with `-m live`).
 
 ## Where to go next
 
