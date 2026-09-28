@@ -2,7 +2,8 @@
 """Build regions/<id>/labels.json -- the named-geography layer (GNIS terrain features).
 
 Offline, like region_prep. Queries the USGS ArcGIS GNIS "Landforms" layer (summits,
-ranges, valleys, gaps/passes, flats, basins, ridges) for the region's recorded fetch
+ranges, valleys, gaps/passes, flats, basins, and ridges named as ranges; dunes filed as
+summits are dropped) for the region's recorded fetch
 bbox (regions/<id>/sources.json -> fetch_bbox_4326), projects the names into the region
 CRS, ranks and de-dupes them, and writes labels.json. Water names ship already in
 hydro.json (GNIS names on lakes/rivers), so this file is terrain-only; the renderer
@@ -41,9 +42,26 @@ CLASS_RANK = {
     "Basin": ("basin", 45),
     "Flat": ("flat", 42),        # playa / desert flats (the NV/UT sheets)
     "Valley": ("valley", 40),
-    # Ridge deliberately excluded: rank-30 noise that the density cap never places,
-    # and on a corridor region (elko) it was ~200 features of pure file bloat.
+    # Ridge is excluded as a class: rank-30 noise that the density cap never places,
+    # and on a corridor region (elko) it was ~200 features of pure file bloat. But GNIS
+    # files some true ranges as Ridge (the Nopah Range on tecopa_ca), so a Ridge whose
+    # name ends in one of RIDGE_AS_RANGE is kept as a range (classify, below).
 }
+RIDGE_AS_RANGE = ("range", "mountains")
+# GNIS files dune fields (Dumont, Ibex, Valjean Dunes on tecopa_ca) as Summit, which
+# sets a peak glyph on a sand sea. A Summit whose name ends in one of these is dropped.
+SUMMIT_NOT_A_PEAK = ("dune", "dunes")
+
+
+def classify(name, featureclass):
+    """(kind, rank) for a GNIS landform, or None to leave it out. The class decides,
+    except for the two misfilings above, which the name's last word decides."""
+    last = name.split()[-1].lower() if name.split() else ""
+    if featureclass == "Ridge":
+        return CLASS_RANK["Range"] if last in RIDGE_AS_RANGE else None
+    if featureclass == "Summit" and last in SUMMIT_NOT_A_PEAK:
+        return None
+    return CLASS_RANK.get(featureclass)
 
 
 def _get_json(url, params):
@@ -73,14 +91,14 @@ def fetch_landforms(bbox_4326):
         for ft in feats:
             a = ft.get("attributes", {})
             name = (a.get("gaz_name") or "").strip()
-            cls = a.get("gaz_featureclass")
-            if not name or cls not in CLASS_RANK:
+            kr = classify(name, a.get("gaz_featureclass")) if name else None
+            if kr is None:
                 continue
             geom = ft.get("geometry") or {}
             pts = geom.get("points")
             if not pts:
                 continue
-            kind, rank = CLASS_RANK[cls]
+            kind, rank = kr
             out.append((name, kind, rank, [(float(x), float(y)) for x, y in pts]))
         if len(feats) < 1000 or not d.get("exceededTransferLimit"):
             break

@@ -79,3 +79,36 @@ def test_main_default_root_is_regions(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["build_labels.py", "lassen_ca"])
     bl.main()
     assert seen == [os.path.join("regions", "lassen_ca")]
+
+
+def _fake_landforms(monkeypatch, rows):
+    """Serve fetch_landforms one page of GNIS rows [(name, featureclass)], as the
+    ArcGIS layer returns them, so the class filter runs on the real code path."""
+    from scripts import build_labels as bl
+    page = {"features": [{"attributes": {"gaz_name": n, "gaz_featureclass": c},
+                          "geometry": {"points": [[-116.0, 35.9]]}} for n, c in rows]}
+    monkeypatch.setattr(bl, "_get_json", lambda url, params: page)
+    return bl.fetch_landforms((-116.5, 35.5, -115.5, 36.5))
+
+
+def test_a_ridge_named_as_a_range_is_kept_as_a_range(monkeypatch):
+    # sample-kit finding #7: GNIS files the Nopah Range, the largest ridge on the
+    # Tecopa sheet, as a Ridge. A Ridge named "... Range" or "... Mountains" reads as
+    # a range on the poster; any other Ridge stays out (the elko file-bloat reason).
+    got = _fake_landforms(monkeypatch, [("Nopah Range", "Ridge"),
+                                        ("Tin Mountains", "Ridge"),
+                                        ("Sheep Ridge", "Ridge"),
+                                        ("Rangeview Ridge", "Ridge")])
+    kinds = {name: (kind, rank) for name, kind, rank, _ in got}
+    assert kinds == {"Nopah Range": ("range", 100), "Tin Mountains": ("range", 100)}
+
+
+def test_dunes_filed_as_summits_are_dropped(monkeypatch):
+    # GNIS files dune fields (Dumont, Ibex, Valjean) as Summits, which set a peak
+    # glyph on a sand sea. A Summit whose name ends in Dune or Dunes is dropped.
+    got = _fake_landforms(monkeypatch, [("Dumont Dunes", "Summit"),
+                                        ("Little Dumont Dunes", "Summit"),
+                                        ("Ibex Dune", "Summit"),
+                                        ("Kingston Peak", "Summit"),
+                                        ("Dunesmore Peak", "Summit")])
+    assert sorted(name for name, *_ in got) == ["Dunesmore Peak", "Kingston Peak"]

@@ -262,6 +262,7 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | Decision | Why | Source |
 |---|---|---|
 | A deliverable's filename stem is `tecopa_<region_id>`, except when the id is `tecopa` or begins `tecopa_`: then the id alone. `tecopa_ca` files are `tecopa_ca_…`; every other plate's names are unchanged. | The prefix and the id both said "tecopa" ("tecopa_tecopa_ca_iphone_1179x2556.png"), finding #10. | `download_stem` in `app/main.py` |
+| The labels bake keeps a GNIS Ridge whose name ends in "Range" or "Mountains", as a range, and drops a Summit whose name ends in "Dune" or "Dunes". Other ridges stay out. No committed `labels.json` was rebaked: the rule takes effect on a plate's next `build_labels.py` run, which also refreshes `labels.json`'s hash in `sources.json` and so changes the plate's region pack. A populated-place layer is not part of this; it waits on a product decision. | GNIS files the Nopah Range as a Ridge, so the largest range on `tecopa_ca` had no name, and files the Dumont, Ibex and Valjean dune fields as Summits, so they got peak glyphs. Finding #7. | `classify` in `scripts/build_labels.py` |
 
 ## Rejected and deferred
 
