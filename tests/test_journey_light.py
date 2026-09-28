@@ -293,3 +293,57 @@ def test_journey_light_film_is_share_twin_only():
     webp = c.post("/api/timelapse/submit", data={"session_id": j["session"],
                   "format": "webp", "light_motion": "auto", "max_frames": 4})
     assert webp.status_code == 200 and "job" in webp.json()
+
+
+# ---- colour by grade reads on a road trip (sample-kit finding #3) ----
+
+def _ramp_plate(tmp_path, grade):
+    """A plate that climbs due north at a constant `grade` (rise/run), so a track
+    heading north climbs exactly that grade and one heading south descends it."""
+    import rasterio
+    from rasterio.transform import from_bounds
+    west, south, east, north, res = 600000.0, 4400000.0, 610000.0, 4420000.0, 10.0
+    nx, ny = int((east - west) / res), int((north - south) / res)
+    y_mid = north - (np.arange(ny) + 0.5) * res                    # row 0 = north
+    elev = (1000.0 + grade * (y_mid - south)).astype("float32")
+    data = np.repeat(elev[:, None], nx, axis=1)
+    cfg = {"id": "ramp", "name": "Ramp", "crs": "EPSG:32610",
+           "bounds": [west, south, east, north], "native_resolution_m": res,
+           "elevation_min": float(data.min()), "elevation_max": float(data.max()),
+           "light_azimuth": 315, "light_altitude": 45, "z_factor": 1.0,
+           "overview_size": [100, 200], "dem_path": "dem.tif"}
+    json.dump(cfg, open(tmp_path / "region.json", "w"))
+    with rasterio.open(tmp_path / "dem.tif", "w", driver="GTiff", dtype="float32",
+                       count=1, height=ny, width=nx, crs=cfg["crs"],
+                       transform=from_bounds(west, south, east, north, nx, ny)) as ds:
+        ds.write(data, 1)
+    return cfg
+
+
+def test_grade_colouring_varies_on_road_grades(tmp_path):
+    # A 5% climb is a steep stretch of highway. At the old 30% full scale it landed a
+    # sixth of the way from the flat gold (which is also the default route colour) to
+    # the steep end, so a road trip read as a plain gold route. It must read as
+    # clearly warmer going up and clearly cooler going down.
+    cfg = _ramp_plate(tmp_path, 0.05)
+    ys = np.arange(4402000.0, 4418000.0, 100.0)
+    up = np.column_stack([np.full_like(ys, 605000.0), ys])
+    down = up[::-1].copy()
+    spec = CompositionSpec(region_id="ramp", crs=cfg["crs"],
+                           crop=(600000.0, 4400000.0, 610000.0, 4420000.0),
+                           print_w_in=9, print_h_in=18, native_resolution_m=10,
+                           tracks=[up, down], hotspots=[], track_color_by="grade")
+    cols_up, cols_down = render._track_color_arrays(spec, str(tmp_path), cfg)
+    flat = np.array(render._GRADE_RAMP[1][1], float)
+    steep_up = np.array(render._GRADE_RAMP[2][1], float)
+    steep_down = np.array(render._GRADE_RAMP[0][1], float)
+
+    def reach(cols, end):          # how far from flat toward `end`, 0..1
+        c = cols[len(cols) // 2].astype(float)
+        return float(np.dot(c - flat, end - flat) / np.dot(end - flat, end - flat))
+
+    assert reach(cols_up, steep_up) >= 0.4
+    assert reach(cols_down, steep_down) >= 0.4
+    # the same spec colours the same bytes (invariant 3)
+    again = render._track_color_arrays(spec, str(tmp_path), cfg)
+    assert all(np.array_equal(a, b) for a, b in zip((cols_up, cols_down), again))

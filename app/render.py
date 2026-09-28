@@ -398,7 +398,15 @@ def _sample_dem_elev(region_dir, cfg, xy, ds=None):
 _ELEV_RAMP = ((0.0, (46, 110, 120)), (0.35, (86, 150, 92)), (0.65, (206, 168, 74)),
               (0.85, (208, 120, 66)), (1.0, (238, 226, 200)))
 _GRADE_RAMP = ((0.0, (70, 120, 176)), (0.5, (214, 158, 58)), (1.0, (188, 74, 60)))
-GRADE_FULL_SCALE = 0.30            # |rise/run| that saturates the grade ramp
+# |rise/run| that saturates the grade ramp. 10%, not the old 30%: a road or 4WD trip
+# runs about 2-8% (measured on tecopa_ca's demo journeys: median 1.7%, 90th percentile
+# 4.9%, 99th 8.5% per vertex), and at 30% all of it sat within a sixth of the flat
+# gold midpoint, which is also the default route colour, so the ramp read as a no-op
+# (sample-kit finding #3). A fixed constant rather than a scale taken from the
+# journey's own grades: the colour of a stretch never shifts when another journey
+# joins the sheet (Edition 2 adds ink, it does not repaint Edition 1), and the same
+# grade reads the same on every poster. Steep hiking trails saturate past 10%.
+GRADE_FULL_SCALE = 0.10
 
 def _ramp(stops, t):
     t = 0.0 if not np.isfinite(t) else float(min(1.0, max(0.0, t)))
