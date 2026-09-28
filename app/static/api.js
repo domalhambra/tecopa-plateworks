@@ -230,7 +230,8 @@ export async function fetchBlob(url) {
   return res.blob();
 }
 
-// The server names every deliverable (tecopa_<region>[_edition-N][_years]….ext,
+// The server names every deliverable (tecopa_<region>[_edition-N][_years]….ext, the
+// prefix dropped when the plate id already begins tecopa_;
 // a pure function of the spec) via Content-Disposition — same-origin fetch exposes
 // the header. Returns { blob, filename }; `fallback` covers a missing/odd header so
 // the download never loses its old generic name.

@@ -118,6 +118,20 @@ def test_download_name_dayless_has_no_span():
     s = _spec(track_days=[None])
     assert download_name(s, fmt="pdf") == "tecopa_lassen_ca.pdf"
 
+def test_download_name_does_not_repeat_the_tecopa_prefix():
+    # sample-kit finding #10: the Tecopa plate's id already starts with "tecopa", so
+    # the prefix doubled into "tecopa_tecopa_ca". Every other plate keeps its name.
+    from app.main import download_name
+    s = _spec(region_id="tecopa_ca", crs="EPSG:32611", track_days=["2024-06-01"])
+    assert download_name(s) == "tecopa_ca_2024.png"
+    from app.main import download_stem
+    assert download_stem("tecopa_ca") == "tecopa_ca"      # the wallpaper members' stem
+    assert download_stem("lassen_ca") == "tecopa_lassen_ca"
+    assert download_stem("tushar_beaver_ut") == "tecopa_tushar_beaver_ut"
+    # only a whole "tecopa" word counts: an id that merely starts with the letters
+    # keeps the prefix
+    assert download_stem("tecopah_nv") == "tecopa_tecopah_nv"
+
 def test_download_name_film_and_wallpaper_kinds():
     from app.main import download_name
     s = _spec(edition=2, track_days=["2024-06-01", "2025-06-01"])

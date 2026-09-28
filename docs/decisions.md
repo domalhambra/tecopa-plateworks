@@ -255,6 +255,14 @@ This section supersedes the 2026-06-29 row in invariant 6's history ("Never requ
 | Superseded the same evening: the blog-wide Plausible script is removed, and Ghost's built-in analytics alone counts the pages. The privacy page says so, and its test pins it. | The script's Plausible site no longer existed, so it counted nothing and 404ed on every page. Dom relies on Ghost's analytics. | Dom, 2026-09-26 |
 | Orders go to lab@plateworks.org, not the Gmail address: the order page's button and address, and the privacy page's contact. | Dom: every Plateworks order goes to the Lab's address. The live test pins it. | this change |
 
+## 2026-09-27 (sample-kit fixes)
+
+Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
+
+| Decision | Why | Source |
+|---|---|---|
+| A deliverable's filename stem is `tecopa_<region_id>`, except when the id is `tecopa` or begins `tecopa_`: then the id alone. `tecopa_ca` files are `tecopa_ca_…`; every other plate's names are unchanged. | The prefix and the id both said "tecopa" ("tecopa_tecopa_ca_iphone_1179x2556.png"), finding #10. | `download_stem` in `app/main.py` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

@@ -917,16 +917,26 @@ def credit_line(region) -> str:
     return line[:CREDIT_MAX_CHARS]
 
 
+def download_stem(region_id: str) -> str:
+    """The filename stem every deliverable starts with: tecopa_<region_id>. A plate
+    whose id is already the word "tecopa" or begins "tecopa_" (the Tecopa plate itself,
+    tecopa_ca) keeps its id as the stem, so the name does not stutter into
+    "tecopa_tecopa_ca" (sample-kit finding #10). Every other plate's name is unchanged."""
+    if region_id == "tecopa" or region_id.startswith("tecopa_"):
+        return region_id
+    return f"tecopa_{region_id}"
+
+
 def download_name(spec, kind: str = "", fmt: str = "png") -> str:
     """A self-documenting filename for a deliverable, a pure function of the spec:
-    tecopa_<region_id>[_edition-<n>][_<yearspan>]<kind>.<fmt>. The edition suffix
+    <download_stem>[_edition-<n>][_<yearspan>]<kind>.<fmt>. The edition suffix
     appears from the second edition on (matching the cartouche); the year span comes
     from the spec's track_days (the same year_span the cartouche prints, en dash
     flattened to a filename-safe hyphen). `kind` is "" for prints, "_film" for
     time-lapses, "_wallpapers" for the bundle zip. Charset stays [a-z0-9._-] by
     construction: region ids are ^[a-z0-9_]+$ and years are digits. A reprint names
     the file from the REPRINTED spec (its edition, its years -- there is no clock)."""
-    name = f"tecopa_{spec.region_id}"
+    name = download_stem(spec.region_id)
     if getattr(spec, "edition", 1) >= 2:
         name += f"_edition-{spec.edition}"
     span = year_span(spec.track_days).replace("–", "-")
@@ -1279,7 +1289,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         pa = (spec.crop[2] - spec.crop[0]) * (spec.crop[3] - spec.crop[1])
         na = (pspec.crop[2] - pspec.crop[0]) * (pspec.crop[3] - pspec.crop[1])
         fitted.append({"preset": pid, "crop_growth": round(na / pa, 2)})
-        items.append((pspec, f"tecopa_{region.id}_{p.id}_{p.px_w}x{p.px_h}.png"))
+        items.append((pspec, f"{download_stem(region.id)}_{p.id}_{p.px_w}x{p.px_h}.png"))
     if not items:
         raise HTTPException(422, "No requested device fits this region: "
                             + "; ".join(s["reason"] for s in skipped))
