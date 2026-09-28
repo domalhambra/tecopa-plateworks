@@ -2630,6 +2630,8 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     # is, the band it pulls in from just south of the frame must be real data too
     # (invariant 5) -- refuse with the real reason. A flat crop degenerates to None
     # here and needs no southern band, so the knob-up-on-flat-ground case renders.
+    # The refusal names a smaller frame as well as a move north: a frame that fills
+    # the plate has nowhere to move, and the band shrinks with the frame's height.
     shear = _oblique_shear(region_dir, cfg, spec)
     band_m = oblique_band_m(spec) if shear is not None else 0.0
     if band_m > 0:
@@ -2638,8 +2640,8 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
             raise OffDemError(
                 f"High relief pulls terrain from just south of the frame into view, "
                 f"and that band has no elevation data here ({nan_frac * 100:.0f}% of "
-                f"the sheet's ground is uncovered). Lower the High relief slider or "
-                f"pan the crop north.")
+                f"the sheet's ground is uncovered). Lower the High relief slider, "
+                f"move the frame north, or make the frame smaller.")
 
     gy = (spec.crop[3] - spec.crop[1]) / out_h        # ground metres per px, vertical
     extra_south = _m.ceil(band_m / gy) if shear is not None else 0

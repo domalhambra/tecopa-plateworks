@@ -390,7 +390,13 @@ def test_oblique_south_boundary_422():
     with pytest.raises(OffDemError) as e:
         render.rasterize(dataclasses.replace(spec, oblique=1.0),
                          dpi=96, region_dir=REGION_DIR, hydro=NO_WATER)
-    assert "High relief" in str(e.value)
+    msg = str(e.value)
+    assert "High relief" in msg
+    # sample-kit finding #2: a frame that fills the plate has no room to move north,
+    # so the refusal must also name the way out that always exists. The band is a
+    # fraction of the frame's height (oblique_band_m), so a smaller frame needs less.
+    assert "make the frame smaller" in msg
+    assert "crop" not in msg                 # the studio calls it the frame
 
 
 def test_oblique_flat_crop_degenerates_to_the_flat_sheet(tmp_path):
