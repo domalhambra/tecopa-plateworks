@@ -195,3 +195,53 @@ def test_shipped_region_labels_files_are_wellformed():
         feats = d["features"]
         assert feats and all({"name", "kind", "coords"} <= set(f) for f in feats)
         assert all(f["kind"] in render.GEO_KINDS for f in feats)
+
+
+# ---- the halo is a solid, heavier outline with a soft edge (sample-kit finding #6) ----
+
+GROUND = (30, 60, 200)      # a blue far from both the umber ink and the paper halo
+
+
+def _halo_sheet(dpi):
+    """One straight summit name and one curved range name on a flat blue sheet, so a
+    pixel shows ground exactly when it has blue to spare (ink and paper are both
+    warm: red over blue)."""
+    spec = _spec(labels=True)            # title "-", compass off: a clear sheet
+    w, h = spec.pixel_size(dpi)
+    img = Image.new("RGBA", (w, h), GROUND + (255,))
+    img = render._draw_labels(img, _labels_for(spec), {"lakes": [], "rivers": []},
+                              spec, w, h, dpi)
+    rgb = np.asarray(img.convert("RGB")).astype(int)
+    ink = np.abs(rgb - np.array(render.GEO_LABEL_INK)).sum(axis=2) < 90
+    blue = rgb[..., 2] - rgb[..., 0]     # 170 on bare ground, <= 0 on ink or paper
+    return ink, blue
+
+
+def test_label_halo_is_a_solid_outline_at_least_1_35_pt_wide():
+    # The halo was eight copies of the name shifted 1.1 pt, which left gaps and
+    # streaks between the copies and read poorly over busy relief ("Kingston Range"
+    # on tecopa_ca). No ground may show within 1.35 pt of the ink.
+    from scipy.ndimage import distance_transform_edt
+    for dpi in (150, 300):
+        ink, blue = _halo_sheet(dpi)
+        assert ink.sum() > 200
+        dist = distance_transform_edt(~ink)
+        ring = (dist >= 1.0) & (dist <= render._pt_to_px(1.35, dpi))
+        covered = blue < 25
+        assert covered[ring].mean() > 0.99, (dpi, float(covered[ring].mean()))
+
+
+def test_label_halo_feathers_into_the_ground():
+    # softer: past the solid halo the paper fades into the ground rather than
+    # stopping at a hard cut-out edge
+    from scipy.ndimage import distance_transform_edt
+    dpi = 300
+    ink, blue = _halo_sheet(dpi)
+    dist = distance_transform_edt(~ink)
+    solid = render._pt_to_px(render.GEO_HALO_PT, dpi)
+    band = (dist > solid + 1.5) & (dist <= solid + render._pt_to_px(1.0, dpi))
+    b = blue[band]
+    assert 20 < b.mean() < 150, float(b.mean())
+    # a feather, not a hard edge with a little antialiasing: most of the band is a
+    # partial blend of paper over ground
+    assert ((b > 20) & (b < 150)).mean() > 0.6

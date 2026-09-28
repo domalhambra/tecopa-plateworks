@@ -7,7 +7,7 @@ import rasterio
 from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
                         _fill_nan, _resize_to)
@@ -151,7 +151,15 @@ PLAYA_EDGE_INK = (108, 100, 86)
 # cartographic convention for an area name); everything else is a titlecase point label.
 GEO_LABEL_INK = (46, 38, 30)          # warm dark umber, the map-ink family
 GEO_LABEL_HALO = (244, 238, 225)      # paper, drawn as a knockout halo behind the ink
-GEO_HALO_PT = 1.1                     # halo stroke, points
+# The halo is a true round stroke of the name (Pillow's stroke_width), not the eight
+# shifted copies it was until 2026-09-27: at 1.1 pt those left gaps and streaks between
+# the copies, and "Kingston Range" on tecopa_ca read poorly over busy relief (sample-kit
+# finding #6). Past the solid stroke a Gaussian feather fades the paper into the
+# ground, so the name sits in a soft clearing rather than a hard cut-out.
+GEO_HALO_PT = 1.4                     # solid halo stroke, points
+GEO_HALO_SOFT_PT = 1.2                # feather (Gaussian radius) past the stroke, points
+GEO_HALO_SOFT_GAIN = 1.6              # feather strength: the blurred mask is scaled by this
+GEO_HALO_ALPHA = 235                  # paper opacity at the solid stroke
 GEO_TRACKING_EM = 0.18                # tracked-caps letterspacing for area names
 # per-kind (point size in pt, ALL-CAPS tracked?, keep-rank, type role). Rank orders both
 # the collision pass and, with the density cap, which names survive on a busy sheet. The
@@ -1543,12 +1551,16 @@ def _tracked_width(d, text, font, tracking):
     return round(sum(d.textlength(ch, font=font) for ch in text)
                  + tracking * (len(text) - 1))
 
-def _tracked_text(d, xy, text, font, fill, tracking):
+def _tracked_text(d, xy, text, font, fill, tracking, stroke=0):
     """PIL has no letterspacing; draw per glyph with an added tracking gap --
-    the wide-tracked caps every classic map cartouche sets its title in."""
+    the wide-tracked caps every classic map cartouche sets its title in. `stroke`
+    (px) draws each glyph with a round outline in the same fill: the label halo."""
     x, y = xy
     for ch in text:
-        d.text((x, y), ch, fill=fill, font=font)
+        if stroke:
+            d.text((x, y), ch, fill=fill, font=font, stroke_width=stroke, stroke_fill=fill)
+        else:
+            d.text((x, y), ch, fill=fill, font=font)
         x += d.textlength(ch, font=font) + tracking
 
 def _scale_bar_miles(spec, dpi, fs=1.0):
@@ -2020,26 +2032,55 @@ def _curved_plan(d, poly, text, font, tracking, halo, min_len):
         miny = min(miny, cy - r); maxy = max(maxy, cy + r)
     return glyphs, (round(minx), round(miny), round(maxx), round(maxy))
 
-def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo):
-    """One glyph, centred at `center` and rotated to the path tangent, with the same
-    knockout paper halo the straight labels use. angle_rad is measured y-down, so the
-    tile rotates by -angle to align its +x axis with the tangent."""
+def _draw_glyph_rotated(img, ch, center, angle_rad, font, halo, halo_mask=None):
+    """One glyph, centred at `center` and rotated to the path tangent. With
+    `halo_mask` (an "L" sheet) the glyph's halo stroke is stamped into the mask, for
+    _composite_halo to lay down as paper before any ink; without it, the ink alone is
+    drawn. angle_rad is measured y-down, so the tile rotates by -angle to align its +x
+    axis with the tangent."""
     l, t, r, b = font.getbbox(ch)
     gw, gh = r - l, b - t
     if gw <= 0 or gh <= 0:
         return
     pad = halo + 2
-    tile = Image.new("RGBA", (gw + 2 * pad, gh + 2 * pad), (0, 0, 0, 0))
-    td = ImageDraw.Draw(tile)
+    size = (gw + 2 * pad, gh + 2 * pad)
     ox, oy = pad - l, pad - t
-    for dx in (-halo, 0, halo):
-        for dy in (-halo, 0, halo):
-            if dx or dy:
-                td.text((ox + dx, oy + dy), ch, font=font, fill=GEO_LABEL_HALO + (235,))
-    td.text((ox, oy), ch, font=font, fill=GEO_LABEL_INK + (255,))
+    if halo_mask is not None:
+        tile = Image.new("L", size, 0)
+        ImageDraw.Draw(tile).text((ox, oy), ch, font=font, fill=255,
+                                  stroke_width=halo, stroke_fill=255)
+        rot = tile.rotate(-_m.degrees(angle_rad), expand=True, resample=Image.BILINEAR)
+        x0 = round(center[0] - rot.width / 2); y0 = round(center[1] - rot.height / 2)
+        box = (x0, y0, x0 + rot.width, y0 + rot.height)
+        halo_mask.paste(ImageChops.lighter(halo_mask.crop(box), rot), box)
+        return
+    tile = Image.new("RGBA", size, (0, 0, 0, 0))
+    ImageDraw.Draw(tile).text((ox, oy), ch, font=font, fill=GEO_LABEL_INK + (255,))
     rot = tile.rotate(-_m.degrees(angle_rad), expand=True, resample=Image.BILINEAR)
     img.alpha_composite(rot, (round(center[0] - rot.width / 2),
                               round(center[1] - rot.height / 2)))
+
+def _composite_halo(img, halo_mask, dpi):
+    """Lay the paper halo down from its mask: the solid stroke at GEO_HALO_ALPHA, and
+    past it a Gaussian feather GEO_HALO_SOFT_PT wide (physical, so proof and final
+    match). Only the mask's bounding box, padded by the feather, is processed."""
+    bbox = halo_mask.getbbox()
+    if bbox is None:
+        return img
+    soft = _pt_to_px(GEO_HALO_SOFT_PT, dpi)
+    grow = _m.ceil(3 * soft) + 1
+    box = (max(0, bbox[0] - grow), max(0, bbox[1] - grow),
+           min(img.width, bbox[2] + grow), min(img.height, bbox[3] + grow))
+    # uint8 throughout (lookup tables, not float arrays): a 24x36 final is 78 Mpx
+    crisp = halo_mask.crop(box)
+    feather = crisp.filter(ImageFilter.GaussianBlur(soft)).point(
+        [min(255, round(v * GEO_HALO_SOFT_GAIN)) for v in range(256)])
+    a = ImageChops.lighter(crisp, feather).point(
+        [round(v * GEO_HALO_ALPHA / 255) for v in range(256)])
+    paper = Image.new("RGBA", crisp.size, GEO_LABEL_HALO + (0,))
+    paper.putalpha(a)
+    img.alpha_composite(paper, (box[0], box[1]))
+    return img
 
 def _draw_leader(d, anchor, label_box, dpi):
     """A hairline haloed leader from a displaced label back to its feature anchor, ending in
@@ -2221,23 +2262,33 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
             occupied.append(box)
             placed.append(("straight", x0, y0 - t, text, font, tracking, halo, None))
 
+    if not placed:
+        return img
+    # three passes so no name's paper covers another name's ink: pushed-out smart
+    # labels' leaders, then every halo as one paper layer (a solid stroke with a soft
+    # feather, _composite_halo), then every name's ink on top.
+    for entry in placed:
+        if entry[0] == "straight" and entry[7] is not None:
+            _draw_leader(d, entry[7][0], entry[7][1], dpi)
+    halo_mask = Image.new("L", img.size, 0)
+    hd = ImageDraw.Draw(halo_mask)
+    for entry in placed:
+        if entry[0] == "curved":
+            _, glyphs, font, halo = entry
+            for ch, cx, cy, ang in glyphs:
+                _draw_glyph_rotated(img, ch, (cx, cy), ang, font, halo, halo_mask=halo_mask)
+        else:
+            _, x0, y0, text, font, tracking, halo, _ = entry
+            _tracked_text(hd, (x0, y0), text, font, 255, tracking, stroke=halo)
+    _composite_halo(img, halo_mask, dpi)
+    d = ImageDraw.Draw(img, "RGBA")
     for entry in placed:
         if entry[0] == "curved":
             _, glyphs, font, halo = entry
             for ch, cx, cy, ang in glyphs:
                 _draw_glyph_rotated(img, ch, (cx, cy), ang, font, halo)
         else:
-            _, x0, y0, text, font, tracking, halo, leader = entry
-            # a pushed-out smart label draws its leader first, so the text sits on top.
-            if leader is not None:
-                _draw_leader(d, leader[0], leader[1], dpi)
-            # knockout paper halo: the tracked string stamped around the ink so the name
-            # reads over dark ridges and bright snow alike (classic map label halo).
-            for dx in (-halo, 0, halo):
-                for dy in (-halo, 0, halo):
-                    if dx or dy:
-                        _tracked_text(d, (x0 + dx, y0 + dy), text, font,
-                                      GEO_LABEL_HALO + (235,), tracking)
+            _, x0, y0, text, font, tracking, halo, _ = entry
             _tracked_text(d, (x0, y0), text, font, GEO_LABEL_INK + (255,), tracking)
     return img
 
