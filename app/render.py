@@ -2100,21 +2100,19 @@ def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask
     return None
 
 def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
-    """The occupied rects auto label placement must avoid. The furniture-stack
-    estimate and the clear bands are the shipped arithmetic VERBATIM; rev 2 adds the
-    elevation strip's EXACT rect (shared geometry -- _profile_rect -- so painter and
-    keep-out can't drift). Rev 1 keeps only the hand-tuned estimate: adding the strip
-    rect would move a pre-feature poster's labels (not byte-identical). The furniture
+    """The occupied rects auto label placement must avoid: the furniture stack's
+    measured boxes, the clear bands, and the elevation strip's EXACT rect. The stack
+    and the strip share geometry with their painters (_furniture_stack_rects,
+    _profile_rect) so painter and keep-out can't drift. The furniture
     rects are TRIM-anchored (the sheet until bleed lands) since that is where the
     cartouche/compass/strip draw; the clear bands stay canvas-relative (they are
     wallpaper furniture, and bleed is print-only -- the two never coexist)."""
     tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
-    fs = _furniture_scale(spec)
-    # only reserve the bottom-left corner when the furniture stack actually draws
-    # there (cartouche needs a title; compass has its own toggle) -- a wallpaper (or a
-    # title-less print) must not blot labels out of a third of the sheet for nothing.
-    keepout = ([(tx0, ty1 - round(2.5 * fs * dpi), tx0 + round(3.4 * fs * dpi), ty1)]
-               if (spec.title_text or spec.compass) else [])
+    # the bottom-left stack as drawn: the cartouche's and the compass's own measured
+    # boxes (_furniture_stack_rects), none when neither draws. This was a fixed
+    # 3.4 x 2.5 in guess until 2026-09-27; a long title or credit line made the real
+    # cartouche wider (about 5.9 in on the Tecopa sheet) and names ran under it.
+    keepout = _furniture_stack_rects(spec, d, tx0, ty1, dpi)
     if spec.top_clear_frac > 0:
         # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
         # so auto-placed geography stays out of that band (user-placed markers don't).
@@ -2761,27 +2759,41 @@ def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _furniture_stack_top(spec, d, ty1, dpi):
-    """Sheet y of the topmost painted pixel of the bottom-left furniture stack
-    (cartouche plate + compass disc + the N label above the rose), computed with the
-    painters' OWN arithmetic (_draw_title_block / _draw_compass) so it can't drift
-    from what they draw. ty1 is the bottom of the furniture datum (the trim box's
-    bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
-    no stack (no title, no compass)."""
+def _furniture_stack_rects(spec, d, tx0, ty1, dpi):
+    """[(x0, y0, x1, y1)] boxes (x1, y1 exclusive) of the bottom-left furniture stack
+    as painted: the cartouche plate, then the compass disc with the N label above the
+    rose. Computed with the painters' OWN arithmetic (_draw_title_block /
+    _draw_compass) so they can't drift from what they draw. Each box runs from the
+    corner datum (tx0, ty1) -- the trim box's bottom-left once bleed lands, the
+    sheet's until then -- so the inset margin beside the stack stays clear too. Empty
+    when there is no stack (no title, no compass)."""
     fdpi = dpi * _furniture_scale(spec)
     inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
-    top = ty1 - inset - m["bh"] if m else ty1
+    rects = []
+    if m:
+        rects.append((tx0, ty1 - inset - m["bh"], tx0 + inset + m["bw"] + 1, ty1))
     if spec.compass:
         R = COMPASS_DIAMETER_IN * fdpi / 2.0
         base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
-        cy = base_y - R
+        cx, cy = tx0 + inset + R, base_y - R
         f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
         nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
         nh = nb - nt
         pad = max(2, round(nh * 0.22))
-        top = min(top, round(cy - R - nh - round(0.05 * fdpi)) - pad)
-    return top
+        top = round(cy - R - nh - round(0.05 * fdpi)) - pad
+        ring = max(1, round(_pt_to_px(0.35, fdpi)))      # the paper disc's keyline
+        rects.append((tx0, top, _m.ceil(cx + R * 1.16) + ring + 1, ty1))
+    return rects
+
+
+def _furniture_stack_top(spec, d, ty1, dpi):
+    """Sheet y of the topmost painted pixel of the bottom-left furniture stack
+    (cartouche plate + compass disc + the N label above the rose), the top of
+    _furniture_stack_rects. ty1 is the bottom of the furniture datum (the trim box's
+    bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
+    no stack (no title, no compass)."""
+    return min([ty1] + [r[1] for r in _furniture_stack_rects(spec, d, 0, ty1, dpi)])
 
 
 def _profile_rect(spec, d, trim, dpi):

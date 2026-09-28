@@ -171,3 +171,50 @@ def test_scale_bar_stays_truthful_when_furniture_scales():
     for fs in (1.0, 1.41, 2.0):
         miles, px = render._scale_bar_miles(s, 96, fs)
         assert abs(px - miles * 1609.344 / gpp) < 1e-6
+
+
+# ---- the label keep-out covers the furniture as drawn (sample-kit finding #5) ----
+
+def _painted(spec, w, h, dpi):
+    """Boolean mask of every pixel the cartouche and compass paint on a clear sheet."""
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    img = render._draw_title_block(img, spec, w, h, dpi)
+    img = render._draw_compass(img, spec, w, h, dpi)
+    return np.asarray(img)[..., 3] > 0
+
+
+def _kept_out(spec, w, h, dpi):
+    from PIL import ImageDraw
+    d = ImageDraw.Draw(Image.new("RGBA", (w, h)))
+    mask = np.zeros((h, w), bool)
+    for x0, y0, x1, y1 in render._label_keepout(spec, d, w, h, dpi):
+        mask[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
+    return mask
+
+
+def test_label_keepout_covers_the_drawn_title_block_and_compass():
+    # The keep-out was a fixed 3.4 x 2.5 in guess; the Tecopa cartouche is about
+    # 5.9 in wide, so "...G HILLS" ran under it. Every painted pixel of the stack
+    # must sit inside the keep-out, for a long title and for the compass alone.
+    dpi = 40
+    for kw in ({"title_text": "Tecopa and the Amargosa Country, California"},
+               {"title_text": "Tecopa", "credit_text": "Terrain USGS 3DEP - "
+                "Water USGS NHD - Land cover NLCD 2021 - Names USGS GNIS"},
+               {"title_text": "", "compass": True}):
+        spec = _spec(print_w_in=18, print_h_in=24, **kw)
+        w, h = spec.pixel_size(dpi)
+        painted = _painted(spec, w, h, dpi)
+        assert painted.any()
+        uncovered = painted & ~_kept_out(spec, w, h, dpi)
+        assert not uncovered.any(), (kw, int(uncovered.sum()))
+
+
+def test_label_keepout_does_not_blot_the_sheet_beyond_the_stack():
+    # measured, not padded: the keep-out is no larger than the drawn stack's own
+    # boxes, so a short title frees the ground beside it for names
+    dpi = 40
+    spec = _spec(print_w_in=18, print_h_in=24, title_text="Tecopa")
+    w, h = spec.pixel_size(dpi)
+    ys, xs = np.nonzero(_painted(spec, w, h, dpi))
+    ky, kx = np.nonzero(_kept_out(spec, w, h, dpi))
+    assert kx.max() <= xs.max() + 1 and ky.min() >= ys.min() - 1
