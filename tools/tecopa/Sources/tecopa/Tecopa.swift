@@ -9,6 +9,6 @@ struct Tecopa: AsyncParsableCommand {
         version: bakedVersion,
         subcommands: [
             DoctorCommand.self, EngineCommand.self, LogsCommand.self, RegionsCommand.self,
-            JobsCommand.self, SessionsCommand.self, CachesCommand.self,
+            JobsCommand.self, SessionsCommand.self, CachesCommand.self, MCPCommand.self,
         ])
 }
