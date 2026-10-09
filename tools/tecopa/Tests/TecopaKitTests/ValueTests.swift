@@ -13,6 +13,20 @@ final class ValueTests: XCTestCase {
         XCTAssertEqual(value.text(pretty: false), text)
     }
 
+    func testIntValueIsNilForANumberThatIsNotAnInt() {
+        // a JSON number past Int64 decodes as a double; Int(d) would trap on it
+        XCTAssertNil(JSONValue.double(1e19).intValue)
+        XCTAssertNil(JSONValue.double(1.5).intValue)
+        XCTAssertEqual(JSONValue.double(8848).intValue, 8848)
+    }
+
+    func testAnEmptyRepoFlagFailsAndDoesNotFallThrough() {
+        XCTAssertThrowsError(try RepoLocator.resolve(flag: "", env: ["TECOPA_REPO": "/good/env"],
+                                                     baked: "/good/baked", fileExists: exists)) { error in
+            XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)
+        }
+    }
+
     func testFailureMapsEachKindToItsExitCode() {
         XCTAssertEqual(TecopaFailure(.refused, "x").exitCode, 1)
         XCTAssertEqual(TecopaFailure(.usage, "x").exitCode, 2)

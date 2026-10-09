@@ -13,7 +13,10 @@ public enum RepoLocator {
             ("TECOPA_REPO", env["TECOPA_REPO"]),
             ("the path baked at build time", baked),
         ]
-        guard let chosen = candidates.first(where: { !($0.path ?? "").isEmpty }),
+        // An explicit --repo always wins, even when empty: `--repo "$UNSET"` must fail
+        // and never fall through to another repo. An empty variable counts as unset.
+        let explicit = flag != nil ? candidates.first : nil
+        guard let chosen = explicit ?? candidates.first(where: { !($0.path ?? "").isEmpty }),
               let path = chosen.path else {
             throw TecopaFailure(
                 .environment, "No repository path is known.",

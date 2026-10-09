@@ -6,7 +6,11 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 INSTALL=0
-[[ "${1:-}" == "--install" ]] && INSTALL=1
+case "${1:-}" in
+  "") ;;
+  --install) INSTALL=1 ;;
+  *) echo "usage: tools/tecopa/build.sh [--install]" >&2; exit 2 ;;
+esac
 
 VERSION="$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo dev)"
 GEN="$SCRIPT_DIR/Sources/TecopaKit/Baked.generated.swift"

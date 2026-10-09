@@ -74,7 +74,7 @@ extension JSONValue {
     public var intValue: Int? {
         switch self {
         case .int(let i): return Int(i)
-        case .double(let d): return Int(d)
+        case .double(let d): return Int(exactly: d)     // nil for 1.5 and for 1e19, never a trap
         default: return nil
         }
     }
