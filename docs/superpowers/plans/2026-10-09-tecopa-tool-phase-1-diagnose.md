@@ -3554,6 +3554,21 @@ Report both outputs to Dom. On his yes: `git push origin main`.
 
 ---
 
+## What changed while it ran
+
+Built on 2026-10-09 on the branch `claude/tecopa-tool-phase-1`. Dom opened the build before the 2026-10-21 review. The task text above is the plan as written. These points differ from it.
+
+- **Counts.** The package has 111 tests, not 50. Two review rounds added the rest.
+- **Global options go after the subcommand.** `tecopa doctor --repo <path>`, not `tecopa --repo <path> doctor`. Steps that show the other order are wrong.
+- **The MCP result uses `.text(text:annotations:_meta:)`.** The short form `.text("…")` is deprecated in the SDK. Task 1 found this.
+- **Review of Task 3.** `?full` takes a boolean. An unknown session is a 404 from one read, with no check-then-read pair.
+- **Review of Task 5.** `JSONValue.intValue` uses `Int(exactly:)`, so a number past Int64 cannot trap. An empty `--repo` fails and does not fall through. `build.sh` refuses an unknown argument.
+- **Review of Tasks 6 and 7.** The HTTP client refuses redirects and uses no proxy. `EngineClient.probe` tells a timeout from a stopped engine, so a busy engine is never reported as not running. `SystemProcessRunner` has a 300-second deadline. `Catalog.call` refuses an undeclared argument and a wrong argument kind. `engine_status` reports a debug-route error that is not the gate as `debug: null` with `debug_error`.
+- **Review of Tasks 8 to 11.** `logs` limits `--lines` to 1 to 2000 and states the `--since` inheritance rule in its help. `engine start` waits 160 seconds. The pgrep pattern is anchored to the launcher's path. `engine stop` waits for the launcher process to exit. `regions verify` treats a Python traceback as a failure, not as drift, and takes only region ids that match `[a-z0-9_]{1,64}`. `RepoLocator` returns a standardized absolute path. `doctor` fails a launcher whose baked path holds no engine, compares versions by component, and reads `.python-version` through a seam.
+- **The MCP server drops replies in flight when stdin closes.** A real client keeps stdin open. A script must wait after its last request, as `smoke_test.sh` does.
+- **Found, not changed.** `tecopa regions verify elko_bonneville` reports `DRIFT dem.tif`. By invariant 12 this is the record of a rebuilt DEM, and the sidecar stays as it is.
+- **Not done here.** The registration in the Claude desktop app, and its file-grant check (spec check 2). The registration in Claude Code waits for Dom's yes.
+
 ## Task 1 result
 
 2026-10-09. PASS. Both packages build with Swift 6.4, XCTest runs, the plan's SDK names compile with one deprecation fix, and a binary started from Claude Code reads `README.md` under `~/Documents`.

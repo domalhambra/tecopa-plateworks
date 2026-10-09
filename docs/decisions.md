@@ -267,6 +267,16 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | The label keep-out for the bottom-left stack is the cartouche's and the compass's measured boxes (`_furniture_stack_rects`, the painters' own arithmetic), not the fixed 3.4 × 2.5 in guess. `_furniture_stack_top`, which places the elevation strip, now reads the same boxes and returns the same value. | A long title or credit line makes the cartouche wider than the guess, about 5.9 in on the Tecopa sheet, and a range name ran under it. Finding #5. | `app/render.py`; `tests/test_poster_furniture.py` |
 | The place-name halo is a solid round stroke of the name, 1.4 pt (was 1.1 pt), with a 1.2 pt Gaussian feather past it, all in points. It is laid down as one paper layer for every name before any ink. | The old halo stamped eight shifted copies of the name onto transparent tiles: gaps between copies, and dark fringes from the tiles' antialiasing, made "Kingston Range" hard to read over busy relief. Judged by eye on before and after proofs of `tecopa_ca`. Finding #6. | `_composite_halo` in `app/render.py`; `tests/test_labels.py` |
 
+## 2026-10-09 (the tecopa tool)
+
+| Decision | Why | Source |
+|---|---|---|
+| Claude gets one tool for the engine: a Swift binary, `tecopa`, that is a command line and an MCP server. | A diagnosis tool in `.venv` fails together with the venv it must diagnose. | `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md` |
+| The engine gains read-only debug routes behind `TECOPA_DEBUG=1`. The default is off. | A host that did not ask for the routes has none. | `app/debug.py`; `tests/test_debug.py` |
+| The launcher stays the one owner of the engine on port 8848. The tool opens and quits the launcher and never starts a second uvicorn. | Two owners of one engine is the fault the launcher spec rejected. | `superpowers/specs/2026-07-18-macos-launcher-app-design.md`; the tecopa spec, Rejected |
+| The script table in `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` is an allowlist. It is the one place that decides a script's venv. | Invariant 13 is enforced in code, not by a rule that a session must remember. | the tecopa spec, Venv rule |
+| Phase 1 is built. Phases 2, 3 and 4 each get their own plan. | Their code depends on shapes that phase 1 fixes. | `superpowers/plans/2026-10-09-tecopa-tool-phase-1-diagnose.md` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |
@@ -291,3 +301,5 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | 2026-09-08 | A project charter (PROJECT_CHARTER.md) and a DESIGN.md. | Deferred to Dom. Charters are hand-written, never generated. | this rollout |
 | 2026-09-28 | Rebaking `tecopa_ca`'s `labels.json` so the Nopah Range and dunes rule shows. | Dropped by Dom. A rebake changes the plate's region pack, so reprints of existing Tecopa posters would be refused. The rule in `build_labels.py` stays and applies to any plate's next bake. | the 2026-09-27 sample-kit fixes, above |
 | 2026-09-28 | Sample-kit findings #4 a stronger biome tint, #7 a town-name label layer, #12 a real photo on the farm posters. | Dropped by Dom. Not deferred: a fresh proposal reopens one. | the 2026-09-27 sample-kit fixes, above |
+| 2026-10-09 | A Python `tecopa` in `.venv`. The MCP server inside the launcher app. A CLI with no MCP server. | It fails with the venv. Control only while the app runs. No access from a client with no shell. | `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`, Rejected |
+| 2026-10-09 | Debug routes always on. Studio reports written to a file. | Any host would list sessions and tracks. A report file is the start of a database. | the same spec |

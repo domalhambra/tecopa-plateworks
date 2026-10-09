@@ -28,6 +28,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
 | The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` |
 | The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
+| The `tecopa` tool, `app/debug.py` | `docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`, then Build the tecopa tool |
 | Blender | Render a hero plate |
 | A past decision | `docs/decisions.md` |
 | Machine state, a trap a session hit | `docs/superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md`, then `git log` |

@@ -315,6 +315,48 @@ with no rebuild, because it runs the engine from this repo's `.venv` on port 884
 
 Design: `superpowers/specs/2026-07-18-macos-launcher-app-design.md`.
 
+## Build the tecopa tool
+
+Only when the repo moves or the Swift code under `tools/tecopa/` changes.
+
+1. `swift test --package-path tools/tecopa` must pass. It needs no engine.
+2. `tools/tecopa/build.sh --install` builds the release binary and copies it to
+   `~/.local/bin/tecopa`. It bakes this repo's path into the binary.
+3. `tools/tecopa/smoke_test.sh` is the end-to-end check. Port 8848 must be free. The
+   first quit from a new calling app raises a macOS Automation prompt.
+4. `tecopa doctor` checks the repo, both venvs, the launcher, the port and the log.
+   Run it first when the engine does not start.
+5. To give Claude the tool, run `claude mcp add --scope user tecopa -- ~/.local/bin/tecopa mcp`.
+   It registers the MCP server for every Claude Code session on this Mac. The Claude
+   desktop app needs a check first: its file grant must reach `~/Documents`.
+
+Global options (`--json`, `--repo`, `--port`) go after the subcommand, for example
+`tecopa doctor --json` and `tecopa regions verify lassen_ca --repo <path>`.
+`tecopa engine start` waits up to 160 seconds. The launcher can wait 90 seconds on the
+macOS Documents prompt and then 60 seconds for the engine to answer.
+
+The debug commands (`jobs`, `sessions`, `caches`) need `TECOPA_DEBUG=1` on the engine.
+The launcher sets it. For a development engine, set it by hand.
+
+Design: `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`.
+
+## Add a tecopa command
+
+A command is one `CatalogEntry`. The CLI and the MCP server both read the catalog.
+
+1. Write the operation in `tools/tecopa/Sources/TecopaKit/` as a `CatalogEntry`, and
+   add it to `Catalog.all`. Set `readOnly` to false if it writes or controls anything.
+   Give each argument an `EntryParameter`: `Catalog.call` refuses an argument that the
+   entry does not declare.
+2. Add a thin struct in `tools/tecopa/Sources/tecopa/Commands.swift` that calls
+   `execute` with the entry's name. The command's words are the name with a space
+   for each underscore.
+3. A command that runs a Python script adds a row to `ScriptRunner.table` in the same
+   change. The row names the script's venv. A script with no row does not run.
+4. Add the name to the two sets in `tools/tecopa/Tests/TecopaKitTests/MCPServerTests.swift`.
+5. The tool holds no render logic, no coordinate math and no spec rule. It sends
+   values to the engine unchanged and reports the engine's answer unchanged.
+
 ## Render a hero plate
 
 Operator-only. Blender 4.2 LTS or newer is a separate install, found by `--blender`,

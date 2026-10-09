@@ -1,7 +1,7 @@
 # The `tecopa` Tool: a Swift CLI and MCP Server for the Engine — Design
 
 **Date:** 2026-10-09
-**Status:** Approved by Dom section by section (brainstorming session, 2026-10-09). The written spec waits for his review.
+**Status:** Approved by Dom (brainstorming session, 2026-10-09). Phase 1 is built: see `../plans/2026-10-09-tecopa-tool-phase-1-diagnose.md`, whose "Decisions made while planning" refine this spec. Phases 2, 3 and 4 are not built.
 **Build starts:** after the 2026-10-21 Now review. No code before that date.
 **Extends:** `2026-07-18-macos-launcher-app-design.md` (the launcher, port 8848, engine ownership)
 **Amends:** nothing. No invariant in `CLAUDE.md` changes.
@@ -110,8 +110,9 @@ reads it and does not control it.
 ### Venv rule
 
 The script runner holds one fixed table that maps each script to its interpreter.
-`region_prep.py` and `scripts/bake_playa.py` run in `.venv-prep`. Every other script
-runs in `.venv`. No flag overrides the table. Invariant 13 is enforced in this one
+The table is an allowlist. A script with no row does not run. `region_prep.py`,
+`scripts/bake_playa.py` and `scripts/dem_coverage.py` belong to `.venv-prep`. No flag
+overrides the table. Invariant 13 is enforced in this one
 place.
 
 ## Commands and tools
@@ -250,6 +251,7 @@ The tool reports what the engine says and adds nothing.
 | 2 | Usage error |
 | 3 | Engine unreachable |
 | 4 | Environment fault: a missing repo, venv, script, or launcher |
+| 64 | A usage error that the argument parser finds, the parser's standard code |
 
 An MCP tool returns the same failure as a tool result with the error flag set.
 
@@ -308,6 +310,17 @@ Phases 2, 3 and 4 do not depend on each other.
 | 2 | The binary can read the repo under `~/Documents` when Claude Code starts it, and when the Claude desktop app starts it. | macOS protects that folder. A child process inherits the grant of the app that starts it. The launcher spec records the same trap. |
 | 3 | The privacy claims in `tests/test_marketing_page.py` stay true with the studio hook. | The hook posts only to the local engine, but the claims are tested and the test must be read before the hook is built. |
 | 4 | Quitting the launcher app from a script stops the engine cleanly. | `scripts/macos/smoke_test.sh` does this with `osascript`. The plan confirms that it works from the binary. |
+
+## Changes made while phase 1 was built
+
+The phase 1 plan records each one under "What changed while it ran".
+
+- Global options go after the subcommand.
+- An MCP tool name uses an underscore for each space in the command.
+- Each MCP tool also takes an optional `port`.
+- `engine start` waits up to 160 seconds, not 75.
+- `logs --since` takes a duration (`90s`, `30m`, `2h`, `1d`), and `--lines` is limited to 1 to 2000.
+- `regions verify` reports a crash of the script as a failure, and returns the script's stderr.
 
 ## Rejected
 

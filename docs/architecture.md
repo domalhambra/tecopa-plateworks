@@ -68,6 +68,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `app/blobs.py` | Render output storage behind `LocalBlobs`. | `tests/test_server_foundation.py` |
 | `app/jobs.py` | `ThreadJobQueue`, the async render queue at the compose to rasterize boundary. | `tests/test_server_foundation.py` |
 | `app/logconfig.py` | Logging configuration. | `tests/test_logconfig.py` |
+| `app/debug.py` | The read-only debug routes under `/api/debug/`: engine, jobs, sessions, caches. `enabled()` is the `TECOPA_DEBUG` gate. `build_router` takes the queues and caches as arguments, so it never imports `app/main.py`. | `tests/test_debug.py` |
 | `app/main.py` | The endpoints, the three queues, `_ready_or_503`, the pre-enqueue checks, the auto-docs switch-off. | `tests/test_main.py`, `tests/test_region_endpoints.py`, `tests/test_geometry_gate.py`, `tests/test_markers_move.py`, `tests/test_proof_refine.py`, `tests/test_region_recovery.py`, `tests/test_output_fitness.py` |
 | `app/static/app.js` | The studio bootstrap and router over target and view. | `tests/test_static_registry.py` (text checks only) |
 | `app/static/controls.js` | The declarative registry of every user-settable option. One entry drives the inspector, the palette, presets and the proof-staling rule. | `tests/test_static_registry.py` |
@@ -89,6 +90,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
+| `tools/tecopa/` | The `tecopa` tool: one Swift binary that is a command line and an MCP server. `tools/tecopa/Sources/TecopaKit/Catalog.swift` lists every operation once, and the CLI and `tecopa mcp` both call it. `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` holds the script table that decides a script's venv. | `swift test --package-path tools/tecopa`, Mac only. `tools/tecopa/smoke_test.sh` is the manual end-to-end check. |
 | `marketing/build_deploy.py` | `terrain_guard` alone: refuses any region whose images were rendered from synthetic or unrecorded terrain. `scripts/export_relief.py` runs it per region. The name is kept from the retired Netlify builder (tag `landing-final-2026-09-26`). | `tests/test_terrain_provenance.py`, `tests/test_export_relief.py` |
 | `tests/conftest.py` | Synthetic DEM hydration, per-worker stores, the central `slow` classification. | none. It is the harness itself. |
 | `tests/fixtures/` | `sample.gpx` and the seven `manifest_*_v1.json` read-tolerance inputs. | none |
@@ -107,6 +109,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 - **Type is bound per role by the operator.** `TECOPA_FONT_TITLE`, `_POINT`, `_AREA`, `_WATER`, and `TECOPA_FONT` for body and fallback. The default chain is Georgia, then DejaVu. Bindings ride in no manifest, so the same file renders differently on a host with different bindings.
 - **Region builds are subprocesses.** `POST /api/regions/build` spawns `region_prep.py` in `.venv-prep` on `BUILD_QUEUE` (one slot). Without that venv `/api/regions/plan` reports `prep_ready: false`.
 - **Auto-docs are off.** `app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`, so the studio never fetches from jsDelivr.
+- **The debug routes are gated.** `/api/debug/*` exists only under `TECOPA_DEBUG=1`, which the macOS launcher sets. With the gate off `app/main.py` never includes the router, so each path is a plain 404. Every debug route reads and none changes a session, a job, a cache or a plate.
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` builds a synthetic DEM tagged `synthetic=1` for any plate that lacks one. Check the tag before judging a poster by eye.
 
 ## Environment
@@ -123,6 +126,8 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `TECOPA_ENGINE_VERSION` | `app/provenance.py` | Overrides the git commit as `engine_version` in packaged builds. |
 | `TECOPA_PREP_PYTHON`, `TECOPA_PREP_SCRIPT`, `TECOPA_LABELS_SCRIPT` | `app/main.py` | The interpreter and scripts the in-app region build spawns. |
 | `TECOPA_LOG_LEVEL`, `TECOPA_LOG_FORMAT` | `app/logconfig.py` | Logging. |
+| `TECOPA_DEBUG` | `app/debug.py`, `app/main.py` | `1` includes the read-only debug routes. Any other value, and unset, leaves them out. The launcher sets it. `tests/conftest.py` removes it. |
+| `TECOPA_REPO` | `tools/tecopa/Sources/TecopaKit/RepoLocator.swift` | The repo path for the `tecopa` tool, after `--repo` and before the path baked at build time. |
 | `TECOPA_BLENDER` | `scripts/hero_plate.py` | The Blender binary, when not on `PATH`. |
 | `TECOPA_COIN_FRAMES`, `TECOPA_MOCKUP_FRAMES` | `scripts/render_asset_farm.py`, `scripts/render_coinspin.py`, `scripts/render_mockups.py` | Frame counts for the social assets. |
 | `NETLIFY_AUTH_TOKEN` | the manual deploy | Read from `~/.config/netlify/token`. See `../marketing/DEPLOY.md`. |
@@ -135,6 +140,7 @@ font bindings, which is by design.
 | Surface | How |
 |---|---|
 | The studio | `uvicorn app.main:app --reload` on port 8000 for development. The macOS launcher runs the engine from this repo's `.venv` on port 8848 and logs to `~/Library/Logs/TecopaPlateworks.log`. Build it with `scripts/macos/build_app.sh --install`. A `git pull` updates it with no rebuild. |
+| The `tecopa` tool | `tools/tecopa/build.sh --install` builds the release binary and copies it to `~/.local/bin/tecopa`, with this repo's path baked in. Register it in Claude Code at user scope as the MCP server `tecopa`. Rebuild after the repo moves or the Swift code changes. |
 | Plates | Five committed under `regions/`: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. Each `dem.tif` is gitignored and rebuilt with `region_prep.py`. Packing and publishing plates has never run. |
 | The landing page | Ghost pages on www.plateworks.org since 2026-09-26: `/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's ghost-tecopa-pages script. `tecopa.plateworks.org` is a Cloudflare 301 to `/tecopa/` with the path kept. The Netlify site `tecopa-plateworks` still holds the last deploy as the rollback: delete the Cloudflare rule to serve it again. |
 | The privacy page | `/tecopa-privacy-policy/`. Ghost's redirects file sends `/tecopa/privacy/` there. |
@@ -149,6 +155,7 @@ font bindings, which is by design.
 - The studio has no JS runner. `tests/test_static_registry.py` checks `controls.js` and the HTML as text. Everything else is a browser drive.
 - `.venv/bin/python scripts/verify_regions.py` reports every plate's hash and geometry state. Run it after any pull that touched `regions/`. Outside `.venv` the render stack is absent and the geometry row degrades to `skip`.
 - `scripts/macos/smoke_test.sh` drives the launcher end to end and needs a human for two macOS prompts.
+- `swift test --package-path tools/tecopa` runs the tool's tests with no engine and no network. `tools/tecopa/smoke_test.sh` drives the real launcher and needs port 8848 free. Neither runs in CI.
 - The published pages are gated by `tests/test_marketing_page.py` (the Collector register, the prices, the privacy claims), run with `-m live`, and the relief images by the terrain guard in `../marketing/build_deploy.py`.
 
 ## Cross-repo dependencies
