@@ -102,7 +102,7 @@ struct LogsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "logs", abstract: "Read the tail of the launcher log.")
     @OptionGroup var global: GlobalOptions
-    @Option(name: .long, help: "How many lines to return.")
+    @Option(name: .long, help: "How many lines to return, from 1 to 2000.")
     var lines: Int = 50
     @Option(name: .long, help: "Keep only lines that contain this text.")
     var grep: String?

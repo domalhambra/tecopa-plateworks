@@ -117,7 +117,7 @@ public enum LogReader {
         summary: "Read the tail of the launcher log, which also holds the engine's output.",
         readOnly: true,
         parameters: [
-            EntryParameter("lines", .integer, "How many lines to return. Default 50."),
+            EntryParameter("lines", .integer, "How many lines to return, from 1 to 2000. Default 50."),
             EntryParameter("grep", .string, "Keep only lines that contain this text, in any letter case."),
             EntryParameter("since", .string, sinceSummary),
         ],
