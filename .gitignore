@@ -57,3 +57,8 @@ assets/
 
 # brainstorming visual companion sessions
 .superpowers/
+
+# the tecopa tool (tools/tecopa/build.sh): SwiftPM's build folder, and the file that
+# bakes this machine's repo path into a release build
+tools/tecopa/.build/
+tools/tecopa/Sources/TecopaKit/Baked.generated.swift
