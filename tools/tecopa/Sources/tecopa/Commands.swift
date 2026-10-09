@@ -116,3 +116,16 @@ struct LogsCommand: AsyncParsableCommand {
         try await execute("logs", global, arguments)
     }
 }
+
+struct DoctorCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "doctor",
+        abstract: "Check the repo, the venvs, the launcher, the port and the log. Works with no engine.")
+    @OptionGroup var global: GlobalOptions
+
+    func run() async throws {
+        let report = try await execute("doctor", global)
+        // a failed check is an environment fault; warnings alone exit 0
+        if (report["fail_count"]?.intValue ?? 0) > 0 { throw ExitCode(4) }
+    }
+}

@@ -8,7 +8,7 @@ struct Tecopa: AsyncParsableCommand {
         abstract: "Control and diagnose the Tecopa Plateworks engine.",
         version: bakedVersion,
         subcommands: [
-            EngineCommand.self, LogsCommand.self, RegionsCommand.self, JobsCommand.self,
-            SessionsCommand.self, CachesCommand.self,
+            DoctorCommand.self, EngineCommand.self, LogsCommand.self, RegionsCommand.self,
+            JobsCommand.self, SessionsCommand.self, CachesCommand.self,
         ])
 }
