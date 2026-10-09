@@ -10,11 +10,15 @@ enum EngineEntries {
         readOnly: true
     ) { runtime, _ in
         let ready: EngineClient.Reply
-        do {
-            ready = try await runtime.client.raw("/readyz", timeout: 3)
-        } catch let failure as TecopaFailure where failure.kind == .engineUnreachable {
+        switch await runtime.client.probe("/readyz", timeout: 3) {
+        case .reply(let reply):
+            ready = reply
+        case .noAnswer:
             // a stopped engine is a normal state, so it is data and not a failure
             return .object(["running": .bool(false), "port": .int(Int64(runtime.port))])
+        case .timedOut:
+            // an engine that is busy with a render is not a stopped engine
+            throw runtime.client.timedOutFailure(3)
         }
         guard let isReady = ready.json["ready"], let plates = ready.json["regions"] else {
             throw TecopaFailure(
@@ -25,11 +29,15 @@ enum EngineEntries {
             "running": .bool(true), "port": .int(Int64(runtime.port)),
             "ready": isReady, "regions": plates,
         ]
-        if let engine = try? await runtime.client.debug("/engine") {
+        do {
+            out["engine"] = try await runtime.client.debug("/engine")
             out["debug"] = .bool(true)
-            out["engine"] = engine
-        } else {
+        } catch let failure as TecopaFailure where EngineClient.isGateOff(failure) {
             out["debug"] = .bool(false)
+        } catch {
+            // the gate's state is not known, so it is not reported as off
+            out["debug"] = .null
+            out["debug_error"] = .string((error as? TecopaFailure)?.message ?? "\(error)")
         }
         return .object(out)
     }
@@ -65,14 +73,16 @@ enum EngineEntries {
             EntryParameter("full", .boolean, "With sid: include the track geometry."),
         ]
     ) { runtime, arguments in
+        let full = arguments["full"]?.boolValue ?? false
         guard let sid = arguments["sid"]?.stringValue, !sid.isEmpty else {
+            guard !full else { throw TecopaFailure(.usage, "full needs a session id.") }
             return try await runtime.client.debug("/sessions")
         }
-        // the id goes into the URL path, and a real id is uuid4().hex
-        guard sid.allSatisfy({ $0.isHexDigit }) else {
+        // the id goes into the URL path, and a real id is uuid4().hex. isHexDigit
+        // alone is also true for the fullwidth forms, which are not ASCII.
+        guard sid.allSatisfy({ $0.isASCII && $0.isHexDigit }) else {
             throw TecopaFailure(.usage, "A session id is hexadecimal: \(sid)")
         }
-        let full = arguments["full"]?.boolValue ?? false
         return try await runtime.client.debug("/sessions/" + sid + (full ? "?full=1" : ""))
     }
 

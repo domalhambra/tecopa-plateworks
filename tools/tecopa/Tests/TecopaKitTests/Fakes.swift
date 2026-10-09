@@ -8,7 +8,10 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var routes: [String: (Int, String)] = [:]
     private var results: [String: ProcessResult] = [:]
+    private var timeouts: Set<String> = []
     private(set) var commands: [[String]] = []
+    /// Every URL a test asked for, served or not.
+    private(set) var requests: [URL] = []
     var onRun: ((FakeWorld, [String]) -> Void)?
 
     /// `path` includes the query, for example "/api/debug/sessions/ab?full=1".
@@ -16,8 +19,14 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         lock.lock(); routes[path] = (status, body); lock.unlock()
     }
 
+    /// After this, a request for `path` gets no answer in time: an engine that
+    /// listens and is busy.
+    func timeOut(_ path: String) {
+        lock.lock(); timeouts.insert(path); lock.unlock()
+    }
+
     func stopServing() {
-        lock.lock(); routes.removeAll(); lock.unlock()
+        lock.lock(); routes.removeAll(); timeouts.removeAll(); lock.unlock()
     }
 
     /// The result for any command whose executable ends with `name`.
@@ -27,7 +36,11 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
 
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         let key = url.path + (url.query.map { "?" + $0 } ?? "")
-        let route = lock.withLock { routes[key] }
+        let (slow, route) = lock.withLock {
+            requests.append(url)
+            return (timeouts.contains(key), routes[key])
+        }
+        if slow { throw URLError(.timedOut) }
         guard let route else { throw URLError(.cannotConnectToHost) }
         return (route.0, Data(route.1.utf8))
     }

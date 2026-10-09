@@ -49,3 +49,9 @@ public struct TecopaFailure: Error, Equatable, Sendable {
 public func envelope(_ data: JSONValue) -> JSONValue {
     .object(["ok": .bool(true), "data": data])
 }
+
+/// A number of seconds for a message: "3" and "0.5", never "3.0".
+func secondsText(_ seconds: TimeInterval) -> String {
+    if let whole = Int(exactly: seconds) { return String(whole) }
+    return String(seconds)
+}

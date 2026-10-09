@@ -11,7 +11,7 @@ struct GlobalOptions: ParsableArguments {
     var repo: String?
 
     @Option(name: .long, help: "The engine port.")
-    var port: Int = 8848
+    var port: Int = Runtime.defaultPort
 }
 
 /// Run one catalog entry and print it. The one place the CLI prints and exits, so

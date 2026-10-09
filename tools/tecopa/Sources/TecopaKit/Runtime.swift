@@ -3,6 +3,9 @@ import Foundation
 /// What one call needs. The CLI and the MCP server each build one, and a test builds
 /// one over a fake machine.
 public struct Runtime: Sendable {
+    /// The launcher's engine port, and the default for every command.
+    public static let defaultPort = 8848
+
     public var repoFlag: String?
     public var port: Int
     public var environment: [String: String]
@@ -14,7 +17,7 @@ public struct Runtime: Sendable {
 
     public init(
         repoFlag: String? = nil,
-        port: Int = 8848,
+        port: Int = Runtime.defaultPort,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: String = NSHomeDirectory(),
         http: any HTTPFetching = URLSessionFetcher(),

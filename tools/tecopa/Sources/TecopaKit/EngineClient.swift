@@ -16,21 +16,79 @@ public struct EngineClient: Sendable {
         public let json: JSONValue
     }
 
-    /// Any HTTP answer is a Reply, a 503 included. No answer is `engine_unreachable`.
-    public func raw(_ path: String, timeout: TimeInterval = 10) async throws -> Reply {
-        guard let url = URL(string: "http://127.0.0.1:\(port)" + path) else {
-            throw TecopaFailure(.usage, "Not a valid path: \(path)")
+    /// What one request found. "Nothing listens" and "it listens and is slow" are
+    /// different states: the second is an engine that is busy, not one that is stopped.
+    public enum Probe: Equatable, Sendable {
+        case reply(Reply)
+        case noAnswer
+        case timedOut
+    }
+
+    /// The start of the message `debug(_:)` throws when the gate is off. `isGateOff`
+    /// reads the same constant, so the two cannot drift.
+    static let gateOffMessage = "The debug routes are off on port "
+
+    /// True only for the failure `debug(_:)` throws when the gate is off.
+    public static func isGateOff(_ failure: TecopaFailure) -> Bool {
+        failure.kind == .refused && failure.status == 404
+            && failure.message.hasPrefix(gateOffMessage)
+    }
+
+    /// The URL of one engine path. The host is 127.0.0.1 and the port is this
+    /// client's port, or the address is refused: a path such as "@host/x" would move
+    /// the request to another machine.
+    func address(_ path: String) throws -> URL {
+        guard path.hasPrefix("/") else {
+            throw TecopaFailure(.usage, "An engine path starts with a slash: \(path)")
         }
+        guard (1...65535).contains(port),
+              let url = URL(string: "http://127.0.0.1:\(port)" + path),
+              url.host == "127.0.0.1", url.port == port else {
+            throw TecopaFailure(.usage, "Not a valid engine address: port \(port), path \(path)")
+        }
+        return url
+    }
+
+    func noAnswerFailure() -> TecopaFailure {
+        TecopaFailure(.engineUnreachable, "No engine answers on port \(port).",
+                      hint: "Run `tecopa doctor`.")
+    }
+
+    func timedOutFailure(_ timeout: TimeInterval) -> TecopaFailure {
+        TecopaFailure(
+            .engineUnreachable,
+            "The engine on port \(port) did not answer within \(secondsText(timeout)) seconds.",
+            hint: "It may be busy with a render. Run `tecopa logs`.")
+    }
+
+    /// Ask one path. Never throws: any HTTP answer is `.reply`, a 503 included.
+    public func probe(_ path: String, timeout: TimeInterval = 10) async -> Probe {
+        // `probe` cannot throw, and an address the tool refuses is never asked, so
+        // nothing answers from it. `raw` checks the address first and reports the
+        // usage failure.
+        guard let url = try? address(path) else { return .noAnswer }
         let fetched: (status: Int, body: Data)
         do {
             fetched = try await http.get(url, timeout: timeout)
+        } catch let error as URLError where error.code == .timedOut {
+            return .timedOut
         } catch {
-            throw TecopaFailure(.engineUnreachable, "No engine answers on port \(port).",
-                                hint: "Run `tecopa doctor`.")
+            return .noAnswer
         }
         let json = (try? JSONValue.parse(fetched.body))
             ?? .string(String(decoding: fetched.body, as: UTF8.self))
-        return Reply(status: fetched.status, json: json)
+        return .reply(Reply(status: fetched.status, json: json))
+    }
+
+    /// Any HTTP answer is a Reply, a 503 included. No answer is `engine_unreachable`,
+    /// and its message says if nothing listens or if the engine did not answer in time.
+    public func raw(_ path: String, timeout: TimeInterval = 10) async throws -> Reply {
+        _ = try address(path)
+        switch await probe(path, timeout: timeout) {
+        case .reply(let reply): return reply
+        case .noAnswer: throw noAnswerFailure()
+        case .timedOut: throw timedOutFailure(timeout)
+        }
     }
 
     /// A 2xx body. Any other status is `refused`, with the engine's own body.
@@ -51,7 +109,7 @@ public struct EngineClient: Sendable {
         } catch let failure as TecopaFailure
             where failure.status == 404 && failure.body?["detail"]?.stringValue == "Not Found" {
             throw TecopaFailure(
-                .refused, "The debug routes are off on port \(port).",
+                .refused, Self.gateOffMessage + "\(port).",
                 hint: "Start the engine with TECOPA_DEBUG=1. The launcher sets it.",
                 status: 404, body: failure.body)
         }

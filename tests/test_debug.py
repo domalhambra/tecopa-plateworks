@@ -48,7 +48,10 @@ def test_gate_reads_only_the_exact_value():
 def test_gate_off_means_the_live_app_has_no_debug_routes():
     # conftest removes TECOPA_DEBUG, so app.main was imported with the gate off
     from app.main import app
-    assert TestClient(app).get("/api/debug/engine").status_code == 404
+    r = TestClient(app).get("/api/debug/engine")
+    assert r.status_code == 404
+    # the tecopa tool reads this exact body to say "the debug routes are off"
+    assert r.json() == {"detail": "Not Found"}
 
 
 def test_engine_reports_identity_and_queue_widths():
