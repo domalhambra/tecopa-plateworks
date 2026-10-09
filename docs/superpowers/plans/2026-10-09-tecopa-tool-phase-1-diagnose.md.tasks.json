@@ -28,7 +28,7 @@
     {
       "id": 4,
       "subject": "Task 4: The launcher sets the gate",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The launcher starts the engine with `TECOPA_DEBUG=1`, and the installed app runs from the repo's current path.\n\n**Files:**\n- Modify: `scripts/macos/TecopaPlateworksLauncher.swift` (step 4 of `boot()`, after `p.currentDirectoryURL`)\n\n**Acceptance Criteria:**\n- [ ] `/Applications/Tecopa Plateworks.app/Contents/Info.plist` holds the repo's current path under `TecopaRepoPath`.\n- [ ] With the launcher running, `curl -s http://127.0.0.1:8848/api/debug/engine` returns JSON whose `env` holds `\"TECOPA_DEBUG\":\"1\"`.\n- [ ] After the quit, port 8848 no longer answers.\n\n**Verify:** the three commands in Step 3 → the three expected outputs.\n\n**Steps:**\n- Step 1: Set the variable\n- Step 2: Ask Dom, then rebuild and reinstall\n- Step 3: Check the installed app\n- Step 4: Commit\n\n```json:metadata\n{\"files\": [\"scripts/macos/TecopaPlateworksLauncher.swift\"], \"verifyCommand\": \"curl -s http://127.0.0.1:8848/api/debug/engine | grep -o '\\\"TECOPA_DEBUG\\\":\\\"1\\\"'\", \"acceptanceCriteria\": [\"`/Applications/Tecopa Plateworks.app/Contents/Info.plist` holds the repo's current path under `TecopaRepoPath`.\", \"With the launcher running, `curl -s http://127.0.0.1:8848/api/debug/engine` returns JSON whose `env` holds `\\\"TECOPA_DEBUG\\\":\\\"1\\\"`.\", \"After the quit, port 8848 no longer answers.\"]}\n```",
       "blockedBy": [
         3
@@ -131,5 +131,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-09T22:47:06Z"
+  "lastUpdated": "2026-10-09T22:48:21Z"
 }
