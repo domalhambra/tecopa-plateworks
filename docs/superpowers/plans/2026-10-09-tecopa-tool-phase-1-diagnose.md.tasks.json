@@ -4,7 +4,7 @@
     {
       "id": 1,
       "subject": "Task 1: Prove the Swift stack before any repo code",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Prove that swift-argument-parser and the MCP Swift SDK build with Swift 6.4 on this Mac, that the SDK names this plan uses exist, and that a binary started from Claude Code can read the repo under `~/Documents`.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create: `$TMPDIR/tecopa-probe/Package.swift` (throwaway, not committed)\n- Create: `$TMPDIR/tecopa-probe/Sources/probe/Probe.swift` (throwaway)\n- Create: `$TMPDIR/tecopa-probe/Tests/probeTests/ProbeTests.swift` (throwaway)\n\n**Acceptance Criteria:**\n- [ ] `swift build` of the probe exits 0 and prints no error.\n- [ ] `swift test` of the probe reports 1 test passed, which proves XCTest is available.\n- [ ] The probe's reply to `tools/list` contains `\"name\":\"ping\"` and `\"readOnlyHint\":true`.\n- [ ] The probe's reply to `tools/call` contains `pong` and the first 10 characters of the repo's `README.md`.\n- [ ] The result (PASS or FAIL for each line above, with the output) is written under \"Task 1 result\" at the end of this plan.\n\n**Verify:** the two `printf … | probe` commands in Step 4 → the two expected lines.\n\n**Steps:**\n- Step 1: Ask Dom before the download\n- Step 2: Write the probe package\n- Step 3: Build and test the probe\n- Step 4: Drive the probe over stdio\n- Step 5: Record the result\n\n```json:metadata\n{\"files\": [\"$TMPDIR/tecopa-probe/Package.swift\", \"$TMPDIR/tecopa-probe/Sources/probe/Probe.swift\", \"$TMPDIR/tecopa-probe/Tests/probeTests/ProbeTests.swift\"], \"verifyCommand\": \"swift build --package-path \\\"$TMPDIR/tecopa-probe\\\" && swift test --package-path \\\"$TMPDIR/tecopa-probe\\\"\", \"acceptanceCriteria\": [\"`swift build` of the probe exits 0 and prints no error.\", \"`swift test` of the probe reports 1 test passed, which proves XCTest is available.\", \"The probe's reply to `tools/list` contains `\\\"name\\\":\\\"ping\\\"` and `\\\"readOnlyHint\\\":true`.\", \"The probe's reply to `tools/call` contains `pong` and the first 10 characters of the repo's `README.md`.\", \"The result (PASS or FAIL for each line above, with the output) is written under \\\"Task 1 result\\\" at the end of this plan.\"], \"userGate\": true, \"tags\": [\"user-gate\"]}\n```"
     },
     {
@@ -131,5 +131,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-09T22:28:29Z"
+  "lastUpdated": "2026-10-09T22:41:44Z"
 }
