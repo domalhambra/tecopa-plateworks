@@ -91,11 +91,14 @@ def test_session_detail_holds_no_geometry_unless_asked():
     assert body["spec"]["title_text"] == "LASSEN"
     assert body["spec"]["tracks"] == 1          # a count, never the coordinates
     assert "coords" not in str(body)
+    assert "1100.0" not in str(body) and "5900.0" not in str(body)
+    assert body["hotspots"][0]["label"] == "Camp"   # the user's own labelled points stay
 
 
 def test_session_detail_full_returns_the_geometry():
     c, _ = _client()
     sid = _make_session(with_spec=True)
+    assert c.get(f"/api/debug/sessions/{sid}?full=true").status_code == 200
     full = c.get(f"/api/debug/sessions/{sid}?full=1").json()
     assert full["tracks"][0]["coords"] == [[1100.0, 2100.0], [3900.0, 5900.0]]
     assert full["spec"]["tracks"] == [[[1100.0, 2100.0], [3900.0, 5900.0]]]

@@ -84,10 +84,12 @@ def build_router(*, queues: dict, caches: dict, started: float) -> APIRouter:
         return {"sessions": rows}
 
     @r.get("/sessions/{sid}")
-    async def session_detail(sid: str, full: int = 0):
-        if not session.has(sid):
+    async def session_detail(sid: str, full: bool = False):
+        try:
+            data = session.get(sid)
+        except KeyError:
             raise HTTPException(404, "Unknown session")
-        return _session_detail(sid, session.get(sid), bool(full))
+        return _session_detail(sid, data, full)
 
     @r.get("/caches")
     async def list_caches():
