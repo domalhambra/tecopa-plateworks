@@ -124,12 +124,12 @@
     {
       "id": 14,
       "subject": "Task 14: Documents, the full suite, and the push",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The repo's documents describe the tool and the debug routes, the docs test passes, the full suite matches `main`, and `main` is pushed.\n\n**Files:**\n- Modify: `docs/architecture.md`\n- Modify: `docs/changing-things.md`\n- Modify: `docs/decisions.md`\n- Modify: `docs/README.md`\n- Modify: `CLAUDE.md`\n- Modify: `docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`\n\n**Acceptance Criteria:**\n- [ ] `docs/architecture.md` has module map rows for `app/debug.py` and the Swift package, and environment rows for `TECOPA_DEBUG` and `TECOPA_REPO`.\n- [ ] `docs/changing-things.md` has the sections \"Build the tecopa tool\" and \"Add a tecopa command\".\n- [ ] `CLAUDE.md` routes a change to the tool to the spec, and stays under 2,000 tokens.\n- [ ] The `docs/README.md` row for this plan says phase 1 is built.\n- [ ] The spec's status line says phase 1 is built, and its exit-code table has the row for 64.\n- [ ] `.venv/bin/python -m pytest tests/test_docs.py -q` passes.\n- [ ] The full suite has the same failure set as `main` before Task 2.\n\n**Verify:** `.venv/bin/python -m pytest tests/test_docs.py -q` → `1 passed`. Then `.venv/bin/python -m pytest -n auto -q` → the same failure set as the baseline.\n\n**Steps:**\n- Step 1: `docs/architecture.md`, the module map\n- Step 2: `docs/architecture.md`, the rest\n- Step 3: `docs/changing-things.md`\n- Step 4: `docs/decisions.md`\n- Step 5: `CLAUDE.md`\n- Step 6: `docs/README.md`\n- Step 7: The spec\n- Step 8: Run the docs test\n- Step 9: Commit the documents\n- Step 10: The full suite, then ask Dom before the push\n- Step 11: Log the session\n\n```json:metadata\n{\"files\": [\"docs/architecture.md\", \"docs/changing-things.md\", \"docs/decisions.md\", \"docs/README.md\", \"CLAUDE.md\", \"docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_docs.py -q\", \"acceptanceCriteria\": [\"`docs/architecture.md` has module map rows for `app/debug.py` and the Swift package, and environment rows for `TECOPA_DEBUG` and `TECOPA_REPO`.\", \"`docs/changing-things.md` has the sections \\\"Build the tecopa tool\\\" and \\\"Add a tecopa command\\\".\", \"`CLAUDE.md` routes a change to the tool to the spec, and stays under 2,000 tokens.\", \"The `docs/README.md` row for this plan says phase 1 is built.\", \"The spec's status line says phase 1 is built, and its exit-code table has the row for 64.\", \"`.venv/bin/python -m pytest tests/test_docs.py -q` passes.\", \"The full suite has the same failure set as `main` before Task 2.\"]}\n```",
       "blockedBy": [
         13
       ]
     }
   ],
-  "lastUpdated": "2026-10-09T23:28:42Z"
+  "lastUpdated": "2026-10-09T23:54:06Z"
 }
