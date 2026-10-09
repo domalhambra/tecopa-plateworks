@@ -63,3 +63,22 @@ struct CachesCommand: AsyncParsableCommand {
     @OptionGroup var global: GlobalOptions
     func run() async throws { try await execute("caches", global) }
 }
+
+struct LogsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "logs", abstract: "Read the tail of the launcher log.")
+    @OptionGroup var global: GlobalOptions
+    @Option(name: .long, help: "How many lines to return.")
+    var lines: Int = 50
+    @Option(name: .long, help: "Keep only lines that contain this text.")
+    var grep: String?
+    @Option(name: .long, help: "Keep only lines newer than this age: 90s, 30m, 2h, 1d.")
+    var since: String?
+
+    func run() async throws {
+        var arguments: [String: JSONValue] = ["lines": .int(Int64(lines))]
+        if let grep { arguments["grep"] = .string(grep) }
+        if let since { arguments["since"] = .string(since) }
+        try await execute("logs", global, arguments)
+    }
+}
