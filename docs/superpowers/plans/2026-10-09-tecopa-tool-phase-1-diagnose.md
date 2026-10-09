@@ -3556,12 +3556,30 @@ Report both outputs to Dom. On his yes: `git push origin main`.
 
 ## Task 1 result
 
-Not run. Task 1 fills this section.
+2026-10-09. PASS. Both packages build with Swift 6.4, XCTest runs, the plan's SDK names compile with one deprecation fix, and a binary started from Claude Code reads `README.md` under `~/Documents`.
 
 | Check | Result | Output |
 |---|---|---|
-| `swift build` of the probe | | |
-| `swift test` of the probe | | |
-| `tools/list` holds `ping` and `readOnlyHint` | | |
-| `tools/call` reads `README.md` from Claude Code | | |
-| SDK names that differ from this plan | | |
+| `swift build` of the probe | PASS | `Build complete!`, exit 0, no warnings or errors (after the `.text` fix below) |
+| `swift test` of the probe | PASS | `Executed 1 test, with 0 failures (0 unexpected)` |
+| `tools/list` holds `ping` and `readOnlyHint` | PASS | `{"id":2,...,"result":{"tools":[{"annotations":{"readOnlyHint":true},"description":"Returns pong and the start of README.md","inputSchema":{"properties":{"word":{"type":"string"}},"type":"object"},"name":"ping"}]}}` |
+| `tools/call` reads `README.md` from Claude Code | PASS | `{"id":3,...,"result":{"content":[{"text":"pong hello # Tecopa P","type":"text"}],"isError":false}}` |
+| SDK names that differ from this plan | 1 differs | `.text("...")` is deprecated; use `.text(text:annotations:_meta:)`. See below. |
+
+Resolved versions (from `Package.resolved`): swift-argument-parser 1.8.2, swift-sdk (MCP) 0.12.1. Transitive: eventsource 1.5.1, swift-atomics 1.3.1, swift-collections 1.7.2, swift-log 1.16.1, swift-nio 2.104.0, swift-system 1.8.1.
+
+### SDK names for Task 12
+
+1. **`Tool` construction: as the plan assumes.** `Tool(name:description:inputSchema:annotations:)` with `inputSchema: .object(["type": .string("object"), "properties": .object([...])])` and `annotations: .init(readOnlyHint: true)`. The wire reply carries `"annotations":{"readOnlyHint":true}`. `title:` and `outputSchema:` are optional extras. `description:` is `String?` but has no default, so pass it.
+2. **`params.arguments`: as the plan assumes.** It is `[String: Value]?`. `params.arguments?["word"]?.stringValue` returns `String?`.
+3. **`Value` is `Codable`: as the plan assumes.** `try JSONEncoder().encode(Value.object(["a": .int(1)]))` compiles and prints `{"a":1}`. `Value` also has `init<T: Codable>(_ value: T) throws`, which builds a `Value` from any Codable.
+4. **Keep the server alive: as the plan assumes.** `try await server.start(transport: StdioTransport())` then `await server.waitUntilCompleted()`. The process exited 0 after stdin closed.
+5. **`CallTool.Result` initializer: differs in the content case only.** `.init(content:structuredContent:isError:_meta:)` exists, and `isError: Bool?`. The plan's `.text("...")` still compiles but warns as deprecated. Use:
+
+```swift
+return .init(content: [.text(text: text, annotations: nil, _meta: nil)], isError: false)
+```
+
+6. **`swiftLanguageModes: [.v5]`: as the plan assumes.** The manifest is accepted and no concurrency diagnostic appears. A trial build with `[.v6]` also compiled clean (the handlers capture only a local `let`), so Task 12 can use either mode.
+
+Handler registration `await server.withMethodHandler(ListTools.self) { _ in ... }` and `await server.withMethodHandler(CallTool.self) { params in ... }` compiled as written. The server's `initialize` reply echoes `protocolVersion` `2025-03-26`.
