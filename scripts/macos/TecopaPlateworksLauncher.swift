@@ -174,6 +174,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.executableURL = URL(fileURLWithPath: py)
         p.arguments = ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "\(kPort)"]
         p.currentDirectoryURL = URL(fileURLWithPath: repo)
+        // The `tecopa` tool reads /api/debug/*. Those routes exist only under this
+        // gate, and only this launcher sets it: a hand-started engine has none.
+        var engineEnv = ProcessInfo.processInfo.environment
+        engineEnv["TECOPA_DEBUG"] = "1"
+        p.environment = engineEnv
         if kLogFD >= 0 {
             p.standardOutput = logHandle
             p.standardError = logHandle
