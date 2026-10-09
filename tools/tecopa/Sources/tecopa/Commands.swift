@@ -43,7 +43,7 @@ struct RegionsCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "regions",
         abstract: "List the plates, or check them against sources.json.",
-        subcommands: [List.self],
+        subcommands: [List.self, Verify.self],
         defaultSubcommand: List.self)
 
     struct List: AsyncParsableCommand {
@@ -51,6 +51,19 @@ struct RegionsCommand: AsyncParsableCommand {
             commandName: "list", abstract: "List the plates with the readiness report.")
         @OptionGroup var global: GlobalOptions
         func run() async throws { try await execute("regions", global) }
+    }
+
+    struct Verify: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "verify", abstract: "Run scripts/verify_regions.py.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "Region ids to check. Without one, every plate is checked.")
+        var regions: [String] = []
+
+        func run() async throws {
+            let ids = regions.map { JSONValue.string($0) }
+            try await execute("regions_verify", global, ids.isEmpty ? [:] : ["regions": .array(ids)])
+        }
     }
 }
 
