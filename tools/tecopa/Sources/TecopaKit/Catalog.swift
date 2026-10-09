@@ -43,7 +43,7 @@ public struct CatalogEntry: Sendable {
 /// Every operation the tool has. The CLI and the MCP server both call `call`, so a
 /// command and its tool cannot differ.
 public enum Catalog {
-    public static let all: [CatalogEntry] = EngineEntries.all + [LogReader.entry]
+    public static let all: [CatalogEntry] = EngineEntries.all + Launcher.entries + [LogReader.entry]
 
     public static func named(_ name: String) -> CatalogEntry? {
         all.first { $0.name == name }

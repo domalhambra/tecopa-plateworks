@@ -8,13 +8,34 @@ struct EngineCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "engine",
         abstract: "Read or control the launcher's engine.",
-        subcommands: [Status.self])
+        subcommands: [Status.self, Start.self, Stop.self, Restart.self])
 
     struct Status: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "status", abstract: "Report if the engine answers, and the debug gate.")
         @OptionGroup var global: GlobalOptions
         func run() async throws { try await execute("engine_status", global) }
+    }
+
+    struct Start: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "start", abstract: "Open the launcher app and wait for the engine.")
+        @OptionGroup var global: GlobalOptions
+        func run() async throws { try await execute("engine_start", global) }
+    }
+
+    struct Stop: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "stop", abstract: "Quit the launcher app and wait for the port to close.")
+        @OptionGroup var global: GlobalOptions
+        func run() async throws { try await execute("engine_stop", global) }
+    }
+
+    struct Restart: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "restart", abstract: "Quit and reopen the launcher app.")
+        @OptionGroup var global: GlobalOptions
+        func run() async throws { try await execute("engine_restart", global) }
     }
 }
 
