@@ -10,7 +10,7 @@
     {
       "id": 2,
       "subject": "Task 2: The queue and the stores can list what they hold",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** `ThreadJobQueue` returns a copy of every job with its times, and both stores return their session ids, so a debug route can read them without a private attribute.\n\n**Files:**\n- Modify: `app/jobs.py`\n- Modify: `app/store.py`\n- Modify: `app/session.py`\n- Test: `tests/test_server_foundation.py`\n\n**Acceptance Criteria:**\n- [ ] `ThreadJobQueue.snapshot()` returns one row per job, newest first, with `jid`, `state`, `error`, `progress`, `created`, `started`, `finished`, and no `result`.\n- [ ] A change to a returned row does not change the queue.\n- [ ] `ThreadJobQueue(max_concurrency=0).max_concurrency == 1`.\n- [ ] `MemoryStore.ids()` and `SqliteStore.ids()` return the ids of every created session.\n- [ ] `session.ids()` and `session.kind()` exist.\n- [ ] No existing test changes its result.\n\n**Verify:** `.venv/bin/python -m pytest tests/test_server_foundation.py -q` → all pass.\n\n**Steps:**\n- Step 1: Write the failing tests\n- Step 2: Run the tests to see them fail\n- Step 3: Change `app/jobs.py`\n- Step 4: Change `app/store.py`\n- Step 5: Change `app/session.py`\n- Step 6: Run the file, then the fast suite\n- Step 7: Commit\n\n```json:metadata\n{\"files\": [\"app/jobs.py\", \"app/store.py\", \"app/session.py\", \"tests/test_server_foundation.py\"], \"verifyCommand\": \".venv/bin/python -m pytest tests/test_server_foundation.py -q\", \"acceptanceCriteria\": [\"`ThreadJobQueue.snapshot()` returns one row per job, newest first, with `jid`, `state`, `error`, `progress`, `created`, `started`, `finished`, and no `result`.\", \"A change to a returned row does not change the queue.\", \"`ThreadJobQueue(max_concurrency=0).max_concurrency == 1`.\", \"`MemoryStore.ids()` and `SqliteStore.ids()` return the ids of every created session.\", \"`session.ids()` and `session.kind()` exist.\", \"No existing test changes its result.\"]}\n```",
       "blockedBy": [
         1
@@ -131,5 +131,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-09T22:41:44Z"
+  "lastUpdated": "2026-10-09T22:47:06Z"
 }
