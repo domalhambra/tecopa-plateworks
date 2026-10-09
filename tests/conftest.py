@@ -18,6 +18,11 @@ import json
 import os
 import tempfile
 
+# The debug routes are gated on TECOPA_DEBUG=1 and tests/test_debug.py asserts that the
+# live app has none of them. A shell that exports the variable would otherwise flip
+# that test, so the suite always imports app.main with the gate off.
+os.environ.pop("TECOPA_DEBUG", None)
+
 # Isolate the app's writable stores BEFORE any test module imports app.main: the
 # endpoint tests used to write finals into the repo's live blobs/ and uploads/
 # (417 MB accumulated) and every put() swept the operator's real store (red-team).

@@ -15,7 +15,7 @@ from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
-from app import basecache
+from app import basecache, debug
 from app import ingest, regionbuild
 
 logconfig.setup_logging()
@@ -110,6 +110,16 @@ TIMELAPSE_DEFAULT_DPI = PROOF_DPI
 # promises the studio goes online only to build a plate, and nothing in the studio or
 # the tests reads the schema, so the pages go rather than the promise.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+# Debug routes for the `tecopa` tool: read-only, and present only under
+# TECOPA_DEBUG=1, which the macOS launcher sets. With the gate off this router is
+# never included, so every /api/debug path falls through to the static mount's 404.
+STARTED = time.time()
+if debug.enabled():
+    app.include_router(debug.build_router(
+        queues={"render": QUEUE, "build": BUILD_QUEUE, "proof": PROOF_QUEUE},
+        caches={"base": BASE_CACHE, "ink": INK_CACHE},
+        started=STARTED))
 
 # The deliverable isn't only a print: a PDF suits "an image someone saves for
 # themselves" and is what a print shop asks for anyway (V1-10). Both encode the

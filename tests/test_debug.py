@@ -1,0 +1,114 @@
+# tests/test_debug.py
+# The read-only debug routes behind TECOPA_DEBUG=1 (the `tecopa` tool reads them).
+# The router is built on a small app of its own here, so the gate-on shape is tested
+# without re-importing app.main. The gate-off shape is tested on the live app.
+import time
+import numpy as np
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app import basecache, debug, jobs, session
+from app.ingest import Track
+from app.spec import CompositionSpec
+
+
+def _client():
+    q = jobs.ThreadJobQueue(max_concurrency=2)
+    app = FastAPI()
+    app.include_router(debug.build_router(
+        queues={"render": q}, caches={"base": basecache.BaseCache(1000)},
+        started=time.time() - 5))
+    return TestClient(app), q
+
+
+def _track():
+    return Track("t-0", np.array([[1100.0, 2100.0], [3900.0, 5900.0]]), "2024-06-01")
+
+
+def _make_session(with_spec=False):
+    t = _track()
+    spec = None
+    if with_spec:
+        spec = CompositionSpec(region_id="lassen_ca", crs="EPSG:32610",
+                               crop=(1000.0, 2000.0, 4000.0, 6000.0),
+                               print_w_in=9, print_h_in=12, native_resolution_m=10,
+                               tracks=[t.coords], hotspots=[], seed=7,
+                               title_text="LASSEN")
+    return session.create({"region_id": "lassen_ca", "tracks": [t],
+                           "hotspots": [{"x": 1.0, "y": 2.0, "weight": 1, "label": "Camp"}],
+                           "spec": spec})
+
+
+def test_gate_reads_only_the_exact_value():
+    assert debug.enabled({"TECOPA_DEBUG": "1"})
+    assert not debug.enabled({})
+    assert not debug.enabled({"TECOPA_DEBUG": "0"})
+    assert not debug.enabled({"TECOPA_DEBUG": "true"})
+
+
+def test_gate_off_means_the_live_app_has_no_debug_routes():
+    # conftest removes TECOPA_DEBUG, so app.main was imported with the gate off
+    from app.main import app
+    assert TestClient(app).get("/api/debug/engine").status_code == 404
+
+
+def test_engine_reports_identity_and_queue_widths():
+    c, _ = _client()
+    body = c.get("/api/debug/engine").json()
+    assert body["engine"] == "tecopa-plateworks"
+    assert body["engine_version"]
+    assert body["queues"] == {"render": 2}
+    assert body["uptime_s"] >= 5
+    assert body["pid"] > 0
+    assert body["store"] in ("MemoryStore", "SqliteStore")
+    assert all(k.startswith("TECOPA_") for k in body["env"])
+
+
+def test_jobs_lists_each_queue_without_results():
+    c, q = _client()
+    jid = q.submit(lambda: "secret-result")
+    deadline = time.time() + 5
+    while q.status(jid)["state"] != "done" and time.time() < deadline:
+        time.sleep(0.01)
+    rows = c.get("/api/debug/jobs").json()["jobs"]
+    assert len(rows) == 1
+    assert rows[0]["queue"] == "render" and rows[0]["jid"] == jid
+    assert rows[0]["state"] == "done" and "result" not in rows[0]
+
+
+def test_sessions_lists_a_summary_row():
+    c, _ = _client()
+    sid = _make_session()
+    rows = {r["sid"]: r for r in c.get("/api/debug/sessions").json()["sessions"]}
+    assert rows[sid] == {"sid": sid, "region_id": "lassen_ca", "tracks": 1,
+                         "hotspots": 1, "has_spec": False}
+
+
+def test_session_detail_holds_no_geometry_unless_asked():
+    c, _ = _client()
+    sid = _make_session(with_spec=True)
+    body = c.get(f"/api/debug/sessions/{sid}").json()
+    assert body["tracks"] == [{"track_id": "t-0", "points": 2, "day": "2024-06-01"}]
+    assert body["spec"]["title_text"] == "LASSEN"
+    assert body["spec"]["tracks"] == 1          # a count, never the coordinates
+    assert "coords" not in str(body)
+
+
+def test_session_detail_full_returns_the_geometry():
+    c, _ = _client()
+    sid = _make_session(with_spec=True)
+    full = c.get(f"/api/debug/sessions/{sid}?full=1").json()
+    assert full["tracks"][0]["coords"] == [[1100.0, 2100.0], [3900.0, 5900.0]]
+    assert full["spec"]["tracks"] == [[[1100.0, 2100.0], [3900.0, 5900.0]]]
+
+
+def test_unknown_session_is_a_404_that_names_the_cause():
+    c, _ = _client()
+    r = c.get("/api/debug/sessions/nope")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown session"
+
+
+def test_caches_reports_each_cache():
+    c, _ = _client()
+    body = c.get("/api/debug/caches").json()
+    assert body == {"base": {"entries": 0, "bytes": 0, "max_bytes": 1000,
+                             "hits": 0, "misses": 0}}
