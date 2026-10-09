@@ -19,3 +19,10 @@ def get(sid: str) -> dict:
 
 def update(sid: str, **kw):
     _STORE.update(sid, **kw)
+
+def ids() -> list[str]:
+    return _STORE.ids()
+
+def kind() -> str:
+    """The store's class name, for the debug route: MemoryStore or SqliteStore."""
+    return type(_STORE).__name__

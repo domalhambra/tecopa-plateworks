@@ -223,3 +223,56 @@ def test_job_progress_field_updates_and_survives_status():
             break
         time.sleep(0.1)
     assert q.status(jid)["result"] == "ok"
+
+
+def _wait_done(q, jid, seconds=5.0):
+    deadline = time.time() + seconds
+    while q.status(jid)["state"] not in ("done", "error") and time.time() < deadline:
+        time.sleep(0.01)
+
+
+def test_job_queue_snapshot_lists_every_job_without_results():
+    # the debug route reads this; a result can be a large blob key or any object,
+    # so a snapshot never carries it
+    q = jobs.ThreadJobQueue()
+    jid = q.submit(lambda: "big-result")
+    _wait_done(q, jid)
+    rows = q.snapshot()
+    assert [r["jid"] for r in rows] == [jid]
+    row = rows[0]
+    assert row["state"] == "done" and row["error"] is None
+    assert "result" not in row
+    assert row["created"] <= row["started"] <= row["finished"]
+
+
+def test_job_queue_snapshot_is_newest_first_and_a_copy():
+    q = jobs.ThreadJobQueue()
+    first = q.submit(lambda: 1)
+    time.sleep(0.01)
+    second = q.submit(lambda: 2)
+    _wait_done(q, first)
+    _wait_done(q, second)
+    rows = q.snapshot()
+    assert [r["jid"] for r in rows] == [second, first]
+    rows[0]["state"] = "MUTATED"
+    assert q.snapshot()[0]["state"] == "done"
+
+
+def test_job_queue_records_its_width():
+    assert jobs.ThreadJobQueue(max_concurrency=3).max_concurrency == 3
+    assert jobs.ThreadJobQueue(max_concurrency=0).max_concurrency == 1
+
+
+def test_stores_list_their_session_ids(tmp_path):
+    for s in (store.MemoryStore(), store.SqliteStore(str(tmp_path / "ids.db"))):
+        assert s.ids() == []
+        a = s.create(_session())
+        b = s.create(_session())
+        assert sorted(s.ids()) == sorted([a, b])
+
+
+def test_session_module_lists_ids_and_names_its_store():
+    from app import session
+    sid = session.create({"region_id": "r", "hotspots": [], "tracks": [], "spec": None})
+    assert sid in session.ids()
+    assert session.kind() in ("MemoryStore", "SqliteStore")

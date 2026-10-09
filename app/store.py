@@ -33,6 +33,10 @@ class MemoryStore:
     def has(self, sid: str) -> bool:
         return sid in self._d
 
+    def ids(self) -> list[str]:
+        with self._lock:
+            return list(self._d)
+
     def get(self, sid: str) -> dict:
         with self._lock:
             return copy.deepcopy(self._d[sid])   # KeyError -> caller maps to 404
@@ -73,6 +77,10 @@ class SqliteStore:
     def has(self, sid: str) -> bool:
         with self._conn() as c:
             return c.execute("SELECT 1 FROM sessions WHERE id=?", (sid,)).fetchone() is not None
+
+    def ids(self) -> list[str]:
+        with self._conn() as c:
+            return [row[0] for row in c.execute("SELECT id FROM sessions")]
 
     def get(self, sid: str) -> dict:
         return self._read(sid)

@@ -28,7 +28,8 @@ class ThreadJobQueue:
         # thread, so back-to-back finals ran several ~GB 300-dpi renders at once and
         # could OOM the operator's machine (red-team). Excess jobs stay "queued"
         # until a slot frees -- same states, no API change.
-        self._slots = threading.Semaphore(max(1, max_concurrency))
+        self.max_concurrency = max(1, max_concurrency)
+        self._slots = threading.Semaphore(self.max_concurrency)
 
     def _evict_expired_locked(self):
         if not self.ttl_seconds:
@@ -46,8 +47,8 @@ class ThreadJobQueue:
         with self._lock:
             self._evict_expired_locked()
             self._jobs[jid] = {"state": "queued", "result": None, "error": None,
-                               "created": time.time(), "finished": None,
-                               "progress": None}
+                               "created": time.time(), "started": None,
+                               "finished": None, "progress": None}
         log.info("event=job.submit jid=%s", jid)
 
         def run():
@@ -55,6 +56,7 @@ class ThreadJobQueue:
                 t0 = time.time()
                 with self._lock:
                     self._jobs[jid]["state"] = "running"
+                    self._jobs[jid]["started"] = t0
                 try:
                     result = fn(*args, **kwargs)
                     with self._lock:
@@ -86,3 +88,15 @@ class ThreadJobQueue:
             if jid not in self._jobs:
                 raise KeyError(jid)
             return dict(self._jobs[jid])
+
+    def snapshot(self) -> list[dict]:
+        """Every job record, newest first, for the debug route. A copy, taken under
+        the lock. `result` is left out: it can be a large blob key or any object, and
+        a debug reader needs the state, not the payload."""
+        with self._lock:
+            rows = [{"jid": j, "state": r["state"], "error": r["error"],
+                     "progress": r["progress"], "created": r["created"],
+                     "started": r.get("started"), "finished": r["finished"]}
+                    for j, r in self._jobs.items()]
+        rows.sort(key=lambda r: r["created"], reverse=True)
+        return rows
