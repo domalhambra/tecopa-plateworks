@@ -17,6 +17,25 @@ public enum Doctor {
         text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// True if the interpreter's version starts with ALL the components of the
+    /// wanted version: 3.14 matches 3.14.2, 3.1 does not, and 3.14.1 does not match
+    /// 3.14.10. nil when `wanted` is not dot-separated digits ("cpython-3.14"): such
+    /// a value is not compared.
+    static func versionMatches(found: String, wanted: String) -> Bool? {
+        let wantedParts = wanted.split(separator: ".", omittingEmptySubsequences: false)
+        guard !wantedParts.isEmpty,
+              wantedParts.allSatisfy({ part in
+                  !part.isEmpty && part.utf8.allSatisfy {
+                      (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0)
+                  }
+              }) else { return nil }
+        // "Python 3.14.2": the version is the token after "Python "
+        guard found.hasPrefix("Python "),
+              let token = found.dropFirst("Python ".count).split(whereSeparator: \.isWhitespace).first
+        else { return false }
+        return token.split(separator: ".", omittingEmptySubsequences: false).starts(with: wantedParts)
+    }
+
     static func venvRows(_ runtime: Runtime, repo: String) -> [JSONValue] {
         var rows: [JSONValue] = []
         let python = repo + "/.venv/bin/python"
@@ -25,8 +44,8 @@ public enum Doctor {
                             hint: "Read docs/changing-things.md, Set up a machine."))
         } else if let version = try? runtime.exec(python, ["--version"], cwd: repo), version.exitCode == 0 {
             let found = trimmed(version.stdout)             // "Python 3.14.2"
-            let wanted = trimmed((try? String(contentsOfFile: repo + "/.python-version", encoding: .utf8)) ?? "")
-            if !wanted.isEmpty, !found.contains(" " + wanted) {
+            let wanted = trimmed(runtime.readFile(repo + "/.python-version") ?? "")
+            if versionMatches(found: found, wanted: wanted) == false {
                 rows.append(row("venv", "warn", "\(found), and .python-version asks for \(wanted)."))
             } else {
                 rows.append(row("venv", "ok", found))
@@ -56,6 +75,12 @@ public enum Doctor {
             return row("launcher", "fail", "The launcher holds no repository path.",
                        hint: "Run scripts/macos/build_app.sh --install.")
         }
+        // the launcher starts <built>/.venv/bin/python and shows an alert without it
+        if !runtime.fileExists(built + "/.venv/bin/python") {
+            return row("launcher", "fail",
+                       "The launcher was built for \(built), and no engine is there.",
+                       hint: "Run scripts/macos/build_app.sh --install.")
+        }
         if let repo, built != repo {
             return row("launcher", "fail",
                        "The launcher was built for \(built). The repository is at \(repo).",
@@ -65,31 +90,51 @@ public enum Doctor {
     }
 
     static func engineRows(_ runtime: Runtime) async -> [JSONValue] {
-        guard let reply = try? await runtime.client.raw("/readyz", timeout: 3) else {
+        let timeout: TimeInterval = 3
+        let reply: EngineClient.Reply
+        switch await runtime.client.probe("/readyz", timeout: timeout) {
+        case .reply(let found):
+            reply = found
+        case .noAnswer:
+            // `engine start` controls only the launcher's engine
             return [row("engine", "warn", "No engine answers on port \(runtime.port).",
-                        hint: "Run `tecopa engine start`.")]
+                        hint: runtime.port == Launcher.port
+                            ? "Run `tecopa engine start`."
+                            : "Start the development engine on that port.")]
+        case .timedOut:
+            return [row("engine", "warn",
+                        "Port \(runtime.port) accepts connections but did not answer within \(secondsText(timeout)) seconds.",
+                        hint: "An engine may be busy with a render. Run `tecopa logs`.")]
         }
-        guard let ready = reply.json["ready"]?.boolValue,
-              let plates = reply.json["regions"]?.arrayValue else {
+        // the debug gate of another program is not this tool's business: no second row
+        guard EngineClient.isTecopa(reply) else {
             return [row("engine", "fail", "Port \(runtime.port) answers, but it is not Tecopa Plateworks.",
                         hint: "Quit the other program on that port.")]
         }
+        let plates = reply.json["regions"]?.arrayValue ?? []
         var rows: [JSONValue] = []
-        if ready {
+        if reply.json["ready"]?.boolValue == true {
             rows.append(row("engine", "ok", "Ready on port \(runtime.port), \(plates.count) plates."))
         } else {
             let bad = plates.filter { $0["ready"]?.boolValue != true }
                 .compactMap { $0["id"]?.stringValue }
             rows.append(row(
                 "engine", "fail",
-                "The engine answers, and these plates cannot render: \(bad.joined(separator: ", ")).",
+                bad.isEmpty
+                    ? "The engine answers and reports that it is not ready, with no plate named."
+                    : "The engine answers, and these plates cannot render: \(bad.joined(separator: ", ")).",
                 hint: "Run `tecopa regions verify`. Then read docs/changing-things.md, Repair an orphaned DEM."))
         }
-        if (try? await runtime.client.debug("/engine")) != nil {
+        do {
+            _ = try await runtime.client.debug("/engine")
             rows.append(row("debug_gate", "ok", "The debug routes are on."))
-        } else {
+        } catch let failure as TecopaFailure where EngineClient.isGateOff(failure) {
             rows.append(row("debug_gate", "warn", "The debug routes are off.",
                             hint: "Start the engine with TECOPA_DEBUG=1. The launcher sets it."))
+        } catch {
+            // the gate's state is not known, so it is not reported as off
+            let said = (error as? TecopaFailure)?.message ?? "\(error)"
+            rows.append(row("debug_gate", "warn", "The debug routes did not answer: \(said)"))
         }
         return rows
     }

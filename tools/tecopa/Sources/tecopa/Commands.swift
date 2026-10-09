@@ -106,7 +106,7 @@ struct LogsCommand: AsyncParsableCommand {
     var lines: Int = 50
     @Option(name: .long, help: "Keep only lines that contain this text.")
     var grep: String?
-    @Option(name: .long, help: "Keep only lines newer than this age: 90s, 30m, 2h, 1d.")
+    @Option(name: .long, help: ArgumentHelp(LogReader.sinceSummary))
     var since: String?
 
     func run() async throws {

@@ -9,6 +9,10 @@ enum EngineEntries {
         summary: "Report if the engine answers, each plate's readiness, and the debug gate.",
         readOnly: true
     ) { runtime, _ in
+        // `probe` cannot throw, so it reports an address the tool refuses as no
+        // answer. Check the address first: a port out of range is a usage failure,
+        // not a stopped engine.
+        _ = try runtime.client.address("/readyz")
         let ready: EngineClient.Reply
         switch await runtime.client.probe("/readyz", timeout: 3) {
         case .reply(let reply):
@@ -20,14 +24,14 @@ enum EngineEntries {
             // an engine that is busy with a render is not a stopped engine
             throw runtime.client.timedOutFailure(3)
         }
-        guard let isReady = ready.json["ready"], let plates = ready.json["regions"] else {
+        guard EngineClient.isTecopa(ready) else {
             throw TecopaFailure(
                 .environment, "Port \(runtime.port) answers, but it is not Tecopa Plateworks.",
                 hint: "Quit the other program on that port.")
         }
         var out: [String: JSONValue] = [
             "running": .bool(true), "port": .int(Int64(runtime.port)),
-            "ready": isReady, "regions": plates,
+            "ready": ready.json["ready"] ?? .null, "regions": ready.json["regions"] ?? .null,
         ]
         do {
             out["engine"] = try await runtime.client.debug("/engine")

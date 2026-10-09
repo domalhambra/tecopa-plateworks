@@ -79,6 +79,30 @@ final class ValueTests: XCTestCase {
         }
     }
 
+    func testTheRepoPathIsStandardized() throws {
+        for given in ["/good/x//", "/good/x/.", "/good//x", "/good/y/../x", "/good/x"] {
+            let repo = try RepoLocator.resolve(flag: given, env: [:], baked: nil, fileExists: exists)
+            XCTAssertEqual(repo, "/good/x", given)
+        }
+    }
+
+    func testARelativeRepoPathBecomesAbsolute() throws {
+        // a script runs with the repo as its working directory, so the path must
+        // not depend on where the tool itself was started
+        let repo = try RepoLocator.resolve(flag: "some/checkout", env: [:], baked: nil,
+                                           fileExists: { _ in true })
+        XCTAssertTrue(repo.hasPrefix("/"), repo)
+        XCTAssertTrue(repo.hasSuffix("/some/checkout"), repo)
+    }
+
+    func testAnEmptyRepoFlagIsNeverTheCurrentDirectory() {
+        // standardized, an empty path would be the folder the tool was started in
+        XCTAssertThrowsError(try RepoLocator.resolve(flag: "", env: [:], baked: nil,
+                                                     fileExists: { _ in true })) { error in
+            XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)
+        }
+    }
+
     func testNoPathAtAllIsAnEnvironmentFault() {
         XCTAssertThrowsError(try RepoLocator.resolve(flag: nil, env: [:], baked: nil, fileExists: exists)) { error in
             XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)

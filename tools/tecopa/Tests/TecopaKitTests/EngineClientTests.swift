@@ -127,6 +127,20 @@ final class EngineClientTests: XCTestCase {
             "ready": .bool(false), "regions": .array([])]))))
     }
 
+    func testIsTecopaNeedsBothKeys() throws {
+        func reply(_ status: Int, _ body: String) throws -> EngineClient.Reply {
+            EngineClient.Reply(status: status, json: try JSONValue.parse(Data(body.utf8)))
+        }
+        XCTAssertTrue(EngineClient.isTecopa(try reply(200, FakeWorld.readyBody)))
+        // a 503 from an engine that cannot render is still the engine
+        XCTAssertTrue(EngineClient.isTecopa(try reply(503, #"{"ready":false,"regions":[]}"#)))
+        XCTAssertFalse(EngineClient.isTecopa(try reply(200, #"{"ready":true}"#)))
+        XCTAssertFalse(EngineClient.isTecopa(try reply(200, #"{"regions":[]}"#)))
+        XCTAssertFalse(EngineClient.isTecopa(try reply(200, #"["ready","regions"]"#)))
+        XCTAssertFalse(EngineClient.isTecopa(
+            EngineClient.Reply(status: 200, json: .string("<html>ready regions</html>"))))
+    }
+
     func testIsGateOffIsTrueOnlyForTheClosedGate() async {
         let world = FakeWorld()
         world.serve("/api/debug/jobs", 404, #"{"detail":"Not Found"}"#)

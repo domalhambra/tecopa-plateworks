@@ -6,14 +6,23 @@ import Foundation
 public enum Launcher {
     public static let appPath = "/Applications/Tecopa Plateworks.app"
     public static let port = 8848
-    /// Matches the launcher's own process, by its path inside the app bundle.
-    static let processPattern = "Tecopa Plateworks.app/Contents/MacOS/TecopaPlateworks"
+    /// Matches the launcher's own process and nothing else. `pgrep -f` matches the
+    /// full command line with an extended regular expression, so the pattern is
+    /// anchored at the start, and the executable's name ends at a space or at the
+    /// end. A process that only has the path in its arguments does not match.
+    static let processPattern =
+        "^" + appPath.replacingOccurrences(of: ".", with: "\\.")
+        + "/Contents/MacOS/TecopaPlateworks( |$)"
 
-    enum Serving { case tecopa, foreign, none }
+    /// `busy`: the port accepts a connection and gives no answer in time.
+    enum Serving { case tecopa, foreign, none, busy }
 
     static func probe(_ runtime: Runtime) async -> Serving {
-        guard let reply = try? await runtime.client.raw("/readyz", timeout: 2) else { return .none }
-        return (reply.json["ready"] != nil && reply.json["regions"] != nil) ? .tecopa : .foreign
+        switch await runtime.client.probe("/readyz", timeout: 2) {
+        case .reply(let reply): return EngineClient.isTecopa(reply) ? .tecopa : .foreign
+        case .noAnswer: return .none
+        case .timedOut: return .busy
+        }
     }
 
     static func requireLauncherPort(_ runtime: Runtime) throws {
@@ -21,6 +30,20 @@ public enum Launcher {
             throw TecopaFailure(
                 .usage, "Engine control applies only to the launcher's engine on port \(port).",
                 hint: "Stop a development engine where it was started.")
+        }
+    }
+
+    /// True if the launcher process exists. pgrep exits 0 for a match and 1 for no
+    /// match. Any other code means pgrep could not do its work, and that is not
+    /// "the launcher is not running".
+    static func launcherRuns(_ runtime: Runtime) throws -> Bool {
+        let found = try runtime.exec("/usr/bin/pgrep", ["-f", processPattern])
+        switch found.exitCode {
+        case 0: return true
+        case 1: return false
+        default:
+            let said = found.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            throw TecopaFailure(.environment, "pgrep failed with exit \(found.exitCode): \(said)")
         }
     }
 
@@ -36,6 +59,12 @@ public enum Launcher {
             throw TecopaFailure(
                 .environment, "Port \(port) answers, but it is not Tecopa Plateworks.",
                 hint: "Quit the other program on that port.")
+        case .busy:
+            // a slow engine is not a stopped one: a second launcher is not opened on it
+            throw TecopaFailure(
+                .engineUnreachable,
+                "Something on port \(port) accepts connections but did not answer.",
+                hint: "An engine may be busy with a render. Run `tecopa logs`.")
         case .none:
             break
         }
@@ -49,21 +78,23 @@ public enum Launcher {
         guard opened.exitCode == 0 else {
             throw TecopaFailure(.environment, "macOS could not open the launcher: \(opened.stderr)")
         }
-        for _ in 0..<150 {              // 75 seconds: the launcher itself waits 60
+        // 160 seconds: the launcher can wait 90 on the macOS Documents-permission
+        // prompt, and then 60 for the engine. `busy` is "not ready yet".
+        for _ in 0..<320 {
             if await probe(runtime) == .tecopa {
                 return .object(["started": .bool(true), "running": .bool(true)])
             }
             await runtime.sleep(0.5)
         }
         throw TecopaFailure(
-            .environment, "The engine did not answer within 75 seconds.",
-            hint: "Run `tecopa logs`. The launcher shows an alert when it cannot start the engine.")
+            .environment, "The engine did not answer within 160 seconds.",
+            hint: "Run `tecopa logs`. The launcher shows an alert when it cannot start the engine, "
+                + "and macOS may be waiting for a Documents-folder permission click.")
     }
 
     public static func stop(_ runtime: Runtime) async throws -> JSONValue {
         try requireLauncherPort(runtime)
-        let launcherRuns = try runtime.exec("/usr/bin/pgrep", ["-f", processPattern]).exitCode == 0
-        guard launcherRuns else {
+        guard try launcherRuns(runtime) else {
             if await probe(runtime) != .none {
                 throw TecopaFailure(
                     .refused, "An engine answers on port \(port), but the launcher is not running.",
@@ -85,15 +116,33 @@ public enum Launcher {
                     ? "Allow the calling app to control Tecopa Plateworks: System Settings > Privacy & Security > Automation."
                     : nil)
         }
-        for _ in 0..<24 {               // 12 seconds: the launcher gives the engine 5, then SIGKILL
+        // 12 seconds: the launcher gives the engine 5, then SIGKILL. `busy` is "still there".
+        var closed = false
+        for _ in 0..<24 {
             if await probe(runtime) == .none {
-                return .object(["stopped": .bool(true), "running": .bool(false)])
+                closed = true
+                break
             }
             await runtime.sleep(0.5)
         }
-        throw TecopaFailure(
-            .refused, "The engine still answers on port \(port) after the launcher quit.",
-            hint: "The launcher adopted an engine that it did not start. Stop that engine where it was started.")
+        guard closed else {
+            throw TecopaFailure(
+                .refused, "The engine still answers on port \(port) after the launcher quit.",
+                hint: "The launcher adopted an engine that it did not start. Stop that engine where it was started.")
+        }
+        // The port closes before the app is gone. Wait for the process too, so that
+        // an `open` that follows cannot reach an app that is still quitting.
+        var out: [String: JSONValue] = ["stopped": .bool(true), "running": .bool(false)]
+        var gone = false
+        for _ in 0..<10 {
+            if try !launcherRuns(runtime) {
+                gone = true
+                break
+            }
+            await runtime.sleep(0.5)
+        }
+        if !gone { out["note"] = .string("The launcher process is still exiting.") }
+        return .object(out)
     }
 
     public static func restart(_ runtime: Runtime) async throws -> JSONValue {

@@ -22,8 +22,11 @@ public enum RepoLocator {
                 .environment, "No repository path is known.",
                 hint: "Pass --repo, set TECOPA_REPO, or build with tools/tecopa/build.sh --install.")
         }
-        let clean = path.hasSuffix("/") ? String(path.dropLast()) : path
-        guard fileExists(clean + "/" + marker) else {
+        // Absolute and standardized: no ".", "..", doubled or trailing slash, and a
+        // relative path is taken from the current directory. An empty path stays
+        // empty and fails: standardized, it would become the current directory.
+        let clean = path.isEmpty ? path : URL(fileURLWithPath: path).standardizedFileURL.path
+        guard !clean.isEmpty, fileExists(clean + "/" + marker) else {
             throw TecopaFailure(
                 .environment, "The repository is not at \(clean) (from \(chosen.source)).",
                 hint: "Rebuild with tools/tecopa/build.sh --install, or pass --repo.")

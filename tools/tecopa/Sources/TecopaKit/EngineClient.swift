@@ -34,6 +34,13 @@ public struct EngineClient: Sendable {
             && failure.message.hasPrefix(gateOffMessage)
     }
 
+    /// True when a reply is the engine's own /readyz: the JSON has both keys. This
+    /// is the launcher app's rule too, and the one definition in the tool, so
+    /// `engine status`, engine control and `doctor` cannot disagree on who owns a port.
+    public static func isTecopa(_ reply: Reply) -> Bool {
+        reply.json["ready"] != nil && reply.json["regions"] != nil
+    }
+
     /// The URL of one engine path. The host is 127.0.0.1 and the port is this
     /// client's port, or the address is refused: a path such as "@host/x" would move
     /// the request to another machine.

@@ -1,15 +1,19 @@
 import Foundation
 @testable import TecopaKit
 
-/// One fake machine for a test: an engine that answers some paths, and a process
-/// runner that records each command. `onRun` lets a test change the engine when a
-/// command runs, which is how "the launcher starts the engine" is modelled.
+/// One fake machine for a test: an engine that answers some paths, a process runner
+/// that records each command, and a few files. `onRun` lets a test change the engine
+/// when a command runs, which is how "the launcher starts the engine" is modelled.
 final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private let lock = NSLock()
     private var routes: [String: (Int, String)] = [:]
     private var results: [String: ProcessResult] = [:]
     private var timeouts: Set<String> = []
+    private var files: [String: String] = [:]
+    private var launcherProcess: Bool?
     private(set) var commands: [[String]] = []
+    /// The working directory of each command, in the order of `commands`.
+    private(set) var workingDirectories: [String?] = []
     /// Every URL a test asked for, served or not.
     private(set) var requests: [URL] = []
     var onRun: ((FakeWorld, [String]) -> Void)?
@@ -34,6 +38,19 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         lock.lock(); results[name] = result; lock.unlock()
     }
 
+    /// Does the launcher process exist? When this is set, `pgrep` exits 0 or 1 to
+    /// match it, unless a test gave pgrep its own `result(for:)`. nil, the default,
+    /// does not model the process: pgrep then exits 0 like any other command.
+    var launcherRunning: Bool? {
+        get { lock.withLock { launcherProcess } }
+        set { lock.withLock { launcherProcess = newValue } }
+    }
+
+    /// The text `Runtime.readFile` returns for `path`. Any other path reads as nil.
+    func file(_ path: String, _ contents: String) {
+        lock.lock(); files[path] = contents; lock.unlock()
+    }
+
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         let key = url.path + (url.query.map { "?" + $0 } ?? "")
         let (slow, route) = lock.withLock {
@@ -49,8 +66,12 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         let command = [executable] + arguments
         lock.lock()
         commands.append(command)
+        workingDirectories.append(cwd)
         let name = (executable as NSString).lastPathComponent
-        let result = results[name] ?? ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        var result = results[name] ?? ProcessResult(exitCode: 0, stdout: "", stderr: "")
+        if name == "pgrep", results[name] == nil, let launcherProcess {
+            result = ProcessResult(exitCode: launcherProcess ? 0 : 1, stdout: "", stderr: "")
+        }
         lock.unlock()
         onRun?(self, command)
         return result
@@ -62,6 +83,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         Runtime(repoFlag: repo, port: port, environment: [:], home: home,
                 http: self, runner: self,
                 fileExists: { _ in true },
-                sleep: { _ in })
+                sleep: { _ in },
+                readFile: { path in self.lock.withLock { self.files[path] } })
     }
 }

@@ -30,6 +30,18 @@ final class EngineEntriesTests: XCTestCase {
         XCTAssertEqual(env["data"]?["port"]?.intValue, 8848)
     }
 
+    func testEngineStatusRefusesAPortOutOfRange() async {
+        // without the check this was {"running": false}: a stopped engine on port 0
+        let world = FakeWorld()
+        for port in [0, 65536, -1] {
+            let (env, failure) = await Catalog.call("engine_status", world.runtime(port: port), [:])
+            XCTAssertEqual(failure?.kind, .usage, "\(port)")
+            XCTAssertTrue(failure?.message.contains("Not a valid engine address") ?? false)
+            XCTAssertNil(env["data"])
+        }
+        XCTAssertEqual(world.requests, [])
+    }
+
     func testEngineStatusRefusesAForeignProgramOnThePort() async {
         let world = FakeWorld()
         world.serve("/readyz", 200, "<html>hello</html>")

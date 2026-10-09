@@ -14,6 +14,8 @@ public struct Runtime: Sendable {
     public var runner: any ProcessRunning
     public var fileExists: @Sendable (String) -> Bool
     public var sleep: @Sendable (Double) async -> Void
+    /// The text of one file, or nil when it cannot be read.
+    public var readFile: @Sendable (String) -> String?
 
     public init(
         repoFlag: String? = nil,
@@ -25,6 +27,9 @@ public struct Runtime: Sendable {
         fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
         sleep: @escaping @Sendable (Double) async -> Void = {
             try? await Task.sleep(nanoseconds: UInt64($0 * 1_000_000_000))
+        },
+        readFile: @escaping @Sendable (String) -> String? = {
+            try? String(contentsOfFile: $0, encoding: .utf8)
         }
     ) {
         self.repoFlag = repoFlag
@@ -35,6 +40,7 @@ public struct Runtime: Sendable {
         self.runner = runner
         self.fileExists = fileExists
         self.sleep = sleep
+        self.readFile = readFile
     }
 
     public var client: EngineClient { EngineClient(port: port, http: http) }
