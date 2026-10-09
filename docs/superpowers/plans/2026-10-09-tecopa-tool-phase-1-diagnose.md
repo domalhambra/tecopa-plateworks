@@ -3558,7 +3558,7 @@ Report both outputs to Dom. On his yes: `git push origin main`.
 
 Built on 2026-10-09 on the branch `claude/tecopa-tool-phase-1`. Dom opened the build before the 2026-10-21 review. The task text above is the plan as written. These points differ from it.
 
-- **Counts.** The package has 111 tests, not 50. Two review rounds added the rest.
+- **Counts.** The package has 127 tests, not 50. Three review rounds added the rest.
 - **Global options go after the subcommand.** `tecopa doctor --repo <path>`, not `tecopa --repo <path> doctor`. Steps that show the other order are wrong.
 - **The MCP result uses `.text(text:annotations:_meta:)`.** The short form `.text("…")` is deprecated in the SDK. Task 1 found this.
 - **Review of Task 3.** `?full` takes a boolean. An unknown session is a 404 from one read, with no check-then-read pair.

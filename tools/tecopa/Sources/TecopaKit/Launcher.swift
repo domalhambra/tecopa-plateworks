@@ -95,11 +95,24 @@ public enum Launcher {
 
     /// The jobs a stop would end: those that run and those that wait for a slot.
     /// nil when the engine did not say, which is not the same as none.
-    static func activeJobs(_ runtime: Runtime) async -> Int? {
-        guard let rows = (try? await runtime.client.debug("/jobs"))?["jobs"]?.arrayValue else {
-            return nil
+    /// What one read of the engine's jobs said. `timedOut` means the engine accepted
+    /// the connection and did not answer: a long render can hold it that way, and
+    /// that render is the work a stop would end.
+    enum JobsRead: Equatable { case active(Int), unknown, timedOut }
+
+    static func readJobs(_ runtime: Runtime) async -> JobsRead {
+        switch await runtime.client.probe("/api/debug/jobs", timeout: 10) {
+        case .timedOut:
+            return .timedOut
+        case .noAnswer:
+            return .unknown
+        case .reply(let reply):
+            guard reply.status == 200, let rows = reply.json["jobs"]?.arrayValue else {
+                return .unknown       // the gate is off, or the route failed
+            }
+            let states = ["running", "queued"]
+            return .active(rows.filter { states.contains($0["state"]?.stringValue ?? "") }.count)
         }
-        return rows.filter { ["running", "queued"].contains($0["state"]?.stringValue ?? "") }.count
     }
 
     /// The sessions the engine holds, or nil when the engine did not say.
@@ -124,12 +137,21 @@ public enum Launcher {
                 "note": .string("The launcher is not running."),
             ])
         }
-        let jobs = await activeJobs(runtime)
-        if let jobs, jobs > 0, !force {
-            throw TecopaFailure(
-                .refused, "\(jobs) job(s) are running or queued. Stopping the engine ends them.",
-                hint: "Wait for them (`tecopa jobs`), or stop with force.")
+        let jobsRead = await readJobs(runtime)
+        if !force {
+            if jobsRead == .timedOut {
+                throw TecopaFailure(
+                    .refused, "The engine did not say what jobs it holds. It may be busy with a render.",
+                    hint: "Wait and read `tecopa logs`, or stop with force.")
+            }
+            if case .active(let count) = jobsRead, count > 0 {
+                throw TecopaFailure(
+                    .refused, "\(count) job(s) are running or queued. Stopping the engine ends them.",
+                    hint: "Wait for them (`tecopa jobs`), or stop with force.")
+            }
         }
+        var jobs: Int?
+        if case .active(let count) = jobsRead { jobs = count }
         let sessions = await heldSessions(runtime)
         var notes: [String] = []
         if jobs == nil || sessions == nil {

@@ -460,4 +460,29 @@ final class LauncherTests: XCTestCase {
         }
         XCTAssertEqual(w.commands, [])
     }
+
+    func testStopRefusesWhenTheJobsReadTimesOut() async {
+        // a long render can hold the engine so that it does not answer; that render is
+        // exactly the work a stop would end, so "no answer in time" must not read as "no jobs"
+        let w = world(running: true)
+        w.timeOut("/api/debug/jobs")
+        do {
+            _ = try await Launcher.stop(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .refused)
+            XCTAssertTrue(f.message.contains("busy with a render"))
+            XCTAssertEqual(w.commands.map { $0[0] }, ["/usr/bin/pgrep"])
+        } catch { XCTFail("\(error)") }
+    }
+
+    func testForceStopsAnEngineWhoseJobsReadTimesOut() async throws {
+        let w = world(running: true)
+        w.timeOut("/api/debug/jobs")
+        let out = try await Launcher.stop(w.runtime(), force: true)
+        XCTAssertEqual(out["stopped"], .bool(true))
+        XCTAssertNil(out["jobs_ended"])
+        XCTAssertTrue(out["note"]?.stringValue?.contains("could not be read") ?? false)
+    }
+
 }
