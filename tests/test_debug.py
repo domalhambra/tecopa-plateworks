@@ -4,11 +4,13 @@
 # without re-importing app.main. The gate-off shape is tested on the live app.
 import time
 import numpy as np
-from fastapi import FastAPI
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from app import basecache, debug, jobs, session
 from app.ingest import Track
 from app.spec import CompositionSpec
+from starlette.requests import Request
 
 
 def _client():
@@ -17,7 +19,8 @@ def _client():
     app.include_router(debug.build_router(
         queues={"render": q}, caches={"base": basecache.BaseCache(1000)},
         started=time.time() - 5))
-    return TestClient(app), q
+    # the routes answer only a local Host header, and TestClient's default is "testserver"
+    return TestClient(app, base_url="http://127.0.0.1"), q
 
 
 def _track():
@@ -118,3 +121,45 @@ def test_caches_reports_each_cache():
     body = c.get("/api/debug/caches").json()
     assert body == {"base": {"entries": 0, "bytes": 0, "max_bytes": 1000,
                              "hits": 0, "misses": 0}}
+
+
+LOCAL_ONLY = "Debug routes answer only a local Host header."
+
+
+def test_a_foreign_host_header_is_refused_on_every_route():
+    # a page that uses DNS rebinding reaches 127.0.0.1 with its own Host header
+    c, _ = _client()
+    sid = _make_session(with_spec=True)
+    for path in ("/engine", "/jobs", "/sessions", "/sessions/x?full=1",
+                 f"/sessions/{sid}?full=1", "/caches"):
+        r = c.get("/api/debug" + path, headers={"Host": "attacker.example:8848"})
+        assert r.status_code == 403, path
+        # 403 and not 404: the tecopa tool reads a 404 "Not Found" as "the gate is off"
+        assert r.json() == {"detail": LOCAL_ONLY}, path
+        assert "1100.0" not in r.text, path
+
+
+@pytest.mark.parametrize("host", ["localhost:8848", "127.0.0.1", "[::1]:8848",
+                                  "127.0.0.1:8848", "localhost", "[::1]",
+                                  "LOCALHOST:8848"])
+def test_a_local_host_header_is_answered(host):
+    c, _ = _client()
+    assert c.get("/api/debug/engine", headers={"Host": host}).status_code == 200
+
+
+@pytest.mark.parametrize("host", ["attacker.example", "127.0.0.1.attacker.example",
+                                  "localhost.attacker.example:8848", "::1",
+                                  "[::1]x:8848", "[::1].attacker.example",
+                                  "127.0.0.1:8848:1", "localhost:", "127.0.0.2",
+                                  "0.0.0.0:8848", "testserver", ""])
+def test_a_host_header_that_only_looks_local_is_refused(host):
+    c, _ = _client()
+    r = c.get("/api/debug/engine", headers={"Host": host})
+    assert r.status_code == 403 and r.json() == {"detail": LOCAL_ONLY}
+
+
+def test_a_request_with_no_host_header_is_refused():
+    # httpx always sends a Host header, so the dependency is called directly
+    with pytest.raises(HTTPException) as refused:
+        debug._local_host_only(Request({"type": "http", "headers": []}))
+    assert refused.value.status_code == 403 and refused.value.detail == LOCAL_ONLY

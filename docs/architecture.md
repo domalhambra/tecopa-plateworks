@@ -109,7 +109,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 - **Type is bound per role by the operator.** `TECOPA_FONT_TITLE`, `_POINT`, `_AREA`, `_WATER`, and `TECOPA_FONT` for body and fallback. The default chain is Georgia, then DejaVu. Bindings ride in no manifest, so the same file renders differently on a host with different bindings.
 - **Region builds are subprocesses.** `POST /api/regions/build` spawns `region_prep.py` in `.venv-prep` on `BUILD_QUEUE` (one slot). Without that venv `/api/regions/plan` reports `prep_ready: false`.
 - **Auto-docs are off.** `app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`, so the studio never fetches from jsDelivr.
-- **The debug routes are gated.** `/api/debug/*` exists only under `TECOPA_DEBUG=1`, which the macOS launcher sets. With the gate off `app/main.py` never includes the router, so each path is a plain 404. Every debug route reads and none changes a session, a job, a cache or a plate.
+- **The debug routes are gated.** `/api/debug/*` exists only under `TECOPA_DEBUG=1`, which the macOS launcher sets. With the gate off `app/main.py` never includes the router, so each path is a plain 404. With the gate on, the routes also refuse any request whose Host header is not local, with a 403. Every debug route reads and none changes a session, a job, a cache or a plate.
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` builds a synthetic DEM tagged `synthetic=1` for any plate that lacks one. Check the tag before judging a poster by eye.
 
 ## Environment

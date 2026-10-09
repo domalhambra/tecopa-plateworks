@@ -9,13 +9,15 @@ show that and change nothing.
 The gate is off by default. A route that lists sessions and tracks must not exist on
 a host that did not ask for it, so with the gate off app.main never includes this
 router and every /api/debug path is a plain 404. The macOS launcher sets the gate.
+With the gate on, the routes answer only a request whose Host header is local.
 
 Design: docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md."""
 from __future__ import annotations
 import os
 import platform
+import re
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from app import provenance, serialize, session
 
 
@@ -23,6 +25,22 @@ def enabled(env=None) -> bool:
     """True only for the exact value "1". Anything else, the routes do not exist."""
     env = os.environ if env is None else env
     return env.get("TECOPA_DEBUG", "") == "1"
+
+
+# The Host values a debug route answers, after the port is removed. IPv6 keeps its
+# brackets in a Host header, so "[::1]:8848" loses only the ":8848".
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+_PORT = re.compile(r":[0-9]+\Z")
+
+
+def _local_host_only(request: Request) -> None:
+    # DNS rebinding: a web page can point its own name at 127.0.0.1, and the browser
+    # then lets that page read these routes. The request still carries the page's
+    # name in Host, so a Host that is not local is refused. A missing Host is too.
+    # 403 and not 404: the tecopa tool reads a 404 "Not Found" as "the gate is off".
+    host = _PORT.sub("", request.headers.get("host", ""), count=1).lower()
+    if host not in _LOCAL_HOSTS:
+        raise HTTPException(403, "Debug routes answer only a local Host header.")
 
 
 def _session_row(sid: str, data: dict) -> dict:
@@ -52,7 +70,7 @@ def build_router(*, queues: dict, caches: dict, started: float) -> APIRouter:
     """`queues` maps a name to a ThreadJobQueue, `caches` a name to a BaseCache,
     `started` is the engine's start time. Passed in, not imported, so this module
     never imports app.main."""
-    r = APIRouter(prefix="/api/debug")
+    r = APIRouter(prefix="/api/debug", dependencies=[Depends(_local_host_only)])
 
     @r.get("/engine")
     async def engine():
