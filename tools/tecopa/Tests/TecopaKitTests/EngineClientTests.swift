@@ -38,6 +38,7 @@ final class EngineClientTests: XCTestCase {
 
     func testAClosedGateNamesTheVariable() async {
         let world = FakeWorld()
+        world.serve("/readyz", 200, FakeWorld.readyBody)
         world.serve("/api/debug/jobs", 404, #"{"detail":"Not Found"}"#)
         do {
             _ = try await world.runtime().client.debug("/jobs")
@@ -47,6 +48,64 @@ final class EngineClientTests: XCTestCase {
             XCTAssertTrue(f.message.contains("debug routes are off"))
             XCTAssertTrue(f.hint?.contains("TECOPA_DEBUG=1") ?? false)
         } catch { XCTFail("\(error)") }
+    }
+
+    func testA404FromAProgramThatIsNotTecopaIsNotAClosedGate() async {
+        // any FastAPI program answers 404 {"detail":"Not Found"} for a path it lacks
+        let world = FakeWorld()
+        world.serve("/readyz", 200, "<html>hello</html>")
+        world.serve("/api/debug/jobs", 404, #"{"detail":"Not Found"}"#)
+        let (env, failure) = await Catalog.call("jobs", world.runtime(), [:])
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "Port 8848 answers, but it is not Tecopa Plateworks.")
+        XCTAssertEqual(failure?.hint, "Quit the other program on that port, or pass the engine's port.")
+        XCTAssertEqual(env["error"]?["kind"]?.stringValue, "environment")
+        XCTAssertFalse(failure.map(EngineClient.isGateOff) ?? true)
+        XCTAssertEqual(world.requests.map(\.path), ["/api/debug/jobs", "/readyz"])
+
+        // the same when the other program has no /readyz either
+        world.serve("/readyz", 404, #"{"detail":"Not Found"}"#)
+        do {
+            _ = try await world.runtime(port: 9000).client.debug("/jobs")
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .environment)
+            XCTAssertEqual(f.message, "Port 9000 answers, but it is not Tecopa Plateworks.")
+        } catch { XCTFail("\(error)") }
+    }
+
+    func testAClosedGateOnAnEngineThatDoesNotAnswerReadyzIsStillAClosedGate() async {
+        // no answer and a late answer say nothing about who holds the port
+        for slow in [false, true] {
+            let world = FakeWorld()
+            world.serve("/api/debug/jobs", 404, #"{"detail":"Not Found"}"#)
+            if slow { world.timeOut("/readyz") }
+            do {
+                _ = try await world.runtime().client.debug("/jobs")
+                XCTFail("expected a failure")
+            } catch let f as TecopaFailure {
+                XCTAssertTrue(EngineClient.isGateOff(f), "\(slow)")
+                XCTAssertEqual(f.message, "The debug routes are off on port 8848.")
+            } catch { XCTFail("\(error)") }
+            // one probe, never a second
+            XCTAssertEqual(world.requests.map(\.path), ["/api/debug/jobs", "/readyz"])
+        }
+    }
+
+    func testOneMessageNamesAPortThatAnotherProgramHolds() async {
+        // engine_status, engine_start and doctor each meet the same program
+        let world = FakeWorld()
+        world.launcherRunning = false
+        world.serve("/readyz", 200, "<html>hello</html>")
+        let message = "Port 8848 answers, but it is not Tecopa Plateworks."
+        XCTAssertEqual(world.runtime().client.notTecopaMessage, message)
+        for name in ["engine_status", "engine_start"] {
+            let (_, failure) = await Catalog.call(name, world.runtime(), [:])
+            XCTAssertEqual(failure?.kind, .environment, name)
+            XCTAssertEqual(failure?.message, message, name)
+        }
+        let rows = await Doctor.engineRows(world.runtime())
+        XCTAssertEqual(rows.first?["detail"]?.stringValue, message)
     }
 
     func testAnUnknownSessionIsNotMistakenForAClosedGate() async {

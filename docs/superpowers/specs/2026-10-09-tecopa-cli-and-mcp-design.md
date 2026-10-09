@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-09
 **Status:** Approved by Dom (brainstorming session, 2026-10-09). Phase 1 is built: see `../plans/2026-10-09-tecopa-tool-phase-1-diagnose.md`, whose "Decisions made while planning" refine this spec. Phases 2, 3 and 4 are not built.
-**Build starts:** after the 2026-10-21 Now review. No code before that date.
+**Build:** Phase 1 was built on 2026-10-09. Dom opened the build before the 2026-10-21 Now review.
 **Extends:** `2026-07-18-macos-launcher-app-design.md` (the launcher, port 8848, engine ownership)
 **Amends:** nothing. No invariant in `CLAUDE.md` changes.
 
@@ -66,7 +66,7 @@ All new Swift files live under `tools/tecopa/`.
 | `tools/tecopa/Package.swift` | The package manifest. Two outside dependencies: Apple's swift-argument-parser and the official MCP Swift SDK. |
 | `tools/tecopa/Package.resolved` | The pinned dependency versions. Committed. |
 | `tools/tecopa/Sources/TecopaKit/` | The core library: the engine HTTP client, launcher control, the log reader, the script runner, run records. |
-| `tools/tecopa/Sources/tecopa/` | The executable: one file per command group, and the MCP server. |
+| `tools/tecopa/Sources/tecopa/` | The executable: the root command, the shared options, one thin struct per command, and the MCP server. |
 | `tools/tecopa/Tests/TecopaKitTests/` | The `swift test` target. |
 | `tools/tecopa/build.sh` | Builds the release binary. `--install` copies it to `~/.local/bin/tecopa`. |
 | `tools/tecopa/smoke_test.sh` | A manual end-to-end check against a live engine. |
@@ -217,7 +217,7 @@ the report buffer. No debug route changes a session, a job, a cache, or a plate.
 - `ThreadJobQueue.snapshot()` returns a copy of every job's status under the queue's lock.
 - `MemoryStore.ids()` and `SqliteStore.ids()` return the session ids.
 
-Both are read-only. Neither changes an existing method.
+Both are read-only. `ThreadJobQueue` also records each job's start time and its own width, so `submit` and `__init__` each gained one line.
 
 ## The studio hook
 
@@ -321,6 +321,8 @@ The phase 1 plan records each one under "What changed while it ran".
 - `engine start` waits up to 160 seconds, not 75.
 - `logs --since` takes a duration (`90s`, `30m`, `2h`, `1d`), and `--lines` is limited to 1 to 2000.
 - `regions verify` reports a crash of the script as a failure, and returns the script's stderr.
+- The debug routes refuse a request whose Host header is not local, with a 403.
+- `engine stop` and `engine restart` refuse while a job is running or queued, unless `--force` is given, and report how many jobs and sessions they ended.
 
 ## Rejected
 

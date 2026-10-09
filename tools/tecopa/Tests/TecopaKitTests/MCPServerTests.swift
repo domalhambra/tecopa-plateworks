@@ -125,6 +125,13 @@ final class MCPServerTests: XCTestCase {
         XCTAssertNotNil(sessions?["inputSchema"]?["properties"]?["full"])
         let verify = tools.first { $0["name"]?.stringValue == "regions_verify" }
         XCTAssertEqual(verify?["inputSchema"]?["properties"]?["regions"]?["type"]?.stringValue, "array")
+        for name in ["engine_stop", "engine_restart"] {
+            let tool = tools.first { $0["name"]?.stringValue == name }
+            XCTAssertEqual(tool?["inputSchema"]?["properties"]?["force"]?["type"]?.stringValue,
+                           "boolean", name)
+        }
+        let start = tools.first { $0["name"]?.stringValue == "engine_start" }
+        XCTAssertNil(start?["inputSchema"]?["properties"]?["force"])
     }
 
     func testEveryToolHasACommandOfTheSameWords() throws {

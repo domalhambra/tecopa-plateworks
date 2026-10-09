@@ -26,7 +26,7 @@ enum EngineEntries {
         }
         guard EngineClient.isTecopa(ready) else {
             throw TecopaFailure(
-                .environment, "Port \(runtime.port) answers, but it is not Tecopa Plateworks.",
+                .environment, runtime.client.notTecopaMessage,
                 hint: "Quit the other program on that port.")
         }
         var out: [String: JSONValue] = [

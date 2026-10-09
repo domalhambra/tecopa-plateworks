@@ -108,7 +108,7 @@ public enum Doctor {
         }
         // the debug gate of another program is not this tool's business: no second row
         guard EngineClient.isTecopa(reply) else {
-            return [row("engine", "fail", "Port \(runtime.port) answers, but it is not Tecopa Plateworks.",
+            return [row("engine", "fail", runtime.client.notTecopaMessage,
                         hint: "Quit the other program on that port.")]
         }
         let plates = reply.json["regions"]?.arrayValue ?? []

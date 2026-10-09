@@ -5,7 +5,8 @@ import Foundation
 /// owners of one engine is the fault the launcher spec was written to prevent.
 public enum Launcher {
     public static let appPath = "/Applications/Tecopa Plateworks.app"
-    public static let port = 8848
+    /// The launcher's engine port. `Runtime.defaultPort` is the one definition.
+    public static let port = Runtime.defaultPort
     /// Matches the launcher's own process and nothing else. `pgrep -f` matches the
     /// full command line with an extended regular expression, so the pattern is
     /// anchored at the start, and the executable's name ends at a space or at the
@@ -57,7 +58,7 @@ public enum Launcher {
             ])
         case .foreign:
             throw TecopaFailure(
-                .environment, "Port \(port) answers, but it is not Tecopa Plateworks.",
+                .environment, runtime.client.notTecopaMessage,
                 hint: "Quit the other program on that port.")
         case .busy:
             // a slow engine is not a stopped one: a second launcher is not opened on it
@@ -92,7 +93,25 @@ public enum Launcher {
                 + "and macOS may be waiting for a Documents-folder permission click.")
     }
 
-    public static func stop(_ runtime: Runtime) async throws -> JSONValue {
+    /// The jobs a stop would end: those that run and those that wait for a slot.
+    /// nil when the engine did not say, which is not the same as none.
+    static func activeJobs(_ runtime: Runtime) async -> Int? {
+        guard let rows = (try? await runtime.client.debug("/jobs"))?["jobs"]?.arrayValue else {
+            return nil
+        }
+        return rows.filter { ["running", "queued"].contains($0["state"]?.stringValue ?? "") }.count
+    }
+
+    /// The sessions the engine holds, or nil when the engine did not say.
+    static func heldSessions(_ runtime: Runtime) async -> Int? {
+        (try? await runtime.client.debug("/sessions"))?["sessions"]?.arrayValue?.count
+    }
+
+    /// The engine keeps its jobs and its sessions in memory by default, so a stop
+    /// ends them. A stop is refused while a job runs or waits, unless `force` is
+    /// true. When the engine does not say what it holds (the gate is off, or the
+    /// read fails), the tool cannot know, so the stop continues and says so.
+    public static func stop(_ runtime: Runtime, force: Bool = false) async throws -> JSONValue {
         try requireLauncherPort(runtime)
         guard try launcherRuns(runtime) else {
             if await probe(runtime) != .none {
@@ -104,6 +123,17 @@ public enum Launcher {
                 "stopped": .bool(false), "running": .bool(false),
                 "note": .string("The launcher is not running."),
             ])
+        }
+        let jobs = await activeJobs(runtime)
+        if let jobs, jobs > 0, !force {
+            throw TecopaFailure(
+                .refused, "\(jobs) job(s) are running or queued. Stopping the engine ends them.",
+                hint: "Wait for them (`tecopa jobs`), or stop with force.")
+        }
+        let sessions = await heldSessions(runtime)
+        var notes: [String] = []
+        if jobs == nil || sessions == nil {
+            notes.append("The engine's jobs and sessions could not be read before the stop.")
         }
         let quit = try runtime.exec("/usr/bin/osascript", ["-e", "quit app \"Tecopa Plateworks\""])
         if quit.exitCode != 0 {
@@ -133,6 +163,8 @@ public enum Launcher {
         // The port closes before the app is gone. Wait for the process too, so that
         // an `open` that follows cannot reach an app that is still quitting.
         var out: [String: JSONValue] = ["stopped": .bool(true), "running": .bool(false)]
+        if let jobs { out["jobs_ended"] = .int(Int64(jobs)) }
+        if let sessions { out["sessions_ended"] = .int(Int64(sessions)) }
         var gone = false
         for _ in 0..<10 {
             if try !launcherRuns(runtime) {
@@ -141,31 +173,45 @@ public enum Launcher {
             }
             await runtime.sleep(0.5)
         }
-        if !gone { out["note"] = .string("The launcher process is still exiting.") }
+        if !gone { notes.append("The launcher process is still exiting.") }
+        if !notes.isEmpty { out["note"] = .string(notes.joined(separator: " ")) }
         return .object(out)
     }
 
-    public static func restart(_ runtime: Runtime) async throws -> JSONValue {
-        let stopped = try await stop(runtime)
+    public static func restart(_ runtime: Runtime, force: Bool = false) async throws -> JSONValue {
+        let stopped = try await stop(runtime, force: force)
         let started = try await start(runtime)
         return .object(["stop": stopped, "start": started])
     }
 
+    static let forceParameter = EntryParameter(
+        "force", .boolean, "Stop even when a job is running or queued.")
+
     static let entries: [CatalogEntry] = [
         CatalogEntry(
             name: "engine_start",
-            summary: "Open the launcher app, which starts the engine on port 8848, and wait for it to answer.",
+            summary: "Open the launcher app, which starts the engine on port \(port), and wait for it to answer.",
             readOnly: false
         ) { runtime, _ in try await start(runtime) },
         CatalogEntry(
             name: "engine_stop",
-            summary: "Quit the launcher app, which stops the engine it started, and wait for the port to close.",
-            readOnly: false
-        ) { runtime, _ in try await stop(runtime) },
+            summary: "Quit the launcher app, which stops the engine it started. "
+                + "This ends every running job and every studio session that is held in memory. "
+                + "Refuses while a job is running or queued, unless force is true.",
+            readOnly: false,
+            parameters: [forceParameter]
+        ) { runtime, arguments in
+            try await stop(runtime, force: arguments["force"]?.boolValue ?? false)
+        },
         CatalogEntry(
             name: "engine_restart",
-            summary: "Quit and reopen the launcher app. Use after a change to the engine's Python code.",
-            readOnly: false
-        ) { runtime, _ in try await restart(runtime) },
+            summary: "Quit and reopen the launcher app, for example after a change to the engine's Python code. "
+                + "This ends every running job and every studio session that is held in memory. "
+                + "Refuses while a job is running or queued, unless force is true.",
+            readOnly: false,
+            parameters: [forceParameter]
+        ) { runtime, arguments in
+            try await restart(runtime, force: arguments["force"]?.boolValue ?? false)
+        },
     ]
 }

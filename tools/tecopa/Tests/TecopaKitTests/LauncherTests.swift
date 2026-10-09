@@ -9,15 +9,30 @@ final class LauncherTests: XCTestCase {
     ]
     private let quit = ["/usr/bin/osascript", "-e", "quit app \"Tecopa Plateworks\""]
 
+    private static let noJobs = #"{"jobs":[]}"#
+    private static let noSessions = #"{"sessions":[]}"#
+    private static let oneRunningJob =
+        #"{"jobs":[{"jid":"a","queue":"render","state":"running"},{"jid":"b","queue":"proof","state":"done"}]}"#
+    private static let unreadNote = "The engine's jobs and sessions could not be read before the stop."
+
+    /// A launcher-run engine: /readyz, and the two debug routes `stop` reads. The
+    /// default is an engine that holds no job and no session, so a stop is clean.
+    private static func serveEngine(_ w: FakeWorld, jobs: String = noJobs,
+                                    sessions: String = noSessions) {
+        w.serve("/readyz", 200, FakeWorld.readyBody)
+        w.serve("/api/debug/jobs", 200, jobs)
+        w.serve("/api/debug/sessions", 200, sessions)
+    }
+
     /// A machine where `open` starts the launcher and its engine, and `osascript`
     /// stops both.
     private func world(running: Bool) -> FakeWorld {
         let w = FakeWorld()
         w.launcherRunning = running
-        if running { w.serve("/readyz", 200, FakeWorld.readyBody) }
+        if running { Self.serveEngine(w) }
         w.onRun = { world, command in
             if command.first == "/usr/bin/open" {
-                world.serve("/readyz", 200, FakeWorld.readyBody)
+                Self.serveEngine(world)
                 world.launcherRunning = true
             }
             if command.first == "/usr/bin/osascript" {
@@ -128,14 +143,19 @@ final class LauncherTests: XCTestCase {
         let out = try await Launcher.stop(w.runtime())
         // the full argv: which process is looked for, and which app is told to quit
         XCTAssertEqual(w.commands, [pgrep, quit, pgrep])
-        XCTAssertEqual(out, .object(["stopped": .bool(true), "running": .bool(false)]))
+        XCTAssertEqual(out, .object([
+            "stopped": .bool(true), "running": .bool(false),
+            "jobs_ended": .int(0), "sessions_ended": .int(0),
+        ]))
+        // the two reads come first, and the quit follows them
+        XCTAssertEqual(w.requests.prefix(2).map(\.path), ["/api/debug/jobs", "/api/debug/sessions"])
     }
 
     func testStopPollsUntilTheLauncherProcessIsGone() async throws {
         // the port closes first, and the app needs two more looks to exit
         let w = FakeWorld()
         w.launcherRunning = true
-        w.serve("/readyz", 200, FakeWorld.readyBody)
+        Self.serveEngine(w)
         w.onRun = { world, command in
             if command.first == "/usr/bin/osascript" { world.stopServing() }
             if world.commands.count == 4 { world.launcherRunning = false }
@@ -149,7 +169,7 @@ final class LauncherTests: XCTestCase {
     func testStopSaysWhenTheLauncherProcessIsStillExiting() async throws {
         let w = FakeWorld()
         w.launcherRunning = true
-        w.serve("/readyz", 200, FakeWorld.readyBody)
+        Self.serveEngine(w)
         w.onRun = { world, command in
             if command.first == "/usr/bin/osascript" { world.stopServing() }
         }
@@ -199,7 +219,7 @@ final class LauncherTests: XCTestCase {
     func testAPortThatDoesNotAnswerInTimeIsStillThereForStop() async {
         let w = FakeWorld()
         w.launcherRunning = true
-        w.serve("/readyz", 200, FakeWorld.readyBody)
+        Self.serveEngine(w)
         w.onRun = { world, command in
             if command.first == "/usr/bin/osascript" {
                 world.stopServing()
@@ -214,7 +234,9 @@ final class LauncherTests: XCTestCase {
             XCTAssertTrue(f.message.contains("still answers"), f.message)
         } catch { XCTFail("\(error)") }
         XCTAssertEqual(w.commands, [pgrep, quit])
-        XCTAssertEqual(w.requests.count, 24)
+        // the two reads before the quit, then 24 polls of the port
+        XCTAssertEqual(w.requests.filter { $0.path == "/readyz" }.count, 24)
+        XCTAssertEqual(w.requests.count, 26)
     }
 
     func testStopNamesTheAutomationPermissionWhenMacOSDeniesTheQuit() async {
@@ -230,6 +252,177 @@ final class LauncherTests: XCTestCase {
             XCTAssertEqual(f.kind, .environment)
             XCTAssertTrue(f.hint?.contains("Automation") ?? false)
         } catch { XCTFail("\(error)") }
+    }
+
+    func testStopRefusesWhileAJobRunsAndRunsNoQuit() async {
+        // the engine keeps jobs and sessions in memory, so a stop ends them
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: Self.oneRunningJob)
+        do {
+            _ = try await Launcher.stop(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .refused)
+            XCTAssertEqual(f.message, "1 job(s) are running or queued. Stopping the engine ends them.")
+            XCTAssertEqual(f.hint, "Wait for them (`tecopa jobs`), or stop with force.")
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [pgrep])          // no osascript
+    }
+
+    func testAQueuedJobCountsAndAFinishedJobDoesNot() async {
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: #"{"jobs":[{"state":"queued"},{"state":"running"},{"state":"done"},{"state":"error"}]}"#)
+        do {
+            _ = try await Launcher.stop(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .refused)
+            XCTAssertEqual(f.message, "2 job(s) are running or queued. Stopping the engine ends them.")
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [pgrep])
+
+        // jobs that ended do not hold the stop
+        let done = world(running: true)
+        Self.serveEngine(done, jobs: #"{"jobs":[{"state":"done"},{"state":"error"}]}"#)
+        let out = try? await Launcher.stop(done.runtime())
+        XCTAssertEqual(out?["stopped"], .bool(true))
+        XCTAssertEqual(out?["jobs_ended"], .int(0))
+    }
+
+    func testStopWithForceQuitsAndCountsTheJobsItEnded() async throws {
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: Self.oneRunningJob)
+        let out = try await Launcher.stop(w.runtime(), force: true)
+        XCTAssertEqual(w.commands, [pgrep, quit, pgrep])
+        XCTAssertEqual(out["stopped"], .bool(true))
+        XCTAssertEqual(out["jobs_ended"], .int(1))
+        XCTAssertEqual(out["sessions_ended"], .int(0))
+        XCTAssertNil(out["note"])
+    }
+
+    func testStopCountsTheSessionsItEnded() async throws {
+        let w = world(running: true)
+        Self.serveEngine(w, sessions: #"{"sessions":[{"sid":"ab"},{"sid":"cd"}]}"#)
+        let out = try await Launcher.stop(w.runtime())
+        XCTAssertEqual(w.commands, [pgrep, quit, pgrep])
+        XCTAssertEqual(out["jobs_ended"], .int(0))
+        XCTAssertEqual(out["sessions_ended"], .int(2))
+        XCTAssertNil(out["note"])
+    }
+
+    func testStopWithTheGateOffStillStopsAndSaysWhatItCouldNotRead() async throws {
+        // the tool cannot know what the engine holds, so it does not refuse
+        let w = world(running: true)
+        w.serve("/api/debug/jobs", 404, #"{"detail":"Not Found"}"#)
+        w.serve("/api/debug/sessions", 404, #"{"detail":"Not Found"}"#)
+        let out = try await Launcher.stop(w.runtime())
+        XCTAssertEqual(w.commands, [pgrep, quit, pgrep])
+        XCTAssertEqual(out, .object([
+            "stopped": .bool(true), "running": .bool(false), "note": .string(Self.unreadNote),
+        ]))
+    }
+
+    func testStopWithOneReadThatFailsReportsTheOtherAndTheNote() async throws {
+        let w = world(running: true)
+        w.serve("/api/debug/sessions", 500, "Internal Server Error")
+        var out = try await Launcher.stop(w.runtime())
+        XCTAssertEqual(out["stopped"], .bool(true))
+        XCTAssertEqual(out["jobs_ended"], .int(0))
+        XCTAssertNil(out["sessions_ended"])
+        XCTAssertEqual(out["note"]?.stringValue, Self.unreadNote)
+
+        // a reply that is not the route's shape is not a count of zero
+        let odd = world(running: true)
+        Self.serveEngine(odd, jobs: "[]", sessions: #"{"sessions":[{"sid":"ab"}]}"#)
+        out = try await Launcher.stop(odd.runtime())
+        XCTAssertNil(out["jobs_ended"])
+        XCTAssertEqual(out["sessions_ended"], .int(1))
+        XCTAssertEqual(out["note"]?.stringValue, Self.unreadNote)
+    }
+
+    func testTheUnreadNoteJoinsTheStillExitingNote() async throws {
+        let w = FakeWorld()
+        w.launcherRunning = true
+        w.serve("/readyz", 200, FakeWorld.readyBody)
+        w.onRun = { world, command in
+            if command.first == "/usr/bin/osascript" { world.stopServing() }
+        }
+        let out = try await Launcher.stop(w.runtime())
+        XCTAssertEqual(out["stopped"], .bool(true))
+        XCTAssertEqual(out["note"]?.stringValue,
+                       Self.unreadNote + " The launcher process is still exiting.")
+    }
+
+    func testRestartRefusesWhileAJobRunsAndOpensNothing() async {
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: Self.oneRunningJob)
+        do {
+            _ = try await Launcher.restart(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .refused)
+            XCTAssertTrue(f.message.hasPrefix("1 job(s) are running or queued."), f.message)
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [pgrep])          // no osascript, and no open
+    }
+
+    func testRestartPassesForceToTheStop() async throws {
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: Self.oneRunningJob)
+        let out = try await Launcher.restart(w.runtime(), force: true)
+        XCTAssertEqual(w.commands, [pgrep, quit, pgrep, open])
+        XCTAssertEqual(out["stop"]?["jobs_ended"], .int(1))
+        XCTAssertEqual(out["start"]?["started"], .bool(true))
+    }
+
+    func testForceReachesStopAndRestartThroughTheCatalog() async {
+        for name in ["engine_stop", "engine_restart"] {
+            // the wrong kind is refused, never read as false
+            var w = world(running: true)
+            Self.serveEngine(w, jobs: Self.oneRunningJob)
+            var (env, failure) = await Catalog.call(name, w.runtime(), ["force": .string("yes")])
+            XCTAssertEqual(failure?.kind, .usage, name)
+            XCTAssertEqual(failure?.message, "force must be a boolean.", name)
+            XCTAssertEqual(w.commands, [], name)
+            XCTAssertEqual(w.requests, [], name)
+
+            (env, failure) = await Catalog.call(name, w.runtime(), [:])
+            XCTAssertEqual(failure?.kind, .refused, name)
+            (env, failure) = await Catalog.call(name, w.runtime(), ["force": .bool(false)])
+            XCTAssertEqual(failure?.kind, .refused, name)
+            XCTAssertEqual(w.commands, [pgrep, pgrep], name)
+
+            w = world(running: true)
+            Self.serveEngine(w, jobs: Self.oneRunningJob)
+            (env, failure) = await Catalog.call(name, w.runtime(), ["force": .bool(true)])
+            XCTAssertNil(failure, name)
+            let stopped = name == "engine_stop" ? env["data"] : env["data"]?["stop"]
+            XCTAssertEqual(stopped?["jobs_ended"], .int(1), name)
+        }
+    }
+
+    func testTheControlSummariesStateWhatAStopEnds() {
+        XCTAssertEqual(Launcher.port, Runtime.defaultPort)
+        XCTAssertEqual(
+            Catalog.named("engine_start")?.summary,
+            "Open the launcher app, which starts the engine on port 8848, and wait for it to answer.")
+        XCTAssertEqual(
+            Catalog.named("engine_stop")?.summary,
+            "Quit the launcher app, which stops the engine it started. This ends every running job "
+                + "and every studio session that is held in memory. Refuses while a job is running "
+                + "or queued, unless force is true.")
+        XCTAssertEqual(
+            Catalog.named("engine_restart")?.summary,
+            "Quit and reopen the launcher app, for example after a change to the engine's Python "
+                + "code. This ends every running job and every studio session that is held in memory. "
+                + "Refuses while a job is running or queued, unless force is true.")
+        for name in ["engine_stop", "engine_restart"] {
+            let parameters = Catalog.named(name)?.parameters ?? []
+            XCTAssertEqual(parameters.map(\.name), ["force"], name)
+            XCTAssertEqual(parameters.first?.kind, .boolean, name)
+            XCTAssertEqual(parameters.first?.summary, "Stop even when a job is running or queued.", name)
+        }
+        XCTAssertEqual(Catalog.named("engine_start")?.parameters.count, 0)
     }
 
     func testRestartWaitsForTheProcessToExitBeforeItOpensTheLauncher() async throws {

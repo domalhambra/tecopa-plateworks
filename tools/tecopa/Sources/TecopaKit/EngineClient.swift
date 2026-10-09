@@ -41,6 +41,12 @@ public struct EngineClient: Sendable {
         reply.json["ready"] != nil && reply.json["regions"] != nil
     }
 
+    /// The message for a port that another program holds. `engine status`, engine
+    /// control, `doctor` and `debug(_:)` all say it with this one text.
+    var notTecopaMessage: String {
+        "Port \(port) answers, but it is not Tecopa Plateworks."
+    }
+
     /// The URL of one engine path. The host is 127.0.0.1 and the port is this
     /// client's port, or the address is refused: a path such as "@host/x" would move
     /// the request to another machine.
@@ -110,11 +116,21 @@ public struct EngineClient: Sendable {
 
     /// A debug route. With the gate off the router does not exist, and the static
     /// mount answers 404 "Not Found". A debug route's own 404 has another detail.
+    ///
+    /// Any FastAPI program answers that same 404 for a path it does not have, so one
+    /// look at /readyz says who holds the port. A program that is not the engine is
+    /// an environment fault. An engine, and a port that gives /readyz no answer, is
+    /// the closed gate.
     public func debug(_ path: String) async throws -> JSONValue {
         do {
             return try await get("/api/debug" + path)
         } catch let failure as TecopaFailure
             where failure.status == 404 && failure.body?["detail"]?.stringValue == "Not Found" {
+            if case .reply(let ready) = await probe("/readyz", timeout: 2), !Self.isTecopa(ready) {
+                throw TecopaFailure(
+                    .environment, notTecopaMessage,
+                    hint: "Quit the other program on that port, or pass the engine's port.")
+            }
             throw TecopaFailure(
                 .refused, Self.gateOffMessage + "\(port).",
                 hint: "Start the engine with TECOPA_DEBUG=1. The launcher sets it.",

@@ -334,6 +334,8 @@ Global options (`--json`, `--repo`, `--port`) go after the subcommand, for examp
 `tecopa doctor --json` and `tecopa regions verify lassen_ca --repo <path>`.
 `tecopa engine start` waits up to 160 seconds. The launcher can wait 90 seconds on the
 macOS Documents prompt and then 60 seconds for the engine to answer.
+`tecopa engine stop` and `tecopa engine restart` refuse while a job is running or
+queued, and `--force` overrides that.
 
 The debug commands (`jobs`, `sessions`, `caches`) need `TECOPA_DEBUG=1` on the engine.
 The launcher sets it. For a development engine, set it by hand.
@@ -353,7 +355,9 @@ A command is one `CatalogEntry`. The CLI and the MCP server both read the catalo
    for each underscore.
 3. A command that runs a Python script adds a row to `ScriptRunner.table` in the same
    change. The row names the script's venv. A script with no row does not run.
-4. Add the name to the two sets in `tools/tecopa/Tests/TecopaKitTests/MCPServerTests.swift`.
+4. Add the name to one of the two sets in `tools/tecopa/Tests/TecopaKitTests/MCPServerTests.swift`,
+   `readOnly` or `control`. The tools/list test in that file also pins the number of
+   tools as a literal, so change that count too.
 5. The tool holds no render logic, no coordinate math and no spec rule. It sends
    values to the engine unchanged and reports the engine's answer unchanged.
 

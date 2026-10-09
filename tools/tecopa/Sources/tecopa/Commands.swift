@@ -28,14 +28,24 @@ struct EngineCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "stop", abstract: "Quit the launcher app and wait for the port to close.")
         @OptionGroup var global: GlobalOptions
-        func run() async throws { try await execute("engine_stop", global) }
+        @Flag(name: .long, help: "Stop even when a job is running or queued.")
+        var force = false
+
+        func run() async throws {
+            try await execute("engine_stop", global, force ? ["force": .bool(true)] : [:])
+        }
     }
 
     struct Restart: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "restart", abstract: "Quit and reopen the launcher app.")
         @OptionGroup var global: GlobalOptions
-        func run() async throws { try await execute("engine_restart", global) }
+        @Flag(name: .long, help: "Stop even when a job is running or queued.")
+        var force = false
+
+        func run() async throws {
+            try await execute("engine_restart", global, force ? ["force": .bool(true)] : [:])
+        }
     }
 }
 
