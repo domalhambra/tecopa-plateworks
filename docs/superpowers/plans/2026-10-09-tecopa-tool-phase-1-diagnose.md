@@ -3568,7 +3568,8 @@ Built on 2026-10-09 on the branch `claude/tecopa-tool-phase-1`. Dom opened the b
 - **The MCP server drops replies in flight when stdin closes.** A real client keeps stdin open. A script must wait after its last request, as `smoke_test.sh` does.
 - **Final review.** The debug routes refuse a Host header that is not local (403), against DNS rebinding. `engine stop` and `engine restart` refuse while a job is running or queued unless forced, and report the jobs and sessions they ended. A 404 from a program that is not Tecopa is no longer reported as a closed gate. Decision 2 (underscore tool names) and the MCP `port` argument are recorded in Decisions and in Task 12.
 - **Found, not changed.** `tecopa regions verify elko_bonneville` reports `DRIFT dem.tif`. By invariant 12 this is the record of a rebuilt DEM, and the sidecar stays as it is.
-- **Not done here.** The registration in the Claude desktop app, and its file-grant check (spec check 2). The registration in Claude Code waits for Dom's yes.
+- **Registered.** On Dom's yes, `claude mcp add --scope user tecopa` registered the server in Claude Code on 2026-10-09, and `claude mcp list` shows it connected.
+- **Not done here.** The registration in the Claude desktop app, and its file-grant check (spec check 2).
 
 ## Task 1 result
 

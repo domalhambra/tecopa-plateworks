@@ -114,7 +114,7 @@
     {
       "id": 13,
       "subject": "Task 13: Install, the smoke test, registration, and the phase proof",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** The installed binary passes an end-to-end run against the real launcher, and Claude Code has the `tecopa` MCP server at user scope.\n\n> **USER-ORDERED GATE — NON-SKIPPABLE.** This task was requested by the user in the current conversation. It MUST NOT be closed by walking around it, by declaring it \"verified inline\", or by substituting a cheaper check. Close only after every item in `acceptanceCriteria` has been re-validated independently, with output captured.\n\n**Files:**\n- Create: `tools/tecopa/smoke_test.sh`\n\n**Acceptance Criteria:**\n- [ ] `~/.local/bin/tecopa --version` prints the `git describe` text of the build.\n- [ ] `tools/tecopa/smoke_test.sh` prints `PASS: phase 1 proof` and exits 0.\n- [ ] With the engine stopped, `tecopa doctor` reports the `engine` check as `warn` with the text `No engine answers on port 8848`.\n- [ ] With the engine running, a raw `tools/call` of `jobs` through `tecopa mcp` returns an envelope with `\"ok\":true`.\n- [ ] `claude mcp list` shows a `tecopa` row.\n- [ ] After the smoke test, port 8848 does not answer.\n\n**Verify:** `tools/tecopa/smoke_test.sh` → `PASS: phase 1 proof`.\n\n**Steps:**\n- Step 1: Write `tools/tecopa/smoke_test.sh`\n- Step 2: Run it\n- Step 3: Commit the script\n- Step 4: Ask Dom, then register the server in Claude Code\n- Step 5: Give Dom the two checks that need a new session\n\n```json:metadata\n{\"files\": [\"tools/tecopa/smoke_test.sh\"], \"verifyCommand\": \"tools/tecopa/smoke_test.sh\", \"acceptanceCriteria\": [\"`~/.local/bin/tecopa --version` prints the `git describe` text of the build.\", \"`tools/tecopa/smoke_test.sh` prints `PASS: phase 1 proof` and exits 0.\", \"With the engine stopped, `tecopa doctor` reports the `engine` check as `warn` with the text `No engine answers on port 8848`.\", \"With the engine running, a raw `tools/call` of `jobs` through `tecopa mcp` returns an envelope with `\\\"ok\\\":true`.\", \"`claude mcp list` shows a `tecopa` row.\", \"After the smoke test, port 8848 does not answer.\"], \"userGate\": true, \"tags\": [\"user-gate\"]}\n```",
       "blockedBy": [
         12,
@@ -131,5 +131,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-10-09T23:54:06Z"
+  "lastUpdated": "2026-10-10T00:02:53Z"
 }
