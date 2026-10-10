@@ -104,12 +104,14 @@ Prices, from `docs/decisions.md`:
 
 | Group | Product | Price |
 |---|---|---|
-| Your first poster | Print, 13×19 | $79 |
-| Your first poster | Print, 18×24 | $89 |
+| Your first poster | Print, 11×17 | $69 |
+| Your first poster | Print, 17×22 | $99 |
 | Your first poster | Digital poster | $39 |
-| Next year | Print, 13×19 | $59 |
-| Next year | Print, 18×24 | $69 |
+| Next year | Print, 11×17 | $59 |
+| Next year | Print, 17×22 | $69 |
 | Next year | Digital poster | $25 |
+
+Shipping is $8 on an 11×17 and $12 on a 17×22 (Dom, 2026-10-10).
 
 The page does not claim that shipping is included. No decision says so.
 

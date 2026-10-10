@@ -29,8 +29,8 @@ export const state = {
   hotspots: [],           // [{px:[ovx,ovy], weight, label, icon, photo}]
   crop: null,             // [x0,y0,x1,y1] in CANVAS px (Frame step)
   starterCrop: null,      // [x0,y0,x1,y1] in OVERVIEW px (from /api/upload)
-  printW: 18,
-  printH: 24,
+  printW: 17,
+  printH: 22,
   orientation: 'auto',    // 'auto' (tracks decide) | 'landscape' | 'portrait'
   output: 'print',        // 'print' | 'wallpaper' (a screen is a sheet with a known ppi)
   wpPresets: [],          // /api/wallpapers/presets metadata (id,name,px,ppi,device_class,*_clear_frac)
