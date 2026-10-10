@@ -153,7 +153,17 @@ public enum Doctor {
         do {
             let found = try runtime.repo()
             repo = found
-            rows.append(row("repo", "ok", found))
+            // The locator only asks if the marker is there. macOS guards the contents
+            // of ~/Documents and not the names, so only a read proves the access.
+            if runtime.readFile(found + "/" + RepoLocator.marker) != nil {
+                rows.append(row("repo", "ok", found))
+            } else {
+                rows.append(row(
+                    "repo", "fail",
+                    "The repo is at \(found), and \(RepoLocator.marker) there cannot be read.",
+                    hint: "macOS can refuse a program the Documents folder. Allow it in System Settings, "
+                        + "Privacy & Security, Files and Folders."))
+            }
         } catch let failure as TecopaFailure {
             rows.append(row("repo", "fail", failure.message, hint: failure.hint))
         } catch {

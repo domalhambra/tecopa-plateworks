@@ -17,10 +17,11 @@ final class DoctorTests: XCTestCase {
         (report["checks"]?.arrayValue ?? []).compactMap { $0["name"]?.stringValue }
     }
 
-    /// A healthy machine with a stopped engine: PlistBuddy reports the repo path and
-    /// python reports its version.
-    private func healthy() -> FakeWorld {
+    /// A healthy machine with a stopped engine: PlistBuddy reports the repo path,
+    /// python reports its version, and the repo's marker file can be read.
+    private func healthy(readable: Bool = true) -> FakeWorld {
         let w = FakeWorld()
+        if readable { w.file("/repo/app/main.py", "app = FastAPI()\n") }
         w.result(for: "PlistBuddy", ProcessResult(exitCode: 0, stdout: "/repo\n", stderr: ""))
         w.result(for: "python", ProcessResult(exitCode: 0, stdout: "Python 3.14.2\n", stderr: ""))
         return w
@@ -33,6 +34,20 @@ final class DoctorTests: XCTestCase {
         XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "ok")
         XCTAssertEqual(check(report, "launcher")?["status"]?.stringValue, "ok")
         XCTAssertEqual(report["fail_count"]?.intValue, 0)
+    }
+
+    func testARepoWhoseFilesCannotBeReadFailsAndTheLaterChecksStillRun() async {
+        // macOS guards the contents of ~/Documents and not the names: the marker is
+        // there, and the read is refused. Only a read can prove the access.
+        let report = await Doctor.run(healthy(readable: false).runtime(repo: "/repo"))
+        let row = check(report, "repo")
+        XCTAssertEqual(row?["status"]?.stringValue, "fail")
+        XCTAssertEqual(row?["detail"]?.stringValue,
+                       "The repo is at /repo, and app/main.py there cannot be read.")
+        XCTAssertTrue(row?["hint"]?.stringValue?.contains("Files and Folders") == true)
+        XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(check(report, "launcher")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(report["fail_count"]?.intValue, 1)
     }
 
     func testALauncherBuiltForAnotherPathFailsAndNamesBothPaths() async {
@@ -88,7 +103,9 @@ final class DoctorTests: XCTestCase {
 
     func testEveryRowIsStillThereWhenNoProgramCanStart() async {
         // doctor is the command for the worst case, so one fault never stops the rest
-        var runtime = FakeWorld().runtime(repo: "/repo")
+        let w = FakeWorld()
+        w.file("/repo/app/main.py", "app = FastAPI()\n")
+        var runtime = w.runtime(repo: "/repo")
         runtime.runner = BrokenRunner()
         let report = await Doctor.run(runtime)
         XCTAssertEqual(names(report), ["repo", "venv", "venv_prep", "launcher", "engine", "log"])
