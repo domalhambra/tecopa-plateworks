@@ -3569,7 +3569,9 @@ Built on 2026-10-09 on the branch `claude/tecopa-tool-phase-1`. Dom opened the b
 - **Final review.** The debug routes refuse a Host header that is not local (403), against DNS rebinding. `engine stop` and `engine restart` refuse while a job is running or queued unless forced, and report the jobs and sessions they ended. A 404 from a program that is not Tecopa is no longer reported as a closed gate. Decision 2 (underscore tool names) and the MCP `port` argument are recorded in Decisions and in Task 12.
 - **Found, not changed.** `tecopa regions verify elko_bonneville` reports `DRIFT dem.tif`. By invariant 12 this is the record of a rebuilt DEM, and the sidecar stays as it is.
 - **Registered.** On Dom's yes, `claude mcp add --scope user tecopa` registered the server in Claude Code on 2026-10-09, and `claude mcp list` shows it connected.
-- **Not done here.** The registration in the Claude desktop app, and its file-grant check (spec check 2).
+- **Spec check 2, the desktop app half.** 2026-10-09. PASS in the app's launch form. The desktop app starts each MCP server as `/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- <command>`. Started in that form with a minimal environment, `tecopa regions verify elko_bonneville` read and hashed the plate files (6 of 7 ok, and the known drift), and the MCP tools `regions_verify` and `jobs` returned data. `tecopa doctor` is not the probe that Step 5 of Task 13 names: it reports `ok` when its one file read fails. The macOS privacy database was not readable, so the grant record itself is not confirmed.
+- **The desktop app registration needs the app quit.** 2026-10-09, on Dom's yes. An entry written to `claude_desktop_config.json` while the app ran was gone 88 seconds later: the running app writes its own copy of the file. `tools/tecopa/register_desktop.sh` makes the change and refuses while the app runs. A session inside the app cannot quit the app, so Dom runs the script from Terminal.
+- **Not done here.** The run of `register_desktop.sh` with the app quit, and the first tool call from a desktop app chat.
 
 ## Task 1 result
 

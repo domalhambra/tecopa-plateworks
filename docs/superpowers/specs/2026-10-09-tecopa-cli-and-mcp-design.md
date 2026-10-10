@@ -323,6 +323,7 @@ The phase 1 plan records each one under "What changed while it ran".
 - `regions verify` reports a crash of the script as a failure, and returns the script's stderr.
 - The debug routes refuse a request whose Host header is not local, with a 403.
 - `engine stop` and `engine restart` refuse while a job is running or queued, unless `--force` is given, and report how many jobs and sessions they ended.
+- Check 2 names the wrong mechanism for the desktop app. That app starts each server through its `disclaimer` helper, so the binary does not inherit the app's grant: it answers for its own access. The check passed in that launch form on 2026-10-09. `tools/tecopa/register_desktop.sh` registers the server there, with the app quit.
 
 ## Rejected
 

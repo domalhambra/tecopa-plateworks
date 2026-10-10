@@ -140,7 +140,7 @@ font bindings, which is by design.
 | Surface | How |
 |---|---|
 | The studio | `uvicorn app.main:app --reload` on port 8000 for development. The macOS launcher runs the engine from this repo's `.venv` on port 8848 and logs to `~/Library/Logs/TecopaPlateworks.log`. Build it with `scripts/macos/build_app.sh --install`. A `git pull` updates it with no rebuild. |
-| The `tecopa` tool | `tools/tecopa/build.sh --install` builds the release binary and copies it to `~/.local/bin/tecopa`, with this repo's path baked in. Register it in Claude Code at user scope as the MCP server `tecopa`. Rebuild after the repo moves or the Swift code changes. |
+| The `tecopa` tool | `tools/tecopa/build.sh --install` builds the release binary and copies it to `~/.local/bin/tecopa`, with this repo's path baked in. Register it in Claude Code at user scope as the MCP server `tecopa`. `tools/tecopa/register_desktop.sh` registers it in the Claude desktop app, with the app quit. Rebuild after the repo moves or the Swift code changes. |
 | Plates | Five committed under `regions/`: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. Each `dem.tif` is gitignored and rebuilt with `region_prep.py`. Packing and publishing plates has never run. |
 | The landing page | Ghost pages on www.plateworks.org since 2026-09-26: `/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's ghost-tecopa-pages script. `tecopa.plateworks.org` is a Cloudflare 301 to `/tecopa/` with the path kept. The Netlify site `tecopa-plateworks` still holds the last deploy as the rollback: delete the Cloudflare rule to serve it again. |
 | The privacy page | `/tecopa-privacy-policy/`. Ghost's redirects file sends `/tecopa/privacy/` there. |

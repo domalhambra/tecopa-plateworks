@@ -327,8 +327,18 @@ Only when the repo moves or the Swift code under `tools/tecopa/` changes.
 4. `tecopa doctor` checks the repo, both venvs, the launcher, the port and the log.
    Run it first when the engine does not start.
 5. To give Claude the tool, run `claude mcp add --scope user tecopa -- ~/.local/bin/tecopa mcp`.
-   It registers the MCP server for every Claude Code session on this Mac. The Claude
-   desktop app needs a check first: its file grant must reach `~/Documents`.
+   It registers the MCP server for every Claude Code session on this Mac.
+6. The Claude desktop app reads its own file,
+   `~/Library/Application Support/Claude/claude_desktop_config.json`. Quit the app, then
+   run `tools/tecopa/register_desktop.sh` from Terminal, then start the app. The script
+   adds `tecopa` under `mcpServers` and keeps a copy of the file. It refuses while the
+   app runs: a running app writes its own copy of the file about once a minute, and that
+   copy drops an entry added from outside.
+7. The desktop app starts each server through its helper, so the binary answers for its
+   own access to `~/Documents`. To test that access, run
+   `/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- ~/.local/bin/tecopa regions verify <id>`.
+   It must print the plate's rows. `tecopa doctor` does not prove the access. The binary
+   is ad-hoc signed, so macOS can ask again after a rebuild.
 
 Global options (`--json`, `--repo`, `--port`) go after the subcommand, for example
 `tecopa doctor --json` and `tecopa regions verify lassen_ca --repo <path>`.
