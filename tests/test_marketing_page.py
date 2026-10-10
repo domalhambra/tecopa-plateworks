@@ -90,8 +90,8 @@ def test_no_ghost_plates_on_the_page():
 
 # spec §2.1: the first poster and next year's, at both sizes and digital
 # (the two-size menu, Dom 2026-10-10: 11x17 and 17x22 from 17 in rolls)
-LANDING_PRICES = ["$59", "$99", "$39", "$69", "$25"]
-ORDER_PRICES = ["$59", "$99", "$39"]
+LANDING_PRICES = ["$69", "$99", "$39", "$59", "$25"]
+ORDER_PRICES = ["$69", "$99", "$39"]
 SIZES = ["11×17", "17×22"]
 # retired 2026-10-10: the PRO-1100 feeds at most 17 in, so 18x24 cannot print
 RETIRED_2026_10 = ["13×19", "18×24", "$79", "$89"]

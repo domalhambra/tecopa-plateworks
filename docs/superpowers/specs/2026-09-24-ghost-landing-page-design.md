@@ -104,7 +104,7 @@ Prices, from `docs/decisions.md`:
 
 | Group | Product | Price |
 |---|---|---|
-| Your first poster | Print, 11×17 | $59 |
+| Your first poster | Print, 11×17 | $69 |
 | Your first poster | Print, 17×22 | $99 |
 | Your first poster | Digital poster | $39 |
 | Next year | Print, 11×17 | $59 |

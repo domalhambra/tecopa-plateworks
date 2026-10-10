@@ -281,7 +281,7 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 
 | Decision | Why | Source |
 |---|---|---|
-| The Print comes in 11×17 at $59 (shipping $8) and 17×22 at $99 (shipping $12). The digital poster stays $39. This supersedes $79 at 13×19 and $89 at 18×24. | Dom's call: the Lab and Tecopa share one menu printed from 17 in rolls, and the PRO-1100 cannot feed an 18×24. | Dom, 2026-10-10; Ghost pages /tecopa/ and /tecopa-build/ |
+| The Print comes in 11×17 at $69 (shipping $8) and 17×22 at $99 (shipping $12). The digital poster stays $39. This supersedes $79 at 13×19 and $89 at 18×24. | Dom's call: the Lab and Tecopa share one menu printed from 17 in rolls, and the PRO-1100 cannot feed an 18×24. | Dom, 2026-10-10 (11×17 moved from $59 to $69 at 15:03Z); Ghost pages /tecopa/ and /tecopa-build/ |
 | The Edition N+1 reprint is $59 at 11×17 and $69 at 17×22, and the digital edition stays $25. | Dom's call, same day. | Dom, 2026-10-10 |
 | The studio's print size menu is 17×22 (the default) and 11×17, and an order.toml with no size means 11×17. | The studio should only frame what can be sold. 17×22 keeps the old 18×24 default's framing nearly unchanged. | this change |
 
