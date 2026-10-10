@@ -24,6 +24,7 @@ from app.regionbuild import slugify
 ORDERS_ENV = "TECOPA_ORDERS_DIR"
 TRACK_EXTS = (".gpx", ".kml", ".kmz")
 MAX_WIDTH_IN = 17.0            # the PRO-1100 feeds at most 17 in wide
+DEFAULT_SIZE = "11x17"         # the menu is 11x17 and 17x22 (decisions, 2026-10-10)
 ORIENTATIONS = ("portrait", "landscape")
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$")
 
@@ -60,10 +61,10 @@ def refuse_inside_repo(path) -> None:
 
 
 def parse_size(text) -> tuple:
-    """'12x18' -> (12.0, 18.0), short side first."""
+    """'17x11' -> (11.0, 17.0), short side first."""
     m = _SIZE.match(str(text))
     if not m:
-        raise OrderError(f"size {text!r} is not like 12x18")
+        raise OrderError(f"size {text!r} is not like 11x17")
     short, long_ = sorted((float(m.group(1)), float(m.group(2))))
     if short <= 0:
         raise OrderError(f"size {text!r} must be larger than zero")
@@ -150,7 +151,7 @@ def load(folder) -> Order:
         raise OrderError(f"orientation must be portrait or landscape, not {orientation!r}")
     return Order(dir=folder, title=title,
                  subtitle=str(cfg.get("subtitle", "")).strip(),
-                 size=parse_size(cfg.get("size", "12x18")),
+                 size=parse_size(cfg.get("size", DEFAULT_SIZE)),
                  orientation=orientation, notes=str(cfg.get("notes", "")))
 
 

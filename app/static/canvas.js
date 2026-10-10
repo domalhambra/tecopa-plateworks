@@ -51,7 +51,7 @@ export function setMode(m) {
 }
 
 // Reset the frame to the server-computed starter crop (clears only the crop). The
-// server sizes the starter for 18x24; if the active print size was restored to
+// server sizes the starter for 17x22; if the active print size was restored to
 // something else, re-fit so the crop matches that aspect and meets ITS 1x framing
 // target on entry (else a returning operator's first proof would need more than
 // the zoom cap's upsampling allows).
@@ -60,7 +60,7 @@ export function resetFrame() {
   const s = state.scale;
   const [x0, y0, x1, y1] = state.starterCrop;         // overview px -> canvas px
   state.crop = [x0 * s, y0 * s, x1 * s, y1 * s];
-  if (state.printW !== 18 || state.printH !== 24) { refitForSize(); return; }
+  if (state.printW !== 17 || state.printH !== 22) { refitForSize(); return; }
   draw();
   hooks.onCropChange && hooks.onCropChange();
 }

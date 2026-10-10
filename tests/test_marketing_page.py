@@ -89,8 +89,12 @@ def test_no_ghost_plates_on_the_page():
 
 
 # spec §2.1: the first poster and next year's, at both sizes and digital
-LANDING_PRICES = ["$79", "$89", "$39", "$59", "$69", "$25"]
-ORDER_PRICES = ["$79", "$89", "$39"]
+# (the two-size menu, Dom 2026-10-10: 11x17 and 17x22 from 17 in rolls)
+LANDING_PRICES = ["$59", "$99", "$39", "$69", "$25"]
+ORDER_PRICES = ["$59", "$99", "$39"]
+SIZES = ["11×17", "17×22"]
+# retired 2026-10-10: the PRO-1100 feeds at most 17 in, so 18x24 cannot print
+RETIRED_2026_10 = ["13×19", "18×24", "$79", "$89"]
 
 
 def test_every_price_is_on_the_landing_page():
@@ -198,3 +202,11 @@ def test_privacy_page_says_how_orders_are_paid():
     page = privacy()
     assert "LZ Books" in page
     assert "Stripe" not in page and "PayPal" not in page
+
+
+def test_both_pages_sell_the_two_sizes_and_no_retired_one():
+    for path, page in (("/tecopa/", landing()), ("/tecopa-build/", order())):
+        for size in SIZES:
+            assert size in page, f"{path} lost the size {size}"
+        for gone in RETIRED_2026_10:
+            assert gone not in page, f"{path} still shows the retired {gone}"

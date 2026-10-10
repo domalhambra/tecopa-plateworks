@@ -132,6 +132,10 @@ plates).
 
 `config/papers.toml` lists every sheet. Dom enables a row when the paper is in stock.
 
+> Amended 2026-10-10: the menu is now 11×17 and 17×22 only, both printed on the PRO-1100
+> from 17 in rolls and hand-cut, so the rows below are superseded. 18×24 and 12×18 are
+> no longer sold. See `docs/decisions.md`, 2026-10-10 (two-size menu).
+
 | Paper | Sheet | Print size | At launch |
 |---|---|---|---|
 | PT-101 Platinum | 13×19 | 12×18 (The Print) | on |

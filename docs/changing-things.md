@@ -130,8 +130,8 @@ Prepare's plate step only.
 
 1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
    inside the repo: it is public. Put the customer's GPX, KML or KMZ files in `in/`.
-2. Write `order.toml`: `title` (required), `size` such as `"12x18"` (short side at most
-   17 in, the PRO-1100's width), `orientation` (`portrait` or `landscape`).
+2. Write `order.toml`: `title` (required), `size`, `"11x17"` (the default) or `"17x22"`
+   (short side at most 17 in, the PRO-1100's width), `orientation` (`portrait` or `landscape`).
 3. Run `.venv/bin/python scripts/order.py prepare "<folder>"`. It needs `.venv-prep`.
    `TECOPA_PREP_PYTHON` overrides which prep interpreter it calls.
 4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the

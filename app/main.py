@@ -594,9 +594,9 @@ async def upload(files: List[UploadFile] = File(...),
     hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]), "weight": s["weight"],
             "label": s.get("label", ""), "icon": s.get("icon", ""),
             "photo": bool(s.get("photo"))} for s in spots]
-    # a floor-safe default crop for the Frame step (default print size 18x24); the
+    # a floor-safe default crop for the Frame step (default print size 17x22); the
     # client re-fits it in place when the operator changes the print size.
-    start = starter_crop(region.geo, tpx, 18, 24,
+    start = starter_crop(region.geo, tpx, 17, 22,
                          native_resolution_m=region.cfg["native_resolution_m"])
     log.info("event=upload session=%s region=%s tracks=%d hotspots=%d recovered=%s",
              sid, region.id, len(tracks), len(spots), recovered)
@@ -1045,7 +1045,7 @@ def _preset_or_422(preset_id: str, custom_px_w: int = 0, custom_px_h: int = 0,
 async def proof(session_id: str = Form(...),
                 x0: float = Form(...), y0: float = Form(...),
                 x1: float = Form(...), y1: float = Form(...),
-                print_w: float = Form(18.0), print_h: float = Form(24.0),
+                print_w: float = Form(17.0), print_h: float = Form(22.0),
                 title: str = Form(""),
                 contours: bool = Form(False), compass: bool = Form(True),
                 biome: bool = Form(False), labels: bool = Form(False),

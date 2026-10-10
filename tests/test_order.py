@@ -37,8 +37,8 @@ def test_parse_size_refuses_bad_text(bad):
 def test_load_and_defaults(tmp_path):
     o = od.load(str(_order(tmp_path, toml='title = "Smith home ground"\n')))
     assert o.title == "Smith home ground"
-    assert o.size == (12.0, 18.0) and o.orientation == "portrait"
-    assert o.print_in() == (12.0, 18.0)
+    assert o.size == (11.0, 17.0) and o.orientation == "portrait"
+    assert o.print_in() == (11.0, 17.0)
     assert o.id == "order_2026_10_001_smith"
 
 
