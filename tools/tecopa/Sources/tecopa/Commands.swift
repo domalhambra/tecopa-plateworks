@@ -127,6 +127,138 @@ struct LogsCommand: AsyncParsableCommand {
     }
 }
 
+/// Where a render's picture comes from, and its proof fields. The four commands
+/// that make a picture share these options.
+struct RenderPicture: ParsableArguments {
+    @Option(name: .long, parsing: .upToNextOption,
+            help: "GPX, KML or KMZ paths. Give --tracks or --session, never both.")
+    var tracks: [String] = []
+    @Option(name: .long, help: "A session id. The tool sends no upload, and renders the session.")
+    var session: String?
+    @Option(name: .long, help: "A region id, sent with the tracks.")
+    var region: String?
+    @Option(name: .long, help: "The path of a JSON file: one flat object of proof form fields.")
+    var spec: String?
+    @Option(name: .long, parsing: .upToNextOption,
+            help: "key=value, one proof form field for each. Wins over --spec.")
+    var set: [String] = []
+    // a crop can start with a minus sign, so the next word is always its value
+    @Option(name: .long, parsing: .unconditional, help: "x0,y0,x1,y1 in overview pixels.")
+    var crop: String?
+
+    var arguments: [String: JSONValue] {
+        var arguments: [String: JSONValue] = [:]
+        if !tracks.isEmpty { arguments["tracks"] = .array(tracks.map { .string($0) }) }
+        if let session { arguments["session"] = .string(session) }
+        if let region { arguments["region"] = .string(region) }
+        if let spec { arguments["spec"] = .string(spec) }
+        if !set.isEmpty { arguments["set"] = .array(set.map { .string($0) }) }
+        if let crop { arguments["crop"] = .string(crop) }
+        return arguments
+    }
+}
+
+/// The options of a render that runs as a job: the output route's fields, the
+/// file, and the choice not to wait.
+struct RenderJob: ParsableArguments {
+    @Option(name: .long, parsing: .upToNextOption,
+            help: "key=value, one field of the output route for each.")
+    var opt: [String] = []
+    @Option(name: .long, help: "The path of the file to write. It must hold no file.")
+    var out: String?
+    @Flag(name: .long, help: "Return the job id at once and write no file. Then run `tecopa render fetch`.")
+    var noWait = false
+
+    var arguments: [String: JSONValue] {
+        var arguments: [String: JSONValue] = [:]
+        if !opt.isEmpty { arguments["opt"] = .array(opt.map { .string($0) }) }
+        if let out { arguments["out"] = .string(out) }
+        if noWait { arguments["no_wait"] = .bool(true) }
+        return arguments
+    }
+}
+
+struct RenderCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "render",
+        abstract: "Render a proof, a final, wallpapers or a film, or save a finished job's file.",
+        subcommands: [Proof.self, Final.self, Wallpaper.self, Film.self, Fetch.self])
+
+    struct Proof: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "proof", abstract: "Render a proof PNG and write it to --out.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var picture: RenderPicture
+        @Option(name: .long, help: "The path of the PNG to write. It must hold no file.")
+        var out: String?
+
+        func run() async throws {
+            var arguments = picture.arguments
+            if let out { arguments["out"] = .string(out) }
+            try await execute("render_proof", global, arguments)
+        }
+    }
+
+    struct Final: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "final", abstract: "Render the final poster and write it to --out.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var picture: RenderPicture
+        @OptionGroup var job: RenderJob
+
+        func run() async throws {
+            try await execute("render_final", global,
+                              picture.arguments.merging(job.arguments) { _, new in new })
+        }
+    }
+
+    struct Wallpaper: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "wallpaper", abstract: "Render a zip of wallpapers, one for each preset.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var picture: RenderPicture
+        @Option(name: .long, parsing: .upToNextOption, help: "Wallpaper preset ids. Required.")
+        var presets: [String] = []
+        @OptionGroup var job: RenderJob
+
+        func run() async throws {
+            var arguments = picture.arguments.merging(job.arguments) { _, new in new }
+            if !presets.isEmpty { arguments["presets"] = .array(presets.map { .string($0) }) }
+            try await execute("render_wallpaper", global, arguments)
+        }
+    }
+
+    struct Film: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "film", abstract: "Render the time-lapse film and write it to --out.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var picture: RenderPicture
+        @OptionGroup var job: RenderJob
+
+        func run() async throws {
+            try await execute("render_film", global,
+                              picture.arguments.merging(job.arguments) { _, new in new })
+        }
+    }
+
+    struct Fetch: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "fetch", abstract: "Write the file of a job that is done to --out.")
+        @OptionGroup var global: GlobalOptions
+        @Option(name: .long, help: "The job id that --no-wait returned.")
+        var job: String?
+        @Option(name: .long, help: "The path of the file to write. It must hold no file.")
+        var out: String?
+
+        func run() async throws {
+            var arguments: [String: JSONValue] = [:]
+            if let job { arguments["job"] = .string(job) }
+            if let out { arguments["out"] = .string(out) }
+            try await execute("render_fetch", global, arguments)
+        }
+    }
+}
+
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",

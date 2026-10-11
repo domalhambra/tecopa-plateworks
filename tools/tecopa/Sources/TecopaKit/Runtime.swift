@@ -1,5 +1,13 @@
 import Foundation
 
+/// What one path holds, when it holds anything.
+public enum PathKind: Equatable, Sendable {
+    /// A file, a link that points at nothing, or anything else that is not a folder.
+    case file
+    /// A folder, or a link to one.
+    case folder
+}
+
 /// What one call needs. The CLI and the MCP server each build one, and a test builds
 /// one over a fake machine.
 public struct Runtime: Sendable {
@@ -21,6 +29,10 @@ public struct Runtime: Sendable {
     /// Write the bytes to a path that holds no file. A file at the path is a usage
     /// failure: the tool never overwrites.
     public var writeNew: @Sendable (String, Data) throws -> Void
+    /// What is at one path, or nil when nothing is there. A command asks this for
+    /// its output path before its first request, so a long render is not lost to a
+    /// path that `writeNew` will refuse.
+    public var pathKind: @Sendable (String) -> PathKind?
 
     public init(
         repoFlag: String? = nil,
@@ -41,7 +53,8 @@ public struct Runtime: Sendable {
         },
         writeNew: @escaping @Sendable (String, Data) throws -> Void = {
             try Runtime.writeNewFile($0, $1)
-        }
+        },
+        pathKind: @escaping @Sendable (String) -> PathKind? = { Runtime.kindOfPath($0) }
     ) {
         self.repoFlag = repoFlag
         self.port = port
@@ -54,6 +67,7 @@ public struct Runtime: Sendable {
         self.readFile = readFile
         self.readData = readData
         self.writeNew = writeNew
+        self.pathKind = pathKind
     }
 
     public var client: EngineClient { EngineClient(port: port, http: http) }
@@ -89,6 +103,16 @@ extension Runtime {
     /// The real `writeNew`: create the file at `path` and write all the bytes to it.
     public static func writeNewFile(_ path: String, _ data: Data) throws {
         try TecopaKit.writeNewFile(path, data, write: { Darwin.write($0, $1, $2) })
+    }
+
+    /// The real `pathKind`. The first look does not follow a link, so a link that
+    /// points at nothing is still something at the path: `writeNew` refuses it too.
+    /// A link to a folder is a folder, because a file can be made in it.
+    public static func kindOfPath(_ path: String) -> PathKind? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        if info.st_mode & S_IFMT == S_IFLNK, stat(path, &info) != 0 { return .file }
+        return info.st_mode & S_IFMT == S_IFDIR ? .folder : .file
     }
 }
 

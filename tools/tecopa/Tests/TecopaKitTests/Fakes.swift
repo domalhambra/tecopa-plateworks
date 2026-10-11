@@ -2,8 +2,9 @@ import Foundation
 @testable import TecopaKit
 
 /// One fake machine for a test: an engine that answers some paths, a process runner
-/// that records each command, and a few files. `onRun` lets a test change the engine
-/// when a command runs, which is how "the launcher starts the engine" is modelled.
+/// that records each command, a few files, and a clock that counts each sleep.
+/// `onRun` lets a test change the engine when a command runs, which is how "the
+/// launcher starts the engine" is modelled.
 final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     /// One multipart POST, as an engine would read it from the request's bytes.
     struct Post: Equatable {
@@ -43,11 +44,13 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
 
     private let lock = NSLock()
     private var routes: [String: Route] = [:]
+    private var sequences: [String: [Route]] = [:]
     private var results: [String: ProcessResult] = [:]
     private var timeouts: Set<String> = []
     private var files: [String: String] = [:]
     private var binaries: [String: Data] = [:]
     private var taken: Set<String> = []
+    private var folders: Set<String> = []
     private var launcherProcess: Bool?
     private(set) var commands: [[String]] = []
     /// The working directory of each command, in the order of `commands`.
@@ -60,6 +63,10 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var posts: [Post] = []
     /// Every file that `Runtime.writeNew` wrote, in order.
     private(set) var written: [Written] = []
+    /// The seconds of each `Runtime.sleep`, in order. No time passes in a test.
+    private(set) var slept: [Double] = []
+    /// The fake clock: the sum of every sleep, in seconds.
+    var clock: Double { lock.withLock { slept.reduce(0, +) } }
     var onRun: ((FakeWorld, [String]) -> Void)?
 
     /// `path` includes the query, for example "/api/debug/sessions/ab?full=1". A
@@ -79,6 +86,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Answers that change with each request: a job that runs and then ends. Each
+    /// request takes the next answer, and the last one repeats. The keys are those
+    /// of `serve`, and a sequence answers before a fixed route of the same key.
+    func serveSequence(_ key: String, _ answers: [(status: Int, body: String)]) {
+        let list = answers.map {
+            Route(status: $0.status, contentType: "application/json", body: Data($0.body.utf8))
+        }
+        lock.lock(); sequences[key] = list; lock.unlock()
+    }
+
     /// After this, a request for `path` gets no answer in time: an engine that
     /// listens and is busy. The keys are those of `serve`.
     func timeOut(_ path: String) {
@@ -86,7 +103,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     }
 
     func stopServing() {
-        lock.lock(); routes.removeAll(); timeouts.removeAll(); lock.unlock()
+        lock.lock(); routes.removeAll(); sequences.removeAll(); timeouts.removeAll(); lock.unlock()
     }
 
     /// The result for any command whose executable ends with `name`.
@@ -113,8 +130,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     }
 
     /// After this, `Runtime.writeNew` refuses `path`: a file is already there.
+    /// `Runtime.pathKind` reports it as a file.
     func existingFile(_ path: String) {
         lock.lock(); taken.insert(path); lock.unlock()
+    }
+
+    /// After this, `Runtime.pathKind` reports `path` as a folder. A path that is
+    /// not a folder and holds no file reads as nothing, so a test names each folder
+    /// that a command writes into.
+    func folder(_ path: String) {
+        lock.lock(); folders.insert(path); lock.unlock()
     }
 
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
@@ -143,11 +168,24 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
             requests.append(url)
             calls.append(method + " " + path)
             if let post { posts.append(post) }
-            return (keys.contains(where: timeouts.contains), keys.compactMap { routes[$0] }.first)
+            return (keys.contains(where: timeouts.contains), next(keys))
         }
         if slow { throw URLError(.timedOut) }
         guard let route else { throw URLError(.cannotConnectToHost) }
         return route
+    }
+
+    /// The answer for the first key that has one. A sequence gives its next answer
+    /// and keeps its last. The caller holds the lock.
+    private func next(_ keys: [String]) -> Route? {
+        for key in keys {
+            if let list = sequences[key], let first = list.first {
+                if list.count > 1 { sequences[key] = Array(list.dropFirst()) }
+                return first
+            }
+            if let route = routes[key] { return route }
+        }
+        return nil
     }
 
     /// Read a multipart body back into its parts. The fake has its own reader, so a
@@ -230,11 +268,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         Runtime(repoFlag: repo, port: port, environment: [:], home: home,
                 http: self, runner: self,
                 fileExists: { _ in true },
-                sleep: { _ in },
+                sleep: { seconds in self.lock.withLock { self.slept.append(seconds) } },
                 readFile: { path in self.lock.withLock { self.files[path] } },
                 readData: { path in
                     self.lock.withLock { self.binaries[path] ?? self.files[path].map { Data($0.utf8) } }
                 },
-                writeNew: { path, data in try self.write(path, data) })
+                writeNew: { path, data in try self.write(path, data) },
+                pathKind: { path in
+                    self.lock.withLock {
+                        self.taken.contains(path) ? .file : self.folders.contains(path) ? .folder : nil
+                    }
+                })
     }
 }

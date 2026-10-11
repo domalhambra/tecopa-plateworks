@@ -244,6 +244,65 @@ final class SeamsTests: XCTestCase {
         }
         XCTAssertEqual(world.written, [FakeWorld.Written(path: "/out/proof.png", data: Data([9, 8]))])
     }
+
+    func testPathKindTellsAFileAFolderAndNothing() throws {
+        let folder = try temporaryFolder()
+        let file = folder + "/poster.png"
+        try Data([1]).write(to: URL(fileURLWithPath: file))
+        XCTAssertEqual(Runtime().pathKind(folder), .folder)
+        XCTAssertEqual(Runtime().pathKind(file), .file)
+        XCTAssertNil(Runtime().pathKind(folder + "/none.png"))
+        XCTAssertNil(Runtime().pathKind(file + "/under-a-file.png"))
+    }
+
+    func testPathKindSeesALinkAsWriteNewDoes() throws {
+        // `writeNew` refuses a link that points at nothing, so the early look must
+        // report it. A link to a folder is a folder: a file can be made in it.
+        let folder = try temporaryFolder()
+        let dangling = folder + "/dangling.png"
+        try FileManager.default.createSymbolicLink(atPath: dangling,
+                                                   withDestinationPath: folder + "/none.png")
+        XCTAssertEqual(Runtime().pathKind(dangling), .file)
+        XCTAssertThrowsError(try Runtime().writeNew(dangling, Data([1])))
+
+        let alias = folder + "/alias"
+        try FileManager.default.createSymbolicLink(atPath: alias, withDestinationPath: folder)
+        XCTAssertEqual(Runtime().pathKind(alias), .folder)
+        try Runtime().writeNew(alias + "/proof.png", Data([1]))
+    }
+
+    func testTheFakeAnswersPathKindForEachPath() throws {
+        let world = FakeWorld()
+        world.folder("/out")
+        world.existingFile("/out/old.png")
+        let runtime = world.runtime()
+        XCTAssertEqual(runtime.pathKind("/out"), .folder)
+        XCTAssertEqual(runtime.pathKind("/out/old.png"), .file)
+        XCTAssertNil(runtime.pathKind("/out/new.png"))
+        XCTAssertNil(runtime.pathKind("/none"))
+        // a write makes a file, and the phase 1 seam still says yes to every path
+        try runtime.writeNew("/out/new.png", Data([1]))
+        XCTAssertEqual(runtime.pathKind("/out/new.png"), .file)
+        XCTAssertTrue(runtime.fileExists("/none"))
+    }
+
+    func testTheFakeAnswersASequenceAndCountsEachSleep() async throws {
+        let world = FakeWorld()
+        world.serve("/api/jobs/ab", 200, #"{"state":"fixed"}"#)
+        world.serveSequence("GET /api/jobs/ab", [
+            (200, #"{"state":"queued"}"#), (200, #"{"state":"running"}"#), (200, #"{"state":"done"}"#),
+        ])
+        let runtime = world.runtime()
+        var states: [String] = []
+        for _ in 0..<5 {
+            states.append(try await runtime.client.get("/api/jobs/ab")["state"]?.stringValue ?? "")
+            await runtime.sleep(1.5)
+        }
+        // the last answer repeats, and the sequence answers before the fixed route
+        XCTAssertEqual(states, ["queued", "running", "done", "done", "done"])
+        XCTAssertEqual(world.slept, [1.5, 1.5, 1.5, 1.5, 1.5])
+        XCTAssertEqual(world.clock, 7.5)
+    }
 }
 
 /// One listener on 127.0.0.1, on a port that the system picks. `/redirect/<status>`
