@@ -549,6 +549,43 @@ struct PlateCommand: AsyncParsableCommand {
     }
 }
 
+struct OrderCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "order",
+        abstract: "Prepare a customer order, or read what Prepare decided.",
+        discussion: "`order prepare` starts a tracked run and returns at once. "
+            + "Read it with `tecopa runs show <id>`, then run `tecopa order status <folder>`.",
+        subcommands: [Prepare.self, Status.self])
+
+    /// The one argument of both commands.
+    struct Folder: ParsableArguments {
+        @Argument(help: "The order folder, which holds in/ and order.toml.")
+        var folder: String?
+
+        var arguments: [String: JSONValue] {
+            folder.map { ["folder": .string(absolutePath($0))] } ?? [:]
+        }
+    }
+
+    struct Prepare: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "prepare",
+            abstract: "Start Prepare as a tracked run: build or reuse the order's plate and frame the tracks.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var order: Folder
+        func run() async throws { try await execute("order_prepare", global, order.arguments) }
+    }
+
+    struct Status: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "status",
+            abstract: "Print the order's report, from its own work/ folder. With --json: all of its state.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var order: Folder
+        func run() async throws { try await execute("order_status", global, order.arguments) }
+    }
+}
+
 struct StudioCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "studio",

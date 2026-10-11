@@ -31,6 +31,7 @@ final class ScriptRunnerTests: XCTestCase {
             "scripts/bake_playa.py": .script(.prep),
             "scripts/pack_region.py": .script(.app),
             "app.plates": .module(.app),
+            "scripts/order.py": .script(.app),
         ])
     }
 

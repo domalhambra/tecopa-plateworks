@@ -253,6 +253,27 @@ final class CommandPathTests: XCTestCase {
         XCTAssertEqual(failure?.message, "plate install takes a local file.")
     }
 
+    // MARK: The order commands
+
+    func testTheFolderOfAnOrderCommandIsMadeAbsolute() throws {
+        let here = FileManager.default.currentDirectoryPath
+        let prepare = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "prepare", "~/Tecopa Orders/2026-10-001-smith"])
+            as? OrderCommand.Prepare)
+        XCTAssertEqual(prepare.order.arguments,
+                       ["folder": .string(NSHomeDirectory() + "/Tecopa Orders/2026-10-001-smith")])
+        let status = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "status", "2026-10-001-smith", "--json"])
+            as? OrderCommand.Status)
+        XCTAssertEqual(status.order.arguments, ["folder": .string(here + "/2026-10-001-smith")])
+        let absolute = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "status", "/o/2026-10-001-smith"])
+            as? OrderCommand.Status)
+        XCTAssertEqual(absolute.order.arguments, ["folder": .string("/o/2026-10-001-smith")])
+        // without a folder, the entry says that it is missing
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["order", "prepare"]) as? OrderCommand.Prepare)
+            .order.arguments, [:])
+        // an order command has no option of its own
+        XCTAssertNil(try? Tecopa.parseAsRoot(["order", "prepare", "/o/a", "--out", "/tmp"]))
+    }
+
     func testContinueTakesTheFileThenItsOptions() throws {
         let here = FileManager.default.currentDirectoryPath
         let command = try Tecopa.parseAsRoot([

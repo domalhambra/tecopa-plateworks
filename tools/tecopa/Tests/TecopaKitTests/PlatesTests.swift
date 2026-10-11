@@ -722,6 +722,14 @@ final class PlatesTests: XCTestCase {
             "plate_pack": Walk(arguments: ["id": .string("lassen_ca")], programs: 1) { _ in },
             "plate_install": Walk(arguments: ["file": .string(zip)], programs: 1) { $0.existingFile(self.zip) },
             "plate_check": Walk(arguments: ["poster": .string("/p/lassen.png")], programs: 1) { _ in },
+            "order_prepare": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 1) {
+                $0.folder("/orders/2026-10-001-smith")
+            },
+            // it reads the order's own files and runs no program
+            "order_status": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 0) { world in
+                world.folder("/orders/2026-10-001-smith")
+                world.file("/orders/2026-10-001-smith/work/state.json", "{}")
+            },
         ]
     }
 

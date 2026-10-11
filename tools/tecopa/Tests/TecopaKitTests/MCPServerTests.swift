@@ -7,14 +7,14 @@ final class MCPServerTests: XCTestCase {
     private let readOnly: Set<String> = [
         "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
         "reprint_inspect", "studio_state", "studio_errors", "runs", "runs_show",
-        "plate_plan", "plate_check"]
+        "plate_plan", "plate_check", "order_status"]
     /// Not read-only: the entries that control the engine, the ones that write a
     /// file, and the ones that start or run a script that writes.
     private let writes: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
         "reprint", "continue", "runs_cancel",
-        "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install"]
+        "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install", "order_prepare"]
 
     private var binary: URL {
         // the test bundle sits beside the products of the same build
@@ -119,7 +119,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 31)
+        XCTAssertEqual(tools.count, 33)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -181,8 +181,18 @@ final class MCPServerTests: XCTestCase {
         for name in ["id", "name", "resolution"] {
             XCTAssertEqual(build?["inputSchema"]?["properties"]?[name]?["type"]?.stringValue, "string", name)
         }
-        // only `plate pack` has the resync flag, and no plate tool has a flag that replaces or moves a folder
-        for tool in tools where (tool["name"]?.stringValue ?? "").hasPrefix("plate_") {
+        // an order is named by its folder, and by nothing more
+        for name in ["order_prepare", "order_status"] {
+            let tool = tools.first { $0["name"]?.stringValue == name }
+            XCTAssertEqual(tool?["inputSchema"]?["properties"]?["folder"]?["type"]?.stringValue, "string", name)
+            guard case .object(let properties)? = tool?["inputSchema"]?["properties"] else {
+                XCTFail("\(name) has no properties")
+                continue
+            }
+            XCTAssertEqual(Set(properties.keys), ["folder", "port"], name)
+        }
+        // only `plate pack` has the resync flag, and no plate or order tool has a flag that replaces or moves a folder
+        for tool in tools where ["plate_", "order_"].contains(where: (tool["name"]?.stringValue ?? "").hasPrefix) {
             let name = tool["name"]?.stringValue ?? ""
             XCTAssertEqual(tool["inputSchema"]?["properties"]?["resync"]?["type"]?.stringValue,
                            name == "plate_pack" ? "boolean" : nil, name)
