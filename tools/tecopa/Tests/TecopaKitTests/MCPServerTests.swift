@@ -6,7 +6,7 @@ import XCTest
 final class MCPServerTests: XCTestCase {
     private let readOnly: Set<String> = [
         "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
-        "reprint_inspect"]
+        "reprint_inspect", "studio_state", "studio_errors"]
     /// Not read-only: the entries that control the engine, and the ones that write a file.
     private let writes: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
@@ -116,7 +116,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 19)
+        XCTAssertEqual(tools.count, 21)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -152,6 +152,13 @@ final class MCPServerTests: XCTestCase {
             XCTAssertEqual(tool["inputSchema"]?["properties"]?["allow_plate_mismatch"]?["type"]?.stringValue,
                            ["reprint", "continue"].contains(name) ? "boolean" : nil, name)
         }
+        // the two filters of `studio errors` are strings, and `studio state` has none
+        let errors = tools.first { $0["name"]?.stringValue == "studio_errors" }
+        for name in ["tab", "kind"] {
+            XCTAssertEqual(errors?["inputSchema"]?["properties"]?[name]?["type"]?.stringValue, "string", name)
+        }
+        let state = tools.first { $0["name"]?.stringValue == "studio_state" }
+        XCTAssertNil(state?["inputSchema"]?["properties"]?["tab"])
         let inspect = tools.first { $0["name"]?.stringValue == "reprint_inspect" }
         XCTAssertEqual(inspect?["inputSchema"]?["properties"]?["file"]?["type"]?.stringValue, "string")
     }

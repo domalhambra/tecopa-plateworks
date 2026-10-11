@@ -353,6 +353,39 @@ struct ContinueCommand: AsyncParsableCommand {
     func run() async throws { try await execute("continue", global, arguments) }
 }
 
+struct StudioCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "studio",
+        abstract: "Read what the studio's browser tabs reported: their state, and their errors.",
+        subcommands: [State.self, Errors.self])
+
+    struct State: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "state",
+            abstract: "List each studio tab that has reported, with its session, view and proof flags.")
+        @OptionGroup var global: GlobalOptions
+        func run() async throws { try await execute("studio_state", global) }
+    }
+
+    struct Errors: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "errors",
+            abstract: "List the errors the studio's tabs reported, newest first.")
+        @OptionGroup var global: GlobalOptions
+        @Option(name: .long, help: "A tab id from `tecopa studio state`. Keeps only that tab's errors.")
+        var tab: String?
+        @Option(name: .long, help: "error, rejection or toast. Keeps only that kind.")
+        var kind: String?
+
+        func run() async throws {
+            var arguments: [String: JSONValue] = [:]
+            if let tab { arguments["tab"] = .string(tab) }
+            if let kind { arguments["kind"] = .string(kind) }
+            try await execute("studio_errors", global, arguments)
+        }
+    }
+}
+
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",
