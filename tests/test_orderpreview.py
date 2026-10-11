@@ -7,8 +7,11 @@ import pytest
 
 from app import orderprep as op
 from app import orderpreview as opv
-from app.orderplate import CoverageError, PlateError, nestled_frame, track_shares
-from tests.test_orderprep import WIDE, _make_order, tools  # noqa: F401
+from app import order as od
+from app import orderplate as opl
+from app.orderplate import (CoverageError, PlateError, nestled_frame, order_epsg, project_bbox,
+                            track_shares)
+from tests.test_orderprep import WIDE, _gpx, _make_order, tools  # noqa: F401
 
 KM = 1000.0
 
@@ -157,6 +160,7 @@ def test_a_widened_frame_is_judged_as_widened():
 def _fake_render(calls):
     def render(entries, tracks, plate_dir, title, out_dir):
         calls.append({"plate_dir": plate_dir, "title": title, "tracks": len(tracks),
+                      "coords": [t.coords for t in tracks],
                       "keys": [e["key"] for e in entries if e["offered"]]})
         for e in entries:
             if e["offered"]:
@@ -312,6 +316,166 @@ def test_the_preview_keeps_its_own_build_log(tmp_path, tools):
     assert state["plate"]["kind"] == "built"
     assert (d / "work" / "build.log").read_bytes() == before
     assert b"cache=" in (d / "work" / "preview" / "build.log").read_bytes()
+
+
+# ---- every size is framed in the projection Prepare gives it ----
+
+SIERRA = (-118.75, 36.6, -118.70, 37.5)                # 100 km north to south, 4 km wide
+SIERRA_DIAGONAL = (-119.5, 36.5, -118.4612, 37.5649)   # 93 km east, 118 km north
+# 280 km east and 150 km north in UTM zone 14: every single sheet and the set of two
+# stay in UTM, and the set of three frames 640 km wide, so Prepare gives it Albers
+PLAINS = (-102.0, 39.5, -98.7, 40.85)
+
+
+def _order_plan(bbox):
+    ground = opv.OrderGround([(_gpx(*bbox).encode(), "trip.gpx")], bbox)
+    return {e["key"]: e for e in opv.plan_sizes(ground=ground)}
+
+
+def _as_prepare_frames(bbox, entry):
+    """(projection, track box, frame) of the order that asks for this entry's size,
+    orientation and gap, by the lines of orderprep.prepare."""
+    size, panels = od.parse_order_size(entry["key"])
+    order = od.Order(dir="x", title="t", subtitle="", size=size, notes="", panels=panels,
+                     orientation=entry["orientation"], gap=entry["gap"])
+    pw, ph = order.print_in()
+    assert [pw, ph] == entry["print_in"]
+    epsg = order_epsg(bbox, pw / ph)
+    box = project_bbox(bbox, epsg)
+    return epsg, box, nestled_frame(box, pw / ph)
+
+
+@pytest.mark.parametrize("bbox", [SIERRA, SIERRA_DIAGONAL, PLAINS])
+def test_every_size_is_framed_as_prepare_frames_it(bbox):
+    plan = _order_plan(bbox)
+    assert list(plan) == list(opv.SIZE_KEYS)
+    for entry in plan.values():
+        epsg, box, frame = _as_prepare_frames(bbox, entry)
+        assert entry["epsg"] == epsg
+        assert entry["frame"] == pytest.approx(list(frame), abs=1e-6)
+        shares = track_shares(box, frame)
+        assert entry["width_share"] == round(shares[0], 3)
+        assert entry["fill"] == round(max(shares), 3)
+
+
+def test_one_albers_candidate_does_not_move_the_other_sizes():
+    # the 70 x 17 in landscape sheet of this route frames 680 km wide, so Prepare gives
+    # it Albers. One projection for all eight candidates gave every size Albers, and
+    # the map of a single sheet was 12.6 degrees off its print.
+    assert order_epsg(SIERRA, 70 / 17) == 5070 and order_epsg(SIERRA, 17 / 22) == 32611
+    plan = _order_plan(SIERRA)
+    assert [(e["epsg"], e["orientation"]) for e in plan.values()] == [
+        (32611, "portrait"), (32611, "portrait"), (32611, "portrait"), (5070, "landscape")]
+    assert plan["11x17"]["offered"] and plan["17x22"]["offered"]
+    assert not plan["two"]["offered"] and not plan["three"]["offered"]
+    assert opv.plate_groups(plan.values()) == {32611: [plan["11x17"], plan["17x22"]]}
+
+
+def test_a_set_is_judged_at_the_share_prepare_frames():
+    # in Albers this route spans 31.3 % of the two-panel sheet, and the set was offered;
+    # Prepare frames it in UTM zone 11 at 29.0 %
+    two = _order_plan(SIERRA_DIAGONAL)["two"]
+    epsg, box, frame = _as_prepare_frames(SIERRA_DIAGONAL, two)
+    assert (two["epsg"], two["orientation"]) == (32611, "portrait")
+    assert two["width_share"] == round(track_shares(box, frame)[0], 3) == 0.29
+    assert not two["offered"]
+    assert two["why"] == "the tracks span 29% of the sheet's width, under 30%"
+
+
+def test_the_lines_of_the_report_give_prepare_the_frame_of_the_preview(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=SIERRA_DIAGONAL, size="11x17")
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22", "two"]\n')
+    for e in _preview(d, tools)["sizes"]:
+        if not e["offered"]:
+            continue
+        gap = f"gap = {e['gap']:g}\n" if e["panels"] > 1 else ""
+        (d / "order.toml").write_text(f'title = "Smith home ground"\nsize = "{e["key"]}"\n'
+                                      f'orientation = "{e["orientation"]}"\n{gap}')
+        state = op.prepare(str(d), tools, log=lambda s: None)
+        assert state["epsg"] == e["epsg"] and state["print_in"] == e["print_in"]
+        assert state["frame"] == pytest.approx(e["frame"], abs=1e-6)
+        assert state["fill"] == e["fill"]
+
+
+def test_a_set_that_needs_albers_gets_a_plate_of_its_own(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=PLAINS, size="11x17")
+    calls = []
+    state = _preview(d, tools, calls)
+    by_key = {e["key"]: e for e in state["sizes"]}
+    assert [e["epsg"] for e in state["sizes"]] == [32614, 32614, 32614, 5070]
+    assert all(e["offered"] for e in state["sizes"])
+    utm, albers = state["plates"]
+    assert state["plate"] == utm and state["epsg"] == 32614
+    assert (utm["id"], utm["epsg"], utm["sizes"]) == (
+        "preview_2026_10_001_smith", 32614, ["11x17", "17x22", "two"])
+    assert (albers["id"], albers["epsg"], albers["sizes"]) == (
+        "preview_2026_10_001_smith_5070", 5070, ["three"])
+    assert [by_key[k]["plate"] for k in opv.SIZE_KEYS] == [utm["id"]] * 3 + [albers["id"]]
+    root = d / "work" / "preview" / "plate"
+    assert (root / "builds.log").read_text().split() == [utm["id"], albers["id"]]
+    for plate in (utm, albers):
+        assert plate["root"] == str(root) and plate["kind"] == "built"
+        built = json.loads((root / plate["id"] / "region.json").read_text())
+        assert built["crs"] == f"EPSG:{plate['epsg']}"
+        # the plate holds the frames of its own sizes, and no frame of the other projection
+        frames = opv.union_frame([by_key[k] for k in plate["sizes"]])
+        assert built["bbox"] == pytest.approx(list(opl.to_lonlat_bbox(
+            opl.plate_bounds(frames), plate["epsg"], pad_m=opl.PLATE_PAD_M)))
+    # each build keeps its own log
+    assert b"cache=" in (d / "work" / "preview" / "build.log").read_bytes()
+    assert b"cache=" in (d / "work" / "preview" / "build_5070.log").read_bytes()
+    # each map is drawn on its own plate, with the tracks in that plate's projection
+    assert [c["keys"] for c in calls] == [["11x17", "17x22", "two"], ["three"]]
+    payloads = opv.load(str(d)).payloads()
+    for call, plate in zip(calls, (utm, albers)):
+        assert call["plate_dir"] == os.path.join(plate["root"], plate["id"])
+        want = opv.load_tracks_m(payloads, plate["epsg"])
+        assert len(call["coords"]) == len(want) == 1
+        assert np.array_equal(call["coords"][0], want[0].coords)
+    assert calls[0]["coords"][0][0, 0] > 0 > calls[1]["coords"][0][0, 0]   # UTM east, Albers west
+    saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
+    assert saved["plates"] == [utm, albers] and saved["plate"] == utm
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert report.splitlines()[2:5] == [
+        "Plate: preview_2026_10_001_smith (built), 260 m grid, EPSG:32614, for 11x17, 17x22, two",
+        "Plate: preview_2026_10_001_smith_5070 (built), 240 m grid, EPSG:5070, for three",
+        "Sizes:"]
+
+
+def test_the_rules_and_the_painter_get_the_tracks_of_the_entrys_projection(
+        tmp_path, tools, monkeypatch):
+    real_load, real_judge, real_plan = opv.load_tracks_m, opv.judge, op._plan_grid
+    loaded, judged, widened = {}, [], []
+
+    def load(payloads, epsg):
+        loaded[epsg] = real_load(payloads, epsg)
+        return loaded[epsg]
+
+    def judge(cand, frame, bounds_m, tracks_m):
+        judged.append((cand.key, bounds_m, tracks_m))
+        return real_judge(cand, frame, bounds_m, tracks_m)
+
+    def plan(tools, frame, epsg, print_w_in, env):
+        widened.append((epsg, print_w_in))
+        return real_plan(tools, frame, epsg, print_w_in, env)
+    monkeypatch.setattr(opv, "load_tracks_m", load)
+    monkeypatch.setattr(opv, "judge", judge)
+    monkeypatch.setattr(op, "_plan_grid", plan)
+    d = _make_order(tmp_path, bbox=PLAINS, size="11x17")
+    calls = []
+    state = _preview(d, tools, calls)
+    by_key = {e["key"]: e for e in state["sizes"]}
+    assert sorted(loaded) == [5070, 32614]                   # no other projection is read
+    assert {key for key, _, _ in judged} == set(opv.SIZE_KEYS)
+    for key, bounds_m, tracks_m in judged:                   # the fit rule
+        epsg = by_key[key]["epsg"]
+        assert bounds_m == project_bbox(PLAINS, epsg)
+        assert len(tracks_m) == 1 and np.array_equal(tracks_m[0], loaded[epsg][0].coords)
+    # the 2x rule: each size in its own projection, by the width of its sheet
+    assert widened == [(e["epsg"], e["print_in"][0]) for e in state["sizes"]]
+    for call in calls:                                       # the painter
+        epsg = by_key[call["keys"][0]]["epsg"]
+        assert np.array_equal(call["coords"][0], loaded[epsg][0].coords)
 
 
 # ---- the PDF's place, the report and the command ----

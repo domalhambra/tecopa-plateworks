@@ -2,6 +2,13 @@
 """The size preview of an order: frame the tracks at every size, offer the sizes that
 suit them, show each one on a coarse plate, and write the PDF and the report.
 
+Every size is framed as Prepare frames it (app/orderprep.py, prepare): in the
+projection order_epsg gives the tracks at that sheet's aspect, on the tracks' box in
+that projection. So a size's map is the ground its print will show, and the fit rule
+judges the frame Prepare will make. A plate has one projection (invariant 4), so the
+offered sizes are grouped by projection and each group gets one plate: almost always
+one plate, and two when a set is wide enough for Albers while a single sheet is not.
+
 Spec: docs/superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md,
 section 5. This file never imports app.main, and it imports the renderer only inside
 render_maps, so the framing can be tested with no DEM."""
@@ -21,9 +28,9 @@ from app.geo import RegionGeo
 from app.ingest import load_tracks, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
                        parse_order_size, refuse_inside_repo)
-from app.orderplate import (ALBERS_EPSG, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
-                            PlateError, choose_grid, conus_covered, nestled_frame, order_epsg, plate_bounds,
-                            project_bbox, to_lonlat_bbox, track_shares)
+from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, CoverageError, PlateError,
+                            choose_grid, conus_covered, nestled_frame, order_epsg,
+                            plate_bounds, project_bbox, to_lonlat_bbox, track_shares)
 from app.regionbuild import slugify
 from app.spec import CompositionSpec
 
@@ -60,10 +67,56 @@ def candidates(key) -> list:
     return out
 
 
-def choose(cands, bounds_m) -> Candidate:
+class Ground:
+    """The tracks in one projection: the ground a size is framed and judged on.
+    `tracks_m` is each track's vertices, or a function that gives them. The function
+    is called when the fit rule first needs the tracks: choosing an orientation reads
+    only the box, `bounds_m`."""
+
+    def __init__(self, epsg, bounds_m, tracks_m):
+        self.epsg, self.bounds_m, self._tracks_m = epsg, bounds_m, tracks_m
+
+    @property
+    def tracks_m(self) -> list:
+        if callable(self._tracks_m):
+            self._tracks_m = self._tracks_m()
+        return self._tracks_m
+
+
+class OrderGround:
+    """The ground of each candidate as Prepare makes it: the projection is order_epsg
+    of the tracks at the candidate's aspect, and the box is project_bbox of the
+    tracks' lon/lat box in it. Call it with a Candidate. The track files are read
+    once for each projection that a chosen size uses."""
+
+    def __init__(self, payloads, tracks_lonlat):
+        self.payloads, self.tracks_lonlat = payloads, tracks_lonlat
+        self._epsg, self._grounds, self._tracks = {}, {}, {}
+
+    def tracks(self, epsg) -> list:
+        """The order's tracks (app.ingest.Track) in one projection."""
+        if epsg not in self._tracks:
+            self._tracks[epsg] = load_tracks_m(self.payloads, epsg)
+        return self._tracks[epsg]
+
+    def __call__(self, cand) -> Ground:
+        if cand.aspect not in self._epsg:
+            self._epsg[cand.aspect] = order_epsg(self.tracks_lonlat, cand.aspect)
+        epsg = self._epsg[cand.aspect]
+        if epsg not in self._grounds:
+            self._grounds[epsg] = Ground(epsg, project_bbox(self.tracks_lonlat, epsg),
+                                         lambda: [t.coords for t in self.tracks(epsg)])
+        return self._grounds[epsg]
+
+
+def choose(cands, ground) -> Candidate:
     """The orientation with less wasted ground: the one whose nestled frame the
-    tracks fill more on their weaker side. A tie keeps the first, portrait."""
-    return max(cands, key=lambda c: min(track_shares(bounds_m, nestled_frame(bounds_m, c.aspect))))
+    tracks fill more on their weaker side, each judged on its own ground. A tie
+    keeps the first, portrait."""
+    def weaker_side(c):
+        box = ground(c).bounds_m
+        return min(track_shares(box, nestled_frame(box, c.aspect)))
+    return max(cands, key=weaker_side)
 
 
 def _samples(tracks_m, step) -> np.ndarray:
@@ -140,27 +193,40 @@ def judge(cand, frame, bounds_m, tracks_m) -> dict:
     return entry
 
 
-def plan_sizes(bounds_m, tracks_m, widen=None, forced=()) -> list:
+def plan_sizes(bounds_m=None, tracks_m=None, widen=None, forced=(), ground=None) -> list:
     """One entry for each size, in menu order.
+
+    `ground(cand)` gives the Ground a candidate is framed and judged on, and each
+    entry records the `epsg` of its own. The preview passes an OrderGround: Prepare
+    chooses a projection for each sheet, so one size can be in UTM and the next in
+    Albers. With no `ground`, every candidate is on `bounds_m` and `tracks_m`, in the
+    one projection the caller works in, and `epsg` is None.
 
     `widen(cand, frame)` returns the frame the real print would get under the 2x
     rule, or raises PlateError when the terrain cannot hold the size. `forced` is
     the `sizes` list of order.toml: it overrides the fit rule, never the terrain.
     A CoverageError from `widen` is not caught: the 3DEP index did not answer, which
     says nothing about the size, so the whole preview stops."""
+    if ground is None:
+        one = Ground(None, bounds_m, tracks_m)
+
+        def ground(cand):
+            return one
     entries = []
     for key in SIZE_KEYS:
-        cand = choose(candidates(key), bounds_m)
-        frame = nestled_frame(bounds_m, cand.aspect)
+        cand = choose(candidates(key), ground)
+        here = ground(cand)
+        frame = nestled_frame(here.bounds_m, cand.aspect)
         try:
             if widen is not None:
                 frame = widen(cand, frame)
-            entry = judge(cand, frame, bounds_m, tracks_m)
+            entry = judge(cand, frame, here.bounds_m, here.tracks_m)
         except CoverageError:
             raise
         except PlateError as ex:
-            entry = judge(cand, frame, bounds_m, tracks_m)
+            entry = judge(cand, frame, here.bounds_m, here.tracks_m)
             entry.update(offered=False, why=str(ex), blocked=True)
+        entry["epsg"] = here.epsg
         if forced and not entry["blocked"]:
             if key in forced:
                 entry.update(offered=True, warning=entry["why"], why="")
@@ -196,16 +262,19 @@ def preview_need_m(entries) -> float:
                for e in entries if e["offered"])
 
 
-def preview_epsg(tracks_lonlat) -> int:
-    """One projection for every size: Albers when any size's frame needs it, else
-    the tracks' own UTM zone."""
-    codes = [order_epsg(tracks_lonlat, c.aspect) for key in SIZE_KEYS for c in candidates(key)]
-    return ALBERS_EPSG if ALBERS_EPSG in codes else codes[0]
+def plate_groups(entries) -> dict:
+    """{epsg: the offered entries framed in it}, in menu order. A plate has one
+    projection, so each group gets a plate of its own."""
+    groups = {}
+    for e in entries:
+        if e["offered"]:
+            groups.setdefault(e["epsg"], []).append(e)
+    return groups
 
 
 def load_tracks_m(payloads, epsg) -> list:
-    """Every track of the order in the preview's projection. A file that does not
-    parse is left out, as Prepare leaves it out."""
+    """Every track of the order in one projection. A file that does not parse is
+    left out, as Prepare leaves it out."""
     geo = RegionGeo(crs=f"EPSG:{epsg}", bounds=(0.0, 0.0, 1.0, 1.0), overview_size=(1, 1))
     tracks = []
     for data, name in payloads:
@@ -243,9 +312,10 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
         e["image"], e["dpi"] = path, round(dpi, 2)
 
 
-def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log) -> dict:
+def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log, suffix="") -> dict:
     """A curated plate when one holds the frames in this projection, else one coarse
-    plate built under work/preview/plate/."""
+    plate built under work/preview/plate/. `suffix` names the plate and the build
+    log of a second projection: preview_<order>_5070 and build_5070.log."""
     from app.orderprep import (COARSE_LAYERS_M, COARSE_NEED_M, _build, curated_regions,
                                read_coverage)
     bounds = plate_bounds(union)
@@ -265,8 +335,8 @@ def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log) -> dict
         raise PlateError("The terrain data here is too coarse even for a preview.")
     plate, _ = _build(order, tools, union, epsg, grid, env, log, cwd=cache_dir,
                       root=os.path.join(order.work_dir, "preview", "plate"),
-                      rid="preview_" + order.id[len("order_"):],
-                      build_log=os.path.join(order.work_dir, "preview", "build.log"))
+                      rid="preview_" + order.id[len("order_"):] + suffix,
+                      build_log=os.path.join(order.work_dir, "preview", f"build{suffix}.log"))
     return plate
 
 
@@ -284,9 +354,14 @@ def write_preview_report(order, state, names) -> str:
     the client can choose. Prepare then frames that size with the same rule."""
     def sentence(text):          # one line, and the report adds the full stop
         return " ".join(str(text).split()).rstrip(".")
-    plate = state["plate"]
-    lines = [f"Order: {order.title}", f"Preview: {state['pdf']}",
-             f"Plate: {plate['id']} ({plate['kind']}), {plate['grid_m']:g} m grid", "Sizes:"]
+    plates = state.get("plates") or [state["plate"]]
+    lines = [f"Order: {order.title}", f"Preview: {state['pdf']}"]
+    for plate in plates:
+        line = f"Plate: {plate['id']} ({plate['kind']}), {plate['grid_m']:g} m grid"
+        if len(plates) > 1:       # two projections: say which sizes each plate shows
+            line += f", EPSG:{plate['epsg']}, for {', '.join(plate['sizes'])}"
+        lines.append(line)
+    lines.append("Sizes:")
     for e in state["sizes"]:
         what = (f"{names[e['key']]['name']}, {e['orientation']}, "
                 f"{e['print_in'][0]:g} x {e['print_in'][1]:g} in")
@@ -311,9 +386,15 @@ def write_preview_report(order, state, names) -> str:
 
 
 def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
-    """Frame every size, build one coarse plate, draw the offered sizes, and write the
-    PDF, work/preview/preview.json and work/preview/report.txt. `render` and
-    `write_pdf` are for tests: stand-ins for the two slow steps."""
+    """Frame every size, build one coarse plate for each projection the offered sizes
+    use, draw the offered sizes, and write the PDF, work/preview/preview.json and
+    work/preview/report.txt. `render` and `write_pdf` are for tests: stand-ins for
+    the two slow steps.
+
+    preview.json: `sizes` holds every entry, each with the `epsg` it is framed in
+    and, when offered, the id of its `plate`. `plates` holds one plate for each
+    projection, with its `epsg` and the keys of its `sizes`. `plate` and `epsg` are
+    the first plate and its projection."""
     from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env
     refuse_inside_repo(orders_root())
     order = load(order_dir)
@@ -328,31 +409,37 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
         raise PlateError(f"The prep venv is missing: {tools.prep_python}. "
                          f"Set it up with {PREP_VENV_HELP}.")
     started = time.monotonic()
-    epsg = preview_epsg(tracks_ll)
-    bounds_m = project_bbox(tracks_ll, epsg)
-    tracks = load_tracks_m(payloads, epsg)
-    if not tracks:
+    ground = OrderGround(payloads, tracks_ll)
+    if not ground.tracks(ground(candidates(SIZE_KEYS[0])[0]).epsg):
         raise OrderError(f"no track points in {order.in_dir}")
     env, cache_dir = cache_env()
 
     def widen(cand, frame):
-        return _plan_grid(tools, frame, epsg, cand.print_in[0], env)[0]
+        return _plan_grid(tools, frame, ground(cand).epsg, cand.print_in[0], env)[0]
 
-    entries = plan_sizes(bounds_m, [t.coords for t in tracks], widen=widen, forced=order.sizes)
+    entries = plan_sizes(ground=ground, widen=widen, forced=order.sizes)
     offered = [e for e in entries if e["offered"]]
     if not offered:
         raise PlateError("No size can be offered: " + "; ".join(
             f"{e['key']}: {e['why']}" for e in entries))
     log(f"Offering {', '.join(e['key'] for e in offered)}.")
-    plate = _preview_plate(order, tools, union_frame(entries), epsg,
-                           preview_need_m(entries), env, cache_dir, log)
+    groups = plate_groups(entries)
+    plates = []
+    for epsg, group in groups.items():       # every plate before any map
+        plate = _preview_plate(order, tools, union_frame(group), epsg, preview_need_m(group),
+                               env, cache_dir, log, suffix=f"_{epsg}" if plates else "")
+        plate.update(epsg=epsg, sizes=[e["key"] for e in group])
+        for e in group:
+            e["plate"] = plate["id"]
+        plates.append(plate)
     work = os.path.join(order.work_dir, "preview")
-    (render or render_maps)(entries, tracks, os.path.join(plate["root"], plate["id"]),
-                            order.title, work)
+    for plate, group in zip(plates, groups.values()):
+        (render or render_maps)(group, ground.tracks(plate["epsg"]),
+                                os.path.join(plate["root"], plate["id"]), order.title, work)
     pdf = os.path.join(order.dir, "out", "preview", f"{slugify(order.title)}-preview.pdf")
     (write_pdf or previewpdf.write)(pdf, entries, names, order.title)
-    state = {"epsg": epsg, "plate": plate, "sizes": entries, "pdf": pdf,
-             "seconds": round(time.monotonic() - started, 1)}
+    state = {"epsg": plates[0]["epsg"], "plate": plates[0], "plates": plates, "sizes": entries,
+             "pdf": pdf, "seconds": round(time.monotonic() - started, 1)}
     _dump(os.path.join(work, "preview.json"), state)
     write_preview_report(order, state, names)
     return state

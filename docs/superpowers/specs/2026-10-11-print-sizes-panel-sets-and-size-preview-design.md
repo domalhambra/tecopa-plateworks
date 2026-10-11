@@ -150,7 +150,9 @@ title in `order.toml`. It needs no size. It can run again safely.
 
 **Step 1: frame every size.** For 11 × 17, 17 × 22, two panels and three panels, the
 command makes a frame with `orderplate.nestled_frame`, in both orientations. It keeps
-the orientation with less wasted ground. A set is framed at a gap of 2 in.
+the orientation with less wasted ground. A set is framed at a gap of 2 in. Each frame
+is in the projection that Prepare gives that sheet: `orderplate.order_epsg` of the
+tracks at the sheet's aspect. Thus the frame of the preview is the frame of the print.
 
 **Step 2: the fit rule.** The two single sheets are always offered. A set is offered
 when both of these are true:
@@ -166,9 +168,11 @@ widens, its fill drops below `SET_MIN_FILL`, and the set is not offered.
 A `sizes` line in `order.toml` overrides the rule, for example
 `sizes = ["11x17", "17x22", "three"]`.
 
-**Step 3: the preview plate.** One plate covers every offered frame. Its grid follows
-the preview's pixels, not a print's. The command uses a curated plate when one holds
-the frames, as Prepare does.
+**Step 3: the preview plate.** One plate covers every offered frame that is in one
+projection. Almost every order has one plate. An order has two when a set is wide
+enough for Albers and a single sheet is not. The grid of a plate follows the preview's
+pixels, not a print's. The command uses a curated plate when one holds the frames, as
+Prepare does.
 
 **Step 4: the maps.** Each offered size is rendered at screen size: 1,600 px on the
 long side for a single sheet, and 50 dpi for a set, so a panel is 1,100 px on its long
@@ -192,12 +196,13 @@ price. A size with no price prints "Price on request". Dom sets the set prices.
     work/preview/        the preview plate, the frames, preview.json
     out/preview/         <title>-preview.pdf
 
-`preview.json` lists each size: its frame, its fill, whether it is offered, and why not.
+`preview.json` lists each size: its frame, its projection, its fill, whether it is
+offered, and why not. It also lists each plate and the sizes that the plate shows.
 
 **After the choice.** The preview's report gives, for each offered size, the lines to
 write in `order.toml`: the size, the orientation and the gap. Prepare then frames that
 size with the same rule and builds the real plate for it only. Prepare does not read
-`preview.json`: the whole preview uses one projection, and Prepare chooses its own.
+`preview.json`: it frames the size again, in the same projection, and gets the same frame.
 
 **Limits.**
 
@@ -349,3 +354,12 @@ this document said:
 - **No `caption` type role exists.** The panel mark uses the body role (§3).
 - **A route end behind a gap** is named by the preview's report and by Prepare's
   warnings. An order has no markers or hotspots yet (§3).
+
+## Amended while building (2026-10-11)
+
+- **Each size is framed in its own projection** (§5, steps 1 and 3). The first build used
+  one projection for the whole preview: Albers when any of the eight candidates needed
+  it. A 70 × 17 in candidate that no size chose then moved a route of 90 km north to
+  south into Albers, while Prepare keeps it in UTM up to 466 km. The map of the preview
+  was 12.6 degrees off the print in the Sierra, and the fit rule judged the wrong box.
+  This reverses decision 15 of the plan's table.
