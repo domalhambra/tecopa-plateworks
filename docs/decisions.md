@@ -285,6 +285,18 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | The Edition N+1 reprint is $59 at 11×17 and $69 at 17×22, and the digital edition stays $25. | Dom's call, same day. | Dom, 2026-10-10 |
 | The studio's print size menu is 17×22 (the default) and 11×17, and an order.toml with no size means 11×17. | The studio should only frame what can be sold. 17×22 keeps the old 18×24 default's framing nearly unchanged. | this change |
 
+## 2026-10-10 (the tecopa tool, phases 2 to 4)
+
+| Decision | Why | Source |
+|---|---|---|
+| Dom opened phases 2 to 4 before the 2026-10-21 review. One plan covers the three. | They share the seams: a multipart POST, a write that never overwrites, a detached run. | `superpowers/plans/2026-10-10-tecopa-tool-phases-2-to-4.md` |
+| The engine names its own form fields, a session's starter crop and a session's proof fields, on three read-only debug routes. | FastAPI ignores a form field that it does not know, and the tool must refuse a misspelled one. With the names on the engine, the tool holds no copy of an engine rule and does no coordinate math. | `app/debug.py`; `tests/test_debug.py` |
+| `/api/continue` returns `proof_form`: the exact `/api/proof` fields for the file's spec. | A continued poster keeps its look only if the next proof sends the same fields. The studio's `prefill` has its own shape, and a second client must not copy that mapping. | `app/main.py`, `_proof_form_for`; `tests/test_editions.py` |
+| The debug routes are no longer all read-only. The studio post adds to a report buffer in memory and changes nothing else. | A fault in the browser was invisible until Dom described it. Reports stay in memory, so the product still has no database. | `app/debug.py`, `StudioReports`; the tecopa spec, decision 9 |
+| The studio post needs a JSON content type and refuses an Origin header that is not local. | A page on another website can send a simple POST to 127.0.0.1 with a local Host header, so the Host check alone does not stop it. | `tests/test_debug.py`, `test_the_engine_answers_no_preflight` |
+| A studio report's state holds eight values and never journey data. A text test holds the browser module to those eight store fields. | The report leaves the page, so the rule is enforced in the module, in the route and in a test. | `app/static/debug.js`; `tests/test_static_registry.py` |
+| `spec.validate()` refuses a field of the wrong type by name, and a JSON `true` where a number belongs. | A crafted poster file reached the render path as a `TypeError`, which is a 500. Forty cases now give a 422. | `app/spec.py`, `_require_types`; `tests/test_spec.py` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

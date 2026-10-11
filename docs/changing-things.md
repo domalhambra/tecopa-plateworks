@@ -257,6 +257,13 @@ There is no JS runner.
 
 `app.js` routes, `viewer.js` owns proof zoom and pan, `statusbar.js` prints the truth line.
 
+`debug.js` reports the studio's state and errors to the engine for the `tecopa` tool.
+Three rules hold for it, and `tests/test_static_registry.py` checks each as text. It
+reads the store only as its eight fields. It has one `fetch`, to `/api/debug/studio`.
+It writes nothing to the browser log. A new state key goes into `snapshot()` in
+`debug.js` and into `STATE_KEYS` in `app/debug.py` in the same change. Never add a key
+that holds journey data: tracks, markers, filenames, the crop or the title.
+
 ## Add a region to the farm and publish its relief images
 
 The Tecopa pages are Ghost pages on www.plateworks.org since 2026-09-26. Their images
@@ -348,8 +355,27 @@ macOS Documents prompt and then 60 seconds for the engine to answer.
 `tecopa engine stop` and `tecopa engine restart` refuse while a job is running or
 queued, and `--force` overrides that.
 
-The debug commands (`jobs`, `sessions`, `caches`) need `TECOPA_DEBUG=1` on the engine.
-The launcher sets it. For a development engine, set it by hand.
+The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need
+`TECOPA_DEBUG=1` on the engine. The launcher sets it. For a development engine, set it
+by hand.
+
+The render commands are `render proof`, `render final`, `render wallpaper`,
+`render film` and `render fetch`, then `reprint`, `reprint inspect` and `continue`.
+
+- `--set key=value` is one `/api/proof` form field: the picture. `--opt key=value` is
+  one field of the output route: `format` and `embed_spec` for a final, the pacing
+  fields for a film. The tool sends each value unchanged and has no default of its own.
+- The tool refuses a field name that the engine does not have. It reads the names from
+  `/api/debug/forms`, so a render with `--set`, `--spec` or `--opt` needs the gate.
+- `--session <id>` renders a session that exists, for example the one open in the
+  studio. A change to it starts from the session's own fields, so one `--set` keeps
+  the rest of the look.
+- `--out` is never overwritten. `--no-wait` returns the job id at once, and
+  `render fetch --job <id> --out <path>` saves the result later.
+- A path argument is absolute at the MCP level. The command line also takes a relative
+  path and a leading `~`.
+- A render result carries the engine's own warnings: journeys outside the plate,
+  dropped points, skipped duplicates, and how far each wallpaper frame grew.
 
 Design: `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`.
 
@@ -367,7 +393,7 @@ A command is one `CatalogEntry`. The CLI and the MCP server both read the catalo
 3. A command that runs a Python script adds a row to `ScriptRunner.table` in the same
    change. The row names the script's venv. A script with no row does not run.
 4. Add the name to one of the two sets in `tools/tecopa/Tests/TecopaKitTests/MCPServerTests.swift`,
-   `readOnly` or `control`. The tools/list test in that file also pins the number of
+   `readOnly` or `writes`. The tools/list test in that file also pins the number of
    tools as a literal, so change that count too.
 5. The tool holds no render logic, no coordinate math and no spec rule. It sends
    values to the engine unchanged and reports the engine's answer unchanged.

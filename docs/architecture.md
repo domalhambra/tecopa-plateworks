@@ -35,7 +35,7 @@ regions/<id>/  (region.json, dem.tif, hydro.json, │  labels.json, landcover.ti
                           /api/reprint/inspect reads manifest fields only, and builds no spec.
 
 app/main.py: the endpoints, three ThreadJobQueue instances (render, region build, proof refine)
-app/static/: the single-window studio, 22 ES modules, no build step
+app/static/: the single-window studio, 23 ES modules, no build step
 scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ Ghost, by the blog's pages script
 ```
 
@@ -68,13 +68,14 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `app/blobs.py` | Render output storage behind `LocalBlobs`. | `tests/test_server_foundation.py` |
 | `app/jobs.py` | `ThreadJobQueue`, the async render queue at the compose to rasterize boundary. | `tests/test_server_foundation.py` |
 | `app/logconfig.py` | Logging configuration. | `tests/test_logconfig.py` |
-| `app/debug.py` | The read-only debug routes under `/api/debug/`: engine, jobs, sessions, caches. `enabled()` is the `TECOPA_DEBUG` gate. `build_router` takes the queues and caches as arguments, so it never imports `app/main.py`. | `tests/test_debug.py` |
+| `app/debug.py` | The debug routes under `/api/debug/`. Read-only: engine, jobs, sessions, caches, `forms` (the form-field names of each render route), and for one session its `starter_crop` and its `proof_form`. One route writes: `POST /api/debug/studio` adds a studio report to a buffer in memory, and `GET /api/debug/studio` returns the buffer. `enabled()` is the `TECOPA_DEBUG` gate. `build_router` takes the queues, the caches, the route functions and two helpers as arguments, so it never imports `app/main.py`. | `tests/test_debug.py` |
 | `app/main.py` | The endpoints, the three queues, `_ready_or_503`, the pre-enqueue checks, the auto-docs switch-off. | `tests/test_main.py`, `tests/test_region_endpoints.py`, `tests/test_geometry_gate.py`, `tests/test_markers_move.py`, `tests/test_proof_refine.py`, `tests/test_region_recovery.py`, `tests/test_output_fitness.py` |
 | `app/static/app.js` | The studio bootstrap and router over target and view. | `tests/test_static_registry.py` (text checks only) |
 | `app/static/controls.js` | The declarative registry of every user-settable option. One entry drives the inspector, the palette, presets and the proof-staling rule. | `tests/test_static_registry.py` |
 | `app/static/viewer.js`, `proof.js`, `statusbar.js`, `jobs.js` | Proof zoom and pan, the progressive proof, the status strip, the shared job poll loop. | not covered. No JS runner: drive the browser. |
 | `app/static/library.js`, `compose.js`, `create.js`, `films.js`, `social.js`, `exports.js` | The Library home, the Compose workspace, the GPX-first creation card, the Film and Social targets, the Exports center. | not covered |
 | `app/static/store.js`, `api.js`, `ui.js`, `inspector.js`, `palette.js`, `presets.js`, `markers.js`, `canvas.js`, `guided.js`, `sunDial.js` | State and prefs, fetch wrappers, DOM helpers, the inspector, the command palette, presets, the marker list, map drawing, the first-run guide, the sun dial. | not covered |
+| `app/static/debug.js` | The studio's report to its own engine. Each 2 seconds it posts eight state values and the page's errors to `/api/debug/studio`. It stops for the page load when the engine refuses the post, which is the gate-off case. It never reads journey data and it can never break the studio. | `tests/test_static_registry.py` (text checks), then a browser drive |
 | `app/static/help.html` | The in-app help page. | not covered |
 | `region_prep.py` | The offline plate bake: `plan_build`, the 3DEP fetch, `build_dem_cog` and its `fill_dem_holes` (a dynamic grid's holes, from the static tiles), `bake_hydro`, NLCD, `write_sources_manifest`. Sets `SSL_CERT_FILE` before importing the fetch stack. Runs in `.venv-prep`. | `tests/test_region_prep.py` (the pure planner, so it runs in the core venv and in CI), `tests/test_hydro.py` (skips without `geopandas`) |
 | `scripts/build_labels.py` | GNIS terrain names to `labels.json`. Needs only the standard library and `pyproj`, so it runs in `.venv`. | `tests/test_build_labels.py` |
@@ -90,7 +91,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
-| `tools/tecopa/` | The `tecopa` tool: one Swift binary that is a command line and an MCP server. `tools/tecopa/Sources/TecopaKit/Catalog.swift` lists every operation once, and the CLI and `tecopa mcp` both call it. `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` holds the script table that decides a script's venv. | `swift test --package-path tools/tecopa`, Mac only. `tools/tecopa/smoke_test.sh` is the manual end-to-end check. |
+| `tools/tecopa/` | The `tecopa` tool: one Swift binary that is a command line and an MCP server. `tools/tecopa/Sources/TecopaKit/Catalog.swift` lists every operation once, and the CLI and `tecopa mcp` both call it. `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` holds the script table that decides a script's venv. `tools/tecopa/Sources/TecopaKit/Render.swift` and `tools/tecopa/Sources/TecopaKit/Reprint.swift` hold the render, reprint and continue commands: they send the caller's values to the engine unchanged and never overwrite a file. `tools/tecopa/Sources/TecopaKit/Studio.swift` reads the studio reports. | `swift test --package-path tools/tecopa`, Mac only. `tools/tecopa/smoke_test.sh` is the manual end-to-end check. |
 | `marketing/build_deploy.py` | `terrain_guard` alone: refuses any region whose images were rendered from synthetic or unrecorded terrain. `scripts/export_relief.py` runs it per region. The name is kept from the retired Netlify builder (tag `landing-final-2026-09-26`). | `tests/test_terrain_provenance.py`, `tests/test_export_relief.py` |
 | `tests/conftest.py` | Synthetic DEM hydration, per-worker stores, the central `slow` classification. | none. It is the harness itself. |
 | `tests/fixtures/` | `sample.gpx` and the seven `manifest_*_v1.json` read-tolerance inputs. | none |
@@ -109,7 +110,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 - **Type is bound per role by the operator.** `TECOPA_FONT_TITLE`, `_POINT`, `_AREA`, `_WATER`, and `TECOPA_FONT` for body and fallback. The default chain is Georgia, then DejaVu. Bindings ride in no manifest, so the same file renders differently on a host with different bindings.
 - **Region builds are subprocesses.** `POST /api/regions/build` spawns `region_prep.py` in `.venv-prep` on `BUILD_QUEUE` (one slot). Without that venv `/api/regions/plan` reports `prep_ready: false`.
 - **Auto-docs are off.** `app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`, so the studio never fetches from jsDelivr.
-- **The debug routes are gated.** `/api/debug/*` exists only under `TECOPA_DEBUG=1`, which the macOS launcher sets. With the gate off `app/main.py` never includes the router, so each path is a plain 404. With the gate on, the routes also refuse any request whose Host header is not local, with a 403. Every debug route reads and none changes a session, a job, a cache or a plate.
+- **The debug routes are gated.** `/api/debug/*` exists only under `TECOPA_DEBUG=1`, which the macOS launcher sets. With the gate off `app/main.py` never includes the router, so each path is a plain 404. With the gate on, the routes also refuse any request whose Host header is not local, with a 403. No debug route changes a session, a job, a cache or a plate, and none writes to disk. One route changes anything at all: the studio post adds to a report buffer of fixed size in memory. That post needs a JSON content type and refuses an Origin header that is not local, so a page on another website cannot fill the buffer.
 - **`ready: True` does not mean real terrain.** `tests/conftest.py` builds a synthetic DEM tagged `synthetic=1` for any plate that lacks one. Check the tag before judging a poster by eye.
 
 ## Environment
@@ -126,7 +127,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `TECOPA_ENGINE_VERSION` | `app/provenance.py` | Overrides the git commit as `engine_version` in packaged builds. |
 | `TECOPA_PREP_PYTHON`, `TECOPA_PREP_SCRIPT`, `TECOPA_LABELS_SCRIPT` | `app/main.py` | The interpreter and scripts the in-app region build spawns. |
 | `TECOPA_LOG_LEVEL`, `TECOPA_LOG_FORMAT` | `app/logconfig.py` | Logging. |
-| `TECOPA_DEBUG` | `app/debug.py`, `app/main.py` | `1` includes the read-only debug routes. Any other value, and unset, leaves them out. The launcher sets it. `tests/conftest.py` removes it. |
+| `TECOPA_DEBUG` | `app/debug.py`, `app/main.py` | `1` includes the debug routes. Any other value, and unset, leaves them out. The launcher sets it. `tests/conftest.py` removes it. |
 | `TECOPA_REPO` | `tools/tecopa/Sources/TecopaKit/RepoLocator.swift` | The repo path for the `tecopa` tool, after `--repo` and before the path baked at build time. |
 | `TECOPA_BLENDER` | `scripts/hero_plate.py` | The Blender binary, when not on `PATH`. |
 | `TECOPA_COIN_FRAMES`, `TECOPA_MOCKUP_FRAMES` | `scripts/render_asset_farm.py`, `scripts/render_coinspin.py`, `scripts/render_mockups.py` | Frame counts for the social assets. |
@@ -152,7 +153,7 @@ font bindings, which is by design.
 - `.venv/bin/python -m pytest -n auto -m "not slow" -q` is the fast tier. On 2026-09-08 it ran 616 tests on this Mac in under a minute: 615 passed and one failed, the documented font failure in `tests/test_bleed.py`.
 - `.venv/bin/python -m pytest -n auto -q` is the full suite, about 3 minutes on this Mac. It has no known Mac-only failure. Compare the failure set, not the totals. `changing-things.md` under Run the tests has the history of the seven tests once blamed on fonts.
 - `tests/conftest.py` classifies `slow` tests centrally from measured durations. Re-derive after adding heavy tests with `--durations=0`.
-- The studio has no JS runner. `tests/test_static_registry.py` checks `controls.js` and the HTML as text. Everything else is a browser drive.
+- The studio has no JS runner. `tests/test_static_registry.py` checks `controls.js`, the HTML and the report module `debug.js` as text. Everything else is a browser drive.
 - `.venv/bin/python scripts/verify_regions.py` reports every plate's hash and geometry state. Run it after any pull that touched `regions/`. Outside `.venv` the render stack is absent and the geometry row degrades to `skip`.
 - `scripts/macos/smoke_test.sh` drives the launcher end to end and needs a human for two macOS prompts.
 - `swift test --package-path tools/tecopa` runs the tool's tests with no engine and no network. `tools/tecopa/smoke_test.sh` drives the real launcher and needs port 8848 free. Neither runs in CI.
