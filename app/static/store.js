@@ -239,6 +239,27 @@ export function trackAspectIsWide() {
   return x1 > x0 && (x1 - x0) > (y1 - y0);
 }
 
+// Width / height of the box the tracks fill, or 0 when there is no box yet.
+export function trackAspect() {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const t of state.tracks) for (const [x, y] of t) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  return x1 > x0 && y1 > y0 ? (x1 - x0) / (y1 - y0) : 0;
+}
+
+// Auto orientation of a set: true = panels 22 in across. Both sheets of a set are
+// wider than tall, so "wider than tall" cannot choose between them. Take the sheet
+// whose shape is nearer the journey's, which leaves less empty ground: the same
+// rule the order preview uses (app/orderpreview.py, choose). A tie, or no box yet,
+// keeps panels 17 in across.
+export function setAutoIsLandscape(n, gap, aspect = trackAspect()) {
+  if (!(aspect > 0)) return false;
+  const near = (sheet) => Math.min(sheet / aspect, aspect / sheet);
+  return near((n * 22 + (n - 1) * gap) / 17) > near((n * 17 + (n - 1) * gap) / 22);
+}
+
 // The current crop expressed in OVERVIEW px (ordered), or null. Shared by the
 // canvas (proof request) and markers (out-of-frame cue) so both agree on geometry.
 export function cropOverviewPx() {

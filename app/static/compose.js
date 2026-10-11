@@ -5,7 +5,7 @@
 // refit → feasibility chain, the loud upload boundaries, the continue-restore prefill)
 // and adapted to the studio: no linear stepper, a map-mode toggle instead of steps, and
 // all reflection driven by the store.
-import { state, savePref, loadPrefs, activePreset, trackAspectIsWide } from './store.js';
+import { state, savePref, loadPrefs, activePreset, trackAspectIsWide, setAutoIsLandscape } from './store.js';
 import * as api from './api.js';
 import * as canvas from './canvas.js';
 import * as markers from './markers.js';
@@ -116,15 +116,16 @@ export function applyPrintSize() {
     return;
   }
   const v = $('size').value;
-  const landscape = state.orientation === 'auto' ? trackAspectIsWide() : state.orientation === 'landscape';
   if (v.startsWith('panels:')) {
     // a set: the sheet is the hung size. Landscape = panels 22 in across.
     const n = Number(v.slice(7)), g = state.panelGap;
+    const across22 = state.orientation === 'auto' ? setAutoIsLandscape(n, g) : state.orientation === 'landscape';
     state.panels = n;
-    state.printW = n * (landscape ? 22 : 17) + (n - 1) * g;
-    state.printH = landscape ? 17 : 22;
+    state.printW = n * (across22 ? 22 : 17) + (n - 1) * g;
+    state.printH = across22 ? 17 : 22;
     return;
   }
+  const landscape = state.orientation === 'auto' ? trackAspectIsWide() : state.orientation === 'landscape';
   state.panels = 1;
   const [a, b] = v.split(',').map(Number);
   state.printW = landscape ? Math.max(a, b) : Math.min(a, b);

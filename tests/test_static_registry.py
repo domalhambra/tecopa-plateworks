@@ -329,3 +329,53 @@ def test_the_save_file_note_has_its_own_sentence_for_a_set_as_pdf():
         "reprintable copy as your save file.'",
     ):
         assert sentence in body, sentence
+
+
+def test_the_proof_call_passes_the_set_to_the_api_module():
+    """api.proof defaults to one panel. If the call in proof.js stopped passing the
+    two values, a set would go to the engine as an odd single sheet, with a
+    remembered bleed, and the engine would accept it: no error anywhere."""
+    src = (STATIC / "proof.js").read_text(encoding="utf-8")
+    call = re.search(r"api\.proof\((.*?)\);", src, re.S)
+    assert call, "proof.js no longer calls api.proof"
+    assert re.search(r"\bpanels: state\.panels\b", call.group(1))
+    assert re.search(r"\bpanelGap: state\.panelGap\b", call.group(1))
+
+
+def test_auto_orientation_of_a_set_takes_the_nearer_sheet():
+    """Both sheets of a set are wider than tall, so the single-sheet rule ("are the
+    tracks wider than tall?") cannot choose. The studio takes the sheet whose shape
+    is nearer the journey's, as app/orderpreview.choose does. Run the function itself
+    under node, and compare with the order preview's choice."""
+    import json
+    import shutil
+    import subprocess
+    import pytest
+    from app import orderpreview as opv
+    from app.orderplate import nestled_frame, track_shares
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    store = (STATIC / "store.js").read_text(encoding="utf-8")
+    fn = re.search(r"export function setAutoIsLandscape\(.*?\n\}\n", store, re.S)
+    assert fn, "store.js has no setAutoIsLandscape"
+    cases = [(n, g, a) for n in (2, 3) for g in (0, 2, 4)
+             for a in (0.2, 0.9, 1.2, 1.7, 2.0, 2.4, 3.0, 5.0, 12.0)]
+    script = (fn.group(0).replace("export function", "function").replace(
+        "aspect = trackAspect()", "aspect") +
+        f"console.log(JSON.stringify({json.dumps(cases)}.map(([n, g, a]) => setAutoIsLandscape(n, g, a))));")
+    got = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True,
+                                    check=True).stdout)
+    for (n, g, a), landscape in zip(cases, got):
+        bounds = (0.0, 0.0, 1000.0 * a, 1000.0)            # a box of that shape
+        best = {}
+        for c in opv.candidates("two" if n == 2 else "three"):
+            w = n * (22 if c.orientation == "landscape" else 17) + (n - 1) * g
+            h = 17 if c.orientation == "landscape" else 22
+            best[c.orientation] = min(track_shares(bounds, nestled_frame(bounds, w / h)))
+        want = best["landscape"] > best["portrait"]
+        assert landscape == want, (n, g, a, best)
+    assert json.loads(subprocess.run(
+        ["node", "-e", fn.group(0).replace("export function", "function").replace(
+            "aspect = trackAspect()", "aspect") + "console.log(setAutoIsLandscape(2, 2, 0))"],
+        capture_output=True, text=True, check=True).stdout) is False     # no box yet
+
