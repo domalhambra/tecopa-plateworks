@@ -1972,7 +1972,8 @@ if debug.enabled():
     app.include_router(debug.build_router(
         queues={"render": QUEUE, "build": BUILD_QUEUE, "proof": PROOF_QUEUE},
         caches={"base": BASE_CACHE, "ink": INK_CACHE},
-        started=STARTED, forms=DEBUG_FORMS, regions=REGIONS))
+        started=STARTED, forms=DEBUG_FORMS, regions=REGIONS,
+        proof_form=_proof_form_for, crop_px=_crop_to_overview_px))
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")

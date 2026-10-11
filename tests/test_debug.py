@@ -2,6 +2,7 @@
 # The read-only debug routes behind TECOPA_DEBUG=1 (the `tecopa` tool reads them).
 # The router is built on a small app of its own here, so the gate-on shape is tested
 # without re-importing app.main. The gate-off shape is tested on the live app.
+import ast
 import inspect
 import json
 import time
@@ -20,7 +21,8 @@ def _client():
     app = FastAPI()
     app.include_router(debug.build_router(
         queues={"render": q}, caches={"base": basecache.BaseCache(1000)},
-        started=time.time() - 5, forms=main.DEBUG_FORMS, regions=main.REGIONS))
+        started=time.time() - 5, forms=main.DEBUG_FORMS, regions=main.REGIONS,
+        proof_form=main._proof_form_for, crop_px=main._crop_to_overview_px))
     # the routes answer only a local Host header, and TestClient's default is "testserver"
     return TestClient(app, base_url="http://127.0.0.1"), q
 
@@ -57,6 +59,8 @@ def _frozen(sid):
     # the whole session as text, so a before and an after compare exactly
     data = dict(session.get(sid))
     data["tracks"] = [serialize.track_to_json(t) for t in data["tracks"]]
+    if data.get("spec") is not None:
+        data["spec"] = serialize.spec_to_json(data["spec"])
     return json.dumps(data, sort_keys=True)
 
 
@@ -242,6 +246,135 @@ def test_forms_and_starter_crop_leave_the_session_as_it_was():
     assert _frozen(sid) == before
 
 
+# ---- sessions/{sid}/proof_form: the proof fields of a session's stamped spec ----
+# A change to a session the studio has open (one --set, a new crop) must start from
+# the session's own fields. Without them, one field would put every other one back to
+# the engine default. The proof is a round trip: send proof_form and crop back to
+# /api/proof, and the spec it stamps is the spec the session had.
+
+STYLED = {"print_w": 6, "print_h": 8, "title": "Three Summers", "bleed": 0.125,
+          "contours": "true", "compass": "false", "labels": "true",
+          "track_width_pt": 3.4, "track_halo": 0.4, "track_color": "#4a6936",
+          "marker_size_in": 0.31, "marker_ring": 0.12, "photo_style": "polaroid",
+          "furniture_scale": 1.2, "terrain_depth": 0.8, "shadow_strength": 0.3,
+          "soft_light": 0.4, "haze_strength": 0.25, "water_depth": 0.5,
+          "track_color_by": "elevation", "label_place": "anchor",
+          "track_weave": "false"}
+
+
+def _as_form(proof_form):
+    # the way a form sends it: a boolean is "true" or "false"
+    return {k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in proof_form.items()}
+
+
+def _proofed(c, **fields):
+    # a real session with a stamped spec: upload, frame it for the sheet, proof it
+    sid = _upload()["session"]
+    w, h = fields.get("print_w", 17), fields.get("print_h", 22)
+    crop = c.get(f"/api/debug/sessions/{sid}/starter_crop"
+                 f"?print_w={w}&print_h={h}").json()["starter_crop"]
+    r = TestClient(main.app).post("/api/proof", data={
+        "session_id": sid, **dict(zip(("x0", "y0", "x1", "y1"), crop)), **fields})
+    assert r.status_code == 200, r.text
+    return sid
+
+
+def test_proof_form_and_crop_stamp_the_same_spec_again():
+    c, _ = _client()
+    sid = _proofed(c, **STYLED)
+    first = session.get(sid)["spec"]
+    # the first proof left the defaults: a default-only round trip proves nothing
+    plain = CompositionSpec(region_id="lassen_ca", crs="EPSG:32610",
+                            crop=(0.0, 0.0, 3.0, 4.0), print_w_in=17, print_h_in=22,
+                            native_resolution_m=10, tracks=[], hotspots=[], seed=0)
+    moved = {n for n in ("print_w_in", "print_h_in", "title_text", "bleed_in",
+                         "contours", "compass", "labels", "track_width_pt",
+                         "track_halo", "track_rgb", "marker_diameter_in",
+                         "marker_ring", "photo_frame_style", "furniture_scale",
+                         "terrain_depth", "shadow_strength", "soft_light",
+                         "haze_strength", "water_depth", "track_color_by")
+             if getattr(first, n) != getattr(plain, n)}
+    assert len(moved) == 20, moved
+    # these two leave the form defaults ("smart", true), which are not the spec's
+    assert first.label_place == "anchor" and first.track_weave is False
+
+    r = c.get(f"/api/debug/sessions/{sid}/proof_form")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert set(body) == {"proof_form", "crop"}
+    form, crop = body["proof_form"], body["crop"]
+    assert form == main._proof_form_for(first)
+    assert set(form) <= set(inspect.signature(main.proof).parameters)
+    assert isinstance(crop, list) and len(crop) == 4
+    assert all(type(v) in (int, float) for v in crop), crop
+    assert crop[0] < crop[2] and crop[1] < crop[3]
+
+    x0, y0, x1, y1 = crop
+    r = TestClient(main.app).post("/api/proof", data={
+        "session_id": sid, "x0": x0, "y0": y0, "x1": x1, "y1": y1, **_as_form(form)})
+    assert r.status_code == 200, r.text
+    second = session.get(sid)["spec"]
+    a, b = (json.loads(json.dumps(serialize.spec_to_json(s))) for s in (first, second))
+    diff = [f"{k}: {str(a.get(k))[:80]} -> {str(b.get(k))[:80]}"
+            for k in sorted(set(a) | set(b)) if k != "crop" and a.get(k) != b.get(k)]
+    assert not diff, "proof_form did not restore: " + "; ".join(diff)
+    # the crop goes CRS metres -> overview px -> CRS metres, so not bit for bit
+    drift = max(abs(p - q) for p, q in zip(first.crop, second.crop))
+    assert drift < 1e-3, f"crop moved {drift} m: {first.crop} -> {second.crop}"
+
+
+def test_proof_form_of_an_unknown_session_is_a_404_that_names_the_cause():
+    c, _ = _client()
+    r = c.get("/api/debug/sessions/nope/proof_form")
+    assert r.status_code == 404 and r.json() == {"detail": "Unknown session"}
+
+
+def test_proof_form_of_a_session_with_no_proof_is_a_409():
+    c, _ = _client()
+    for sid in (_make_session(), _upload()["session"]):
+        r = c.get(f"/api/debug/sessions/{sid}/proof_form")
+        assert r.status_code == 409, r.text
+        assert r.json() == {"detail": "This session has no proof yet."}
+
+
+def test_proof_form_of_a_session_on_an_unknown_plate_is_a_404():
+    c, _ = _client()
+    sid = _make_session(with_spec=True)
+    session.update(sid, region_id="no_such_plate")
+    r = c.get(f"/api/debug/sessions/{sid}/proof_form")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown region 'no_such_plate'"
+
+
+def test_gate_off_means_the_live_app_has_no_proof_form():
+    sid = _make_session(with_spec=True)
+    r = TestClient(main.app).get(f"/api/debug/sessions/{sid}/proof_form")
+    assert r.status_code == 404 and r.json() == {"detail": "Not Found"}
+
+
+def test_proof_form_leaves_the_session_as_it_was():
+    c, _ = _client()
+    sid = _proofed(c, print_w=6, print_h=8, title="Trip")
+    before = _frozen(sid)
+    assert '"title_text": "Trip"' in before     # the frozen text holds the spec too
+    for _ in range(2):
+        assert c.get(f"/api/debug/sessions/{sid}/proof_form").status_code == 200
+    assert _frozen(sid) == before
+
+
+def test_debug_module_never_imports_app_main():
+    # build_router takes what it needs as arguments. An import of app.main from
+    # app.debug is a cycle: app.main imports app.debug to build this router.
+    tree = ast.parse(open(debug.__file__).read())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert all(a.name != "app.main" for a in node.names), node.lineno
+        if isinstance(node, ast.ImportFrom):
+            assert node.module != "app.main", node.lineno
+            if node.module in ("app", None):
+                assert all(a.name != "main" for a in node.names), node.lineno
+
+
 LOCAL_ONLY = "Debug routes answer only a local Host header."
 
 
@@ -251,7 +384,8 @@ def test_a_foreign_host_header_is_refused_on_every_route():
     sid = _make_session(with_spec=True)
     for path in ("/engine", "/jobs", "/sessions", "/sessions/x?full=1",
                  f"/sessions/{sid}?full=1", "/caches", "/forms",
-                 f"/sessions/{sid}/starter_crop?print_w=17&print_h=22"):
+                 f"/sessions/{sid}/starter_crop?print_w=17&print_h=22",
+                 f"/sessions/{sid}/proof_form"):
         r = c.get("/api/debug" + path, headers={"Host": "attacker.example:8848"})
         assert r.status_code == 403, path
         # 403 and not 404: the tecopa tool reads a 404 "Not Found" as "the gate is off"

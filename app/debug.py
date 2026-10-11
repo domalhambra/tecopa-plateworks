@@ -69,11 +69,13 @@ def _session_detail(sid: str, data: dict, full: bool) -> dict:
 
 
 def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
-                 regions: dict) -> APIRouter:
+                 regions: dict, proof_form, crop_px) -> APIRouter:
     """`queues` maps a name to a ThreadJobQueue, `caches` a name to a BaseCache,
     `started` is the engine's start time, `forms` maps a name to a route function,
-    `regions` a region id to a Region. Passed in, not imported, so this module
-    never imports app.main."""
+    `regions` a region id to a Region. `proof_form` turns a spec into its /api/proof
+    form fields, and `crop_px` turns a region's geo and a CRS crop into overview
+    pixels: the two helpers /api/continue answers with. Passed in, not imported, so
+    this module never imports app.main."""
     r = APIRouter(prefix="/api/debug", dependencies=[Depends(_local_host_only)])
 
     @r.get("/engine")
@@ -139,6 +141,26 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
         if not (crop[2] - crop[0] > 1e-6 and crop[3] - crop[1] > 1e-6):
             raise bad_size
         return {"starter_crop": list(crop)}
+
+    @r.get("/sessions/{sid}/proof_form")
+    async def session_proof_form(sid: str):
+        # A change to a session's proof must start from the session's own fields:
+        # /api/proof builds every field it is not sent from the engine default, so
+        # one field alone would put the rest of the look back to plain.
+        try:
+            data = session.get(sid)
+        except KeyError:
+            raise HTTPException(404, "Unknown session")
+        spec = data.get("spec")
+        if spec is None:
+            raise HTTPException(409, "This session has no proof yet.")
+        region = regions.get(data.get("region_id"))
+        if region is None:
+            raise HTTPException(404, f"Unknown region {data.get('region_id')!r}")
+        # the two answers /api/continue gives for a file, here for a live session:
+        # the form fields, and the crop in the overview pixels /api/proof takes
+        return {"proof_form": proof_form(spec),
+                "crop": list(crop_px(region.geo, spec.crop))}
 
     @r.get("/forms")
     async def list_forms():
