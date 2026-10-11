@@ -554,3 +554,14 @@ def test_auto_docs_are_switched_off():
     c = _client()
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert c.get(path).status_code == 404, path
+
+
+def test_a_huge_integer_is_not_a_finite_coordinate():
+    """A hotspot x of 400 digits in a crafted file made /api/continue answer 500:
+    math.isfinite raises OverflowError on an integer no float can hold."""
+    from app import main
+    assert main._finite_num(10 ** 400) is False and main._finite_num(-(10 ** 400)) is False
+    assert main._finite_num(3) and main._finite_num(2.5) and main._finite_num(-0.0)
+    for bad in (True, None, "3", float("nan"), float("inf"), [1]):
+        assert main._finite_num(bad) is False
+

@@ -1939,7 +1939,12 @@ def _finite_num(v) -> bool:
     """True for a real, finite number (not a bool, not NaN/inf) -- the guard for an
     untrusted hotspot coordinate before it reaches coordinate math."""
     import math
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return False
+    try:
+        return math.isfinite(v)
+    except OverflowError:      # an integer too large for a float is not a coordinate
+        return False
 
 def _crop_to_overview_px(geo, crop):
     """A CRS crop window -> an ordered overview-px rect (x0,y0,x1,y1), the same
