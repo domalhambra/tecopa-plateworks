@@ -73,7 +73,9 @@ final class SeamsTests: XCTestCase {
 
     func testSendReturnsARedirectAndDoesNotFollowIt() async throws {
         // a 307 and a 308 would carry the POST and its body to the new address
-        for (method, status) in [("GET", 302), ("POST", 302), ("POST", 303), ("POST", 307), ("POST", 308)] {
+        let table = [("GET", 301), ("GET", 302), ("GET", 307), ("POST", 301), ("POST", 302),
+                     ("POST", 303), ("POST", 307), ("POST", 308)]
+        for (method, status) in table {
             let server = try LoopbackServer()
             defer { server.stop() }
             var request = URLRequest(url: server.url("/redirect/\(status)"))
@@ -106,6 +108,44 @@ final class SeamsTests: XCTestCase {
         let fetched = try await URLSessionFetcher().get(server.url("/readyz"), timeout: 5)
         XCTAssertEqual(fetched.status, 200)
         XCTAssertEqual(String(decoding: fetched.body, as: UTF8.self), "GET /readyz 0 ")
+    }
+
+    func testSendTimesOutAtItsOwnDeadline() async throws {
+        // a listener that takes the request and never answers: an engine that is busy
+        let server = try LoopbackServer()
+        defer { server.stop() }
+        // This test cannot hang. If the deadline does not hold, the listener closes
+        // the connection after 5 seconds, and that error is not a timeout.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { server.stop() }
+        let start = Date()
+        do {
+            _ = try await URLSessionFetcher().send(URLRequest(url: server.url("/silent")), timeout: 0.5)
+            XCTFail("expected a timeout")
+        } catch {
+            XCTAssertEqual((error as? URLError)?.code, .timedOut, "\(error)")
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        XCTAssertEqual(server.requestLines, ["GET /silent HTTP/1.1"])
+    }
+
+    func testTheRequestCarriesTheDeadlineAsItsOwnTimeout() throws {
+        // a URLRequest has a timeout of its own, 60 seconds when it is not set, and
+        // a render waits 300
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:8848/api/proof")!)
+        request.httpMethod = "POST"
+        request.httpBody = Data("the form".utf8)
+        request.setValue("multipart/form-data; boundary=XX", forHTTPHeaderField: "Content-Type")
+        XCTAssertEqual(request.timeoutInterval, 60)
+
+        let sent = URLSessionFetcher.request(request, timeout: 300)
+        XCTAssertEqual(sent.timeoutInterval, 300)
+        XCTAssertEqual(URLSessionFetcher.request(request, timeout: 0.5).timeoutInterval, 0.5)
+        // nothing else changes, and the caller's request is not touched
+        XCTAssertEqual(sent.url, request.url)
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.httpBody, Data("the form".utf8))
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Content-Type"), "multipart/form-data; boundary=XX")
+        XCTAssertEqual(request.timeoutInterval, 60)
     }
 
     func testNoAnswerThrows() async throws {
@@ -196,7 +236,7 @@ final class SeamsTests: XCTestCase {
 
     func testAFailedWriteLeavesNoFile() throws {
         let path = try temporaryFolder() + "/final.png"
-        XCTAssertThrowsError(try writeNewFile(path, Data([1, 2, 3]), write: { _, _, _ in
+        XCTAssertThrowsError(try writeExclusive(path, Data([1, 2, 3]), write: { _, _, _ in
             errno = ENOSPC
             return -1
         })) { error in
@@ -212,10 +252,38 @@ final class SeamsTests: XCTestCase {
         // the system may take fewer bytes than it was given
         let path = try temporaryFolder() + "/film.mp4"
         let bytes = Data((0..<1000).map { UInt8($0 % 251) })
-        try writeNewFile(path, bytes, write: { fd, pointer, count in
+        try writeExclusive(path, bytes, write: { fd, pointer, count in
             Darwin.write(fd, pointer, min(count, 7))
         })
         XCTAssertEqual(FileManager.default.contents(atPath: path), bytes)
+    }
+
+    func testAWriteThatTakesNoBytesIsAnErrorAndNotALoop() throws {
+        // a call that returns 0 for ever would keep the tool in the loop for ever
+        let path = try temporaryFolder() + "/final.png"
+        var calls = 0
+        XCTAssertThrowsError(try writeExclusive(path, Data([1, 2, 3]), write: { _, _, _ in
+            calls += 1
+            return 0
+        })) { error in
+            let failure = error as? TecopaFailure
+            XCTAssertEqual(failure?.kind, .environment)
+            XCTAssertEqual(failure?.message,
+                           "Could not write \(path): \(String(cString: strerror(EIO)))")
+        }
+        XCTAssertEqual(calls, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path))
+    }
+
+    func testTheNewFileIsClosedInAChildProcess() throws {
+        // the tool starts scripts, and a child must not get a file that is part-written
+        let path = try temporaryFolder() + "/proof.png"
+        var flags: Int32 = 0
+        try writeExclusive(path, Data([1, 2, 3]), write: { fd, pointer, count in
+            flags = fcntl(fd, F_GETFD)
+            return Darwin.write(fd, pointer, count)
+        })
+        XCTAssertNotEqual(flags & FD_CLOEXEC, 0)
     }
 
     func testReadDataIsNilForAPathThatCannotBeRead() throws {
@@ -307,8 +375,9 @@ final class SeamsTests: XCTestCase {
 
 /// One listener on 127.0.0.1, on a port that the system picks. `/redirect/<status>`
 /// answers that status with a Location on this same listener, so a followed redirect
-/// shows as a second request line. Any other path answers 200 with what was read:
-/// the method, the path, the count of body bytes and the content type.
+/// shows as a second request line. `/silent` reads the request and never answers:
+/// the connection stays open until `stop()`. Any other path answers 200 with what
+/// was read: the method, the path, the count of body bytes and the content type.
 private final class LoopbackServer: @unchecked Sendable {
     let port: Int
     private let listener: Int32
@@ -351,19 +420,27 @@ private final class LoopbackServer: @unchecked Sendable {
     func waitUntilClosed() { closed.wait() }
 
     private func serve() {
+        // the connections of `/silent`, open until the listener stops
+        var silent: [Int32] = []
         while !lock.withLock({ stopped }) {
             var waiting = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
             guard poll(&waiting, 1, 20) > 0 else { continue }
             let client = accept(listener, nil, nil)
             guard client >= 0 else { continue }
-            answer(client)
-            close(client)
+            if answer(client) {
+                close(client)
+            } else {
+                silent.append(client)
+            }
         }
+        for client in silent { close(client) }
         close(listener)
         closed.signal()
     }
 
-    private func answer(_ client: Int32) {
+    /// Read one request and answer it. False means no answer: the caller keeps the
+    /// connection open.
+    private func answer(_ client: Int32) -> Bool {
         var on: Int32 = 1
         setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         var limit = timeval(tv_sec: 5, tv_usec: 0)
@@ -386,12 +463,13 @@ private final class LoopbackServer: @unchecked Sendable {
                 bodyLength = Int(Self.header("content-length", in: text)) ?? 0
             }
         }
-        guard let head else { return }
+        guard let head else { return true }
         let line = head.components(separatedBy: "\r\n").first ?? ""
         lock.withLock { lines.append(line) }
 
         let words = line.components(separatedBy: " ")
         let (method, path) = (words.first ?? "", words.count > 1 ? words[1] : "")
+        if path == "/silent" { return false }
         var reply: String
         if path.hasPrefix("/redirect/"), let status = Int(path.dropFirst("/redirect/".count)) {
             reply = "HTTP/1.1 \(status) Redirect\r\nLocation: http://127.0.0.1:\(port)/followed\r\n"
@@ -404,9 +482,10 @@ private final class LoopbackServer: @unchecked Sendable {
         var bytes = Array(reply.utf8)
         while !bytes.isEmpty {
             let sent = Darwin.send(client, bytes, bytes.count, 0)
-            guard sent > 0 else { return }
+            guard sent > 0 else { return true }
             bytes.removeFirst(sent)
         }
+        return true
     }
 
     /// The value of one request header, or "" when the head has none.

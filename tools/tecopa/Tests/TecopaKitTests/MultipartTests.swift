@@ -66,12 +66,47 @@ final class MultipartTests: XCTestCase {
         }
     }
 
-    func testAValueMayHoldAQuoteAndALineEnd() throws {
+    func testABackslashInANameIsAUsageFailure() {
+        // python-multipart reads `\"` as a quote inside the name, so the engine would
+        // read another name than the one the tool wrote
+        for bad in ["a\\b", "a\\", "\\", "title\\\"; filename=\\"] {
+            var form = Multipart(boundary: "XX")
+            XCTAssertThrowsError(try form.field(bad, "value"), bad) { error in
+                XCTAssertEqual((error as? TecopaFailure)?.kind, .usage, bad)
+            }
+            XCTAssertThrowsError(try form.file(bad, filename: "a.gpx", Data()), bad) { error in
+                XCTAssertEqual((error as? TecopaFailure)?.kind, .usage, bad)
+            }
+            XCTAssertThrowsError(try form.file("files", filename: bad, Data()), bad) { error in
+                XCTAssertEqual((error as? TecopaFailure)?.kind, .usage, bad)
+            }
+            XCTAssertEqual(form.body(), Data("--XX--\r\n".utf8), bad)
+        }
+    }
+
+    func testAnEmptyNameIsAUsageFailure() {
+        var form = Multipart(boundary: "XX")
+        XCTAssertThrowsError(try form.field("", "value")) { error in
+            XCTAssertEqual(error as? TecopaFailure,
+                           TecopaFailure(.usage, "A form field name cannot be empty."))
+        }
+        XCTAssertThrowsError(try form.file("", filename: "a.gpx", Data())) { error in
+            XCTAssertEqual((error as? TecopaFailure)?.kind, .usage)
+        }
+        XCTAssertThrowsError(try form.file("files", filename: "", Data([1]))) { error in
+            XCTAssertEqual(error as? TecopaFailure, TecopaFailure(.usage, "A file name cannot be empty."))
+        }
+        XCTAssertEqual(form.body(), Data("--XX--\r\n".utf8))
+        // an empty value is a value
+        XCTAssertNoThrow(try form.field("title", ""))
+    }
+
+    func testAValueMayHoldAQuoteABackslashAndALineEnd() throws {
         // a value is in the body of its part, not in a header
         var form = Multipart(boundary: "XX")
-        try form.field("subtitle", "the \"long\" way\r\nhome")
+        try form.field("subtitle", "the \"long\" way\r\nhome \\ away")
         let expected = "--XX\r\nContent-Disposition: form-data; name=\"subtitle\"\r\n\r\n"
-            + "the \"long\" way\r\nhome\r\n--XX--\r\n"
+            + "the \"long\" way\r\nhome \\ away\r\n--XX--\r\n"
         XCTAssertEqual(form.body(), Data(expected.utf8))
     }
 }

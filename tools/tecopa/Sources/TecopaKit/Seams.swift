@@ -72,6 +72,15 @@ public struct URLSessionFetcher: HTTPFetching {
                    delegate: RedirectRefuser(), delegateQueue: nil)
     }
 
+    /// A copy of the request with the deadline as its own timeout. A URLRequest has
+    /// a timeout of its own, 60 seconds when nobody sets it, and it could end a
+    /// render of 300 seconds early whatever the session says.
+    static func request(_ request: URLRequest, timeout: TimeInterval) -> URLRequest {
+        var copy = request
+        copy.timeoutInterval = timeout
+        return copy
+    }
+
     public func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
         let reply = try await send(URLRequest(url: url), timeout: timeout)
         return (reply.status, reply.body)
@@ -80,7 +89,7 @@ public struct URLSessionFetcher: HTTPFetching {
     public func send(_ request: URLRequest, timeout: TimeInterval) async throws -> HTTPReply {
         let session = Self.session(timeout: timeout)
         defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await session.data(for: Self.request(request, timeout: timeout))
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }

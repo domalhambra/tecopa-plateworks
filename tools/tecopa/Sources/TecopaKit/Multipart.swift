@@ -4,8 +4,9 @@ import Foundation
 /// The tool sends each value and each file's bytes unchanged.
 public struct Multipart: Sendable {
     /// The line that divides the parts. A test gives its own, so the bytes of a body
-    /// are known. The default is new for each form, so no value can contain it.
-    public let boundary: String
+    /// are known. The default is a random UUID, new for each form. That is the only
+    /// defense: the encoder does not search a value or a file for the boundary.
+    let boundary: String
     private var parts: [Part] = []
 
     private struct Part: Sendable {
@@ -51,15 +52,22 @@ public struct Multipart: Sendable {
     }
 
     /// A name goes into a header between quotes. A quote would end it early, and a
-    /// line end would start a new header, so the encoder never writes one.
+    /// line end would start a new header, so the encoder never writes one. It never
+    /// writes a backslash: python-multipart reads `\"` as a quote inside the name,
+    /// so the engine would read another name than the one written here. An empty
+    /// name is not a name.
     ///
     /// The check reads bytes: to Swift, CR and LF together are one character, and a
     /// search for either one alone does not find it.
     private static func check(_ text: String, _ what: String) throws {
-        let bad: Set<UInt8> = [0x22, 0x0D, 0x0A]      // the quote, CR, LF
+        guard !text.isEmpty else {
+            throw TecopaFailure(.usage, "\(what) cannot be empty.")
+        }
+        let bad: Set<UInt8> = [0x22, 0x5C, 0x0D, 0x0A]      // the quote, the backslash, CR, LF
         guard !text.utf8.contains(where: bad.contains) else {
             throw TecopaFailure(
-                .usage, "\(what) cannot contain a quote or a line end: \(text.debugDescription)")
+                .usage,
+                "\(what) cannot contain a quote, a backslash or a line end: \(text.debugDescription)")
         }
     }
 }

@@ -47,6 +47,9 @@ public struct EngineClient: Sendable {
         "Port \(port) answers, but it is not Tecopa Plateworks."
     }
 
+    /// What to do about it.
+    static let notTecopaHint = "Quit the other program on that port, or pass the engine's port."
+
     /// The URL of one engine path. The host is 127.0.0.1 and the port is this
     /// client's port, or the address is refused: a path such as "@host/x" would move
     /// the request to another machine.
@@ -152,11 +155,19 @@ public struct EngineClient: Sendable {
     }
 
     /// The JSON of a 2xx reply. Any other status is `refused`, with the engine's own
-    /// body: the same rule as `get`.
+    /// body: its JSON, or its text when it is not JSON.
+    ///
+    /// A 2xx body that is not JSON is not the engine's answer: the caller asked a
+    /// route that answers with JSON. It is an environment fault, and the body is
+    /// not kept, because it can be megabytes of another program's text.
     public func json(_ reply: HTTPReply, for path: String) throws -> JSONValue {
-        let json = Self.value(of: reply.body)
         guard (200..<300).contains(reply.status) else {
-            throw refusedFailure(reply.status, path, json)
+            throw refusedFailure(reply.status, path, Self.value(of: reply.body))
+        }
+        guard let json = try? JSONValue.parse(reply.body) else {
+            throw TecopaFailure(
+                .environment, notTecopaMessage,
+                hint: "The answer for \(path) is not JSON. " + Self.notTecopaHint)
         }
         return json
     }
@@ -176,7 +187,7 @@ public struct EngineClient: Sendable {
             if case .reply(let ready) = await probe("/readyz", timeout: 2), !Self.isTecopa(ready) {
                 throw TecopaFailure(
                     .environment, notTecopaMessage,
-                    hint: "Quit the other program on that port, or pass the engine's port.")
+                    hint: Self.notTecopaHint)
             }
             throw TecopaFailure(
                 .refused, Self.gateOffMessage + "\(port).",

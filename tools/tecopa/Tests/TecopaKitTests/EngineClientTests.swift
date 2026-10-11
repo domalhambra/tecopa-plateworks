@@ -310,8 +310,8 @@ final class EngineClientTests: XCTestCase {
         }
     }
 
-    func testAReplyThatIsNotJsonIsItsText() throws {
-        // the same rule as `get`: the body rides unchanged, as a string
+    func testARefusalThatIsNotJsonKeepsItsText() throws {
+        // the same rule as `get`: the body of a refusal rides unchanged, as a string
         let client = FakeWorld().runtime().client
         let error = HTTPReply(status: 500, contentType: "text/plain; charset=utf-8",
                               body: Data("Internal Server Error".utf8))
@@ -321,13 +321,36 @@ final class EngineClientTests: XCTestCase {
             XCTAssertEqual(f?.status, 500)
             XCTAssertEqual(f?.body, .string("Internal Server Error"))
         }
-        let text = HTTPReply(status: 200, contentType: "text/plain", body: Data("ok".utf8))
-        XCTAssertEqual(try client.json(text, for: "/x"), .string("ok"))
         // a redirect is not a success: the tool follows none
         let moved = HTTPReply(status: 307, contentType: nil, body: Data())
         XCTAssertThrowsError(try client.json(moved, for: "/x")) { thrown in
             XCTAssertEqual((thrown as? TecopaFailure)?.status, 307)
         }
+    }
+
+    func testA2xxReplyThatIsNotJsonIsAnEnvironmentFailure() throws {
+        // the engine answers these routes with JSON. A caller that reads JSON must
+        // not get the megabytes of some other program's page as one string.
+        let client = FakeWorld().runtime(port: 9000).client
+        let replies = [
+            HTTPReply(status: 200, contentType: "text/plain", body: Data("ok".utf8)),
+            HTTPReply(status: 200, contentType: "text/html", body: Data(repeating: 0x3C, count: 100_000)),
+            HTTPReply(status: 200, contentType: "application/json", body: Data("{\"session\":".utf8)),
+            HTTPReply(status: 204, contentType: nil, body: Data()),
+        ]
+        for reply in replies {
+            XCTAssertThrowsError(try client.json(reply, for: "/api/upload")) { thrown in
+                let f = thrown as? TecopaFailure
+                XCTAssertEqual(f?.kind, .environment)
+                XCTAssertEqual(f?.message, "Port 9000 answers, but it is not Tecopa Plateworks.")
+                XCTAssertTrue(f?.hint?.contains("/api/upload") ?? false, f?.hint ?? "")
+                XCTAssertNil(f?.body)
+                XCTAssertNil(f?.status)
+            }
+        }
+        // any JSON value is JSON
+        let list = HTTPReply(status: 200, contentType: "application/json", body: Data("[1]".utf8))
+        XCTAssertEqual(try client.json(list, for: "/x"), .array([.int(1)]))
     }
 
     func testATimeoutOnPostAndOnDownloadHasTheBusyHint() async throws {

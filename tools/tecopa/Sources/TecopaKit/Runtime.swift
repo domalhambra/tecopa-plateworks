@@ -102,7 +102,7 @@ func fileAlreadyThere(_ path: String) -> TecopaFailure {
 extension Runtime {
     /// The real `writeNew`: create the file at `path` and write all the bytes to it.
     public static func writeNewFile(_ path: String, _ data: Data) throws {
-        try TecopaKit.writeNewFile(path, data, write: { Darwin.write($0, $1, $2) })
+        try writeExclusive(path, data, write: { Darwin.write($0, $1, $2) })
     }
 
     /// The real `pathKind`. The first look does not follow a link, so a link that
@@ -120,14 +120,18 @@ extension Runtime {
 ///
 /// `O_EXCL` makes the create fail when anything is at the path, a link included, so
 /// the check and the create are one step and no other program can come between
-/// them. There is no temporary file and no rename, because a rename replaces what
-/// is at its target. If the write fails, the part-written file is removed: it is the
-/// tool's own, made a moment before.
+/// them. There is no temporary file and no rename: `rename(2)` replaces a file at
+/// its target, and the rename that does not (`renamex_np` with `RENAME_EXCL`) gives
+/// nothing that `O_EXCL` does not give in one call. The cost is that another program
+/// can read the file while it is part-written. If the write fails, the part-written
+/// file is removed: it is the tool's own, made a moment before.
+///
+/// `O_CLOEXEC` keeps the file out of a program that the tool starts meanwhile.
 ///
 /// `write` is the system call. A test gives another to model a full disk.
-func writeNewFile(_ path: String, _ data: Data,
-                  write: (Int32, UnsafeRawPointer?, Int) -> Int) throws {
-    let fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0o644)
+func writeExclusive(_ path: String, _ data: Data,
+                    write: (Int32, UnsafeRawPointer?, Int) -> Int) throws {
+    let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
     guard fd >= 0 else {
         let code = errno
         let folder = (path as NSString).deletingLastPathComponent
@@ -153,6 +157,12 @@ func writeNewFile(_ path: String, _ data: Data,
             if count < 0 {
                 if errno == EINTR { continue }
                 failed = errno
+                return
+            }
+            // A call that takes no bytes will take none the next time: this loop
+            // would never end. It is an I/O error.
+            if count == 0 {
+                failed = EIO
                 return
             }
             offset += count
