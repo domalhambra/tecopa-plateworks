@@ -115,8 +115,9 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
 
     @r.get("/sessions/{sid}/starter_crop")
     async def session_starter_crop(sid: str, print_w: float, print_h: float):
+        bad_size = HTTPException(422, "print_w and print_h must be finite and positive")
         if not all(math.isfinite(v) and v > 0 for v in (print_w, print_h)):
-            raise HTTPException(422, "print_w and print_h must be finite and positive")
+            raise bad_size
         try:
             data = session.get(sid)
         except KeyError:
@@ -128,8 +129,15 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
         # the tracks go to overview pixels, then app.geo frames them
         tpx = [[geo.crs_to_overview_px(region.geo, x, y) for x, y in t.coords]
                for t in data.get("tracks") or []]
-        crop = geo.starter_crop(region.geo, tpx, print_w, print_h,
-                                native_resolution_m=region.cfg["native_resolution_m"])
+        try:
+            crop = geo.starter_crop(region.geo, tpx, print_w, print_h,
+                                    native_resolution_m=region.cfg["native_resolution_m"])
+        except (ArithmeticError, ValueError):
+            # a size such as 1e308 is finite and still overflows the floor arithmetic
+            raise bad_size
+        # an aspect such as 17 by 1e15 frames a box with no width: not a crop
+        if not (crop[2] - crop[0] > 1e-6 and crop[3] - crop[1] > 1e-6):
+            raise bad_size
         return {"starter_crop": list(crop)}
 
     @r.get("/forms")

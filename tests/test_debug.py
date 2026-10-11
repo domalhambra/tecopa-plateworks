@@ -212,6 +212,10 @@ def test_starter_crop_of_a_session_on_an_unknown_plate_is_a_404():
                                    "print_w=nan&print_h=22", "print_w=17&print_h=nan",
                                    "print_w=inf&print_h=22", "print_w=17&print_h=-inf",
                                    "print_w=wide&print_h=22",
+                                   # finite and positive, and still no usable sheet
+                                   "print_w=1e308&print_h=22", "print_w=5e-324&print_h=22",
+                                   "print_w=1e-300&print_h=1e300",
+                                   "print_w=17&print_h=1e15", "print_w=1e-200&print_h=22",
                                    "print_w=17", "print_h=22", ""])
 def test_starter_crop_refuses_a_size_that_is_not_finite_and_positive(query):
     c, _ = _client()
@@ -236,7 +240,6 @@ def test_forms_and_starter_crop_leave_the_session_as_it_was():
     for size in ("print_w=17&print_h=22", "print_w=11&print_h=17"):
         assert c.get(f"/api/debug/sessions/{sid}/starter_crop?{size}").status_code == 200
     assert _frozen(sid) == before
-    assert set(session.get(sid)) == set(json.loads(before))
 
 
 LOCAL_ONLY = "Debug routes answer only a local Host header."
