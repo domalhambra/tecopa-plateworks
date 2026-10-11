@@ -10,6 +10,24 @@ private final class PathLog: @unchecked Sendable {
     var all: [String] { lock.withLock { paths } }
 }
 
+/// A machine on which no signal can be sent. Each other call goes to the fake.
+private struct SignalRefuser: ProcessRunning {
+    let world: FakeWorld
+
+    func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
+        try world.run(executable, arguments, cwd: cwd)
+    }
+
+    func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                       environment: [String: String]) throws -> Int32 {
+        try world.startDetached(executable, arguments, cwd: cwd, environment: environment)
+    }
+
+    func signalGroup(_ group: Int32, _ signal: Int32) throws {
+        throw TecopaFailure(.environment, "Could not signal the process group \(group): Operation not permitted")
+    }
+}
+
 /// Tracked runs on the fake machine: the start, the record, each state, and the
 /// three entries. The real machine is in `TrackedRunTests` below.
 final class RunsTests: XCTestCase {
@@ -141,8 +159,8 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(world.detached.count, 1)
         XCTAssertEqual(world.written.count, 1)
 
-        // a log or an exit file with the id is the same refusal
-        for name in ["log", "exit"] {
+        // a log, an exit file or a cancel marker with the id is the same refusal
+        for name in ["log", "exit", "cancelled"] {
             let other = FakeWorld()
             other.existingFile("\(folder)/\(id).\(name)")
             XCTAssertThrowsError(try Runs.start(program: "/bin/true", arguments: [], cwd: "/", command: "test",
@@ -357,6 +375,88 @@ final class RunsTests: XCTestCase {
         world.process(4001, shell("20261010-185515-ffffff"))
         (data, failure) = await call("runs_show", world, ["run": .string(id)])
         XCTAssertEqual(data?["state"]?.stringValue, "lost")
+        // no marker was written by a read
+        XCTAssertEqual(world.written, [])
+    }
+
+    // MARK: The cancel marker
+
+    func testARunWithNoExitFileNoProcessAndAMarkerIsCancelled() async {
+        let world = FakeWorld()
+        record(world, id)
+        world.existingFile("\(folder)/\(id).cancelled")
+        var (data, failure) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data?["state"]?.stringValue, "cancelled")
+        XCTAssertEqual(data?["exit_code"], .null)
+        // the process table is still read first: a run with its process is running
+        XCTAssertEqual(world.commands, [ps(4001)])
+        let (list, _) = await call("runs", world)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.map { $0["state"]?.stringValue }, ["cancelled"])
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["exit_code"], .null)
+
+        // macOS gave the pid to another program: the run is still the one that was cancelled
+        world.process(4001, "/usr/bin/python3 /Users/dom/other.py")
+        (data, failure) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "cancelled")
+
+        // the marker of another run says nothing about this one
+        let other = FakeWorld()
+        record(other, id)
+        other.existingFile("\(folder)/20261010-185515-ffffff.cancelled")
+        (data, failure) = await call("runs_show", other, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "lost")
+    }
+
+    func testARunThatStillHasItsProcessAfterTheSignalIsRunning() async {
+        // a script can take a moment to end, or can ignore SIGTERM
+        let world = FakeWorld()
+        record(world, id)
+        world.existingFile("\(folder)/\(id).cancelled")
+        world.process(4001, shell(id))
+        let (data, failure) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data?["state"]?.stringValue, "running")
+        let (list, _) = await call("runs", world)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "running")
+    }
+
+    func testAMarkerDoesNotChangeARunThatHasAnExitFile() async {
+        // the script ended by itself as the signal went, and it wrote its exit code
+        let world = FakeWorld()
+        record(world, id, command: "plate_playa", failureText: "FAILED")
+        world.existingFile("\(folder)/\(id).cancelled")
+        world.file("\(folder)/\(id).exit", "0\n")
+        var (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "done")
+        XCTAssertEqual(data?["exit_code"]?.intValue, 0)
+
+        world.file("\(folder)/\(id).exit", "143\n")
+        (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "failed")
+        XCTAssertEqual(data?["exit_code"]?.intValue, 143)
+
+        world.file("\(folder)/\(id).exit", "0\n")
+        world.file("\(folder)/\(id).log", "rifle_aspen: FAILED no lakebed\n")
+        (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "failed")
+        let (list, _) = await call("runs", world)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "failed")
+        // the exit file is the answer: no process is looked for
+        XCTAssertEqual(world.commands, [])
+    }
+
+    func testARunThatEndsBetweenTheTwoLooksIsNotCancelled() async {
+        // the exit file is read one more time before the marker is
+        let world = FakeWorld()
+        record(world, id)
+        world.existingFile("\(folder)/\(id).cancelled")
+        let exit = "\(folder)/\(id).exit"
+        world.onRun = { world, command in
+            if command.first == "/bin/ps" { world.file(exit, "0\n") }
+        }
+        let (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "done")
     }
 
     func testARunThatEndsBetweenTheTwoLooksIsNotLost() async {
@@ -589,13 +689,97 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(world.slept, [])
         XCTAssertEqual(world.commands, [ps(4001)])
 
-        // the shell is gone and wrote no exit file, so the run now reads as lost
+        // the shell is gone and wrote no exit file. The marker says why: the run
+        // reads as cancelled, and `lost` stays for a run that vanished.
         let (after, _) = await call("runs_show", world, ["run": .string(id)])
-        XCTAssertEqual(after?["state"]?.stringValue, "lost")
+        XCTAssertEqual(after?["state"]?.stringValue, "cancelled")
+        XCTAssertEqual(after?["exit_code"], .null)
+        let (list, _) = await call("runs", world)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.map { $0["state"]?.stringValue }, ["cancelled"])
         // and a second cancel is refused
         let (_, again) = await call("runs_cancel", world, ["run": .string(id)])
         XCTAssertEqual(again?.kind, .refused)
+        XCTAssertEqual(again?.message, "Run \(id) is not running: its state is cancelled.")
         XCTAssertEqual(world.signals.count, 1)
+    }
+
+    func testRunsCancelWritesTheMarkerWithTheTimeOfTheCancel() async {
+        let world = FakeWorld()
+        record(world, id)
+        world.process(4001, shell(id))
+        world.now = FakeWorld.date("2026-10-11T07:08:09Z")
+        let (_, failure) = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        // one new file, named by the run's id, with the ISO time in UTC
+        XCTAssertEqual(world.written, [
+            .init(path: "\(folder)/\(id).cancelled", data: Data("2026-10-11T07:08:09Z".utf8))])
+    }
+
+    func testASecondCancelOfARunThatIsStillRunningKeepsTheFirstMarker() async {
+        // the script ignored the first SIGTERM, so its process is still in the table
+        let world = FakeWorld()
+        record(world, id)
+        world.process(4001, shell(id))
+        world.now = FakeWorld.date("2026-10-11T07:08:09Z")
+        _ = await call("runs_cancel", world, ["run": .string(id)])
+        world.process(4001, shell(id))
+        let (between, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(between?["state"]?.stringValue, "running")
+
+        world.now = FakeWorld.date("2026-10-11T07:09:00Z")
+        let (data, failure) = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data, .object(["run": .string(id), "signalled": .bool(true)]))
+        XCTAssertEqual(world.signals, [.init(group: 4001, signal: SIGTERM), .init(group: 4001, signal: SIGTERM)])
+        // the marker is written one time and never written over
+        XCTAssertEqual(world.written, [
+            .init(path: "\(folder)/\(id).cancelled", data: Data("2026-10-11T07:08:09Z".utf8))])
+    }
+
+    func testASignalThatFailsWritesNoMarker() async {
+        // no signal went, so the run was not cancelled
+        let world = FakeWorld()
+        record(world, id)
+        world.process(4001, shell(id))
+        var runtime = world.runtime()
+        runtime.runner = SignalRefuser(world: world)
+        let (envelope, failure) = await Catalog.call("runs_cancel", runtime, ["run": .string(id)])
+        XCTAssertNil(envelope["data"])
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(world.written, [])
+        let (after, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(after?["state"]?.stringValue, "running")
+    }
+
+    func testAMarkerThatCannotBeWrittenIsAFailureThatSaysTheSignalWent() async {
+        let world = FakeWorld()
+        record(world, id)
+        world.process(4001, shell(id))
+        var runtime = world.runtime()
+        runtime.writeNew = { _, _ in throw TecopaFailure(.environment, "Could not write: the disk is full") }
+        let (envelope, failure) = await Catalog.call("runs_cancel", runtime, ["run": .string(id)])
+        XCTAssertNil(envelope["data"])
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(
+            failure?.message,
+            "SIGTERM was sent to run \(id), but its cancel marker could not be written, "
+                + "so the run will read as lost. Could not write: the disk is full.")
+        XCTAssertEqual(failure?.hint, "Run `tecopa runs show \(id)`.")
+        XCTAssertEqual(world.signals, [.init(group: 4001, signal: SIGTERM)])
+    }
+
+    func testRunsCancelOnARunThatWasCancelledSendsNoSignal() async {
+        // the pid of a cancelled run can be another program's by now
+        let world = FakeWorld()
+        record(world, id)
+        world.existingFile("\(folder)/\(id).cancelled")
+        world.process(4001, "/Applications/Safari.app/Contents/MacOS/Safari")
+        let (data, failure) = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .refused)
+        XCTAssertEqual(failure?.message, "Run \(id) is not running: its state is cancelled.")
+        XCTAssertEqual(world.signals, [])
+        XCTAssertEqual(world.written, [])
     }
 
     func testRunsCancelOnARunThatIsNotRunningIsRefusedAndSendsNoSignal() async {
@@ -645,21 +829,28 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(parameters("runs_cancel"), ["run:string"])
     }
 
-    func testNoEntryDeletesARecordALogOrAnExitFile() async throws {
-        // the three entries write nothing: the one write of a run is its record, at the start
+    func testNoEntryDeletesARecordALogAnExitFileOrAMarker() async throws {
+        // A run has two writes: its record at the start, and its marker at a cancel.
+        // Each is a new file. The two entries that read write nothing.
         let world = FakeWorld()
         _ = try Runs.start(program: "/bin/sleep", arguments: ["30"], cwd: "/", command: "test",
                            failureText: nil, world.runtime())
-        XCTAssertEqual(world.written.count, 1)
+        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).json"])
         _ = await call("runs", world)
         _ = await call("runs_show", world, ["run": .string(id)])
-        _ = await call("runs_cancel", world, ["run": .string(id)])
-        _ = await call("runs_show", world, ["run": .string(id)])
         XCTAssertEqual(world.written.count, 1)
+        _ = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).json", "\(folder)/\(id).cancelled"])
+        _ = await call("runs_show", world, ["run": .string(id)])
+        _ = await call("runs", world)
+        _ = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertEqual(world.written.count, 2)
         XCTAssertEqual(world.madeFolders, [folder])
-        // the record is still there, and no program ran but `ps`
+        // the record and the marker are still there, and no program ran but `ps`
         let (data, _) = await call("runs", world)
         XCTAssertEqual(data?["runs"]?.arrayValue?.count, 1)
+        XCTAssertEqual(data?["runs"]?.arrayValue?.first?["state"]?.stringValue, "cancelled")
+        XCTAssertEqual(world.runtime().listFolder(folder), ["\(id).cancelled", "\(id).json"])
         XCTAssertTrue(world.commands.allSatisfy { $0.first == "/bin/ps" })
     }
 
@@ -681,6 +872,10 @@ final class RunsTests: XCTestCase {
             20261009-070000-000001  done  plate_build  2026-10-09T07:00:00Z
             """)
         XCTAssertEqual(Catalog.named("runs")?.text?(.object(["runs": .array([])])), "No runs.")
+        // the summary names each state a caller can read
+        for state in ["running", "done", "failed", "cancelled", "lost"] {
+            XCTAssertTrue(Catalog.named("runs")?.summary.contains(state) ?? false, state)
+        }
     }
 
     func testTheTextOfRunsShowIsTheHeaderThenTheLog() {
@@ -902,14 +1097,35 @@ final class TrackedRunTests: XCTestCase {
         }
         XCTAssertTrue(gone, "the run's processes are still there 5 seconds after the cancel")
 
-        // the shell wrote no exit code, so the run is lost, and a second cancel is refused
+        // the shell wrote no exit code. The marker says why, so the run is
+        // cancelled and not lost, and a second cancel is refused
         let after = await show(runtime, run.id)
-        XCTAssertEqual(after?["state"]?.stringValue, "lost")
+        XCTAssertEqual(after?["state"]?.stringValue, "cancelled")
+        XCTAssertEqual(after?["exit_code"], .null)
         let (_, again) = await Catalog.call("runs_cancel", runtime, ["run": .string(run.id)])
         XCTAssertEqual(again?.kind, .refused)
-        XCTAssertEqual(again?.message, "Run \(run.id) is not running: its state is lost.")
-        // nothing was deleted
-        XCTAssertTrue(FileManager.default.fileExists(atPath: "\(runsFolder(home))/\(run.id).json"))
+        XCTAssertEqual(again?.message, "Run \(run.id) is not running: its state is cancelled.")
+        // Nothing was deleted, and the marker holds the time of the cancel. The
+        // log is there only if the shell came to open it before the signal.
+        let folder = runsFolder(home)
+        let names = Set(try FileManager.default.contentsOfDirectory(atPath: folder))
+        XCTAssertTrue(names.isSuperset(of: ["\(run.id).cancelled", "\(run.id).json"]), "\(names)")
+        XCTAssertTrue(names.isSubset(of: ["\(run.id).cancelled", "\(run.id).json", "\(run.id).log"]), "\(names)")
+        let marker = try String(contentsOfFile: "\(folder)/\(run.id).cancelled", encoding: .utf8)
+        let time = try XCTUnwrap(ISO8601DateFormatter().date(from: marker), marker)
+        XCTAssertLessThan(abs(time.timeIntervalSinceNow), 60)
+    }
+
+    func testARealRunThatIsKilledFromOutsideIsLost() async throws {
+        // no cancel, so no marker: `lost` stays for a run that vanished
+        let home = try temporaryHome()
+        let runtime = machine(home)
+        let run = try start(runtime, "/bin/sleep", ["30"])
+        XCTAssertEqual(kill(-run.pid, SIGKILL), 0)
+        XCTAssertTrue(wait(seconds: 5) { kill(run.pid, 0) == -1 && errno == ESRCH }, "the run is still there")
+        let after = await show(runtime, run.id)
+        XCTAssertEqual(after?["state"]?.stringValue, "lost")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: "\(runsFolder(home))/\(run.id).cancelled"))
     }
 
     func testADetachedChildIsInItsOwnSession() throws {

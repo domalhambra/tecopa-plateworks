@@ -4,12 +4,14 @@ import Foundation
 /// at once, because an MCP call must return quickly. One record for each run lets a
 /// later call read the run and stop it.
 ///
-/// A run has three files in the runs folder, all named by its id:
-///   <id>.json   the record, written one time at the start
-///   <id>.log    the script's stdout and stderr
-///   <id>.exit   the script's exit code, written when the script ends
+/// A run has three files in the runs folder, all named by its id, and a fourth
+/// when it was cancelled:
+///   <id>.json        the record, written one time at the start
+///   <id>.log         the script's stdout and stderr
+///   <id>.exit        the script's exit code, written when the script ends
+///   <id>.cancelled   the marker of `runs cancel`: the time the signal went
 ///
-/// No function here deletes a record, a log or an exit file, and none writes over one.
+/// No function here deletes one of these files, and none writes over one.
 enum Runs {
     static let entries: [CatalogEntry] = [listEntry, showEntry, cancelEntry]
 
@@ -68,7 +70,7 @@ enum Runs {
                 "\(day.0)-\(day.1)-\(day.2)T\(time.0):\(time.1):\(time.2)Z")
     }
 
-    /// The path of one of a run's three files. `kind` is `json`, `log` or `exit`.
+    /// The path of one of a run's files. `kind` is `json`, `log`, `exit` or `cancelled`.
     static func path(_ id: String, _ kind: String, _ runtime: Runtime) -> String {
         runtime.runsFolder + "/" + id + "." + kind
     }
@@ -77,7 +79,7 @@ enum Runs {
 
     /// Start one program detached, and write its record.
     ///
-    /// The order: the folder, a new id whose three paths are free, the start, the
+    /// The order: the folder, a new id whose four paths are free, the start, the
     /// record. The record holds the process id, so it cannot be written first. If
     /// the record cannot be written, the run is stopped: a run with no record
     /// cannot be read or stopped later.
@@ -104,7 +106,9 @@ enum Runs {
             failureText: failureText)
         let recordPath = path(id, "json", runtime)
         // The same second and the same six digits: the first run keeps its files.
-        for taken in [recordPath, record.log, record.exitFile] where runtime.pathKind(taken) != nil {
+        // A marker with the id would make the new run read as cancelled.
+        let paths = [recordPath, record.log, record.exitFile, path(id, "cancelled", runtime)]
+        for taken in paths where runtime.pathKind(taken) != nil {
             throw TecopaFailure(.environment, "A run with the id \(id) is already in \(runtime.runsFolder).",
                                 hint: "Run the command again.")
         }
@@ -230,7 +234,10 @@ enum Runs {
         case done
         /// Any other exit code, or the failure text is in the log.
         case failed
-        /// No exit file and no such process. The Mac restarted, or the run was killed.
+        /// No exit file, no such process, and the marker of `runs cancel`.
+        case cancelled
+        /// No exit file, no such process and no marker: the run vanished. The Mac
+        /// restarted, or another program killed the run.
         case lost
         /// Not a state of a run: the record's file cannot be read as a record.
         case unreadable
@@ -269,14 +276,20 @@ enum Runs {
     /// 1. An exit file: `done` or `failed`.
     /// 2. No exit file, and `ps` prints a command line for the pid that holds
     ///    the run's own name: `running`.
-    /// 3. No exit file and no such process: `lost`.
+    /// 3. No exit file, no such process, and the marker of `runs cancel`:
+    ///    `cancelled`. The signal ends the run's shell before it writes an exit
+    ///    file, so without the marker this run would read as one that vanished.
+    /// 4. No exit file, no such process and no marker: `lost`. The run vanished.
+    ///
+    /// The marker is read last. A run that still has its process after the signal
+    /// is `running`, and a run that wrote its exit code is `done` or `failed`.
     ///
     /// The pid alone is not enough: macOS gives the pid of a run that ended to
     /// another program later. The run's name has its id, and no other program
     /// has that name.
     ///
     /// A run can end between check 1 and check 2. So when `ps` finds no process,
-    /// the exit file is read one more time before the run is called lost.
+    /// the exit file is read one more time before the run is called cancelled or lost.
     ///
     /// `log` is the log's text when the caller has read it, so it is read one time.
     static func status(_ record: Record, _ runtime: Runtime, log: String?) throws -> Status {
@@ -290,7 +303,9 @@ enum Runs {
         if found.exitCode == 0, found.stdout.contains(processName(record.id)) {
             return Status(state: .running, exitCode: nil)
         }
-        return ended(record, runtime, log: log) ?? Status(state: .lost, exitCode: nil)
+        if let status = ended(record, runtime, log: log) { return status }
+        let cancelled = runtime.pathKind(path(record.id, "cancelled", runtime)) != nil
+        return Status(state: cancelled ? .cancelled : .lost, exitCode: nil)
     }
 
     /// The state of a run for the list: the log is read only when the record has
@@ -321,7 +336,7 @@ enum Runs {
     static let listEntry = CatalogEntry(
         name: "runs",
         summary: "List every tracked run of a long script, newest first, each with its state: "
-            + "running, done, failed or lost. Reads only.",
+            + "running, done, failed, cancelled or lost. Reads only.",
         readOnly: true,
         text: { data in
             let rows = (data["runs"]?.arrayValue ?? []).map { run -> String in
@@ -397,7 +412,7 @@ enum Runs {
     static let cancelEntry = CatalogEntry(
         name: "runs_cancel",
         summary: "Stop one tracked run: send SIGTERM to its process group. Refuses a run that is not running. "
-            + "It does not wait, and it deletes nothing.",
+            + "It does not wait, and it deletes nothing. The run then reads as cancelled.",
         readOnly: false,
         parameters: [runParameter],
         text: { data in
@@ -422,6 +437,22 @@ enum Runs {
         } catch {
             throw TecopaFailure(.environment,
                                 "Could not signal run \(record.id): \(error.localizedDescription)")
+        }
+        // The marker, after the signal: a signal that did not go cancels nothing.
+        // A run that ignored an earlier signal has its marker, and the first one
+        // stays: the tool writes over no file.
+        let marker = path(record.id, "cancelled", runtime)
+        if runtime.pathKind(marker) == nil {
+            do {
+                try runtime.writeNew(marker, Data(stamp(runtime.now()).iso.utf8))
+            } catch {
+                let said = (error as? TecopaFailure)?.message ?? error.localizedDescription
+                throw TecopaFailure(
+                    .environment,
+                    "SIGTERM was sent to run \(record.id), but its cancel marker could not be written, "
+                        + "so the run will read as lost. " + Render.sentence(said),
+                    hint: showHint(record.id))
+            }
         }
         return .object(["run": .string(record.id), "signalled": .bool(true)])
     }
