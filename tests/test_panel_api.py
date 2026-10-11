@@ -94,6 +94,9 @@ def test_the_delivery_of_a_set_is_a_zip_of_one_file_per_panel():
     z = zipfile.ZipFile(io.BytesIO(data))
     assert z.namelist() == ["tecopa_lassen_ca_1of2.png", "tecopa_lassen_ca_2of2.png"]
     assert all(i.date_time == (1980, 1, 1, 0, 0, 0) for i in z.infolist())
+    # stored, not deflated (a PNG is compressed already), and a plain file mode
+    assert all(i.compress_type == zipfile.ZIP_STORED for i in z.infolist())
+    assert all(i.external_attr >> 16 == 0o644 for i in z.infolist())
     parts = panels.cut(sheet, spec, 10)
     for k, name in enumerate(z.namelist(), 1):
         png = z.read(name)
