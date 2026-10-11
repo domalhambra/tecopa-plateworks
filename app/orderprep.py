@@ -341,6 +341,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     track_m = project_bbox(tracks, epsg)
     state = write_state(order, {
         "inputs_hash": inputs, "epsg": epsg, "print_in": [pw, ph],
+        "panels": order.panels, "gap": order.gap,
         "frame": list(frame), "track_bounds_m": list(track_m),
         "frame_from_manual": list(manual["frame"]) if "frame" in manual else None,
         "fill": round(track_fill(track_m, frame), 3),
@@ -483,13 +484,22 @@ def check_holes(tools, plate, frame, epsg, need_m, env, log=print) -> list:
     return warnings
 
 
+def _print_line(state) -> str:
+    """A set names its panels, its hung size and its gap. `get` reads a state.json
+    from before a set existed, which has neither key."""
+    size = f"{state['print_in'][0]:g} x {state['print_in'][1]:g} in"
+    if state.get("panels", 1) > 1:
+        return f"Print: {state['panels']} panels, {size} hung, {state.get('gap', 0):g} in gap"
+    return f"Print: {size}"
+
+
 def write_report(order, state) -> str:
     plate, frame = state["plate"], state["frame"]
     grid = f"{plate['grid_m']:g} m grid"
     if plate.get("layer_m") is not None:
         grid += f" from the {plate['layer_m']:g} m 3DEP layer"
     lines = [f"Order: {order.title}",
-             f"Print: {state['print_in'][0]:g} x {state['print_in'][1]:g} in",
+             _print_line(state),
              f"Plate: {plate['id']} ({plate['kind']}), {grid}",
              f"Frame: {(frame[2] - frame[0]) / 1000:.1f} x "
              f"{(frame[3] - frame[1]) / 1000:.1f} km, tracks fill {state['fill']:.0%}",

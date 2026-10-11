@@ -703,3 +703,49 @@ def test_report_lines_are_absent_from_an_old_state(tmp_path, tools):
         state["plate"].pop(key, None)
     text = op.write_report(od.load(str(d)), state)
     assert "No elevation" not in text and "Hole fill" not in text
+
+
+def test_a_set_order_prepares_for_the_hung_sheet(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="three")
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert state["print_in"] == [55.0, 22.0]
+    assert (state["panels"], state["gap"]) == (3, 2.0)
+    frame = state["frame"]
+    assert abs((frame[2] - frame[0]) / (frame[3] - frame[1]) - 55 / 22) < 1e-6
+    report = (d / "work" / "report.txt").read_text()
+    assert "Print: 3 panels, 55 x 22 in hung, 2 in gap\n" in report
+    assert json.load(open(d / "work" / "state.json"))["panels"] == 3
+
+
+def test_a_single_sheet_report_line_is_as_before(tmp_path, tools):
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert (state["panels"], state["gap"]) == (1, 0.0)
+    assert "Print: 12 x 18 in\n" in (d / "work" / "report.txt").read_text()
+
+
+def test_a_state_from_before_a_set_still_reports_and_builds_nothing(tmp_path, tools):
+    # a single-sheet order prepared before this change has no "panels" or "gap" key
+    d = _make_order(tmp_path)
+    op.prepare(str(d), tools, log=lambda s: None)
+    path = d / "work" / "state.json"
+    old = json.load(open(path))
+    del old["panels"], old["gap"]
+    path.write_text(json.dumps(old))
+    lines = []
+    op.prepare(str(d), tools, log=lines.append)
+    assert any("Plate is current" in l for l in lines) and len(_builds(d)) == 1
+    assert "Print: 12 x 18 in\n" in (d / "work" / "report.txt").read_text()
+
+
+def test_a_changed_gap_rebuilds_a_set_once(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="two")
+    op.prepare(str(d), tools, log=lambda s: None)
+    with open(d / "order.toml", "a") as f:
+        f.write("gap = 4\n")
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    op.prepare(str(d), tools, log=lambda s: None)
+    assert len(_builds(d)) == 2
+    assert state["print_in"] == [38.0, 22.0] and state["gap"] == 4.0
+    assert "Print: 2 panels, 38 x 22 in hung, 4 in gap\n" in (
+        d / "work" / "report.txt").read_text()

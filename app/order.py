@@ -2,7 +2,8 @@
 """One customer order on disk (order pipeline spec, section 1).
 
     ~/Tecopa Orders/<order>/in/         the customer's files; nothing writes here
-                            order.toml  Dom's decisions: title, size, orientation
+                            order.toml  Dom's decisions: title, size, orientation;
+                                        a set's gap; the preview's sizes
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
@@ -19,6 +20,7 @@ import tempfile
 import tomllib
 from dataclasses import dataclass
 
+from app import panels as panel_geo
 from app.regionbuild import slugify
 
 ORDERS_ENV = "TECOPA_ORDERS_DIR"
@@ -26,6 +28,9 @@ TRACK_EXTS = (".gpx", ".kml", ".kmz")
 MAX_WIDTH_IN = 17.0            # the PRO-1100 feeds at most 17 in wide
 DEFAULT_SIZE = "11x17"         # the menu is 11x17 and 17x22 (decisions, 2026-10-10)
 ORIENTATIONS = ("portrait", "landscape")
+SET_SIZES = {"two": 2, "three": 3}     # a set of 17 x 22 in panels (spec, 2026-10-11)
+DEFAULT_GAP = 2.0                      # inches between two panels on the wall
+SIZE_KEYS = ("11x17", "17x22", "two", "three")     # what a preview can offer
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$")
 
 
@@ -64,7 +69,7 @@ def parse_size(text) -> tuple:
     """'17x11' -> (11.0, 17.0), short side first."""
     m = _SIZE.match(str(text))
     if not m:
-        raise OrderError(f"size {text!r} is not like 11x17")
+        raise OrderError(f'size {text!r} is not like 11x17, and is not "two" or "three"')
     short, long_ = sorted((float(m.group(1)), float(m.group(2))))
     if short <= 0:
         raise OrderError(f"size {text!r} must be larger than zero")
@@ -72,6 +77,32 @@ def parse_size(text) -> tuple:
         raise OrderError(f"size {text!r} is wider than the PRO-1100's "
                          f"{MAX_WIDTH_IN:g} in")
     return (short, long_)
+
+
+def parse_order_size(text) -> tuple:
+    """'11x17' -> ((11.0, 17.0), 1). 'two' -> ((17.0, 22.0), 2): a set, by its panel."""
+    key = str(text).strip().lower()
+    if key in SET_SIZES:
+        return ((panel_geo.PANEL_SHORT_IN, panel_geo.PANEL_LONG_IN), SET_SIZES[key])
+    return (parse_size(text), 1)
+
+
+def parse_gap(value) -> float:
+    """The gap of a set, in inches: 0, 2 or 4."""
+    if (isinstance(value, bool) or not isinstance(value, (int, float))
+            or float(value) not in panel_geo.GAPS_IN):
+        raise OrderError(f"gap must be 0, 2 or 4 (inches), not {value!r}")
+    return float(value)
+
+
+def parse_sizes(value) -> tuple:
+    """The sizes a preview must offer, from order.toml. () means the fit rule decides."""
+    if value is None:
+        return ()
+    if (not isinstance(value, list) or not value
+            or any(not isinstance(v, str) or v not in SIZE_KEYS for v in value)):
+        raise OrderError(f"sizes must be a list of {', '.join(SIZE_KEYS)}, not {value!r}")
+    return tuple(value)
 
 
 @dataclass(frozen=True)
@@ -82,6 +113,9 @@ class Order:
     size: tuple
     orientation: str
     notes: str
+    panels: int = 1          # 2 or 3: a set of 17 x 22 in panels
+    gap: float = 0.0         # inches between two panels; 0.0 for a single sheet
+    sizes: tuple = ()        # the preview's override list
 
     @property
     def id(self) -> str:
@@ -104,9 +138,15 @@ class Order:
         return os.path.join(self.work_dir, "state.json")
 
     def print_in(self) -> tuple:
-        """(width, height) in inches as printed."""
+        """(width, height) in inches as printed. A set gives its hung sheet, gaps
+        included: landscape is panels 22 in across, portrait is 17 in across."""
         short, long_ = self.size
-        return (short, long_) if self.orientation == "portrait" else (long_, short)
+        landscape = self.orientation != "portrait"
+        if self.panels > 1:
+            across = long_ if landscape else short
+            return (self.panels * across + (self.panels - 1) * self.gap,
+                    short if landscape else long_)
+        return (long_, short) if landscape else (short, long_)
 
     def track_files(self) -> list:
         if not os.path.isdir(self.in_dir):
@@ -123,12 +163,15 @@ class Order:
         return out
 
     def inputs_hash(self) -> str:
-        """Changes when a track file, the size or the orientation changes."""
+        """Changes when a track file, the size, the orientation, or a set's panel
+        count or gap changes."""
         h = hashlib.sha256()
         for data, name in self.payloads():
             h.update(name.encode())
             h.update(hashlib.sha256(data).digest())
         h.update(repr((self.size, self.orientation)).encode())
+        if self.panels > 1:        # a single sheet's hash is what it always was
+            h.update(repr((self.panels, self.gap)).encode())
         return h.hexdigest()
 
 
@@ -149,10 +192,12 @@ def load(folder) -> Order:
     orientation = str(cfg.get("orientation", "portrait")).lower()
     if orientation not in ORIENTATIONS:
         raise OrderError(f"orientation must be portrait or landscape, not {orientation!r}")
+    size, panels = parse_order_size(cfg.get("size", DEFAULT_SIZE))
+    gap = parse_gap(cfg.get("gap", DEFAULT_GAP)) if panels > 1 else 0.0
     return Order(dir=folder, title=title,
                  subtitle=str(cfg.get("subtitle", "")).strip(),
-                 size=parse_size(cfg.get("size", DEFAULT_SIZE)),
-                 orientation=orientation, notes=str(cfg.get("notes", "")))
+                 size=size, orientation=orientation, notes=str(cfg.get("notes", "")),
+                 panels=panels, gap=gap, sizes=parse_sizes(cfg.get("sizes")))
 
 
 def read_state(order: Order) -> dict:
