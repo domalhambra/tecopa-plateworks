@@ -104,12 +104,13 @@ enum Render {
         return .object(await withEngineVersion(result, runtime))
     }
 
-    /// A result as a few lines: the keys in one order, and one line for each device
-    /// that the wallpaper route did not render.
+    /// A result as a few lines: the keys in one order, one line for each device
+    /// that the wallpaper route did not render or did fit, and one line for each
+    /// warning of the upload that has something to say. The JSON has every value.
     static let text: @Sendable (JSONValue) -> String = { data in
         var lines: [String] = []
         let keys = ["out", "bytes", "sha256", "session", "job", "region", "engine_version", "frames",
-                    "edition", "year_span"]
+                    "count", "edition", "year_span"]
         for key in keys {
             switch data[key] {
             case .string(let text)?: lines.append("\(key): \(text)")
@@ -119,6 +120,20 @@ enum Render {
         }
         for item in data["skipped"]?.arrayValue ?? [] {
             lines.append("skipped: \(item["preset"]?.stringValue ?? "?"): \(item["reason"]?.stringValue ?? "")")
+        }
+        for item in data["fitted"]?.arrayValue ?? [] {
+            let growth = item["crop_growth"].flatMap(formText) ?? "?"
+            lines.append("fitted: \(item["preset"]?.stringValue ?? "?"): crop growth \(growth)")
+        }
+        let upload = data["upload"]
+        if upload?["recovered"]?.boolValue == true { lines.append("recovered: true") }
+        let duplicates = strings(upload?["skipped_duplicates"])
+        if !duplicates.isEmpty { lines.append("skipped duplicates: " + duplicates.joined(separator: ", ")) }
+        let counts = [("skipped_duplicate_tracks", "skipped duplicate tracks"),
+                      ("dropped_points", "dropped points"),
+                      ("journeys_outside_plate", "journeys outside the plate")]
+        for (key, words) in counts {
+            if let number = upload?[key]?.intValue, number != 0 { lines.append("\(words): \(number)") }
         }
         return lines.joined(separator: "\n")
     }
@@ -282,6 +297,7 @@ enum Render {
     /// The four texts of a `crop` argument. The tool checks the form only, four
     /// finite numbers, and sends each text as the caller wrote it.
     static func cropArgument(_ text: String) throws -> [String] {
+        // A form check: each text goes into a form field unchanged, and the engine owns the range.
         let digits = Set("0123456789+-.eE")
         let parts = text.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 4,
@@ -378,6 +394,22 @@ enum Render {
         if let session { try form.field("session_id", session) }
         let path = "/api/upload"
         return try runtime.client.json(try await runtime.client.post(path, form), for: path)
+    }
+
+    /// The keys of an upload answer that say what the engine dropped or changed.
+    /// The engine never hides them, so a result does not.
+    static let uploadWarnings = ["recovered", "skipped_duplicates", "skipped_duplicate_tracks",
+                                 "dropped_points", "journeys_outside_plate"]
+
+    /// Those keys of one upload answer, each as the engine gave it and only when
+    /// it did. This is the one place a result takes anything but an id, a region
+    /// and a crop from an upload: never the track geometry, never the hotspots.
+    static func warnings(ofUpload answer: JSONValue) -> JSONValue? {
+        var kept: [String: JSONValue] = [:]
+        for key in uploadWarnings {
+            if let value = answer[key], value != .null { kept[key] = value }
+        }
+        return kept.isEmpty ? nil : .object(kept)
     }
 
     /// The session id of an upload answer. It goes into a URL path, so an answer
@@ -485,25 +517,63 @@ enum Render {
         return id
     }
 
-    /// The seconds between two polls, and the longest time one call waits for a job.
+    /// The seconds between two polls, the seconds one poll waits for its answer,
+    /// and the longest time one call waits for a job.
     static let pollInterval: Double = 1
+    static let pollTimeout: Double = 10
     static let pollLimit: Double = 900
     static let fetchHint = "Run `tecopa render fetch`."
 
-    /// Poll a job until it is done. A job that ends in `error` is `refused` with
-    /// the job's own text. The tool never asks the engine to try again.
-    static func wait(_ runtime: Runtime, job: String) async throws {
+    /// A message as a sentence, so that a second sentence can follow it.
+    static func sentence(_ message: String) -> String {
+        message.hasSuffix(".") ? message : message + "."
+    }
+
+    /// A failure after the submit, with the id of the job. The job can still end
+    /// well, or its file is still on the engine, and the caller has no other way
+    /// to learn the id. The kind, the status and the body are the failure's own.
+    static func named(_ failure: TecopaFailure, job: String) -> TecopaFailure {
+        TecopaFailure(failure.kind, sentence(failure.message) + " The job is \(job).",
+                      hint: fetchHint, status: failure.status, body: failure.body)
+    }
+
+    /// How a job ended: with a file, or with the status that holds its error.
+    enum JobEnd: Equatable, Sendable {
+        case done
+        case failed(JSONValue)
+    }
+
+    /// Poll a job until it ends. The tool never asks the engine to try again.
+    ///
+    /// A poll that times out is one more wait: the engine's event loop is blocked
+    /// while it paints a proof, so a healthy job can give one poll no answer in
+    /// time. Its seconds count, so the limit is a time and not a number of polls.
+    /// A poll that finds nothing on the port fails at once: the engine stopped.
+    static func wait(_ runtime: Runtime, job: String) async throws -> JobEnd {
+        let path = "/api/jobs/" + job
+        // `probe` cannot throw, so the address is checked first, as `raw` does.
+        _ = try runtime.client.address(path)
         var waited: Double = 0
         while true {
-            let status = try await runtime.client.get("/api/jobs/" + job)
-            switch status["state"]?.stringValue {
-            case "done":
-                return
-            case "error":
-                let said = status["error"]?.stringValue ?? "The engine gave no text."
-                throw TecopaFailure(.refused, "Job \(job) ended in an error: \(said)", body: status)
-            default:
-                break                                   // queued or running
+            switch await runtime.client.probe(path, timeout: pollTimeout) {
+            case .reply(let reply):
+                guard (200..<300).contains(reply.status) else {
+                    throw runtime.client.refusedFailure(reply.status, path, reply.json)
+                }
+                switch reply.json["state"]?.stringValue {
+                case "done": return .done
+                case "error": return .failed(reply.json)
+                case "queued", "running": break
+                default:
+                    // a reply the tool cannot read is not a job that runs
+                    throw TecopaFailure(
+                        .environment, "The engine's answer for the job has no state that the tool knows.",
+                        body: reply.json)
+                }
+            case .noAnswer:
+                throw runtime.client.noAnswerFailure()
+            case .timedOut:
+                waited += pollTimeout
             }
             guard waited < pollLimit else {
                 throw TecopaFailure(
@@ -525,16 +595,25 @@ enum Render {
     /// Wait for a job, then write its file. This is the end of each output route,
     /// and of a reprint that is a film.
     ///
-    /// A failure that is not the engine's refusal names the job: the time limit, a
-    /// poll with no answer, a write that failed. The job can still end well, or its
-    /// file is still on the engine, and the caller has no other way to learn the id.
+    /// Each failure here names the job, the engine's refusal of one poll included:
+    /// a 500 on a poll says nothing about the job. One failure is not like the
+    /// others. A job that ended in `error` is finished and has no file, so it is
+    /// `refused` with the job's own text and no hint to fetch.
     static func waitAndFetch(_ runtime: Runtime, job: String, out: String) async throws -> [String: JSONValue] {
+        let end: JobEnd
         do {
-            try await wait(runtime, job: job)
+            end = try await wait(runtime, job: job)
+        } catch let failure as TecopaFailure {
+            throw named(failure, job: job)
+        }
+        if case .failed(let status) = end {
+            let said = status["error"]?.stringValue ?? "The engine gave no text."
+            throw TecopaFailure(.refused, "Job \(job) ended in an error: \(said)", body: status)
+        }
+        do {
             return try await fetch(runtime, job: job, out: out)
-        } catch let failure as TecopaFailure where failure.kind != .refused {
-            throw TecopaFailure(failure.kind, failure.message + " The job is \(job).",
-                                hint: fetchHint, status: failure.status, body: failure.body)
+        } catch let failure as TecopaFailure {
+            throw named(failure, job: job)
         }
     }
 
@@ -546,13 +625,15 @@ enum Render {
     }
 
     /// Follow the job that an answer names: an output route's, or a film reprint's.
-    /// The result has `job`, and `skipped` or `frames` when the answer gave one.
+    /// The result has `job`, and each of `skipped`, `fitted`, `count` and `frames`
+    /// that the answer gave: the wallpaper route says which devices it left out and
+    /// how far the frame of each other one grew, and the engine never hides that.
     /// `out` nil is `no_wait`: the call returns at once, with no poll and no file.
     static func follow(_ runtime: Runtime, answer: JSONValue,
                        out: String?) async throws -> [String: JSONValue] {
         let job = try jobID(in: answer)
         var result: [String: JSONValue] = ["job": .string(job)]
-        for key in ["skipped", "frames"] {
+        for key in ["skipped", "fitted", "count", "frames"] {
             if let value = answer[key], value != .null { result[key] = value }
         }
         guard let out else { return result }
@@ -604,6 +685,11 @@ enum Render {
 
     // MARK: The flow
 
+    /// What to run when a proof was made and its file was not written.
+    static func proofHint(_ session: String) -> String {
+        "Run `tecopa render proof --session \(session)`."
+    }
+
     /// One output route: its path, and its key in /api/debug/forms.
     struct Output: Equatable, Sendable {
         let path: String
@@ -636,6 +722,7 @@ enum Render {
             guard given == nil else {
                 throw TecopaFailure(.usage, "region goes with tracks. A session has its plate.")
             }
+            // A form check: the id goes into a form field unchanged, and the engine owns the plates.
             guard ScriptRunner.isRegionID(region) else {
                 throw TecopaFailure(.usage, "Not a region id: \(region)")
             }
@@ -679,6 +766,7 @@ enum Render {
             let answer = try await upload(runtime, files, region: region)
             session = try sessionID(in: answer)
             if let plate = answer["region"]?.stringValue { result["region"] = .string(plate) }
+            if let warnings = warnings(ofUpload: answer) { result["upload"] = warnings }
             let frame: [String]
             if let crop {
                 frame = crop
@@ -704,8 +792,22 @@ enum Render {
             let made = try await submitAndFetch(runtime, path: output.path, session: session,
                                                 fields: container, out: out)
             result.merge(made) { _, new in new }
-        } else if let png, let out {
-            result.merge(try save(runtime, png, to: out)) { _, new in new }
+        } else {
+            // `render proof` always has a proof and a path. Without one the call
+            // would write nothing and say nothing, so it is a fault and not a result.
+            guard let png, let out else {
+                throw TecopaFailure(
+                    .environment, "The tool made no proof to write, or has no path for it. The session is \(session).",
+                    hint: "This is a fault in the tool. " + proofHint(session))
+            }
+            do {
+                result.merge(try save(runtime, png, to: out)) { _, new in new }
+            } catch let failure as TecopaFailure {
+                // The proof was made, and its spec is stamped on the session. The
+                // caller learns the session, so the upload and the proof are not lost.
+                throw TecopaFailure(failure.kind, sentence(failure.message) + " The session is \(session).",
+                                    hint: proofHint(session), status: failure.status, body: failure.body)
+            }
         }
         return .object(await withEngineVersion(result, runtime))
     }

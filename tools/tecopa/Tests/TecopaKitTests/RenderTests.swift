@@ -137,9 +137,10 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(data?["skipped"], .array([
             .object(["preset": .string("watch"), "reason": .string("too small")])]))
         XCTAssertEqual(data?["job"]?.stringValue, "cd34")
-        // the result has the keys of the plan and no others
-        XCTAssertNil(data?["fitted"])
-        XCTAssertNil(data?["count"])
+        // the engine never hides how far a device's frame grew, so the tool does not
+        XCTAssertEqual(data?["fitted"], .array([
+            .object(["preset": .string("iphone"), "crop_growth": .double(1.2)])]))
+        XCTAssertEqual(data?["count"]?.intValue, 1)
     }
 
     func testRenderFilmSendsThePacingAndReturnsFrames() async {
@@ -392,6 +393,43 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(world.posts.last?.pairs.suffix(2), ["title=a=b = c", "contours="])
     }
 
+    func testASetValueWithALineEndAndAnEqualsSignIsSentIntact() async {
+        let world = engine()
+        let title = "Lassen\n2019 = 2024\r\nthe third line"
+        let (_, failure) = await call("render_proof", world, [
+            "tracks": tracks, "set": list("title=" + title), "out": .string("/out/a.png")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(world.posts.last?.fields.last, .init(name: "title", value: title))
+    }
+
+    func testAFormsAnswerWithoutTheKeyACommandNeedsIsAnEnvironmentFailure() async {
+        // an engine older than the tool: the name cannot be checked, so nothing is sent
+        let world = engine()
+        world.serve("/api/debug/forms", 200, #"{"proof": ["session_id", "title"]}"#)
+        var (data, failure) = await call("render_final", world, [
+            "tracks": tracks, "opt": list("format=tiff"), "out": .string("/out/a.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "The engine did not name the fields of final_submit.")
+
+        world.serve("/api/debug/forms", 200, #"{"final_submit": ["session_id", "format"]}"#)
+        (data, failure) = await call("render_final", world, [
+            "tracks": tracks, "set": list("title=Lassen"), "out": .string("/out/a.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "The engine did not name the fields of proof.")
+
+        // a key that is there and is not a list of names is the same fault
+        world.serve("/api/debug/forms", 200, #"{"proof": "title"}"#)
+        (_, failure) = await call("render_proof", world, [
+            "tracks": tracks, "set": list("title=Lassen"), "out": .string("/out/a.png")])
+        XCTAssertEqual(failure?.kind, .environment)
+
+        XCTAssertEqual(world.calls, ["GET /api/debug/forms", "GET /api/debug/forms", "GET /api/debug/forms"])
+        XCTAssertEqual(world.posts, [])
+        XCTAssertEqual(world.written, [])
+    }
+
     // MARK: The spec file
 
     func testSetWinsOverSpecAndEachScalarIsSentAsText() async {
@@ -454,6 +492,10 @@ final class RenderTests: XCTestCase {
         XCTAssertTrue(failure?.message.contains("OffDemError: the frame is past the DEM") ?? false)
         XCTAssertTrue(failure?.message.contains("cd34") ?? false)
         XCTAssertEqual(failure?.body?["state"]?.stringValue, "error")
+        // the job is finished and it failed: there is no file to fetch
+        XCTAssertEqual(failure?.message,
+                       "Job cd34 ended in an error: OffDemError: the frame is past the DEM")
+        XCTAssertNil(failure?.hint)
         XCTAssertEqual(world.calls, ["POST /api/final/submit", "GET /api/jobs/cd34", "GET /api/jobs/cd34"])
         XCTAssertEqual(world.written, [])
     }
@@ -498,18 +540,114 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(world.written, [])
     }
 
-    func testAPollThatGetsNoAnswerStillNamesTheJob() async {
-        // the caller has no other way to learn the id of the job it started
+    func testAPollThatGetsNoAnswerFailsAtOnceAndNamesTheJob() async {
+        // nothing listens: the engine stopped. The caller has no other way to learn
+        // the id of the job it started.
         let world = engine()
-        world.timeOut("GET /api/jobs/cd34")
+        world.serveSteps("GET /api/jobs/cd34", [.answer(200, running), .noAnswer])
         let (_, failure) = await call("render_final", world, [
             "session": .string("ab12"), "out": .string("/out/final.png")])
-        XCTAssertEqual(failure?.kind, .engineUnreachable)
-        XCTAssertTrue(failure?.message.contains("cd34") ?? false, failure?.message ?? "")
-        XCTAssertEqual(failure?.hint, "Run `tecopa render fetch`.")
-        // one poll, and no second try
-        XCTAssertEqual(world.calls, ["POST /api/final/submit", "GET /api/jobs/cd34"])
+        XCTAssertEqual(failure, TecopaFailure(
+            .engineUnreachable, "No engine answers on port 8848. The job is cd34.",
+            hint: "Run `tecopa render fetch`."))
+        // no try after the poll that got no answer
+        XCTAssertEqual(world.calls, ["POST /api/final/submit", "GET /api/jobs/cd34", "GET /api/jobs/cd34"])
         XCTAssertEqual(world.written, [])
+    }
+
+    func testAPollThatTimesOutIsOneMoreWait() async {
+        // the engine's event loop is blocked while it paints a proof, so one poll
+        // can time out while the job is healthy
+        let world = engine()
+        world.serveSteps("GET /api/jobs/cd34", [.timedOut, .timedOut, .answer(200, done)])
+        let (data, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/final.png")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(world.calls, [
+            "POST /api/final/submit", "GET /api/jobs/cd34", "GET /api/jobs/cd34", "GET /api/jobs/cd34",
+            "GET /api/jobs/cd34/result", "GET /api/debug/engine",
+        ])
+        XCTAssertEqual(world.slept, [1, 1])
+        XCTAssertEqual(world.written, [.init(path: "/out/final.png", data: poster)])
+        XCTAssertEqual(data?["job"]?.stringValue, "cd34")
+    }
+
+    func testPollsThatAlwaysTimeOutStillEndAtTheLimit() async {
+        let world = engine()
+        world.timeOut("GET /api/jobs/cd34")
+        let (data, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/final.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure, TecopaFailure(
+            .environment, "The job did not finish within 900 seconds. The job is cd34.",
+            hint: "Run `tecopa render fetch`."))
+        // a poll that timed out took its own 10 seconds, and they count: the limit
+        // is 900 seconds on the clock, not 900 polls of 11 seconds each
+        let polls = world.calls.filter { $0 == "GET /api/jobs/cd34" }.count
+        XCTAssertEqual(polls, 82)
+        XCTAssertEqual(world.slept.count, 81)
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testAPollThatTheEngineRefusesNamesTheJob() async {
+        // a 500 on one poll says nothing about the job, which can still end well
+        let world = engine()
+        world.serveSteps("GET /api/jobs/cd34", [.answer(200, running), .answer(500, "Internal Server Error")])
+        var (data, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/final.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure, TecopaFailure(
+            .refused, "The engine answered 500 for /api/jobs/cd34. The job is cd34.",
+            hint: "Run `tecopa render fetch`.", status: 500, body: .string("Internal Server Error")))
+        XCTAssertEqual(world.calls, ["POST /api/final/submit", "GET /api/jobs/cd34", "GET /api/jobs/cd34"])
+
+        // the same for the file of a job that is done
+        world.serveSequence("GET /api/jobs/cd34", [(200, done)])
+        world.serve("GET /api/jobs/cd34/result", 503, #"{"detail":"The plate lassen_ca is not ready."}"#)
+        (data, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/final.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure, TecopaFailure(
+            .refused, "The engine answered 503 for /api/jobs/cd34/result. The job is cd34.",
+            hint: "Run `tecopa render fetch`.", status: 503,
+            body: .object(["detail": .string("The plate lassen_ca is not ready.")])))
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testAJobReplyWithNoKnownStateFailsAtOnce() async {
+        // without this the tool polled for 900 seconds on a reply it could not read
+        let replies = [
+            #"{"error":null}"#, #"{"state":null}"#, #"{"state":7}"#, #"{"state":"paused"}"#,
+            #"{"state":"Done"}"#, #"["done"]"#, "done",
+        ]
+        for reply in replies {
+            let world = engine()
+            world.serve("GET /api/jobs/cd34", 200, reply)
+            let (data, failure) = await call("render_final", world, [
+                "session": .string("ab12"), "out": .string("/out/final.png")])
+            XCTAssertNil(data, reply)
+            XCTAssertEqual(failure?.kind, .environment, reply)
+            XCTAssertEqual(failure?.message,
+                           "The engine's answer for the job has no state that the tool knows. The job is cd34.",
+                           reply)
+            XCTAssertEqual(failure?.hint, "Run `tecopa render fetch`.", reply)
+            let body = (try? JSONValue.parse(Data(reply.utf8))) ?? .string(reply)
+            XCTAssertEqual(failure?.body, body, reply)
+            XCTAssertEqual(world.calls, ["POST /api/final/submit", "GET /api/jobs/cd34"], reply)
+            XCTAssertEqual(world.slept, [], reply)
+            XCTAssertEqual(world.written, [], reply)
+        }
+    }
+
+    func testAQueuedJobIsWaitedForLikeARunningOne() async {
+        let world = engine()
+        world.serveSequence("GET /api/jobs/cd34", [
+            (200, #"{"state":"queued","error":null}"#), (200, running), (200, done)])
+        let (_, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/final.png")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(world.slept, [1, 1])
+        XCTAssertEqual(world.written, [.init(path: "/out/final.png", data: poster)])
     }
 
     func testAWriteThatFailsAfterTheRenderNamesTheJob() async {
@@ -523,6 +661,41 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(failure, TecopaFailure(
             .usage, "A file is already at /out/final.png. The job is cd34.",
             hint: "Run `tecopa render fetch`."))
+    }
+
+    func testAProofWriteThatFailsNamesTheSession() async {
+        // the proof was made, and its spec is stamped on the session: the caller
+        // must learn the session, or the upload and the proof are lost
+        let world = engine()
+        var runtime = world.runtime()
+        runtime.writeNew = { path, _ in throw fileAlreadyThere(path) }
+        var (envelope, failure) = await Catalog.call("render_proof", runtime, [
+            "tracks": tracks, "out": .string("/out/p.png")])
+        XCTAssertNil(envelope["data"])
+        XCTAssertEqual(failure, TecopaFailure(
+            .usage, "A file is already at /out/p.png. The session is ab12.",
+            hint: "Run `tecopa render proof --session ab12`."))
+        XCTAssertEqual(world.calls, ["POST /api/upload", "POST /api/proof"])
+
+        // the folder was there at the first look and is gone at the write
+        runtime.writeNew = { _, _ in throw TecopaFailure(.usage, "The folder /out does not exist.") }
+        (envelope, failure) = await Catalog.call("render_proof", runtime, [
+            "session": .string("ab12"), "out": .string("/out/p.png")])
+        XCTAssertNil(envelope["data"])
+        XCTAssertEqual(failure, TecopaFailure(
+            .usage, "The folder /out does not exist. The session is ab12.",
+            hint: "Run `tecopa render proof --session ab12`."))
+
+        // a disk fault keeps its kind
+        runtime.writeNew = { path, _ in
+            throw TecopaFailure(.environment, "Could not write \(path): No space left on device")
+        }
+        (_, failure) = await Catalog.call("render_proof", runtime, [
+            "session": .string("ab12"), "out": .string("/out/p.png")])
+        XCTAssertEqual(failure, TecopaFailure(
+            .environment, "Could not write /out/p.png: No space left on device. The session is ab12.",
+            hint: "Run `tecopa render proof --session ab12`."))
+        XCTAssertEqual(world.written, [])
     }
 
     func testAnUnknownJobPassesThe404Through() async {
@@ -807,7 +980,9 @@ final class RenderTests: XCTestCase {
         world.serve("POST /api/wallpapers/submit", 422, #"{"detail":"No requested device fits this region"}"#)
         (_, failure) = await call("render_wallpaper", world, [
             "session": .string("ab12"), "presets": list("watch"), "out": .string("/out/w2.zip")])
-        XCTAssertEqual(failure?.status, 422)
+        XCTAssertEqual(failure, TecopaFailure(
+            .refused, "The engine answered 422 for /api/wallpapers/submit.", status: 422,
+            body: .object(["detail": .string("No requested device fits this region")])))
         XCTAssertEqual(world.written.map(\.path), ["/out/w.zip"])
     }
 
@@ -840,6 +1015,106 @@ final class RenderTests: XCTestCase {
             XCTAssertFalse(text.contains("starter_crop"), "\(name): \(text)")
             XCTAssertEqual(data?["session"]?.stringValue, "ab12", name)
         }
+    }
+
+    // MARK: The engine's warnings
+
+    /// An upload answer that says each thing the engine dropped or changed.
+    private let loudUpload = #"{"session":"ab12","region":"rifle_aspen","starter_crop":[10,20.5,110,150],"#
+        + #""tracks":[{"track_id":"t1","px":[[1,2],[3,4]]}],"hotspots":[{"px":[5,6],"label":"camp"}],"#
+        + #""recovered":true,"skipped_duplicates":["a.gpx"],"skipped_duplicate_tracks":3,"#
+        + #""dropped_points":12,"journeys_outside_plate":2,"track_days":["2023-07-01"]}"#
+
+    private let loud: JSONValue = .object([
+        "recovered": .bool(true), "skipped_duplicates": .array([.string("a.gpx")]),
+        "skipped_duplicate_tracks": .int(3), "dropped_points": .int(12),
+        "journeys_outside_plate": .int(2),
+    ])
+
+    func testTheUploadsWarningsRideTheResultUnderOneKey() async {
+        let world = engine()
+        world.serve("POST /api/upload", 200, loudUpload)
+        let commands: [(String, [String: JSONValue])] = [
+            ("render_proof", ["out": .string("/out/a.png")]),
+            ("render_final", ["out": .string("/out/b.png")]),
+            ("render_final", ["no_wait": .bool(true)]),
+            ("render_wallpaper", ["presets": list("iphone"), "out": .string("/out/c.zip")]),
+            ("render_film", ["out": .string("/out/d.png")]),
+        ]
+        for (name, arguments) in commands {
+            var arguments = arguments
+            arguments["tracks"] = tracks
+            let (data, failure) = await call(name, world, arguments)
+            XCTAssertNil(failure, name)
+            // the five keys and no other: never the geometry, never the hotspots
+            XCTAssertEqual(data?["upload"], loud, name)
+            XCTAssertNil(data?["tracks"], name)
+            XCTAssertNil(data?["hotspots"], name)
+            let text = data?.text(pretty: false) ?? ""
+            for word in [#""px""#, #""tracks""#, "track_id", "hotspots", "camp", "track_days", "starter_crop"] {
+                XCTAssertFalse(text.contains(word), "\(name) \(word): \(text)")
+            }
+        }
+    }
+
+    func testAnUploadWarningIsKeptAsTheEngineGaveItAndOnlyWhenItDid() async {
+        // a zero and a false are the engine's answer too: the tool does not judge them
+        let world = engine()
+        world.serve("POST /api/upload", 200,
+                    #"{"session":"ab12","region":"lassen_ca","starter_crop":[10,20.5,110,150],"#
+                        + #""recovered":false,"dropped_points":0,"skipped_duplicates":[]}"#)
+        var (data, failure) = await call("render_proof", world, ["tracks": tracks, "out": .string("/out/a.png")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data?["upload"], .object([
+            "recovered": .bool(false), "dropped_points": .int(0), "skipped_duplicates": .array([])]))
+
+        // a session was given: no upload was sent, so the result has no such key
+        (data, failure) = await call("render_proof", world, [
+            "session": .string("ab12"), "out": .string("/out/b.png")])
+        XCTAssertNil(failure)
+        XCTAssertNil(data?["upload"])
+    }
+
+    func testTheTextOfAResultNamesEachWarningThatIsNotZero() {
+        let result: JSONValue = .object([
+            "out": .string("/out/w.zip"), "session": .string("ab12"), "job": .string("cd34"),
+            "count": .int(2),
+            "skipped": .array([.object(["preset": .string("watch"), "reason": .string("too small")])]),
+            "fitted": .array([
+                .object(["preset": .string("iphone"), "crop_growth": .double(1.2)]),
+                .object(["preset": .string("ipad"), "crop_growth": .int(1)]),
+            ]),
+            "upload": .object([
+                "recovered": .bool(true), "skipped_duplicates": .array([.string("a.gpx"), .string("b.kml")]),
+                "skipped_duplicate_tracks": .int(3), "dropped_points": .int(12),
+                "journeys_outside_plate": .int(2),
+            ]),
+        ])
+        XCTAssertEqual(Catalog.named("render_wallpaper")?.text?(result), """
+            out: /out/w.zip
+            session: ab12
+            job: cd34
+            count: 2
+            skipped: watch: too small
+            fitted: iphone: crop growth 1.2
+            fitted: ipad: crop growth 1
+            recovered: true
+            skipped duplicates: a.gpx, b.kml
+            skipped duplicate tracks: 3
+            dropped points: 12
+            journeys outside the plate: 2
+            """)
+
+        // nothing to say is no line
+        let quiet: JSONValue = .object([
+            "session": .string("ab12"),
+            "upload": .object([
+                "recovered": .bool(false), "skipped_duplicates": .array([]),
+                "skipped_duplicate_tracks": .int(0), "dropped_points": .int(0),
+                "journeys_outside_plate": .int(0),
+            ]),
+        ])
+        XCTAssertEqual(Catalog.named("render_proof")?.text?(quiet), "session: ab12")
     }
 
     func testTheTextOfAResultIsAFewLines() {

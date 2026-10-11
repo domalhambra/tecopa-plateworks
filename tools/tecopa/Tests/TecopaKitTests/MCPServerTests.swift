@@ -8,7 +8,7 @@ final class MCPServerTests: XCTestCase {
         "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
         "reprint_inspect"]
     /// Not read-only: the entries that control the engine, and the ones that write a file.
-    private let control: Set<String> = [
+    private let writes: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
         "reprint", "continue"]
@@ -117,7 +117,7 @@ final class MCPServerTests: XCTestCase {
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
         XCTAssertEqual(tools.count, 19)
-        XCTAssertEqual(names, readOnly.union(control))
+        XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
             let name = tool["name"]?.stringValue ?? ""

@@ -171,13 +171,16 @@ enum Reprint {
 
         // 4. The new tracks go into that session. The engine makes a new session
         // for an id it does not have, and that one is not the continued poster.
+        var result: [String: JSONValue] = ["session": .string(session)]
         if !files.isEmpty {
-            let added = try Render.sessionID(in: try await Render.upload(runtime, files, session: session))
+            let upload = try await Render.upload(runtime, files, session: session)
+            let added = try Render.sessionID(in: upload)
             guard added == session else {
                 throw TecopaFailure(
                     .environment,
                     "The engine put the new tracks in session \(added), not in the continued session \(session).")
             }
+            if let warnings = Render.warnings(ofUpload: upload) { result["upload"] = warnings }
         }
 
         // 5. The proof: the file's own fields, then `set`. It stamps the new edition.
@@ -186,7 +189,6 @@ enum Reprint {
         _ = try await Render.proof(runtime, session: session, crop: next.crop, fields: next.fields)
 
         // 6. The final.
-        var result: [String: JSONValue] = ["session": .string(session)]
         if let plate = answer["region"]?.stringValue { result["region"] = .string(plate) }
         if let edition = answer["edition"]?.intValue { result["edition"] = .int(Int64(edition)) }
         if let span = answer["year_span"]?.stringValue, !span.isEmpty { result["year_span"] = .string(span) }

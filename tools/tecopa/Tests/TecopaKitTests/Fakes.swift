@@ -42,9 +42,25 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         let body: Data
     }
 
+    /// One step of `serveSteps`: what one request finds.
+    enum Step {
+        /// A JSON answer with this status.
+        case answer(Int, String)
+        /// No answer in time: the engine listens and is busy.
+        case timedOut
+        /// Nothing listens: the engine stopped.
+        case noAnswer
+    }
+
+    private enum Outcome {
+        case route(Route)
+        case timedOut
+        case noAnswer
+    }
+
     private let lock = NSLock()
     private var routes: [String: Route] = [:]
-    private var sequences: [String: [Route]] = [:]
+    private var sequences: [String: [Outcome]] = [:]
     private var results: [String: ProcessResult] = [:]
     private var timeouts: Set<String> = []
     private var files: [String: String] = [:]
@@ -90,8 +106,20 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     /// request takes the next answer, and the last one repeats. The keys are those
     /// of `serve`, and a sequence answers before a fixed route of the same key.
     func serveSequence(_ key: String, _ answers: [(status: Int, body: String)]) {
-        let list = answers.map {
-            Route(status: $0.status, contentType: "application/json", body: Data($0.body.utf8))
+        serveSteps(key, answers.map { .answer($0.status, $0.body) })
+    }
+
+    /// A sequence in which a request can also get no answer: a poll that times out
+    /// while the engine paints, or an engine that stops while a job runs. The rules
+    /// are those of `serveSequence`.
+    func serveSteps(_ key: String, _ steps: [Step]) {
+        let list: [Outcome] = steps.map {
+            switch $0 {
+            case .answer(let status, let body):
+                return .route(Route(status: status, contentType: "application/json", body: Data(body.utf8)))
+            case .timedOut: return .timedOut
+            case .noAnswer: return .noAnswer
+            }
         }
         lock.lock(); sequences[key] = list; lock.unlock()
     }
@@ -164,28 +192,30 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private func answer(_ method: String, _ url: URL, post: Post?) throws -> Route {
         let path = Self.key(url)
         let keys = method == "GET" ? ["GET " + path, path] : [method + " " + path]
-        let (slow, route): (Bool, Route?) = lock.withLock {
+        let outcome: Outcome = lock.withLock {
             requests.append(url)
             calls.append(method + " " + path)
             if let post { posts.append(post) }
-            return (keys.contains(where: timeouts.contains), next(keys))
+            return keys.contains(where: timeouts.contains) ? .timedOut : next(keys)
         }
-        if slow { throw URLError(.timedOut) }
-        guard let route else { throw URLError(.cannotConnectToHost) }
-        return route
+        switch outcome {
+        case .route(let route): return route
+        case .timedOut: throw URLError(.timedOut)
+        case .noAnswer: throw URLError(.cannotConnectToHost)
+        }
     }
 
-    /// The answer for the first key that has one. A sequence gives its next answer
-    /// and keeps its last. The caller holds the lock.
-    private func next(_ keys: [String]) -> Route? {
+    /// The answer for the first key that has one, or no answer when none has. A
+    /// sequence gives its next step and keeps its last. The caller holds the lock.
+    private func next(_ keys: [String]) -> Outcome {
         for key in keys {
             if let list = sequences[key], let first = list.first {
                 if list.count > 1 { sequences[key] = Array(list.dropFirst()) }
                 return first
             }
-            if let route = routes[key] { return route }
+            if let route = routes[key] { return .route(route) }
         }
-        return nil
+        return .noAnswer
     }
 
     /// Read a multipart body back into its parts. The fake has its own reader, so a

@@ -138,7 +138,7 @@ struct RenderPicture: ParsableArguments {
     var session: String?
     @Option(name: .long, help: "A region id, sent with the tracks.")
     var region: String?
-    @Option(name: .long, help: "The path of a JSON file: one flat object of proof form fields.")
+    @Option(name: .long, help: "A JSON file: one flat object of proof form fields. Quote a text value.")
     var spec: String?
     @Option(name: .long, parsing: .upToNextOption,
             help: "key=value, one proof form field for each. Wins over --spec.")
@@ -165,9 +165,9 @@ struct RenderJob: ParsableArguments {
     @Option(name: .long, parsing: .upToNextOption,
             help: "key=value, one field of the output route for each.")
     var opt: [String] = []
-    @Option(name: .long, help: "The path of the file to write. It must hold no file.")
+    @Option(name: .long, help: "The output path. Required, except with --no-wait.")
     var out: String?
-    @Flag(name: .long, help: "Return the job id at once and write no file. Then run `tecopa render fetch`.")
+    @Flag(name: .long, help: "Return the job id at once. Takes no --out.")
     var noWait = false
 
     var arguments: [String: JSONValue] {
@@ -296,14 +296,14 @@ struct ReprintCommand: AsyncParsableCommand {
         @OptionGroup var global: GlobalOptions
         @Argument(help: "The poster file.")
         var file: String?
-        @Option(name: .long, help: "The path of the file to write. It must hold no file. Required.")
+        @Option(name: .long, help: "The output path. Required, with --no-wait too.")
         var out: String?
         @Option(name: .long, parsing: .upToNextOption,
                 help: "key=value, one field of the reprint route for each: format, embed_spec.")
         var opt: [String] = []
         @OptionGroup var plate: PlateFlag
         @Flag(name: .long,
-              help: "For a film: return the job id at once. Then run `tecopa render fetch`. A still is always written.")
+              help: "For a film: return the job id at once. A still is always written to --out.")
         var noWait = false
 
         var arguments: [String: JSONValue] {

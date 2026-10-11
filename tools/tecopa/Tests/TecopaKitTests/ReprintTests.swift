@@ -300,6 +300,38 @@ final class ReprintTests: XCTestCase {
         XCTAssertEqual(data?["edition"]?.intValue, 2)
     }
 
+    func testContinueWithTracksCarriesTheUploadsWarnings() async {
+        let world = engine()
+        world.serve("POST /api/upload", 200,
+                    #"{"session":"ab12","region":"lassen_ca","starter_crop":[10,20.5,110,150],"#
+                        + #""tracks":[{"track_id":"t1","px":[[1,2],[3,4]]}],"hotspots":[{"px":[5,6]}],"#
+                        + #""recovered":false,"skipped_duplicates":["new.gpx"],"skipped_duplicate_tracks":4,"#
+                        + #""dropped_points":0,"journeys_outside_plate":1}"#)
+        let loud: JSONValue = .object([
+            "recovered": .bool(false), "skipped_duplicates": .array([.string("new.gpx")]),
+            "skipped_duplicate_tracks": .int(4), "dropped_points": .int(0),
+            "journeys_outside_plate": .int(1),
+        ])
+        for arguments: [String: JSONValue] in [["out": .string("/out/two.png")], ["no_wait": .bool(true)]] {
+            var arguments = arguments
+            arguments["file"] = lassen
+            arguments["tracks"] = list("/tracks/new.gpx")
+            let (data, failure) = await call("continue", world, arguments)
+            XCTAssertNil(failure)
+            XCTAssertEqual(data?["upload"], loud)
+            let text = data?.text(pretty: false) ?? ""
+            for word in [#""px""#, #""tracks""#, "track_id", "hotspots", "prefill", "proof_form", "starter_crop"] {
+                XCTAssertFalse(text.contains(word), "\(word): \(text)")
+            }
+        }
+
+        // with no new tracks there is no upload: the continue answer's own keys of
+        // the same names are not an upload's warnings
+        let (data, failure) = await call("continue", world, ["file": lassen, "out": .string("/out/one.png")])
+        XCTAssertNil(failure)
+        XCTAssertNil(data?["upload"])
+    }
+
     func testContinueStopsWhenTheUploadAnswersAnotherSession() async {
         // the engine makes a new session for an id it does not have. That session
         // has only the new tracks, at edition 1: it is not the continued poster.
