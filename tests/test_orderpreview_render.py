@@ -57,3 +57,16 @@ def test_each_offered_size_is_drawn_at_screen_size_with_its_gaps(tmp_path, monke
     assert words == [(True, "PREVIEW")] * 4                     # every map says PREVIEW
     plain = np.asarray(Image.open(by_key["17x22"]["image"]).convert("RGB"))
     assert len(np.unique(plain.reshape(-1, 3), axis=0)) > 500   # a real picture, not a flat fill
+
+
+def test_a_title_past_the_specs_limit_is_a_spec_error(tmp_path):
+    import pytest
+
+    from app.spec import TITLE_MAX_CHARS, SpecError
+    tracks = _tracks()
+    pts = tracks[0].coords
+    bounds = (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
+    entries = opv.plan_sizes(bounds, [t.coords for t in tracks])
+    with pytest.raises(SpecError, match="title_text must be at most"):
+        opv.render_maps(entries, tracks, REGION_DIR, "x" * (TITLE_MAX_CHARS + 1), str(tmp_path))
+    assert list(tmp_path.iterdir()) == []                   # no map was written

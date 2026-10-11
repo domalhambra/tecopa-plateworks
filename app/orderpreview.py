@@ -1,6 +1,6 @@
 # app/orderpreview.py
 """The size preview of an order: frame the tracks at every size, offer the sizes that
-suit them, and show each one on a coarse plate.
+suit them, show each one on a coarse plate, and write the PDF and the report.
 
 Spec: docs/superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md,
 section 5. This file never imports app.main, and it imports the renderer only inside
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import panels as panel_geo
+from app import previewpdf, sizes
 from app.geo import RegionGeo
 from app.ingest import load_tracks, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
@@ -278,12 +279,45 @@ def _dump(path, data) -> None:
     os.replace(tmp, path)
 
 
+def write_preview_report(order, state, names) -> str:
+    """What the preview decided, and the lines to write in order.toml for each size
+    the client can choose. Prepare then frames that size with the same rule."""
+    def sentence(text):          # one line, and the report adds the full stop
+        return " ".join(str(text).split()).rstrip(".")
+    plate = state["plate"]
+    lines = [f"Order: {order.title}", f"Preview: {state['pdf']}",
+             f"Plate: {plate['id']} ({plate['kind']}), {plate['grid_m']:g} m grid", "Sizes:"]
+    for e in state["sizes"]:
+        what = (f"{names[e['key']]['name']}, {e['orientation']}, "
+                f"{e['print_in'][0]:g} x {e['print_in'][1]:g} in")
+        if not e["offered"]:
+            lines.append(f"- {what}: not offered, {sentence(e['why'])}.")
+            continue
+        toml = f'size = "{e["key"]}", orientation = "{e["orientation"]}"'
+        if e["panels"] > 1:
+            toml += f", gap = {e['gap']:g}"
+        lines.append(f"- {what}: offered, tracks fill {e['fill']:.0%}. order.toml: {toml}")
+        if e["warning"]:
+            lines.append(f"  Warning: {sentence(e['warning'])}.")
+        for k in e["ends_behind"]:
+            lines.append(f"  Warning: a route end is behind gap {k}.")
+    lines.append(f"Time: {state['seconds']:g} s")
+    text = "\n".join(lines) + "\n"
+    path = os.path.join(order.work_dir, "preview", "report.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+    return text
+
+
 def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
-    """Frame every size, build one coarse plate, draw the offered sizes and write the
-    PDF. `render` and `write_pdf` are for tests: stand-ins for the two slow steps."""
+    """Frame every size, build one coarse plate, draw the offered sizes, and write the
+    PDF, work/preview/preview.json and work/preview/report.txt. `render` and
+    `write_pdf` are for tests: stand-ins for the two slow steps."""
     from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env
     refuse_inside_repo(orders_root())
     order = load(order_dir)
+    names = sizes.load()         # before the plate: a wrong file must not cost a build
     payloads = order.payloads()
     tracks_ll = lonlat_extent(payloads)["bbox"]
     if tracks_ll is None:
@@ -316,9 +350,9 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     (render or render_maps)(entries, tracks, os.path.join(plate["root"], plate["id"]),
                             order.title, work)
     pdf = os.path.join(order.dir, "out", "preview", f"{slugify(order.title)}-preview.pdf")
-    if write_pdf is not None:
-        write_pdf(pdf, entries, None, order.title)
+    (write_pdf or previewpdf.write)(pdf, entries, names, order.title)
     state = {"epsg": epsg, "plate": plate, "sizes": entries, "pdf": pdf,
              "seconds": round(time.monotonic() - started, 1)}
     _dump(os.path.join(work, "preview.json"), state)
+    write_preview_report(order, state, names)
     return state

@@ -312,3 +312,142 @@ def test_the_preview_keeps_its_own_build_log(tmp_path, tools):
     assert state["plate"]["kind"] == "built"
     assert (d / "work" / "build.log").read_bytes() == before
     assert b"cache=" in (d / "work" / "preview" / "build.log").read_bytes()
+
+
+# ---- the PDF's place, the report and the command ----
+
+def test_every_entry_of_preview_json_says_why(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    state = _preview(d, tools)
+    saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
+    assert saved["sizes"] == state["sizes"] and saved["pdf"] == state["pdf"]
+    for e in saved["sizes"]:
+        assert {"ends_behind", "warning", "why", "blocked", "offered", "fill"} <= set(e)
+        assert isinstance(e["ends_behind"], list) and isinstance(e["blocked"], bool)
+        assert bool(e["why"]) == (not e["offered"])          # a refusal always has its reason
+
+
+def test_the_real_pdf_writer_is_the_default(tmp_path, tools, monkeypatch):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    seen = []
+    monkeypatch.setattr(opv.previewpdf, "write",
+                        lambda path, entries, names, title: seen.append((path, names, title)))
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_fake_render([]))
+    assert seen == [(state["pdf"], opv.sizes.load(), "Smith home ground")]
+
+
+def test_a_wrong_sizes_file_stops_the_preview_before_any_plate(tmp_path, tools, monkeypatch):
+    # the plate takes minutes to build: the names and prices are read first
+    bad = tmp_path / "sizes.toml"
+    bad.write_text('[[size]]\nkey = "11x17"\nname = "Small"\n')
+    monkeypatch.setattr(opv.sizes, "default_path", lambda: str(bad))
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    with pytest.raises(opv.OrderError, match="has no row for 17x22, two, three"):
+        _preview(d, tools)
+    assert not (d / "work" / "preview").exists()
+
+
+def test_the_report_lists_each_size_and_the_lines_for_order_toml(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    state = _preview(d, tools)
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert report.startswith("Order: Smith home ground\n")
+    assert f"Preview: {state['pdf']}" in report
+    assert "Plate: preview_2026_10_001_smith (built)," in report
+    small = [e for e in state["sizes"] if e["key"] == "11x17"][0]
+    assert (f'- 11 × 17 in, {small["orientation"]}, 11 x 17 in: offered' in report
+            or f'- 11 × 17 in, {small["orientation"]}, 17 x 11 in: offered' in report)
+    assert f'order.toml: size = "11x17", orientation = "{small["orientation"]}"' in report
+    assert "- Three panels" in report and "not offered" in report
+    assert report.rstrip().splitlines()[-1].startswith("Time: ")
+
+
+def _state(**entry):
+    base = {"key": "three", "panels": 3, "orientation": "landscape", "print_in": [70.0, 17.0],
+            "gap": 2.0, "fill": 0.6, "offered": True, "why": "", "warning": "",
+            "blocked": False, "ends_behind": []}
+    return {"pdf": "/x/out/preview/t-preview.pdf", "seconds": 12.5,
+            "plate": {"id": "preview_x", "kind": "built", "grid_m": 30.0},
+            "sizes": [{**base, **entry}]}
+
+
+def test_the_report_gives_a_set_its_gap_and_its_warnings(tmp_path, tools):
+    order = opv.load(str(_make_order(tmp_path, bbox=WIDE)))
+    names = opv.sizes.load()
+    text = opv.write_preview_report(order, _state(
+        warning="the tracks span 24% of the sheet's width, under 30%", ends_behind=[1, 2]), names)
+    assert text.splitlines() == [
+        "Order: Smith home ground",
+        "Preview: /x/out/preview/t-preview.pdf",
+        "Plate: preview_x (built), 30 m grid",
+        "Sizes:",
+        '- Three panels, landscape, 70 x 17 in: offered, tracks fill 60%. '
+        'order.toml: size = "three", orientation = "landscape", gap = 2',
+        "  Warning: the tracks span 24% of the sheet's width, under 30%.",
+        "  Warning: a route end is behind gap 1.",
+        "  Warning: a route end is behind gap 2.",
+        "Time: 12.5 s"]
+    assert (tmp_path / "orders" / "2026-10-001-smith" / "work" / "preview"
+            / "report.txt").read_text() == text
+
+
+def test_the_report_gives_a_refusal_one_line_and_one_full_stop(tmp_path, tools):
+    order = opv.load(str(_make_order(tmp_path, bbox=WIDE)))
+    text = opv.write_preview_report(order, _state(
+        offered=False, blocked=True,
+        why="The terrain data is still too coarse for this print size\nafter 5 widenings."),
+        opv.sizes.load())
+    assert ("- Three panels, landscape, 70 x 17 in: not offered, The terrain data is still too "
+            "coarse for this print size after 5 widenings.\n") in text
+    assert "order.toml" not in text
+
+
+def test_the_command_prints_the_preview_report(tmp_path, tools, capsys, monkeypatch):
+    from scripts import order as order_cli
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    monkeypatch.setattr(opv, "render_maps", _fake_render([]))
+    monkeypatch.setattr(opv.previewpdf, "write", lambda path, entries, names, title: 1)
+    assert order_cli.main(["preview", str(d)], tools=tools) == 0
+    out = capsys.readouterr().out
+    assert "Order: Smith home ground" in out and "Sizes:" in out
+    assert out.endswith((d / "work" / "preview" / "report.txt").read_text())
+    assert 'order.toml: size = "11x17"' in out and "not offered" in out
+
+
+def test_each_command_names_itself_when_it_stops(tmp_path, tools, capsys):
+    from scripts import order as order_cli
+    d = _make_order(tmp_path, bbox=WIDE)
+    (d / "order.toml").write_text('size = "11x17"\n')          # no title
+    assert order_cli.main(["preview", str(d)], tools=tools) == 1
+    assert "preview stopped: order.toml needs a title" in capsys.readouterr().err
+    assert order_cli.main(["prepare", str(d)], tools=tools) == 1
+    assert "prepare stopped: order.toml needs a title" in capsys.readouterr().err
+
+
+def test_a_title_the_map_cannot_hold_stops_the_command(tmp_path, tools, capsys, monkeypatch):
+    # render_maps raises SpecError for a title past the spec's limit
+    # (tests/test_orderpreview_render.py); the command must name it, not show a traceback
+    from scripts import order as order_cli
+    from app.spec import SpecError
+
+    def render(entries, tracks, plate_dir, title, out_dir):
+        raise SpecError("title_text must be at most 200 characters")
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    monkeypatch.setattr(opv, "render_maps", render)
+    assert order_cli.main(["preview", str(d)], tools=tools) == 1
+    captured = capsys.readouterr()
+    assert "preview stopped: title_text must be at most 200 characters" in captured.err
+    assert "Sizes:" not in captured.out
+    assert not (d / "work" / "preview" / "preview.json").exists()
+    assert not (d / "work" / "preview" / "report.txt").exists()
+    assert not (d / "out").exists()
+
+
+def test_a_failed_coverage_query_stops_the_command(tmp_path, tools, capsys):
+    from scripts import order as order_cli
+    bad = tmp_path / "stubs" / "bad_coverage.py"
+    bad.write_text('import sys\nsys.exit("boom")\n')
+    tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    assert order_cli.main(["preview", str(d)], tools=tools) == 1
+    assert "preview stopped: The 3DEP coverage check failed" in capsys.readouterr().err

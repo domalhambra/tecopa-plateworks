@@ -1,0 +1,22 @@
+# config/sizes.toml
+# The sizes a preview can offer, in menu order. Dom owns the names and the prices.
+# A row with no price prints "Price on request".
+# The two single-sheet prices are the decision of 2026-10-10 (docs/decisions.md).
+
+[[size]]
+key = "11x17"
+name = "11 × 17 in"
+price = "$69"
+
+[[size]]
+key = "17x22"
+name = "17 × 22 in"
+price = "$99"
+
+[[size]]
+key = "two"
+name = "Two panels"
+
+[[size]]
+key = "three"
+name = "Three panels"
