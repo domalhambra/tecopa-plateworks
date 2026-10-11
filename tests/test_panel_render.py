@@ -27,7 +27,7 @@ def _spec(n=2, gap=2.0, **kw):
                 print_h_in=h, native_resolution_m=10,
                 tracks=[np.array([[crop[0] + 3000, crop[1] + 3000],
                                   [crop[2] - 3000, crop[3] - 3000]])],
-                hotspots=[], seed=7, title_text="-", compass=False, keyline=False,
+                hotspots=[], seed=7, title_text="", compass=False, keyline=False,
                 panels=n, panel_gap_in=gap if n > 1 else 0.0)
     base.update(kw)
     return CompositionSpec(**base)
@@ -49,12 +49,40 @@ def _seam_labels(spec):
 
 
 def test_each_panel_is_the_matching_window_of_the_unbroken_sheet():
+    from PIL import Image, ImageDraw
     as_set = _spec(2, 2.0)
     unbroken = _spec(1, 2.0)
-    a, b = _render(as_set), _render(unbroken)
+    a, b = _render(as_set).copy(), _render(unbroken).copy()
     assert a.shape == b.shape
-    for x0, y0, x1, y1 in panels.panel_rects_px(as_set, DPI):
+    frames = panels.panel_rects_px(as_set, DPI)
+    d = ImageDraw.Draw(Image.new("RGBA", (a.shape[1], a.shape[0])))
+    marks = render._panel_mark_rects(as_set, d, frames, DPI)
+    assert any((a[my0:my1, mx0:mx1] != b[my0:my1, mx0:mx1]).any()
+               for mx0, my0, mx1, my1 in marks)      # the mark is there to leave out
+    for mx0, my0, mx1, my1 in marks:
+        a[my0:my1, mx0:mx1] = 0                  # the panel mark is the one thing a set adds
+        b[my0:my1, mx0:mx1] = 0
+    for x0, y0, x1, y1 in frames:
         assert np.array_equal(a[y0:y1, x0:x1], b[y0:y1, x0:x1])
+
+
+def test_the_watermark_word_reaches_each_panel_through_rasterize():
+    spec = _spec(2, 2.0)
+
+    def shot(**kw):
+        return np.asarray(render.rasterize(spec, dpi=DPI, region_dir=REGION_DIR, cfg=_cfg(),
+                                           hydro={"lakes": [], "rivers": []}, **kw))
+
+    bare, proof = shot(), shot(watermark=True)
+    preview = shot(watermark=True, watermark_text="PREVIEW")
+    assert np.array_equal(proof, shot(watermark=True, watermark_text="PROOF"))   # the default
+    for x0, y0, x1, y1 in panels.panel_rects_px(spec, DPI):
+        top = slice(y0, y0 + (y1 - y0) // 2)
+        assert (proof[top, x0:x1] != bare[top, x0:x1]).any()
+        assert (preview[top, x0:x1] != proof[top, x0:x1]).any()
+    for x0, y0, x1, y1 in panels.gap_rects_px(spec, DPI):
+        assert np.array_equal(proof[y0:y1, x0:x1], bare[y0:y1, x0:x1])
+        assert np.array_equal(preview[y0:y1, x0:x1], bare[y0:y1, x0:x1])
 
 
 def test_no_place_name_is_drawn_in_a_seam_band():

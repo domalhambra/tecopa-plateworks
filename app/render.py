@@ -1476,7 +1476,9 @@ def _furniture_scale(spec):
     size (sqrt of area) relative to the 18x24 they were designed on -- then the
     client's furniture_scale slider multiplies the auto-appropriate size. A pure
     function of the spec, so proof == final at any DPI (invariant 1)."""
-    s = (spec.print_w_in * spec.print_h_in / FURNITURE_BASE_IN2) ** 0.5
+    # a set hangs as panels of 17 x 22 in, so its furniture is sized for one panel
+    w, h = panel_geo.panel_size_in(spec)
+    s = (w * h / FURNITURE_BASE_IN2) ** 0.5
     return min(max(s, FURNITURE_SCALE_MIN), FURNITURE_SCALE_MAX) * spec.furniture_scale
 
 def _year_span(spec):
@@ -2196,6 +2198,7 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
     if panel_geo.is_set(spec):
         # each seam acts as a sheet edge: no name is cut by one or hidden behind a gap
         keepout += panel_geo.seam_bands_px(spec, dpi, round(GEO_EDGE_IN * dpi))
+        keepout += _panel_mark_rects(spec, d, panel_geo.panel_rects_px(spec, dpi), dpi)
     return keepout
 
 
@@ -2972,8 +2975,38 @@ def _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=None):
         img.paste(rgba.convert(img.mode))
     return img
 
+def _panel_mark_rects(spec, d, frames, dpi):
+    """The plate of each panel mark (`2 / 3`), in the lower right corner of its
+    panel: [(x0, y0, x1, y1)] in pixels, right and bottom exclusive, as the keep-out
+    reads a box. The credit line's size, the body face."""
+    fdpi = dpi * _furniture_scale(spec)
+    font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.62, fdpi))))
+    inset = round(TITLE_INSET_IN * fdpi)
+    rects = []
+    for k, (x0, y0, x1, y1) in enumerate(frames):
+        l, t, r, b = d.textbbox((0, 0), f"{k + 1} / {len(frames)}", font=font)
+        pad = max(2, round((b - t) * 0.3))
+        rects.append((x1 - inset - (r - l) - 2 * pad, y1 - inset - (b - t) - 2 * pad,
+                      x1 - inset, y1 - inset))
+    return rects
+
+
+def _draw_panel_marks(img, spec, frames, dpi):
+    """`1 / 3`, `2 / 3`, `3 / 3`: a loose panel can be named and hung in order."""
+    d = ImageDraw.Draw(img, "RGBA")
+    fdpi = dpi * _furniture_scale(spec)
+    font = _font(max(7, round(_pt_to_px(spec.label_pt * 0.62, fdpi))))
+    for k, (x0, y0, x1, y1) in enumerate(_panel_mark_rects(spec, d, frames, dpi)):
+        text = f"{k + 1} / {len(frames)}"
+        l, t, r, b = d.textbbox((0, 0), text, font=font)
+        pad = max(2, round((b - t) * 0.3))
+        d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=LABEL_PLATE + (235,))
+        d.text((x0 + pad - l, y0 + pad - t), text, fill=LABEL_INK + (255,), font=font)
+    return img
+
+
 def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None,
-                    profile=None, paint=None, trim=None):
+                    profile=None, paint=None, trim=None, watermark_text="PROOF"):
     """The layers ABOVE the route, identical across time-lapse frames: markers, photos,
     keyline, compass, title block, and the optional proof watermark. Returns RGB.
     ctx displaces the anchored symbols with the plan-oblique terrain; the sheet
@@ -2981,29 +3014,37 @@ def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None
     never displaces. `paint` is the grown paint-spec whose crop maps to the canvas
     (ground-anchored markers/photos read it); `trim` is the trim box all furniture
     measures from. Both default to the no-bleed identity (paint = spec, trim = the
-    full canvas), so a pre-feature poster is byte-identical."""
+    full canvas), so a pre-feature poster is byte-identical.
+    On a set the furniture is placed in panel 1, and each panel gets a keyline, a mark
+    and the watermark."""
     if paint is None:
         paint = spec
     tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
+    ftrim = panel_geo.furniture_trim_px(spec, dpi, (tx0, ty0, tx1, ty1))
+    frames = panel_geo.frame_rects_px(spec, dpi, (tx0, ty0, tx1, ty1))
     img = _draw_markers(img, paint, lum, out_w, out_h, dpi, ctx=ctx)
     img = _draw_photos(img, paint, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
     if spec.profile:
-        img = _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=(tx0, ty0, tx1, ty1))
+        img = _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=ftrim)
     if spec.keyline:
-        img = _draw_keyline(img, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))
-    img = _draw_compass(img, spec, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))  # above title
-    img = _draw_title_block(img, spec, out_w, out_h, dpi, trim=(tx0, ty0, tx1, ty1))
+        for frame in frames:
+            img = _draw_keyline(img, out_w, out_h, dpi, trim=frame)
+    img = _draw_compass(img, spec, out_w, out_h, dpi, trim=ftrim)  # above title
+    img = _draw_title_block(img, spec, out_w, out_h, dpi, trim=ftrim)
+    if panel_geo.is_set(spec):
+        img = _draw_panel_marks(img, spec, frames, dpi)
     if watermark:
-        # scale to the TRIM box (the old fixed 120 px offset + default font was invisible
-        # at poster sizes) and center properly; translucent so the proof stays readable.
-        tw, th = tx1 - tx0, ty1 - ty0
+        # scale to each printed piece (the old fixed 120 px offset + default font was
+        # invisible at poster sizes) and center properly; translucent so the proof
+        # stays readable. Upper third, not dead center: starter_crop centers the
+        # journey mid-sheet, and the mark was parking on the corridor being judged.
         d = ImageDraw.Draw(img, "RGBA")
-        wm_font = _font(max(24, round(tw * 0.09)))
-        l, t, rt, b = d.textbbox((0, 0), "PROOF", font=wm_font)
-        # upper third, not dead center: starter_crop centers the journey mid-sheet,
-        # and the mark was parking exactly on the corridor being judged (red-team).
-        d.text((tx0 + (tw - (rt - l)) / 2 - l, ty0 + th * 0.24 - t), "PROOF",
-               fill=(255, 255, 255, 80), font=wm_font)
+        for fx0, fy0, fx1, fy1 in frames:
+            tw, th = fx1 - fx0, fy1 - fy0
+            wm_font = _font(max(24, round(tw * 0.09)))
+            l, t, rt, b = d.textbbox((0, 0), watermark_text, font=wm_font)
+            d.text((fx0 + (tw - (rt - l)) / 2 - l, fy0 + th * 0.24 - t), watermark_text,
+                   fill=(255, 255, 255, 80), font=wm_font)
     return img.convert("RGB")
 
 def sheet_geometry(spec, dpi):
@@ -3232,7 +3273,7 @@ def _base_layer(paint, dpi, region_dir, cfg, hydro, labels, trim, base_cache,
 def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
               watermark: bool = False, hydro=None, cfg=None, labels=None,
               base_cache=None, ink_cache=None,
-              terrain_override=None) -> Image.Image:
+              terrain_override=None, watermark_text: str = "PROOF") -> Image.Image:
     """`terrain_override` (default None -- the shipped path, unchanged) paints the
     sheet's water, route, markers, labels and furniture over a caller's own terrain
     instead of the engine's relief. It must be the uint8 RGB plane sized by
@@ -3258,7 +3299,8 @@ def rasterize(spec: CompositionSpec, dpi: int, region_dir: str,
                          track_colors=track_colors, ink_cache=ink_cache,
                          ink_key=ink_key)  # all journeys
     return _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=watermark, ctx=ctx,
-                           profile=profile, paint=paint, trim=trim)
+                           profile=profile, paint=paint, trim=trim,
+                           watermark_text=watermark_text)
 
 
 # The shipped relief-pass module registers on import. Imported HERE, at the bottom,

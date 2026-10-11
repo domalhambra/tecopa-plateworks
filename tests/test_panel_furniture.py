@@ -130,3 +130,104 @@ def test_a_photo_box_stays_inside_the_panel_of_its_anchor(tmp_path):
     assert solid(single).max() >= hi            # the control: one sheet lets it cross
     xs = solid(spec)
     assert xs.min() >= lo and xs.max() < hi
+
+
+def _overlays(spec, dpi, **kw):
+    w, h = spec.pixel_size(dpi)
+    blank = Image.new("RGBA", (w, h), (128, 128, 128, 255))
+    out = render._paint_overlays(blank, spec, np.zeros((h, w)), w, h, dpi, **kw)
+    return np.any(np.asarray(out) != 128, axis=2)
+
+
+def test_a_set_sizes_its_furniture_as_one_panel_does():
+    single = _set(3, 2.0, panels=1, panel_gap_in=0.0, print_w_in=17, print_h_in=22,
+                  crop=(0.0, 0.0, 17000.0, 22000.0))
+    for n, shape in ((2, "wide"), (3, "wide"), (2, "tall"), (3, "tall")):
+        assert render._furniture_scale(_set(n, 4.0, shape)) == render._furniture_scale(single)
+
+
+def test_nothing_is_painted_in_a_gap_strip():
+    spec = _set(3, 2.0)
+    dpi = 40
+    painted = _overlays(spec, dpi, watermark=True)
+    for x0, y0, x1, y1 in panels.gap_rects_px(spec, dpi):
+        assert not painted[y0:y1, x0:x1].any()
+
+
+def test_each_panel_has_its_own_keyline_and_mark():
+    spec = _set(3, 2.0)
+    dpi = 40
+    painted = _overlays(spec, dpi)
+    inset = round(render.KEYLINE_INSET_IN * dpi)
+    d = ImageDraw.Draw(Image.new("RGBA", spec.pixel_size(dpi)))
+    frames = panels.panel_rects_px(spec, dpi)
+    marks = render._panel_mark_rects(spec, d, frames, dpi)
+    assert len(marks) == 3
+    for (x0, y0, x1, y1), (mx0, my0, mx1, my1) in zip(frames, marks):
+        assert painted[y0 + inset, x0 + inset:x1 - inset].all()          # the top keyline
+        assert painted[y0 + inset:y1 - inset, x1 - 1 - inset].all()      # the right keyline
+        assert x0 < mx0 and mx1 <= x1 and my1 <= y1                      # the mark is in the panel
+        assert mx0 > (x0 + x1) / 2 and my0 > (y0 + y1) / 2               # lower right
+        assert painted[my0:my1, mx0:mx1].any()
+
+
+def test_the_title_block_is_inside_panel_one():
+    spec = _set(3, 2.0, keyline=False)
+    dpi = 40
+    painted = _overlays(spec, dpi)
+    frames = panels.panel_rects_px(spec, dpi)
+    d = ImageDraw.Draw(Image.new("RGBA", spec.pixel_size(dpi)))
+    marks = render._panel_mark_rects(spec, d, frames, dpi)
+    for (x0, y0, x1, y1), (mx0, my0, mx1, my1) in list(zip(frames, marks))[1:]:
+        outside_mark = painted[y0:y1, x0:x1].copy()
+        outside_mark[my0 - y0:my1 - y0, mx0 - x0:mx1 - x0] = False
+        assert not outside_mark.any()        # panels 2 and 3 carry the mark and nothing more
+    x0, y0, x1, y1 = frames[0]
+    assert painted[(y0 + y1) // 2:y1, x0:(x0 + x1) // 2].any()           # lower left of panel 1
+
+
+def test_each_panel_mark_is_a_label_keepout():
+    spec = _set(2, 0.0, "tall")
+    dpi = 40
+    d = ImageDraw.Draw(Image.new("RGBA", spec.pixel_size(dpi)))
+    marks = render._panel_mark_rects(spec, d, panels.panel_rects_px(spec, dpi), dpi)
+    rects = _keepout(spec, dpi)
+    assert all(m in rects for m in marks)
+
+
+def test_the_watermark_word_is_drawn_on_each_panel():
+    spec = _set(2, 2.0, "tall", keyline=False, compass=False, title_text="")
+    dpi = 40
+    proof = _overlays(spec, dpi, watermark=True)
+    preview = _overlays(spec, dpi, watermark=True, watermark_text="PREVIEW")
+    assert np.array_equal(proof, _overlays(spec, dpi, watermark=True, watermark_text="PROOF"))
+    for x0, y0, x1, y1 in panels.panel_rects_px(spec, dpi):
+        top = slice(y0, y0 + (y1 - y0) // 2)
+        assert proof[top, x0:x1].any() and preview[top, x0:x1].any()
+        short, long_ = (np.nonzero(a[top, x0:x1].any(axis=0))[0] for a in (proof, preview))
+        assert np.ptp(long_) > np.ptp(short)          # the longer word is the one drawn
+    assert not np.array_equal(proof, preview)
+
+
+def test_the_elevation_strip_of_a_set_is_in_panel_one_and_in_the_keepout():
+    # a strip this high is wider than one panel unless panel 1 is the box that clamps it
+    spec = _set(2, 2.0, "tall", profile=True, profile_height_in=6.0, keyline=False)
+    dpi = 40
+    climb = (np.linspace(0.0, 9000.0, 50), np.linspace(1000.0, 2000.0, 50))
+    painted = _overlays(spec, dpi, profile=climb)
+    d = ImageDraw.Draw(Image.new("RGBA", spec.pixel_size(dpi)))
+    frames = panels.panel_rects_px(spec, dpi)
+    strip = render._profile_rect(spec, d, frames[0], dpi)
+    assert strip in _keepout(spec, dpi)                  # the painter's box is the keep-out's
+    sx0, sy0, sx1, sy1 = strip
+    assert painted[(sy0 + sy1) // 2, sx0:sx1].all()       # the strip is drawn, edge to edge
+    assert painted[sy0:sy1, (sx0 + sx1) // 2].all()
+    x0, y0, x1, y1 = frames[0]
+    assert x0 <= sx0 and sx1 < x1 and y0 <= sy0 and sy1 < y1
+    stack = render._furniture_stack_rects(spec, d, x0, y1, dpi)
+    assert all(r in _keepout(spec, dpi) and r[2] <= x1 for r in stack)   # title and compass too
+    px0, py0, px1, py1 = frames[1]
+    mx0, my0, mx1, my1 = render._panel_mark_rects(spec, d, frames, dpi)[1]
+    rest = painted[py0:py1, px0:px1].copy()
+    rest[my0 - py0:my1 - py0, mx0 - px0:mx1 - px0] = False
+    assert not rest.any()                                # panel 2 has its mark and no strip
