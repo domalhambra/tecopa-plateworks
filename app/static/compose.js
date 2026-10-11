@@ -12,10 +12,10 @@ import * as markers from './markers.js';
 import * as proof from './proof.js';
 import * as inspector from './inspector.js';
 import * as create from './create.js';
-import { $, wireSegmented, toast, announce } from './ui.js';
+import { $, wireSegmented, toast, announce, updateSaveFileNote } from './ui.js';
 
 let hooks = {};                 // { onLoaded(kind), refresh() } provided by app.js
-let segOutput = null, segOrient = null;
+let segOutput = null, segOrient = null, segGap = null;
 
 export function initCompose(h = {}) {
   hooks = h;
@@ -53,6 +53,9 @@ export function initCompose(h = {}) {
     state.orientation = v; savePref('orient', v); reframe();
   });
   $('size').onchange = (e) => { savePref('printSize', e.target.value); reframe(); };
+  segGap = wireSegmented($('gapField').querySelector('.segmented'), (v) => {
+    state.panelGap = Number(v); savePref('panelGap', state.panelGap); reframe();
+  });
   $('bleed').oninput = (e) => {
     state.style.bleedIn = parseFloat(e.target.value) || 0;
     $('bleedVal').textContent = state.style.bleedIn ? `${state.style.bleedIn.toFixed(3).replace(/0+$/, '').replace(/\.$/, '')} in` : 'None';
@@ -106,20 +109,33 @@ export function enterCompose() {
 // ---- page geometry (ported verbatim from app.js) ----------------------------------
 export function applyPrintSize() {
   if (state.output === 'wallpaper') {
+    state.panels = 1;             // a set is a print: a screen is always one sheet
     const p = activePreset();
     if (p) { state.printW = p.px[0] / p.ppi; state.printH = p.px[1] / p.ppi; }
     return;
   }
-  const [a, b] = $('size').value.split(',').map(Number);
+  const v = $('size').value;
   const landscape = state.orientation === 'auto' ? trackAspectIsWide() : state.orientation === 'landscape';
+  if (v.startsWith('panels:')) {
+    // a set: the sheet is the hung size. Landscape = panels 22 in across.
+    const n = Number(v.slice(7)), g = state.panelGap;
+    state.panels = n;
+    state.printW = n * (landscape ? 22 : 17) + (n - 1) * g;
+    state.printH = landscape ? 17 : 22;
+    return;
+  }
+  state.panels = 1;
+  const [a, b] = v.split(',').map(Number);
   state.printW = landscape ? Math.max(a, b) : Math.min(a, b);
   state.printH = landscape ? Math.min(a, b) : Math.max(a, b);
 }
 
 export function applyOutputVisibility() {
   const wp = state.output === 'wallpaper';
+  const set = !wp && state.panels > 1;
   $('sizeField').hidden = wp;
-  $('bleedField').hidden = wp;
+  $('gapField').hidden = !set;
+  $('bleedField').hidden = wp || set;      // a set takes no bleed
   $('wpPresetField').hidden = !wp;
   $('customDeviceField').hidden = !(wp && state.wpPreset === 'custom');
   $('orientField').hidden = wp;
@@ -127,7 +143,9 @@ export function applyOutputVisibility() {
 }
 
 function reframe() {
-  applyPrintSize();
+  // the size decides whether this is a set, and a set shows the gap and hides the bleed
+  applyPrintSize(); applyOutputVisibility();
+  updateSaveFileNote();           // a set's save file is each panel PNG in the zip
   canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
   stalePicture(); proof.scheduleAutoProof(); proof.refreshProofUI();
 }
@@ -138,8 +156,21 @@ export function updateFrameFeasibility() {
   if (infeasible) toast(`This region is too small for ${proof.sizeLabel()} — pick a smaller size.`, 'error');
 }
 
-function ensurePrintSize(w, h) {
+function ensurePrintSize(w, h, panels = 1, gap = 0) {
   if (!w || !h) return;
+  if (panels === 2 || panels === 3) {
+    // a set restores from its own two fields, never as an odd single sheet ("17,70").
+    // The count and the gap are set here, before anything reads the size.
+    $('size').value = `panels:${panels}`;
+    state.panels = panels;
+    state.panelGap = [0, 2, 4].includes(Number(gap)) ? Number(gap) : 0;
+    segGap && segGap.reflect(String(state.panelGap));
+    // the hung sheet is 17 in high when the panels are 22 in across
+    state.orientation = Number(h) === 17 ? 'landscape' : 'portrait';
+    segOrient && segOrient.reflect(state.orientation);
+    return;
+  }
+  state.panels = 1;
   const mn = Math.min(w, h), mx = Math.max(w, h);
   const fmt = (n) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
   const val = `${fmt(mn)},${fmt(mx)}`;
@@ -158,10 +189,12 @@ function restorePagePrefs() {
   const prefs = loadPrefs();
   if (prefs.printSize && [...$('size').options].some((o) => o.value === prefs.printSize)) $('size').value = prefs.printSize;
   if (['auto', 'landscape', 'portrait'].includes(prefs.orient)) state.orientation = prefs.orient;
+  if ([0, 2, 4].includes(prefs.panelGap)) state.panelGap = prefs.panelGap;
   if (!state.wpPresets.length) { $('outputField').hidden = true; }
   else if (prefs.output === 'wallpaper' || prefs.output === 'print') state.output = prefs.output;
   segOutput && segOutput.reflect(state.output);
   segOrient && segOrient.reflect(state.orientation);
+  segGap && segGap.reflect(String(state.panelGap));
   applyPrintSize(); applyOutputVisibility();
 }
 
@@ -319,7 +352,7 @@ function applyPrefill(p) {
     }
   } else {
     state.output = 'print';
-    ensurePrintSize(p.print_w_in, p.print_h_in);
+    ensurePrintSize(p.print_w_in, p.print_h_in, p.panels || 1, p.panel_gap_in || 0);
   }
   segOutput && segOutput.reflect(state.output);
   applyOutputVisibility();
@@ -335,6 +368,7 @@ export function reflectStatic() {
   const bv = $('bleedVal'); if (bv) bv.textContent = state.style.bleedIn ? `${state.style.bleedIn} in` : 'None';
   segOutput && segOutput.reflect(state.output);
   segOrient && segOrient.reflect(state.orientation);
+  segGap && segGap.reflect(String(state.panelGap));
   applyOutputVisibility();
 }
 

@@ -89,7 +89,7 @@ function refreshStage() {
 // controls are static index.html fields, so they resolve through this map instead —
 // without it, every "jump to Print size / Orientation / …" was a silent no-op.
 const STATIC_CONTROL_TARGETS = {
-  output: 'outputField', size: 'size', orientation: 'orientField', bleed: 'bleed',
+  output: 'outputField', size: 'size', gap: 'gapField', orientation: 'orientField', bleed: 'bleed',
   title: 'titleInput', finalFormat: 'formatField', embedSpec: 'embedSpecChk',
 };
 export function jumpToControl(c) {
@@ -196,6 +196,7 @@ function buildPanels() {
 function attachStaticHelp() {
   const H = (id, help) => { const el = $(id); if (el && help) inspector.attachHelp(el, help); };
   H('sizeField', controls.control('size').help);
+  H('gapField', controls.control('gap').help);
   H('orientField', controls.control('orientation').help);
   H('bleedField', controls.control('bleed').help);
   H('titleField', controls.control('title').help);

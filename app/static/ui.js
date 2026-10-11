@@ -48,6 +48,8 @@ export function updateSaveFileNote() {
     el.textContent = 'Reprintable file is off: this download is a share copy — your exact route coordinates stay out of the file, and it can never reprint or continue. Keep a reprintable copy as your save file.';
   } else if (state.output !== 'wallpaper' && state.finalFormat === 'pdf') {
     el.textContent = 'A PDF is for the print shop: it can’t carry the reprint recipe. Download a PNG as well — that file is your save file and reprints from itself alone.';
+  } else if (state.output !== 'wallpaper' && state.panels > 1) {
+    el.textContent = `Each panel PNG in the zip is a save file for the whole set: the set reprints from any one of them, for as long as its terrain plate survives. Keep them — next year the set becomes Edition ${state.edition + 1}.`;
   } else {
     el.textContent = `This PNG is your save file: the whole poster rides inside it and reprints from the file alone, for as long as its terrain plate survives. Keep it — next year it becomes Edition ${state.edition + 1}.`;
   }

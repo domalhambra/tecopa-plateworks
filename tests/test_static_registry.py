@@ -177,3 +177,48 @@ def test_debug_hook_sends_the_state_keys_the_engine_keeps():
     store = (STATIC / "store.js").read_text(encoding="utf-8")
     missing = [f for f in HOOK_FIELDS if not re.search(rf"^  {f}:", store, re.M)]
     assert not missing, f"fields debug.js reads that store.js does not have: {missing}"
+
+
+def test_the_studio_sends_a_set_with_the_engines_own_field_names():
+    """The two set fields have one name each on the wire. A typo here would send a
+    set as a single sheet with no error, because FastAPI ignores an unknown field."""
+    import inspect
+    from app import main
+    params = inspect.signature(main.proof).parameters
+    assert "panels" in params and "panel_gap" in params
+    api = (STATIC / "api.js").read_text(encoding="utf-8")
+    assert re.search(r"\bpanels: panels > 1 \? panels : undefined", api)
+    assert re.search(r"\bpanel_gap: panels > 1 \? panelGap : undefined", api)
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    assert '<option value="panels:2">Two panels</option>' in html
+    assert '<option value="panels:3">Three panels</option>' in html
+    assert 'id="gapField"' in html and 'id="gap"' in html
+    store = (STATIC / "store.js").read_text(encoding="utf-8")
+    assert re.search(r"^  panels: 1,", store, re.M) and re.search(r"^  panelGap: 2,", store, re.M)
+
+
+def test_a_set_is_sent_with_no_bleed():
+    """The engine refuses a set with bleed (422). The bleed control is hidden for a set,
+    so a remembered bleed must stay out of the request, or every proof of a set fails."""
+    api = (STATIC / "api.js").read_text(encoding="utf-8")
+    assert re.search(
+        r"\bbleed: output === 'print' && panels === 1 && style\.bleedIn \? style\.bleedIn : undefined",
+        api)
+
+
+def test_the_provenance_card_escapes_every_value_it_is_given():
+    """The card is written with innerHTML from a file anyone can craft. Each value from
+    the inspect reply is made a number or escaped before the template, and the template
+    takes only those locals. An info.x inside the markup is the hole: the edition was
+    one."""
+    src = (STATIC / "library.js").read_text(encoding="utf-8")
+    body = re.search(r"function renderProvenance\(info\) \{(.*?)\n\}", src, re.S)
+    assert body, "renderProvenance not found in library.js"
+    template = re.search(r"card\.innerHTML = `(.*?)`;", body.group(1), re.S)
+    assert template, "the card template not found"
+    assert "provenance-actions" in template.group(1), "the template was cut short"
+    raw = re.findall(r"\binfo\b[.\[]\w*", template.group(1))
+    assert not raw, f"values written into the card straight from the reply: {raw}"
+    # the text values are escaped where they are read
+    for field in ("title", "region_id"):
+        assert re.search(rf"escapeHtml\(info\.{field}\b", body.group(1)), field

@@ -82,7 +82,20 @@
                 <div class="select-wrap"><select id="size">
                   <option value="17,22">17 × 22 in</option>
                   <option value="11,17">11 × 17 in</option>
+                  <option value="panels:2">Two panels</option>
+                  <option value="panels:3">Three panels</option>
                 </select></div>
+              </div>
+              <div class="field" id="gapField" hidden>
+                <label>Gap between panels</label>
+                <div class="segmented" data-for="gap" role="radiogroup" aria-label="Gap between panels">
+                  <button type="button" role="radio" data-val="0">None</button>
+                  <button type="button" role="radio" data-val="2">2 in</button>
+                  <button type="button" role="radio" data-val="4">4 in</button>
+                </div>
+                <select id="gap" class="sr-only" tabindex="-1" aria-hidden="true">
+                  <option value="0">None</option><option value="2">2 in</option><option value="4">4 in</option>
+                </select>
               </div>
               <div class="field" id="bleedField">
                 <div class="slider-top"><label for="bleed">Print-shop bleed</label><output id="bleedVal">None</output></div>

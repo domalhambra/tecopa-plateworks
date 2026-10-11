@@ -32,6 +32,8 @@ export const state = {
   printW: 17,
   printH: 22,
   orientation: 'auto',    // 'auto' (tracks decide) | 'landscape' | 'portrait'
+  panels: 1,              // 1 = a single sheet; 2 or 3 = a set of 17 × 22 in panels
+  panelGap: 2,            // inches between two panels on the wall: 0 (a cut set), 2 or 4
   output: 'print',        // 'print' | 'wallpaper' (a screen is a sheet with a known ppi)
   wpPresets: [],          // /api/wallpapers/presets metadata (id,name,px,ppi,device_class,*_clear_frac)
   wpPreset: '',           // active device preset id (wallpaper mode); 'custom' = bespoke
@@ -90,11 +92,12 @@ export const state = {
   lightMotion: 'none',    // film: 'none' | 'auto' | 'diurnal' | 'seasonal'
   finalFormat: 'png',     // final deliverable: 'png' | 'pdf'
   embedSpec: true,        // embed the reprint manifest in the PNG (off = a share copy)
-  lastFinal: null,        // { url, fmt } of the last completed final (re-download)
+  lastFinal: null,        // { url, fmt } of the last completed final (re-download); fmt is
+                          // 'zip' for a set, whose final is one zip of panel files
   autoProof: true,        // live-proofing: re-proof on settle after a picture edit
 };
 
-const LS_KEY = 'tecopa';       // { region, printSize, orient, theme, finalFormat, autoProof, stylePresets }
+const LS_KEY = 'tecopa';       // { region, printSize, panelGap, orient, theme, finalFormat, autoProof, stylePresets }
 const LS_KEY_OLD = 'trailprint';   // the pre-"Tecopa Plateworks" key; migrated once on read
 
 export function loadPrefs() {

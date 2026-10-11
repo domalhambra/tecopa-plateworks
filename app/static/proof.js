@@ -71,7 +71,8 @@ export function sizeLabel() {
   if (state.output === 'wallpaper') {
     const p = activePreset(); return p ? p.name : 'this device';
   }
-  return `${state.printW}×${state.printH}`;
+  const sheet = `${state.printW}×${state.printH}`;
+  return state.panels > 1 ? `${state.panels} panels (${sheet} hung)` : sheet;
 }
 
 // Auto-proof: schedule one proof after edits settle. Single-flight + coalescing — a
@@ -136,7 +137,8 @@ export async function renderProof({ auto = false, stay = false } = {}) {
     const blob = await api.proof(state.session, ov, state.printW, state.printH,
       { title: state.title, contours: state.contours, compass: state.compass,
         biome: state.biome, labels: state.labels, style: state.style,
-        output: state.output, wpPreset: state.wpPreset, customDevice: state.customDevice });
+        output: state.output, wpPreset: state.wpPreset, customDevice: state.customDevice,
+        panels: state.panels, panelGap: state.panelGap });
     // push the outgoing proof into history before replacing it (skip the very first)
     if (proofUrl) pushHistory(proofUrl);
     proofUrl = URL.createObjectURL(blob);
@@ -352,21 +354,26 @@ export async function acceptFinal() {
   }
   const accept = $('acceptBtn'); if (accept) accept.disabled = true;
   const fmt = state.output === 'wallpaper' ? 'png' : state.finalFormat;   // wallpaper is PNG-only
+  // read once, before the first await: the set that was proofed is the set this names
+  const isSet = state.output !== 'wallpaper' && state.panels > 1;
+  const count = state.panels;
+  const kind = isSet ? `${count} panels` : fmt.toUpperCase();
   toast('Queuing final render…', 'working');
   try {
     const { job } = await api.submitFinal(state.session, fmt, state.embedSpec);
     const result = await jobs.track(job, {
-      kind: 'final', label: `Final ${fmt.toUpperCase()}`,
+      kind: 'final', label: `Final ${kind}`,
       runningMsg: 'Rendering the full-resolution final…',
       onState: (s) => toast(s === 'running' ? 'Rendering the full-resolution final…'
         : s === 'queued' ? 'Queued…' : s === 'error' ? 'Final render failed.' : '', 'working'),
     });
     if (result) {
-      const filename = await downloadFinal(result, fmt);
+      // a set arrives as one zip with a file for each panel; the server names it
+      const filename = await downloadFinal(result, isSet ? 'zip' : fmt);
       jobs.markDownloaded(job, filename);
-      state.lastFinal = { url: result, fmt };
+      state.lastFinal = { url: result, fmt: isSet ? 'zip' : fmt };
       const da = $('downloadAgain'); if (da) da.hidden = false;
-      toast(`Final ${fmt.toUpperCase()} downloaded.`, 'ok');
+      toast(isSet ? `Final downloaded: a zip of ${count} panel files.` : `Final ${kind} downloaded.`, 'ok');
     }
   } catch (e) { toast('Final failed: ' + e.message, 'error'); }
   refreshProofUI();

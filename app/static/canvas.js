@@ -285,6 +285,21 @@ function drawCrop() {
   for (const [hx, hy] of [[x0, y0], [x1, y0], [x0, y1], [x1, y1]]) {
     ctx.fillRect(hx - 3, hy - 3, 6, 6);
   }
+  // a set: show each gap strip, so the part a window set hides is plain while framing
+  if (state.panels > 1) {
+    const fw = x1 - x0, across = state.printH === 17 ? 22 : 17, g = state.panelGap;
+    for (let k = 1; k < state.panels; k++) {
+      const sx = x0 + fw * (k * (across + g) - g) / state.printW;
+      const sw = fw * g / state.printW;
+      if (sw >= 1) {
+        ctx.fillStyle = 'rgba(236,232,224,0.85)';
+        ctx.fillRect(sx, y0, sw, y1 - y0);
+      }
+      ctx.strokeStyle = stroke; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sx, y0); ctx.lineTo(sx, y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(sx + sw, y0); ctx.lineTo(sx + sw, y1); ctx.stroke();
+    }
+  }
 }
 
 function drawMarkers() {

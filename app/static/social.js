@@ -149,11 +149,18 @@ function renderPanel(panel) {
 }
 
 async function stageMockups() {
+  // The staging takes one poster PNG. The final of a set is a zip of panel files, so
+  // a set stops here, before a final is rendered or sent.
+  if (state.output !== 'wallpaper' && state.panels > 1) {
+    toast('A set has no wall-art mockup yet. Choose one sheet for a mockup.', 'info');
+    return;
+  }
   const btn = $('mockBuild'); if (btn) btn.disabled = true;
   toast('Rendering a poster to stage…', 'working');
   try {
     let blob;
-    if (state.lastFinal) {
+    // only a PNG final is reused as the poster: a set's zip (or a PDF) is not an image
+    if (state.lastFinal && state.lastFinal.fmt === 'png') {
       blob = await api.fetchBlob(state.lastFinal.url);
     } else {
       // no accepted final yet — render one first (reprintable, for the caption placard)

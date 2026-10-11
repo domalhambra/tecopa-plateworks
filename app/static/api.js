@@ -79,7 +79,7 @@ export async function proof(sessionId, cropOv, printW, printH,
                             { title = '', contours = false, compass = true,
                               biome = false, labels = false, style = {},
                               output = 'print', wpPreset = '',
-                              customDevice = null } = {}) {
+                              customDevice = null, panels = 1, panelGap = 0 } = {}) {
   const [x0, y0, x1, y1] = cropOv;
   const custom = output === 'wallpaper' && wpPreset === 'custom' && customDevice;
   const res = await postForm('/api/proof', {
@@ -87,7 +87,11 @@ export async function proof(sessionId, cropOv, printW, printH,
     output, wallpaper_preset: output === 'wallpaper' ? wpPreset : undefined,
     // print-shop bleed (v1.12): extra trimmed sheet; print-only, omitted at 0 so the
     // server default (no bleed) applies and old posters reprint byte-identically.
-    bleed: output === 'print' && style.bleedIn ? style.bleedIn : undefined,
+    // A set takes no bleed (the server answers 422), so a remembered bleed is not sent.
+    bleed: output === 'print' && panels === 1 && style.bleedIn ? style.bleedIn : undefined,
+    // a set (2 or 3 panels): sent only for a set, so a single sheet's request is unchanged
+    panels: panels > 1 ? panels : undefined,
+    panel_gap: panels > 1 ? panelGap : undefined,
     // the escape-hatch device (wpPreset 'custom'): exact pixels + physical ppi
     custom_px_w: custom ? customDevice.px[0] : undefined,
     custom_px_h: custom ? customDevice.px[1] : undefined,

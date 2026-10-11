@@ -81,21 +81,43 @@ const VERDICT_LABEL = {
 
 function renderProvenance(info) {
   const card = $('provenanceCard');
-  const size = info.print_size_in && info.print_size_in[0] ? `${info.print_size_in[0]}×${info.print_size_in[1]} in` : '—';
-  const lineage = (info.lineage || []).length;
+  // The card is written with innerHTML, and the file is one anyone can craft. So each
+  // value from `info` is made a number or escaped HERE, and the template below takes
+  // only these locals. tests/test_static_registry.py holds that.
+  const num = (v, fallback = 0) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+  const ps = Array.isArray(info.print_size_in) ? info.print_size_in : [];
+  const dims = num(ps[0]) > 0 && num(ps[1]) > 0 ? `${num(ps[0])}×${num(ps[1])} in` : '—';
+  const panels = num(info.panels, 1);
+  const isSet = panels > 1;
+  const size = escapeHtml(isSet ? `${panels} panels, ${dims}` : dims);
+  // which panel of the set this file is (null for a single sheet)
+  const panel = info.panel && typeof info.panel === 'object' ? info.panel : null;
+  const panelIndex = panel ? num(panel.index) : 0, panelOf = panel ? num(panel.of) : 0;
+  const panelRow = isSet && panelIndex >= 1 && panelIndex <= panelOf
+    ? `<div class="provenance-row"><span>Panel</span><b>${panelIndex} of ${panelOf}</b></div>` : '';
+  const title = escapeHtml(info.title || 'Untitled poster');
+  const region = escapeHtml(info.region_id || '—');
+  const edition = num(info.edition, 1) || 1;
+  const lineage = Array.isArray(info.lineage) ? info.lineage.length : 0;
+  const tracks = num(info.tracks), places = num(info.hotspots);
   const isFilm = !!info.animation;
+  const available = !!info.region_available;
+  // the verdict is also a class name: only a known one is used as a class
+  const plateClass = Object.hasOwn(VERDICT_LABEL, info.plate) ? info.plate : '';
+  const plateLabel = escapeHtml(plateClass ? VERDICT_LABEL[plateClass] : (info.plate || '—'));
   card.hidden = false;
   card.innerHTML = `
-    <h3>${escapeHtml(info.title || 'Untitled poster')}</h3>
-    <div class="provenance-row"><span>Region</span><b>${escapeHtml(info.region_id || '—')}${info.region_available ? '' : ' (not installed)'}</b></div>
-    <div class="provenance-row"><span>Edition</span><b>${info.edition || 1}${lineage ? ` · ${lineage} prior` : ''}</b></div>
-    <div class="provenance-row"><span>Print size</span><b>${escapeHtml(size)}</b></div>
-    <div class="provenance-row"><span>Tracks · places</span><b>${info.tracks || 0} · ${info.hotspots || 0}</b></div>
+    <h3>${title}</h3>
+    <div class="provenance-row"><span>Region</span><b>${region}${available ? '' : ' (not installed)'}</b></div>
+    <div class="provenance-row"><span>Edition</span><b>${edition}${lineage ? ` · ${lineage} prior` : ''}</b></div>
+    <div class="provenance-row"><span>Print size</span><b>${size}</b></div>
+    ${panelRow}
+    <div class="provenance-row"><span>Tracks · places</span><b>${tracks} · ${places}</b></div>
     <div class="provenance-row"><span>File</span><b>${isFilm ? 'Time-lapse film' : 'Still poster'}</b></div>
-    <div class="provenance-row"><span>Plate</span><span class="verdict ${info.plate}">${VERDICT_LABEL[info.plate] || info.plate}</span></div>
+    <div class="provenance-row"><span>Plate</span><span class="verdict ${plateClass}">${plateLabel}</span></div>
     <div class="provenance-actions">
-      <button class="primary" id="pvContinue" type="button" ${info.region_available ? '' : 'disabled'}>Add this year — Edition ${(info.edition || 1) + 1}</button>
-      <button class="ghost" id="pvReprint" type="button" ${info.region_available ? '' : 'disabled'}>Reprint PNG</button>
+      <button class="primary" id="pvContinue" type="button" ${available ? '' : 'disabled'}>Add this year — Edition ${edition + 1}</button>
+      <button class="ghost" id="pvReprint" type="button" ${available ? '' : 'disabled'}>${isSet ? 'Reprint the set' : 'Reprint PNG'}</button>
     </div>`;
   $('pvContinue').onclick = () => { if (pendingFile) { hooks.goCompose && hooks.goCompose(); compose.continueFromPoster(pendingFile); } };
   $('pvReprint').onclick = () => reprintPending();
