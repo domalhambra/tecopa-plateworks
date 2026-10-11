@@ -217,4 +217,176 @@ final class EngineClientTests: XCTestCase {
         }
         XCTAssertEqual(seen, [true, false, false, false])
     }
+
+    // MARK: A multipart POST and a download
+
+    private func uploadForm() throws -> Multipart {
+        var form = Multipart(boundary: "XX")
+        try form.field("region_id", "lassen_ca")
+        try form.field("title", "Lassen: the \"long\" way")
+        try form.file("files", filename: "a.gpx", Data("<gpx/>".utf8))
+        try form.file("files", filename: "b.kmz", Data([0x50, 0x4B, 0x0D, 0x0A, 0x00]))
+        return form
+    }
+
+    func testPostSendsTheFormTo127001AndReturnsTheReply() async throws {
+        let world = FakeWorld()
+        world.serve("POST /api/upload", 200, #"{"session":"ab12"}"#)
+        let client = world.runtime(port: 9000).client
+        let reply = try await client.post("/api/upload", try uploadForm())
+        XCTAssertEqual(reply.status, 200)
+        XCTAssertEqual(reply.contentType, "application/json")
+        XCTAssertEqual(try client.json(reply, for: "/api/upload")["session"]?.stringValue, "ab12")
+
+        XCTAssertEqual(world.calls, ["POST /api/upload"])
+        XCTAssertEqual(world.requests.map(\.absoluteString), ["http://127.0.0.1:9000/api/upload"])
+        XCTAssertEqual(world.posts, [FakeWorld.Post(
+            path: "/api/upload",
+            fields: [.init(name: "region_id", value: "lassen_ca"),
+                     .init(name: "title", value: "Lassen: the \"long\" way")],
+            files: [.init(name: "files", filename: "a.gpx", bytes: 6),
+                    .init(name: "files", filename: "b.kmz", bytes: 5)])])
+        XCTAssertEqual(world.posts.first?.pairs,
+                       ["region_id=lassen_ca", "title=Lassen: the \"long\" way"])
+    }
+
+    func testPostAndDownloadRefuseAPathThatDoesNotStartWithASlash() async throws {
+        // the same rule as `raw`: "@example.com/x" would move the request to another host
+        let world = FakeWorld()
+        let client = world.runtime().client
+        let form = try uploadForm()
+        var kinds: [TecopaFailure.Kind] = []
+        do {
+            _ = try await client.post("@example.com/api/upload", form)
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { kinds.append(f.kind) }
+        do {
+            _ = try await client.download("api/jobs/ab/result")
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { kinds.append(f.kind) }
+        do {
+            _ = try await world.runtime(port: 0).client.post("/api/upload", form)
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { kinds.append(f.kind) }
+        XCTAssertEqual(kinds, [.usage, .usage, .usage])
+        XCTAssertEqual(world.requests, [])
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.posts, [])
+    }
+
+    func testDownloadReturnsTheBytesAndTheContentType() async throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0xFF])
+        let world = FakeWorld()
+        world.serveData("GET /api/jobs/ab/result", 200, "image/png", png)
+        let reply = try await world.runtime().client.download("/api/jobs/ab/result")
+        XCTAssertEqual(reply, HTTPReply(status: 200, contentType: "image/png", body: png))
+        XCTAssertEqual(world.calls, ["GET /api/jobs/ab/result"])
+        XCTAssertEqual(world.posts, [])
+    }
+
+    func testAPostMayAnswerWithBytes() async throws {
+        // /api/proof answers with the proof PNG itself
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let world = FakeWorld()
+        world.serveData("POST /api/proof", 200, "image/png", png)
+        let reply = try await world.runtime().client.post("/api/proof", try uploadForm())
+        XCTAssertEqual(reply, HTTPReply(status: 200, contentType: "image/png", body: png))
+    }
+
+    func testA422PassedThroughJsonIsRefusedWithTheEnginesBody() async throws {
+        let body = #"{"detail":[{"loc":["body","x0"],"msg":"The crop is past 2x.","n":1.5}]}"#
+        let world = FakeWorld()
+        world.serve("POST /api/proof", 422, body)
+        let client = world.runtime().client
+        let reply = try await client.post("/api/proof", try uploadForm())
+        XCTAssertEqual(reply.status, 422)
+        XCTAssertThrowsError(try client.json(reply, for: "/api/proof")) { error in
+            let f = error as? TecopaFailure
+            XCTAssertEqual(f?.kind, .refused)
+            XCTAssertEqual(f?.status, 422)
+            XCTAssertEqual(f?.message, "The engine answered 422 for /api/proof.")
+            XCTAssertEqual(f?.body, try? JSONValue.parse(Data(body.utf8)))
+            XCTAssertNotNil(f?.body?["detail"])
+        }
+    }
+
+    func testAReplyThatIsNotJsonIsItsText() throws {
+        // the same rule as `get`: the body rides unchanged, as a string
+        let client = FakeWorld().runtime().client
+        let error = HTTPReply(status: 500, contentType: "text/plain; charset=utf-8",
+                              body: Data("Internal Server Error".utf8))
+        XCTAssertThrowsError(try client.json(error, for: "/api/final/submit")) { thrown in
+            let f = thrown as? TecopaFailure
+            XCTAssertEqual(f?.kind, .refused)
+            XCTAssertEqual(f?.status, 500)
+            XCTAssertEqual(f?.body, .string("Internal Server Error"))
+        }
+        let text = HTTPReply(status: 200, contentType: "text/plain", body: Data("ok".utf8))
+        XCTAssertEqual(try client.json(text, for: "/x"), .string("ok"))
+        // a redirect is not a success: the tool follows none
+        let moved = HTTPReply(status: 307, contentType: nil, body: Data())
+        XCTAssertThrowsError(try client.json(moved, for: "/x")) { thrown in
+            XCTAssertEqual((thrown as? TecopaFailure)?.status, 307)
+        }
+    }
+
+    func testATimeoutOnPostAndOnDownloadHasTheBusyHint() async throws {
+        let world = FakeWorld()
+        world.timeOut("POST /api/proof")
+        world.timeOut("GET /api/jobs/ab/result")
+        let client = world.runtime().client
+        var seen: [TecopaFailure] = []
+        do {
+            _ = try await client.post("/api/proof", try uploadForm(), timeout: 2.5)
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { seen.append(f) }
+        do {
+            _ = try await client.download("/api/jobs/ab/result")
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { seen.append(f) }
+        XCTAssertEqual(seen.map(\.kind), [.engineUnreachable, .engineUnreachable])
+        XCTAssertEqual(seen.map(\.message), [
+            "The engine on port 8848 did not answer within 2.5 seconds.",
+            "The engine on port 8848 did not answer within 300 seconds."])
+        XCTAssertEqual(seen.map(\.hint), Array(repeating: "It may be busy with a render. Run `tecopa logs`.", count: 2))
+        // the engine was asked each time, and one time only
+        XCTAssertEqual(world.calls, ["POST /api/proof", "GET /api/jobs/ab/result"])
+    }
+
+    func testNoAnswerOnPostAndOnDownloadHasTheDoctorHint() async throws {
+        let world = FakeWorld()
+        // a route for a GET does not answer a POST
+        world.serve("/api/upload", 200, "{}")
+        let client = world.runtime().client
+        var seen: [TecopaFailure] = []
+        do {
+            _ = try await client.post("/api/upload", try uploadForm())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { seen.append(f) }
+        do {
+            _ = try await client.download("/api/jobs/ab/result")
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure { seen.append(f) }
+        XCTAssertEqual(seen.map(\.kind), [.engineUnreachable, .engineUnreachable])
+        XCTAssertEqual(seen.map(\.message), Array(repeating: "No engine answers on port 8848.", count: 2))
+        XCTAssertEqual(seen.map(\.hint), Array(repeating: "Run `tecopa doctor`.", count: 2))
+    }
+
+    func testTheFakeAnswersAGetFromEitherKey() async throws {
+        // `serve(path, …)` from phase 1 and `serve("GET path", …)` name the same route
+        let world = FakeWorld()
+        world.serve("/api/regions", 200, #"[{"id":"lassen_ca"}]"#)
+        world.serve("GET /api/jobs/ab", 200, #"{"state":"done"}"#)
+        world.serve("/api/debug/caches", 500, "Internal Server Error")
+        let client = world.runtime().client
+        let regions = try await client.download("/api/regions")
+        XCTAssertEqual(regions.contentType, "application/json")
+        XCTAssertEqual(try client.json(regions, for: "/api/regions"), .array([.object(["id": .string("lassen_ca")])]))
+        let job = try await client.get("/api/jobs/ab")
+        XCTAssertEqual(job["state"]?.stringValue, "done")
+        // text that is not JSON has a text type, as the engine's own 500 has
+        let caches = try await client.download("/api/debug/caches")
+        XCTAssertEqual(caches.contentType, "text/plain; charset=utf-8")
+        XCTAssertEqual(world.calls, ["GET /api/regions", "GET /api/jobs/ab", "GET /api/debug/caches"])
+    }
 }

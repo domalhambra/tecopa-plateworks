@@ -88,9 +88,13 @@ public struct EngineClient: Sendable {
         } catch {
             return .noAnswer
         }
-        let json = (try? JSONValue.parse(fetched.body))
-            ?? .string(String(decoding: fetched.body, as: UTF8.self))
-        return .reply(Reply(status: fetched.status, json: json))
+        return .reply(Reply(status: fetched.status, json: Self.value(of: fetched.body)))
+    }
+
+    /// A body as the tool reports it: the JSON, or the text as a JSON string when
+    /// the body is not JSON. Each call that reads a body uses this one rule.
+    static func value(of body: Data) -> JSONValue {
+        (try? JSONValue.parse(body)) ?? .string(String(decoding: body, as: UTF8.self))
     }
 
     /// Any HTTP answer is a Reply, a 503 included. No answer is `engine_unreachable`,
@@ -108,10 +112,53 @@ public struct EngineClient: Sendable {
     public func get(_ path: String) async throws -> JSONValue {
         let reply = try await raw(path)
         guard (200..<300).contains(reply.status) else {
-            throw TecopaFailure(.refused, "The engine answered \(reply.status) for \(path).",
-                                status: reply.status, body: reply.json)
+            throw refusedFailure(reply.status, path, reply.json)
         }
         return reply.json
+    }
+
+    func refusedFailure(_ status: Int, _ path: String, _ body: JSONValue) -> TecopaFailure {
+        TecopaFailure(.refused, "The engine answered \(status) for \(path).",
+                      status: status, body: body)
+    }
+
+    /// POST one multipart form. Any HTTP answer returns, a 422 included: a render
+    /// route answers with JSON or with the image itself, so the caller reads the
+    /// reply. The default deadline is long because a proof can take minutes.
+    public func post(_ path: String, _ form: Multipart,
+                     timeout: TimeInterval = 300) async throws -> HTTPReply {
+        var request = URLRequest(url: try address(path))
+        request.httpMethod = "POST"
+        request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = form.body()
+        return try await send(request, timeout: timeout)
+    }
+
+    /// GET one path and keep the bytes and the content type: a finished job's file.
+    public func download(_ path: String, timeout: TimeInterval = 300) async throws -> HTTPReply {
+        try await send(URLRequest(url: try address(path)), timeout: timeout)
+    }
+
+    /// One request. No answer is `engine_unreachable`, with the same two messages
+    /// as `raw`.
+    private func send(_ request: URLRequest, timeout: TimeInterval) async throws -> HTTPReply {
+        do {
+            return try await http.send(request, timeout: timeout)
+        } catch let error as URLError where error.code == .timedOut {
+            throw timedOutFailure(timeout)
+        } catch {
+            throw noAnswerFailure()
+        }
+    }
+
+    /// The JSON of a 2xx reply. Any other status is `refused`, with the engine's own
+    /// body: the same rule as `get`.
+    public func json(_ reply: HTTPReply, for path: String) throws -> JSONValue {
+        let json = Self.value(of: reply.body)
+        guard (200..<300).contains(reply.status) else {
+            throw refusedFailure(reply.status, path, json)
+        }
+        return json
     }
 
     /// A debug route. With the gate off the router does not exist, and the static

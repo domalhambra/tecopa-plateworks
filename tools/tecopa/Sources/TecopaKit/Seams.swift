@@ -1,9 +1,27 @@
 import Foundation
 
+/// One HTTP answer: the status, the Content-Type header if the answer has one, and
+/// the bytes. A render route answers with JSON or with the image itself, and the
+/// content type says which.
+public struct HTTPReply: Equatable, Sendable {
+    public let status: Int
+    public let contentType: String?
+    public let body: Data
+
+    public init(status: Int, contentType: String?, body: Data) {
+        self.status = status
+        self.contentType = contentType
+        self.body = body
+    }
+}
+
 /// The two places the tool touches the machine. A test replaces both.
 public protocol HTTPFetching: Sendable {
     /// Any HTTP answer returns. No answer throws.
     func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data)
+    /// One request with its own method, headers and body. Any HTTP answer returns,
+    /// a 3xx included. No answer throws.
+    func send(_ request: URLRequest, timeout: TimeInterval) async throws -> HTTPReply
 }
 
 public struct ProcessResult: Equatable, Sendable {
@@ -37,19 +55,38 @@ private final class RedirectRefuser: NSObject, URLSessionTaskDelegate {
 public struct URLSessionFetcher: HTTPFetching {
     public init() {}
 
-    public func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+    /// The rules of every session: nothing kept on disk, one deadline, and no proxy.
+    static func configuration(timeout: TimeInterval) -> URLSessionConfiguration {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = timeout
         config.timeoutIntervalForResource = timeout
         // An empty dictionary, so a system proxy never carries a request to the engine.
         config.connectionProxyDictionary = [:]
-        let session = URLSession(configuration: config, delegate: RedirectRefuser(), delegateQueue: nil)
+        return config
+    }
+
+    /// The one place a session is made, so `get` and `send` cannot have different
+    /// rules: the configuration above, and every redirect refused.
+    private static func session(timeout: TimeInterval) -> URLSession {
+        URLSession(configuration: configuration(timeout: timeout),
+                   delegate: RedirectRefuser(), delegateQueue: nil)
+    }
+
+    public func get(_ url: URL, timeout: TimeInterval) async throws -> (status: Int, body: Data) {
+        let reply = try await send(URLRequest(url: url), timeout: timeout)
+        return (reply.status, reply.body)
+    }
+
+    public func send(_ request: URLRequest, timeout: TimeInterval) async throws -> HTTPReply {
+        let session = Self.session(timeout: timeout)
         defer { session.finishTasksAndInvalidate() }
-        let (data, response) = try await session.data(from: url)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
             throw URLError(.badServerResponse)
         }
-        return (http.statusCode, data)
+        return HTTPReply(status: http.statusCode,
+                         contentType: http.value(forHTTPHeaderField: "Content-Type"),
+                         body: data)
     }
 }
 
