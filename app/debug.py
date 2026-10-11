@@ -13,8 +13,9 @@ job, a cache or a plate, and no route writes to disk.
 The studio reports: the browser posts its small state and its errors, and
 GET /api/debug/studio returns them, so a fault in the page can be read from outside
 it. The reports stay in engine memory, in a buffer of fixed size, and a restart of
-the engine empties it. A report never holds journey data: the route keeps a fixed
-list of state keys and drops every other one.
+the engine empties it. A report's state never holds journey data: the route keeps a
+fixed list of state keys and drops every other one. An error's message, source and
+stack are kept as the page sent them, cut to a fixed length.
 
 The gate is off by default. A route that lists sessions and tracks must not exist on
 a host that did not ask for it, so with the gate off app.main never includes this
@@ -36,6 +37,7 @@ import re
 import threading
 import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.requests import ClientDisconnect
 from app import geo, provenance, serialize, session
 
 log = logging.getLogger("tecopa.debug")
@@ -68,6 +70,9 @@ def _local_host_only(request: Request) -> None:
 # passes. The browser also sends the page's own Origin, and that is refused here.
 # "null" (a sandboxed page, a file) is not local. A request with no Origin passes:
 # the tecopa tool sends none, and a browser adds one to every cross-site POST.
+# For the GET this refuses only a fetch that asks to read the answer. An <img> or a
+# no-cors GET sends no Origin and gets its 200, which the page cannot read: the
+# engine sends no CORS header, and the Host check stops a rebound name.
 _LOCAL_ORIGIN = re.compile(r"http://(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?")
 
 
@@ -92,10 +97,16 @@ _TAB = re.compile(r"[a-z0-9]{8,32}")
 _SAFE_INT = 2 ** 53             # past this a JSON reader no longer holds the integer
 
 
+# NUL, ESC and the other control characters, except the tab and the line end
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
 def _text(value: str, limit: int) -> str:
     # Cut, not refused. A lone surrogate is legal in a JSON string and cannot be
     # written back as UTF-8: one in the buffer would make every later GET a 500.
-    return value[:limit].encode("utf-8", "replace").decode("utf-8")
+    # A control character goes too: the tecopa tool prints this text in a terminal.
+    value = _CONTROL.sub("", value[:limit])
+    return value.encode("utf-8", "replace").decode("utf-8")
 
 
 def _whole(value) -> bool:
@@ -334,15 +345,19 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
         # The one debug route that changes anything: it adds to the report buffer.
         # application/json is required because a page on another website cannot send
         # it without a preflight, and the engine answers no preflight.
-        kind = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        kind = request.headers.get("content-type", "").split(";", 1)[0].strip(" \t").lower()
         if kind != "application/json":
             raise HTTPException(415, "A studio report is sent as application/json.")
-        body = await _read_capped(request)
+        try:
+            body = await _read_capped(request)
+        except ClientDisconnect:
+            # the page closed while it sent. Nothing to keep, and no traceback in the log.
+            return Response(status_code=204)
         try:
             report = json.loads(body)
         except (ValueError, RecursionError):
-            # not JSON, not UTF-8, or an integer too long to read. RecursionError is
-            # for a Python whose JSON reader has a depth limit: 3.14 has none.
+            # not JSON, not UTF-8, an integer too long to read, or nested so deep
+            # that the reader runs out of stack
             raise HTTPException(422, "A studio report is one JSON object.")
         if not isinstance(report, dict):
             raise HTTPException(422, "A studio report is one JSON object.")

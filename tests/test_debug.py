@@ -568,6 +568,68 @@ def test_studio_error_strings_are_cut_and_not_refused():
     assert {k: err[k] for k in exact} == exact
 
 
+def test_studio_text_loses_its_control_characters():
+    # the tecopa tool prints this text in a terminal, where ESC starts a command
+    c, _ = _client()
+    sent = {"kind": "toast", "message": "a\x00b\x1b[31mc\x7f\n\td", "source": "s\x08t"}
+    assert c.post(STUDIO, json={"tab": TAB, "state": {"view": "m\x1bap"},
+                                "errors": [sent]}).status_code == 204
+    got = c.get(STUDIO).json()
+    assert got["errors"][0]["message"] == "ab[31mc\n\td"
+    assert got["errors"][0]["source"] == "st"
+    assert got["tabs"][0]["state"] == {"view": "map"}
+
+
+def test_studio_body_nested_too_deep_to_read_is_a_422(monkeypatch):
+    # the JSON reader runs out of stack on a body of many thousand brackets
+    class Reader:
+        # only this module's reader: the test client reads JSON too
+        @staticmethod
+        def loads(_):
+            raise RecursionError
+    monkeypatch.setattr(debug, "json", Reader)
+    c, _ = _client()
+    r = c.post(STUDIO, content=b"[[[[", headers={"Content-Type": "application/json"})
+    assert r.status_code == 422 and r.json() == {"detail": "A studio report is one JSON object."}
+
+
+def test_studio_post_that_ends_before_its_body_is_dropped_without_an_error():
+    # a page that closes while it sends: no report, and no traceback in the log
+    import asyncio
+    c, _ = _client()
+    def walk(routes):
+        for r in routes:
+            yield r
+            yield from walk(getattr(r, "routes", None) or
+                            getattr(getattr(r, "original_router", None), "routes", []))
+    route = next(r for r in walk(c.app.routes)
+                 if getattr(r, "path", "").endswith("/studio")
+                 and "POST" in (getattr(r, "methods", None) or ()))
+
+    async def closed():
+        return {"type": "http.disconnect"}
+    request = Request({"type": "http", "method": "POST", "path": STUDIO,
+                       "query_string": b"",
+                       "headers": [(b"host", b"127.0.0.1:8848"),
+                                   (b"content-type", b"application/json")]}, closed)
+    reply = asyncio.run(route.endpoint(request))
+    assert reply.status_code == 204
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+def test_the_engine_answers_no_preflight():
+    # The studio post needs application/json because another website cannot send it
+    # without a preflight. That holds only while the engine answers none: no CORS
+    # middleware, and an OPTIONS that carries no Access-Control header.
+    assert not any("cors" in m.cls.__name__.lower() for m in main.app.user_middleware)
+    c, _ = _client()
+    r = c.options(STUDIO, headers={"Origin": "https://attacker.example",
+                                   "Access-Control-Request-Method": "POST",
+                                   "Access-Control-Request-Headers": "content-type"})
+    assert r.status_code >= 400
+    assert not [h for h in r.headers if h.lower().startswith("access-control-")]
+
+
 def test_studio_error_of_another_kind_is_dropped():
     c, _ = _client()
     errors = [_error("one", "error"), _error("two", "rejection"), _error("three", "toast"),
@@ -875,7 +937,7 @@ def test_gate_off_means_the_live_app_takes_no_studio_report():
     # stops on any first reply that is not 2xx.
     live = TestClient(main.app)
     r = live.post(STUDIO, json={"tab": TAB, "state": STATE})
-    assert r.status_code >= 400
+    assert r.status_code == 405
     r = live.get(STUDIO)
     assert r.status_code == 404 and r.json() == {"detail": "Not Found"}
 
