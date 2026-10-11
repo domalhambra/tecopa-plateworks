@@ -4,6 +4,8 @@ from dataclasses import dataclass, fields
 import math
 import numbers
 
+from app import panels as panel_geo
+
 # All three are "this picture can't be made here" conditions, not bugs: the API maps
 # any SpecError to a humanized 422 (like the zoom cap), so a single except catches them.
 class SpecError(ValueError):
@@ -278,6 +280,12 @@ class CompositionSpec:
     # baking dry lakes onto a plate cannot make existing posters report a mismatch
     # (provenance.region_pack_block, the labels/landcover precedent).
     dry_lakes: bool = False
+    # panel sets (2026-10-11): a set is one sheet -- its hung size, gaps included --
+    # painted once and cut into `panels` pieces of 17 x 22 in. panel_gap_in is the
+    # unprinted strip between two neighbours (0 = a cut set). app/panels.py owns the
+    # geometry. Both are always written to the manifest.
+    panels: int = 1
+    panel_gap_in: float = 0.0
 
     def pixel_size(self, dpi: int) -> tuple:
         # the DELIVERED canvas: trim + 2*bleed per axis (bleed 0 -> the classic sheet)
@@ -365,6 +373,26 @@ class CompositionSpec:
             raise SpecError(f"bleed_in must be between 0 and {BLEED_MAX_IN}")
         if self.bleed_in > 0 and self.output_kind != "print":
             raise SpecError("bleed is a print-trim concept -- this output has no trimmer")
+        # panel sets: a fixed menu of counts, gaps and sheets, so every panel is a
+        # full 17 x 22 in. A NaN gap fails the membership test, so it is refused too.
+        if self.panels not in panel_geo.PANEL_COUNTS:
+            raise SpecError("panels must be 1, 2 or 3")
+        if not any(abs(self.panel_gap_in - g) < 1e-9 for g in panel_geo.GAPS_IN):
+            raise SpecError("panel_gap_in must be 0, 2 or 4")
+        if self.panels == 1 and self.panel_gap_in:
+            raise SpecError("panel_gap_in is for a set -- a single sheet has no gap")
+        if self.panels > 1:
+            if self.output_kind != "print":
+                raise SpecError("a set is a print -- a wallpaper has no panels")
+            if self.bleed_in:
+                raise SpecError("a set takes no bleed")
+            sizes = panel_geo.sheet_sizes(self.panels, self.panel_gap_in)
+            if not any(abs(self.print_w_in - w) < 1e-6 and abs(self.print_h_in - h) < 1e-6
+                       for w, h in sizes):
+                want = " or ".join(f"{w:g}x{h:g}" for w, h in sizes)
+                raise SpecError(
+                    f"a set of {self.panels} panels with a {self.panel_gap_in:g} in gap "
+                    f"is {want} in, not {self.print_w_in:g}x{self.print_h_in:g}")
         w_px, h_px = self.pixel_size(dpi)
         # print-size sanity: a non-positive size would divide-by-zero the zoom cap below
         if w_px < 1 or h_px < 1:

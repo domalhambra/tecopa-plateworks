@@ -3032,6 +3032,9 @@ BASE_KEY_MASK_ALWAYS = (
     "compass", "furniture_scale", "profile", "profile_height_in",
     # track geometry -- reached the base only as a smart-label obstacle
     "tracks", "track_days", "track_width_pt",
+    # panel sets -- the cut, the seam keep-out and the per-panel furniture; the
+    # terrain is painted across the whole sheet, gap strips included
+    "panels", "panel_gap_in",
 )
 
 def base_cache_key(spec, dpi, region_dir, cfg):
@@ -3079,6 +3082,8 @@ INK_KEY_MASK_ALWAYS = (
     # track_halo's VALUE is therefore a hit; zero is not, because it skips building the
     # casing raster at all, so the key carries the boolean below.
     "track_halo", "track_max_darken",
+    # panel sets -- the route is inked across the whole sheet, gap strips included
+    "panels", "panel_gap_in",
 )
 # Left in the key on purpose: track_rgb, track_color_by, track_weave, tracks,
 # track_days, track_width_pt. track_rgb is the one worth explaining -- under
