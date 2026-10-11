@@ -4094,4 +4094,8 @@ This section is the build record. Each task adds what it measured or changed her
 
 ### The memory gate (task 1)
 
-The JSON line of `scripts/measure_final.py` goes here.
+```json
+{"region": "rifle_aspen", "sheet_in": [59.0, 22.0], "pixels_mp": 116.8, "seconds": 47.0, "peak_gb": 14.07, "limit_gb": 16.0, "pass": true}
+```
+
+The gate passes: the 116.8 megapixel sheet rendered in 47 seconds with a peak of 14.07 GB, under the 16 GB limit.
