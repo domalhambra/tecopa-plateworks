@@ -231,7 +231,115 @@ final class ReprintTests: XCTestCase {
         XCTAssertEqual(world.written, [])
     }
 
+    func testAReprintReplyWithATextContentTypeIsNotWrittenAsAPoster() async {
+        // another program on the port answers 200 with a page
+        let world = engine()
+        world.serveData("POST /api/reprint", 200, "text/html; charset=utf-8", Data("<html>hello</html>".utf8))
+        let (data, failure) = await call("reprint", world, ["file": lassen, "out": .string("/out/a.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "Port 8848 answers, but it is not Tecopa Plateworks.")
+        XCTAssertTrue(failure?.hint?.contains("/api/reprint") ?? false, failure?.hint ?? "")
+        XCTAssertEqual(world.calls, ["POST /api/reprint"])
+        XCTAssertEqual(world.written, [])
+
+        // the letter case of a header value is not a rule
+        world.serveData("POST /api/reprint", 200, "Text/Plain", Data("hello".utf8))
+        let (_, plain) = await call("reprint", world, ["file": lassen, "out": .string("/out/a.png")])
+        XCTAssertEqual(plain?.kind, .environment)
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testAReprintReplyWithNoContentTypeIsNotWrittenAsAPoster() async {
+        let world = engine()
+        world.serveData("POST /api/reprint", 200, nil, reprinted)
+        let (data, failure) = await call("reprint", world, ["file": lassen, "out": .string("/out/a.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "Port 8848 answers, but it is not Tecopa Plateworks.")
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testAReprintReplyWithAnEmptyBodyIsNotWrittenAsAPoster() async {
+        let world = engine()
+        world.serveData("POST /api/reprint", 200, "image/png", Data())
+        let (data, failure) = await call("reprint", world, ["file": lassen, "out": .string("/out/a.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .environment)
+        XCTAssertEqual(failure?.message, "Port 8848 answers, but it is not Tecopa Plateworks.")
+        XCTAssertEqual(world.written, [])
+    }
+
     // MARK: continue
+
+    func testContinueProofFormValuesReadBackAsTheSameValues() async {
+        // FastAPI must parse each text back to the value the engine gave: a false,
+        // a float with a whole value, a float with an exponent, and strings that a
+        // shell or a header could change.
+        let world = engine()
+        world.serve("POST /api/continue", 200, """
+            {"session": "ab12", "region": "lassen_ca", "starter_crop": [5, 6.5, 70, 80], "edition": 2,
+             "proof_form": {"contours": false, "labels": true, "print_w": 17.0, "print_h": 22,
+                            "soft_light": 0.25, "haze": 1e-05, "title": "-",
+                            "subtitle": "Caf\\u00e9 \\"Lassen\\" 2023", "track_color": "#c0392b"}}
+            """)
+        let (_, failure) = await call("continue", world, ["file": lassen, "out": .string("/out/two.png")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(pairs(world, 1), [
+            "session_id=ab12", "x0=5", "y0=6.5", "x1=70", "y1=80",
+            "contours=false", "haze=1e-05", "labels=true", "print_h=22", "print_w=17",
+            "soft_light=0.25", "subtitle=Café \"Lassen\" 2023", "title=-", "track_color=#c0392b",
+        ])
+        // the text of each number reads back as the same number
+        XCTAssertEqual(Double("1e-05"), 0.00001)
+        XCTAssertEqual(Double("17"), 17.0)
+    }
+
+    func testAContinueOptNameNotInTheFinalFormIsRefusedBeforeTheFileIsSent() async {
+        // `max_frames` is a field of the film route, not of the final
+        let world = engine()
+        let (data, failure) = await call("continue", world, [
+            "file": lassen, "set": list("title=Two", "soft_light=0.30"), "opt": list("max_frames=3"),
+            "out": .string("/out/two.png")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .usage)
+        let message = failure?.message ?? ""
+        XCTAssertTrue(message.hasPrefix("Unknown field for final_submit: max_frames."), message)
+        XCTAssertTrue(message.hasSuffix("The engine's fields are: format, embed_spec."), message)
+        XCTAssertEqual(world.calls, ["GET /api/debug/forms"])
+        XCTAssertEqual(world.posts, [])
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testAFileNameThatCannotGoIntoAHeaderIsRefusedBeforeAnyRequest() async {
+        // /api/continue takes the poster and makes a session, so the name of a new
+        // track is checked before it, not at the upload that follows
+        let world = engine()
+        let out: JSONValue = .string("/out/two.png")
+        for name in ["day \"one\".gpx", "day\\one.gpx", "day\rone.gpx", "day\none.gpx", "day\r\none.gpx"] {
+            world.binary("/tracks/" + name, Data("<gpx/>".utf8))
+            let (data, failure) = await call("continue", world, [
+                "file": lassen, "tracks": list("/tracks/new.gpx", "/tracks/" + name), "out": out])
+            XCTAssertNil(data, name.debugDescription)
+            XCTAssertEqual(failure?.kind, .usage, name.debugDescription)
+            XCTAssertTrue(failure?.message.hasPrefix("A file name cannot contain") ?? false,
+                          failure?.message ?? "")
+        }
+        // the poster's own name, on each entry that sends it
+        world.binary("/posters/las\"sen.png", file)
+        for name in ["reprint_inspect", "reprint", "continue"] {
+            var arguments: [String: JSONValue] = ["file": .string("/posters/las\"sen.png")]
+            if name != "reprint_inspect" {
+                arguments["out"] = out
+                arguments["opt"] = list("format=png")
+            }
+            let (_, failure) = await call(name, world, arguments)
+            XCTAssertEqual(failure?.kind, .usage, name)
+            XCTAssertTrue(failure?.message.hasPrefix("A file name cannot contain") ?? false, name)
+        }
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written, [])
+    }
 
     func testContinueSendsProofFormUnchangedThenTheFinal() async {
         let world = engine()

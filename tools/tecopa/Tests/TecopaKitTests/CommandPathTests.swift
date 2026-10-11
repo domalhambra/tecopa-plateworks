@@ -34,6 +34,17 @@ final class CommandPathTests: XCTestCase {
         XCTAssertEqual(absolute("~other/b.gpx"), "/work/posters/~other/b.gpx")
     }
 
+    func testWithNoCurrentDirectoryARelativePathIsNotChanged() {
+        // a working directory that was deleted reads as "". "/a.png" would be a
+        // file in the root folder, which the caller did not name: the catalog
+        // refuses the relative path instead.
+        XCTAssertEqual(absolutePath("a.png", home: "/Users/dom", directory: ""), "a.png")
+        XCTAssertEqual(absolutePath("out/a.png", home: "/Users/dom", directory: "gone"), "out/a.png")
+        // the other two forms do not need the directory
+        XCTAssertEqual(absolutePath("~/a.png", home: "/Users/dom", directory: ""), "/Users/dom/a.png")
+        XCTAssertEqual(absolutePath("/o/a.png", home: "/Users/dom", directory: ""), "/o/a.png")
+    }
+
     func testAnEmptyPathStaysEmpty() {
         // the catalog then says which argument is missing
         XCTAssertEqual(absolute(""), "")
@@ -52,7 +63,20 @@ final class CommandPathTests: XCTestCase {
         XCTAssertEqual(picture.arguments["spec"], .string(here + "/look.json"))
         let job = try RenderJob.parse(["--out", "final.png"])
         XCTAssertEqual(job.arguments["out"], .string(here + "/final.png"))
+        // the two commands with an --out of their own
+        let proof = try XCTUnwrap(try Tecopa.parseAsRoot(
+            ["render", "proof", "--tracks", "a.gpx", "--out", "proof.png"]) as? RenderCommand.Proof)
+        XCTAssertEqual(proof.arguments, [
+            "tracks": .array([.string(here + "/a.gpx")]), "out": .string(here + "/proof.png")])
+        let fetch = try XCTUnwrap(try Tecopa.parseAsRoot(
+            ["render", "fetch", "--job", "cd34", "--out", "~/final.png"]) as? RenderCommand.Fetch)
+        XCTAssertEqual(fetch.arguments, [
+            "job": .string("cd34"), "out": .string(NSHomeDirectory() + "/final.png")])
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["render", "fetch"]) as? RenderCommand.Fetch)
+            .arguments, [:])
         // an option that is not given is not an argument
+        XCTAssertNil(try XCTUnwrap(try Tecopa.parseAsRoot(["render", "proof", "--session", "ab12"])
+            as? RenderCommand.Proof).arguments["out"])
         XCTAssertNil(try RenderJob.parse([]).arguments["out"])
         XCTAssertNil(try RenderPicture.parse(["--session", "ab12"]).arguments["spec"])
     }
@@ -76,6 +100,22 @@ final class CommandPathTests: XCTestCase {
         XCTAssertEqual(plain.arguments, ["file": .string("/p/lassen.png"), "out": .string("/o/a.png")])
         // the same command by its own name
         XCTAssertNotNil(try Tecopa.parseAsRoot(["reprint", "run", "/p/lassen.png"]) as? ReprintCommand.Run)
+    }
+
+    func testTheHelpOfReprintSaysTheFileComesFirst() {
+        // --opt takes each word up to the next option, so a file after it is read as an opt
+        // the help text is wrapped, so each line end is read as a space
+        func words(_ help: String) -> String {
+            help.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        }
+        let help = words(ReprintCommand.Run.helpMessage())
+        XCTAssertTrue(help.contains("The poster file. Give it before the options."), help)
+        XCTAssertTrue(help.contains("`tecopa reprint <file> --out <path>`: the file comes first"), help)
+        let group = words(ReprintCommand.helpMessage())
+        XCTAssertTrue(group.contains("`tecopa reprint <file> --out <path>` is `tecopa reprint run`."), group)
+        XCTAssertTrue(group.contains("The file comes first, before the options."), group)
+        // as `continue` says it
+        XCTAssertTrue(words(ContinueCommand.helpMessage()).contains("Give it before the options."))
     }
 
     func testReprintInspectTakesTheFile() throws {

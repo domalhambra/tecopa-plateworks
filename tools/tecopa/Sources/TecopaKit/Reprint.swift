@@ -45,10 +45,10 @@ enum Reprint {
         readOnly: true,
         parameters: [Parameter.file]
     ) { runtime, arguments in
-        let poster = try poster(arguments, runtime)
+        let file = try poster(arguments, runtime)
         let path = "/api/reprint/inspect"
         return try runtime.client.json(
-            try await runtime.client.post(path, try form(poster, arguments)), for: path)
+            try await runtime.client.post(path, try form(file, arguments)), for: path)
     }
 
     static let reprintEntry = CatalogEntry(
@@ -92,15 +92,31 @@ enum Reprint {
     /// This is the one place that writes `allow_plate_mismatch`, and it writes it
     /// only when the caller gave true. A refusal for another plate is the engine's
     /// 422, and the caller decides.
-    static func form(_ poster: Render.Upload, _ arguments: [String: JSONValue],
+    static func form(_ file: Render.Upload, _ arguments: [String: JSONValue],
                      fields: Render.Fields = Render.Fields()) throws -> Multipart {
         var form = Multipart()
-        try form.file("file", filename: poster.filename, poster.data)
+        try form.file("file", filename: file.filename, file.data)
         for pair in fields.pairs { try form.field(pair.name, pair.value) }
         if arguments["allow_plate_mismatch"]?.boolValue == true {
             try form.field("allow_plate_mismatch", "true")
         }
         return form
+    }
+
+    /// The bytes of a reply that is a still. `Render.file` refuses each status but
+    /// 2xx, and a JSON reply. This refuses what is left that cannot be a poster: a
+    /// reply with no content type, a text, or no bytes. Another program on the
+    /// port can answer 200 with a page, and the tool does not write that page to
+    /// `out` as the poster.
+    static func still(_ runtime: Runtime, _ reply: HTTPReply, for path: String) throws -> Data {
+        let data = try Render.file(runtime, reply, for: path)
+        let kind = reply.contentType?.lowercased()
+        guard let kind, !kind.hasPrefix("text/"), !data.isEmpty else {
+            throw TecopaFailure(
+                .environment, runtime.client.notTecopaMessage,
+                hint: "The answer for \(path) is not a poster. " + EngineClient.notTecopaHint)
+        }
+        return data
     }
 
     // MARK: The flows
@@ -109,7 +125,7 @@ enum Reprint {
     /// with JSON that names a job.
     static func reprint(_ runtime: Runtime, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         // 1. The arguments. Each check here is before the first request.
-        let poster = try poster(arguments, runtime)
+        let file = try poster(arguments, runtime)
         let options = try Render.pairs(Render.strings(arguments["opt"]), "opt")
         // The tool cannot know before the reply if the file is a still. A still is
         // the reply itself, with no job to fetch later, so there is always a path
@@ -127,16 +143,16 @@ enum Reprint {
         // 3. The reply. The content type is read first: the bytes of a poster are
         // never read as JSON.
         let path = "/api/reprint"
-        let reply = try await runtime.client.post(path, try form(poster, arguments, fields: options))
+        let reply = try await runtime.client.post(path, try form(file, arguments, fields: options))
         var result: [String: JSONValue]
         if (200..<300).contains(reply.status), Render.isJSON(reply),
            let answer = try? JSONValue.parse(reply.body), answer["job"] != nil {
             let wait = arguments["no_wait"]?.boolValue != true
             result = try await Render.follow(runtime, answer: answer, out: wait ? out : nil)
         } else {
-            // `file` refuses each status but 2xx with the engine's own body, and a
-            // JSON reply that names no job.
-            result = try Render.save(runtime, try Render.file(runtime, reply, for: path), to: out)
+            // `still` refuses each status but 2xx with the engine's own body, a
+            // JSON reply that names no job, and a reply that is not a poster.
+            result = try Render.save(runtime, try still(runtime, reply, for: path), to: out)
         }
         return .object(await Render.withEngineVersion(result, runtime))
     }
@@ -145,7 +161,7 @@ enum Reprint {
     /// then the final as `render final` makes it.
     static func nextEdition(_ runtime: Runtime, _ arguments: [String: JSONValue]) async throws -> JSONValue {
         // 1. The arguments. Each check here is before the first request.
-        let poster = try poster(arguments, runtime)
+        let file = try poster(arguments, runtime)
         let files = try Render.uploads(Render.strings(arguments["tracks"]), runtime)
         let crop = try arguments["crop"]?.stringValue.map { try Render.cropArgument($0) }
         let change = try Render.pairs(Render.strings(arguments["set"]), "set")
@@ -160,14 +176,14 @@ enum Reprint {
         // with the track geometry and the studio's prefill, which no result keeps.
         let path = "/api/continue"
         let answer = try runtime.client.json(
-            try await runtime.client.post(path, try form(poster, arguments)), for: path)
+            try await runtime.client.post(path, try form(file, arguments)), for: path)
         let session = try Render.sessionID(in: answer)
-        guard case .object(let form)? = answer["proof_form"],
+        guard case .object(let proofForm)? = answer["proof_form"],
               let frame = Render.cropTexts(answer["starter_crop"]) else {
             throw TecopaFailure(.environment, "The engine's answer has no proof_form and starter crop.",
                                 hint: "The engine may be older than the tool. Run `tecopa doctor`.")
         }
-        let own = (fields: try Render.fields(ofProofForm: form), crop: frame)
+        let own = (fields: try Render.fields(ofProofForm: proofForm), crop: frame)
 
         // 4. The new tracks go into that session. The engine makes a new session
         // for an id it does not have, and that one is not the continued poster.

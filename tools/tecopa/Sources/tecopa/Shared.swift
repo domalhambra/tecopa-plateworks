@@ -45,10 +45,15 @@ func execute(_ name: String, _ global: GlobalOptions,
 ///
 /// The text is joined and not resolved: the system reads `..` and each link. An
 /// empty path stays empty, so the entry says which argument is missing.
+///
+/// A working directory that was deleted reads as an empty text. With no absolute
+/// directory, a relative path stays as it is and the entry refuses it: "/" and the
+/// path would name a file in the root folder, which the caller did not write.
 func absolutePath(_ path: String, home: String = NSHomeDirectory(),
                   directory: String = FileManager.default.currentDirectoryPath) -> String {
     if path.isEmpty || path.hasPrefix("/") { return path }
     if path == "~" { return home }
     if path.hasPrefix("~/") { return home + path.dropFirst() }
+    guard directory.hasPrefix("/") else { return path }
     return (directory.hasSuffix("/") ? directory : directory + "/") + path
 }

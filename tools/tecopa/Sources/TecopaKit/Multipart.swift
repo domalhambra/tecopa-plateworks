@@ -32,7 +32,7 @@ public struct Multipart: Sendable {
     /// with the same name.
     public mutating func file(_ name: String, filename: String, _ data: Data) throws {
         try Self.check(name, "A form field name")
-        try Self.check(filename, "A file name")
+        try Self.checkFilename(filename)
         parts.append(Part(name: name, filename: filename, data: data))
     }
 
@@ -49,6 +49,13 @@ public struct Multipart: Sendable {
         }
         out.append(Data("--\(boundary)--\r\n".utf8))
         return out
+    }
+
+    /// The rule for the name of a file that a form sends. A command calls this for
+    /// each file before its first request: `file` refuses the name too, but it
+    /// runs when the form is built, and an earlier request can be sent by then.
+    static func checkFilename(_ filename: String) throws {
+        try check(filename, "A file name")
     }
 
     /// A name goes into a header between quotes. A quote would end it early, and a

@@ -38,7 +38,8 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
 
     private struct Route {
         let status: Int
-        let contentType: String
+        /// nil is a reply with no Content-Type header.
+        let contentType: String?
         let body: Data
     }
 
@@ -95,8 +96,8 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     }
 
     /// An answer that is bytes: a proof PNG, or a finished job's file. `key` is
-    /// "GET /path" or "POST /path".
-    func serveData(_ key: String, _ status: Int, _ contentType: String, _ data: Data) {
+    /// "GET /path" or "POST /path". A nil content type is a reply without the header.
+    func serveData(_ key: String, _ status: Int, _ contentType: String?, _ data: Data) {
         lock.lock()
         routes[key] = Route(status: status, contentType: contentType, body: data)
         lock.unlock()

@@ -359,14 +359,20 @@ enum Render {
 
     /// Read each file before the first request, so a path that cannot be read
     /// starts no upload. `name` is the argument that holds the paths.
+    ///
+    /// The name of each file is checked here too. The form refuses a name that
+    /// cannot go into a header, but `continue` builds the form of its upload after
+    /// /api/continue has taken the poster and made a session.
     static func uploads(_ paths: [String], _ runtime: Runtime, name: String = "tracks",
                         what: String = "track file") throws -> [Upload] {
         try paths.map { path in
             try checkAbsolute(path, name)
+            let filename = (path as NSString).lastPathComponent
+            try Multipart.checkFilename(filename)
             guard let data = runtime.readData(path) else {
                 throw TecopaFailure(.usage, "Cannot read the \(what): \(path)")
             }
-            return Upload(filename: (path as NSString).lastPathComponent, data: data)
+            return Upload(filename: filename, data: data)
         }
     }
 

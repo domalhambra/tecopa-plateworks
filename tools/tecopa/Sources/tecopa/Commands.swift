@@ -193,11 +193,13 @@ struct RenderCommand: AsyncParsableCommand {
         @Option(name: .long, help: "The path of the PNG to write. It must hold no file.")
         var out: String?
 
-        func run() async throws {
+        var arguments: [String: JSONValue] {
             var arguments = picture.arguments
             if let out { arguments["out"] = .string(absolutePath(out)) }
-            try await execute("render_proof", global, arguments)
+            return arguments
         }
+
+        func run() async throws { try await execute("render_proof", global, arguments) }
     }
 
     struct Final: AsyncParsableCommand {
@@ -251,12 +253,14 @@ struct RenderCommand: AsyncParsableCommand {
         @Option(name: .long, help: "The path of the file to write. It must hold no file.")
         var out: String?
 
-        func run() async throws {
+        var arguments: [String: JSONValue] {
             var arguments: [String: JSONValue] = [:]
             if let job { arguments["job"] = .string(job) }
             if let out { arguments["out"] = .string(absolutePath(out)) }
-            try await execute("render_fetch", global, arguments)
+            return arguments
         }
+
+        func run() async throws { try await execute("render_fetch", global, arguments) }
     }
 }
 
@@ -270,7 +274,8 @@ struct ReprintCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "reprint",
         abstract: "Render a poster file again, or read what it holds.",
-        discussion: "`tecopa reprint <file> --out <path>` is `tecopa reprint run`.",
+        discussion: "`tecopa reprint <file> --out <path>` is `tecopa reprint run`. "
+            + "The file comes first, before the options.",
         subcommands: [Run.self, Inspect.self],
         defaultSubcommand: Run.self)
 
@@ -292,9 +297,10 @@ struct ReprintCommand: AsyncParsableCommand {
     struct Run: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "run",
-            abstract: "Render a poster file again from its own manifest, and write it to --out.")
+            abstract: "Render a poster file again from its own manifest, and write it to --out.",
+            discussion: "`tecopa reprint <file> --out <path>`: the file comes first, before the options.")
         @OptionGroup var global: GlobalOptions
-        @Argument(help: "The poster file.")
+        @Argument(help: "The poster file. Give it before the options.")
         var file: String?
         @Option(name: .long, help: "The output path. Required, with --no-wait too.")
         var out: String?

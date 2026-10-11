@@ -290,6 +290,24 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(world.written, [])
     }
 
+    func testATrackNameThatCannotGoIntoAHeaderIsRefusedBeforeAnyRequest() async {
+        // the name goes between quotes into a part's header. With a `set`, the
+        // forms route was asked before the upload found the name.
+        let world = engine()
+        for name in ["day \"one\".gpx", "day\\one.gpx", "day\rone.gpx", "day\none.gpx", "day\r\none.gpx"] {
+            world.binary("/tracks/" + name, Data("<gpx/>".utf8))
+            let (data, failure) = await call("render_proof", world, [
+                "tracks": list("/tracks/a.gpx", "/tracks/" + name), "set": list("title=Lassen"),
+                "out": .string("/out/p.png")])
+            XCTAssertNil(data, name.debugDescription)
+            XCTAssertEqual(failure?.kind, .usage, name.debugDescription)
+            XCTAssertTrue(failure?.message.hasPrefix("A file name cannot contain") ?? false,
+                          failure?.message ?? "")
+        }
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written, [])
+    }
+
     // MARK: Field names
 
     func testAnUnknownSetNameFailsBeforeTheUploadAndListsTheEngineNames() async {
