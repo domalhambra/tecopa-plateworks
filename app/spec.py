@@ -374,10 +374,11 @@ class CompositionSpec:
         if self.bleed_in > 0 and self.output_kind != "print":
             raise SpecError("bleed is a print-trim concept -- this output has no trimmer")
         # panel sets: a fixed menu of counts, gaps and sheets, so every panel is a
-        # full 17 x 22 in. A NaN gap fails the membership test, so it is refused too.
+        # full 17 x 22 in. The gap is one of three exact values: a NaN, an inf, a
+        # huge integer or 2.0000000001 fails the membership test and is refused.
         if self.panels not in panel_geo.PANEL_COUNTS:
             raise SpecError("panels must be 1, 2 or 3")
-        if not any(abs(self.panel_gap_in - g) < 1e-9 for g in panel_geo.GAPS_IN):
+        if self.panel_gap_in not in panel_geo.GAPS_IN:
             raise SpecError("panel_gap_in must be 0, 2 or 4")
         if self.panels == 1 and self.panel_gap_in:
             raise SpecError("panel_gap_in is for a set -- a single sheet has no gap")

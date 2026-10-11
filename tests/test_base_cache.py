@@ -169,6 +169,9 @@ def _live_spec(**kw):
 # One perturbation per field type. Explicit rather than clever, because a wrong
 # perturbation here would make the guard below pass vacuously.
 _PERTURB = {
+    # a gap alone is inert on a single sheet (every panel function asks is_set first),
+    # so the mask proof for the gap perturbs a real set
+    "panel_gap_in": lambda s: dataclasses.replace(s, panels=2, panel_gap_in=2.0),
     "crop": lambda s: dataclasses.replace(s, crop=tuple(v + 10.0 for v in s.crop)),
     "tracks": lambda s: dataclasses.replace(
         s, tracks=[np.asarray(t, float) + 7.0 for t in s.tracks]),

@@ -49,8 +49,13 @@ def test_panels_and_gaps_tile_the_sheet_at_an_odd_dpi():
     rects = panels.panel_rects_px(spec, dpi)
     gaps = panels.gap_rects_px(spec, dpi)
     edges = sorted(rects + gaps)
-    assert edges[0][0] == 0
+    w, h = spec.pixel_size(dpi)
+    assert len(edges) == 5                                       # 3 panels and 2 gap strips
+    assert edges[0][0] == 0 and edges[-1][2] == w                # from edge to edge
     assert all(a[2] == b[0] for a, b in zip(edges, edges[1:]))   # no overlap, no hole
+    assert all(r[1] == 0 and r[3] == h for r in edges)           # the full height
+    assert rects == [(round(x0 * dpi), 0, round(x1 * dpi), h)    # each edge rounded on its own
+                     for x0, x1 in ((0, 22), (24, 46), (48, 70))]
 
 
 def test_a_cut_set_joins_back_into_the_sheet():
@@ -103,6 +108,11 @@ def test_a_set_gives_panel_one_to_the_furniture_and_a_span_to_each_anchor():
     ({"panel_gap_in": 1.0}, "panel_gap_in must be 0, 2 or 4"),
     ({"panel_gap_in": float("nan")}, "panel_gap_in must be 0, 2 or 4"),
     ({"print_w_in": 68.0}, "a set of 3 panels"),
+    ({"print_h_in": 22.0}, "a set of 3 panels"),                 # the height is checked too
+    ({"panel_gap_in": 2.0000000001}, "panel_gap_in must be 0, 2 or 4"),
+    ({"panel_gap_in": -1e-10}, "panel_gap_in must be 0, 2 or 4"),
+    ({"panel_gap_in": float("inf")}, "panel_gap_in must be 0, 2 or 4"),
+    ({"panel_gap_in": 10 ** 400}, "panel_gap_in must be 0, 2 or 4"),
     ({"bleed_in": 0.125}, "a set takes no bleed"),
     ({"output_kind": "wallpaper", "screen_ppi": 300.0}, "a set is a print"),
     ({"panels": "3"}, "panels must be a whole number"),
@@ -146,3 +156,12 @@ def test_every_frozen_manifest_reads_as_a_single_sheet():
     for path in paths:
         spec = provenance.manifest_to_spec(json.load(open(path)))
         assert spec.panels == 1 and spec.panel_gap_in == 0.0, path
+
+
+def test_a_two_panel_set_with_a_wrong_sheet_is_refused():
+    with pytest.raises(SpecError, match=r"a set of 2 panels with a 2 in gap is 46x17 or 36x22 in"):
+        set_spec(2, 2.0, "tall", print_w_in=34.0).validate(300)
+
+
+def test_a_whole_number_gap_is_a_gap():
+    assert set_spec(3, 2.0, "wide", panel_gap_in=2).validate(300).panel_gap_in == 2
