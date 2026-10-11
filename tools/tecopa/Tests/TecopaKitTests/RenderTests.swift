@@ -244,6 +244,51 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(world.calls, [])
     }
 
+    // MARK: Paths
+
+    func testARelativePathIsRefusedBeforeAnyRequest() async {
+        // Under `tecopa mcp` the working directory is the MCP client's, so a
+        // relative path would name a file in a folder that the caller cannot see.
+        let world = engine()
+        // each of these paths can be read or written, so only the rule refuses it
+        for folder in [".", "out", "~", "~/out"] { world.folder(folder) }
+        for track in ["a.gpx", "tracks/a.gpx", "./a.gpx", "~/a.gpx"] {
+            world.binary(track, Data("<gpx/>".utf8))
+        }
+        world.file("look.json", "{}")
+        world.file("~/look.json", "{}")
+        let out: JSONValue = .string("/out/p.png")
+
+        for track in ["a.gpx", "tracks/a.gpx", "./a.gpx", "~/a.gpx", ""] {
+            let (_, failure) = await call("render_proof", world, [
+                "tracks": list("/tracks/a.gpx", track), "out": out])
+            XCTAssertEqual(failure, TecopaFailure(.usage, "tracks must be an absolute path: \(track)"))
+        }
+        for spec in ["look.json", "~/look.json"] {
+            let (_, failure) = await call("render_final", world, [
+                "tracks": tracks, "spec": .string(spec), "out": out])
+            XCTAssertEqual(failure, TecopaFailure(.usage, "spec must be an absolute path: \(spec)"))
+        }
+        let commands: [(String, [String: JSONValue])] = [
+            ("render_proof", ["tracks": tracks]),
+            ("render_final", ["tracks": tracks]),
+            ("render_wallpaper", ["session": .string("ab12"), "presets": list("iphone")]),
+            ("render_film", ["session": .string("ab12")]),
+            ("render_fetch", ["job": .string("cd34")]),
+        ]
+        for (name, arguments) in commands {
+            for path in ["p.png", "out/p.png", "./p.png", "~/p.png", "~/out/p.png"] {
+                var arguments = arguments
+                arguments["out"] = .string(path)
+                let (_, failure) = await call(name, world, arguments)
+                XCTAssertEqual(failure, TecopaFailure(.usage, "out must be an absolute path: \(path)"),
+                               "\(name) \(path)")
+            }
+        }
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written, [])
+    }
+
     // MARK: Field names
 
     func testAnUnknownSetNameFailsBeforeTheUploadAndListsTheEngineNames() async {

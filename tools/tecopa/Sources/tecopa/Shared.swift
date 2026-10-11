@@ -37,3 +37,18 @@ func execute(_ name: String, _ global: GlobalOptions,
     if let failure { throw ExitCode(failure.exitCode) }
     return data
 }
+
+/// A path as a person writes it on the command line, made absolute: a leading `~`
+/// is the home folder, and a relative path is under the current directory. A
+/// catalog entry takes an absolute path only, because under `tecopa mcp` the
+/// working directory is the MCP client's and not the caller's.
+///
+/// The text is joined and not resolved: the system reads `..` and each link. An
+/// empty path stays empty, so the entry says which argument is missing.
+func absolutePath(_ path: String, home: String = NSHomeDirectory(),
+                  directory: String = FileManager.default.currentDirectoryPath) -> String {
+    if path.isEmpty || path.hasPrefix("/") { return path }
+    if path == "~" { return home }
+    if path.hasPrefix("~/") { return home + path.dropFirst() }
+    return (directory.hasSuffix("/") ? directory : directory + "/") + path
+}

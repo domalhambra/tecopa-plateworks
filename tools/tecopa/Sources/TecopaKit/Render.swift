@@ -16,13 +16,13 @@ enum Render {
     /// The arguments of the entries. Each entry takes the ones that apply to it.
     private enum Parameter {
         static let tracks = EntryParameter(
-            "tracks", .stringArray, "GPX, KML or KMZ paths. Give tracks or session, never both.")
+            "tracks", .stringArray, "Absolute GPX, KML or KMZ paths. Give tracks or session, never both.")
         static let session = EntryParameter(
             "session", .string, "A session id. The tool sends no upload, and renders the session.")
         static let region = EntryParameter(
             "region", .string, "A region id, sent with the tracks. Without it, the engine picks the plate.")
         static let spec = EntryParameter(
-            "spec", .string, "The path of a JSON file: one flat object of proof form fields.")
+            "spec", .string, "The absolute path of a JSON file: one flat object of proof form fields.")
         static let set = EntryParameter(
             "set", .stringArray,
             "key=value, one proof form field for each. Wins over spec. An unknown name is refused with the engine's list.")
@@ -33,10 +33,11 @@ enum Render {
             "crop", .string, "x0,y0,x1,y1 in overview pixels. Without it, the engine frames the tracks.")
         static let presets = EntryParameter("presets", .stringArray, "Wallpaper preset ids. Required.")
         static let out = EntryParameter(
-            "out", .string, "The path of the file to write. It must hold no file. Required, except with no_wait.")
+            "out", .string,
+            "The absolute path of the file to write. It must hold no file. Required, except with no_wait.")
         /// For an entry that has no `no_wait`.
         static let outAlways = EntryParameter(
-            "out", .string, "The path of the file to write. It must hold no file. Required.")
+            "out", .string, "The absolute path of the file to write. It must hold no file. Required.")
         static let noWait = EntryParameter(
             "no_wait", .boolean, "Return the job id at once and write no file. Then run render_fetch.")
         static let job = EntryParameter("job", .string, "The job id that no_wait returned. Required.")
@@ -200,6 +201,7 @@ enum Render {
     /// The fields of a `spec` file: one flat JSON object, each value a string, a
     /// number or a boolean. A JSON object has no order, so the fields go by name.
     static func specFields(_ path: String, _ runtime: Runtime) throws -> Fields {
+        try checkAbsolute(path, "spec")
         guard let data = runtime.readData(path) else {
             throw TecopaFailure(.usage, "Cannot read the spec file: \(path)")
         }
@@ -263,6 +265,15 @@ enum Render {
         }
     }
 
+    /// A path argument is absolute. Under `tecopa mcp` the working directory is the
+    /// MCP client's, so a relative path would name a file that the caller does not
+    /// mean. The command line makes each path absolute before it calls an entry.
+    static func checkAbsolute(_ path: String, _ name: String) throws {
+        guard path.hasPrefix("/") else {
+            throw TecopaFailure(.usage, "\(name) must be an absolute path: \(path)")
+        }
+    }
+
     /// The four texts of a `crop` argument. The tool checks the form only, four
     /// finite numbers, and sends each text as the caller wrote it.
     static func cropArgument(_ text: String) throws -> [String] {
@@ -296,9 +307,9 @@ enum Render {
         guard let out, !out.isEmpty else {
             throw TecopaFailure(.usage, "out is required: the path of the file to write.")
         }
+        try checkAbsolute(out, "out")
         guard runtime.pathKind(out) == nil else { throw fileAlreadyThere(out) }
-        let parent = (out as NSString).deletingLastPathComponent
-        let folder = parent.isEmpty ? "." : parent
+        let folder = (out as NSString).deletingLastPathComponent
         switch runtime.pathKind(folder) {
         case .folder: return out
         case .file: throw TecopaFailure(.usage, "\(folder) is not a folder.")
@@ -326,9 +337,11 @@ enum Render {
     }
 
     /// Read each file before the first request, so a path that cannot be read
-    /// starts no upload.
-    static func uploads(_ paths: [String], _ runtime: Runtime, what: String = "track file") throws -> [Upload] {
+    /// starts no upload. `name` is the argument that holds the paths.
+    static func uploads(_ paths: [String], _ runtime: Runtime, name: String = "tracks",
+                        what: String = "track file") throws -> [Upload] {
         try paths.map { path in
+            try checkAbsolute(path, name)
             guard let data = runtime.readData(path) else {
                 throw TecopaFailure(.usage, "Cannot read the \(what): \(path)")
             }

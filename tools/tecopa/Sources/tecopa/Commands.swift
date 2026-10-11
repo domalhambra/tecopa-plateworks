@@ -2,7 +2,8 @@ import ArgumentParser
 import TecopaKit
 
 // One thin struct per command. Each one names its catalog entry and passes its
-// arguments. No command holds logic of its own.
+// arguments. No command holds logic of its own. A path goes through `absolutePath`:
+// the catalog takes an absolute path only.
 
 struct EngineCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -148,10 +149,10 @@ struct RenderPicture: ParsableArguments {
 
     var arguments: [String: JSONValue] {
         var arguments: [String: JSONValue] = [:]
-        if !tracks.isEmpty { arguments["tracks"] = .array(tracks.map { .string($0) }) }
+        if !tracks.isEmpty { arguments["tracks"] = .array(tracks.map { .string(absolutePath($0)) }) }
         if let session { arguments["session"] = .string(session) }
         if let region { arguments["region"] = .string(region) }
-        if let spec { arguments["spec"] = .string(spec) }
+        if let spec { arguments["spec"] = .string(absolutePath(spec)) }
         if !set.isEmpty { arguments["set"] = .array(set.map { .string($0) }) }
         if let crop { arguments["crop"] = .string(crop) }
         return arguments
@@ -172,7 +173,7 @@ struct RenderJob: ParsableArguments {
     var arguments: [String: JSONValue] {
         var arguments: [String: JSONValue] = [:]
         if !opt.isEmpty { arguments["opt"] = .array(opt.map { .string($0) }) }
-        if let out { arguments["out"] = .string(out) }
+        if let out { arguments["out"] = .string(absolutePath(out)) }
         if noWait { arguments["no_wait"] = .bool(true) }
         return arguments
     }
@@ -194,7 +195,7 @@ struct RenderCommand: AsyncParsableCommand {
 
         func run() async throws {
             var arguments = picture.arguments
-            if let out { arguments["out"] = .string(out) }
+            if let out { arguments["out"] = .string(absolutePath(out)) }
             try await execute("render_proof", global, arguments)
         }
     }
@@ -253,7 +254,7 @@ struct RenderCommand: AsyncParsableCommand {
         func run() async throws {
             var arguments: [String: JSONValue] = [:]
             if let job { arguments["job"] = .string(job) }
-            if let out { arguments["out"] = .string(out) }
+            if let out { arguments["out"] = .string(absolutePath(out)) }
             try await execute("render_fetch", global, arguments)
         }
     }
