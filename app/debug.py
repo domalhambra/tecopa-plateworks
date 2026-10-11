@@ -13,12 +13,14 @@ With the gate on, the routes answer only a request whose Host header is local.
 
 Design: docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md."""
 from __future__ import annotations
+import inspect
+import math
 import os
 import platform
 import re
 import time
 from fastapi import APIRouter, Depends, HTTPException, Request
-from app import provenance, serialize, session
+from app import geo, provenance, serialize, session
 
 
 def enabled(env=None) -> bool:
@@ -66,9 +68,11 @@ def _session_detail(sid: str, data: dict, full: bool) -> dict:
             "edition": data.get("edition", 1), "lineage": data.get("lineage", [])}
 
 
-def build_router(*, queues: dict, caches: dict, started: float) -> APIRouter:
+def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
+                 regions: dict) -> APIRouter:
     """`queues` maps a name to a ThreadJobQueue, `caches` a name to a BaseCache,
-    `started` is the engine's start time. Passed in, not imported, so this module
+    `started` is the engine's start time, `forms` maps a name to a route function,
+    `regions` a region id to a Region. Passed in, not imported, so this module
     never imports app.main."""
     r = APIRouter(prefix="/api/debug", dependencies=[Depends(_local_host_only)])
 
@@ -108,6 +112,32 @@ def build_router(*, queues: dict, caches: dict, started: float) -> APIRouter:
         except KeyError:
             raise HTTPException(404, "Unknown session")
         return _session_detail(sid, data, full)
+
+    @r.get("/sessions/{sid}/starter_crop")
+    async def session_starter_crop(sid: str, print_w: float, print_h: float):
+        if not all(math.isfinite(v) and v > 0 for v in (print_w, print_h)):
+            raise HTTPException(422, "print_w and print_h must be finite and positive")
+        try:
+            data = session.get(sid)
+        except KeyError:
+            raise HTTPException(404, "Unknown session")
+        region = regions.get(data.get("region_id"))
+        if region is None:
+            raise HTTPException(404, f"Unknown region {data.get('region_id')!r}")
+        # the same two steps as /api/upload, so 17 by 22 gives the upload's own crop:
+        # the tracks go to overview pixels, then app.geo frames them
+        tpx = [[geo.crs_to_overview_px(region.geo, x, y) for x, y in t.coords]
+               for t in data.get("tracks") or []]
+        crop = geo.starter_crop(region.geo, tpx, print_w, print_h,
+                                native_resolution_m=region.cfg["native_resolution_m"])
+        return {"starter_crop": list(crop)}
+
+    @r.get("/forms")
+    async def list_forms():
+        # FastAPI ignores a form field it does not know. The tecopa tool refuses a
+        # misspelled name against these lists and holds no copy of the names.
+        return {name: list(inspect.signature(fn).parameters)
+                for name, fn in forms.items()}
 
     @r.get("/caches")
     async def list_caches():

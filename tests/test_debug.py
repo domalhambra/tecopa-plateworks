@@ -2,12 +2,14 @@
 # The read-only debug routes behind TECOPA_DEBUG=1 (the `tecopa` tool reads them).
 # The router is built on a small app of its own here, so the gate-on shape is tested
 # without re-importing app.main. The gate-off shape is tested on the live app.
+import inspect
+import json
 import time
 import numpy as np
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from app import basecache, debug, jobs, session
+from app import basecache, debug, geo, jobs, main, serialize, session
 from app.ingest import Track
 from app.spec import CompositionSpec
 from starlette.requests import Request
@@ -18,7 +20,7 @@ def _client():
     app = FastAPI()
     app.include_router(debug.build_router(
         queues={"render": q}, caches={"base": basecache.BaseCache(1000)},
-        started=time.time() - 5))
+        started=time.time() - 5, forms=main.DEBUG_FORMS, regions=main.REGIONS))
     # the routes answer only a local Host header, and TestClient's default is "testserver"
     return TestClient(app, base_url="http://127.0.0.1"), q
 
@@ -39,6 +41,23 @@ def _make_session(with_spec=False):
     return session.create({"region_id": "lassen_ca", "tracks": [t],
                            "hotspots": [{"x": 1.0, "y": 2.0, "weight": 1, "label": "Camp"}],
                            "spec": spec})
+
+
+def _upload():
+    # a real upload on the live app: the session store is shared, so the debug client
+    # reads the same session, and the answer carries the crop the studio starts from
+    files = [("files", ("a.gpx", open("tests/fixtures/sample.gpx", "rb").read(),
+                        "application/gpx+xml"))]
+    r = TestClient(main.app).post("/api/upload", files=files)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _frozen(sid):
+    # the whole session as text, so a before and an after compare exactly
+    data = dict(session.get(sid))
+    data["tracks"] = [serialize.track_to_json(t) for t in data["tracks"]]
+    return json.dumps(data, sort_keys=True)
 
 
 def test_gate_reads_only_the_exact_value():
@@ -123,6 +142,103 @@ def test_caches_reports_each_cache():
                              "hits": 0, "misses": 0}}
 
 
+FORM_ROUTES = {"proof": "/api/proof", "final_submit": "/api/final/submit",
+               "wallpapers_submit": "/api/wallpapers/submit",
+               "timelapse_submit": "/api/timelapse/submit",
+               "reprint": "/api/reprint", "continue": "/api/continue"}
+
+
+def test_forms_names_each_route_functions_fields_in_declaration_order():
+    c, _ = _client()
+    forms = c.get("/api/debug/forms").json()
+    assert list(forms) == list(FORM_ROUTES)
+    assert forms["proof"] == list(inspect.signature(main.proof).parameters)
+    for name in ("session_id", "x0", "title", "print_w", "soft_light", "bleed"):
+        assert name in forms["proof"], name
+    assert forms["final_submit"] == ["session_id", "format", "embed_spec"]
+    # a file parameter is a field too: the tool sends the file under this name
+    assert forms["reprint"][0] == "file" and forms["continue"][0] == "file"
+    for name, fn in main.DEBUG_FORMS.items():
+        assert forms[name] == list(inspect.signature(fn).parameters), name
+
+
+def test_forms_table_holds_the_function_each_route_runs():
+    # The table holds the functions, not their names, so a rename with no table edit
+    # is a NameError when app.main is imported. This holds the other half: an entry
+    # that names a function its route no longer runs.
+    posts = {r.path: r.endpoint for r in main.app.routes
+             if "POST" in (getattr(r, "methods", None) or ())}
+    assert main.DEBUG_FORMS == {name: posts[path] for name, path in FORM_ROUTES.items()}
+
+
+def test_starter_crop_at_the_default_size_is_the_upload_answer():
+    c, _ = _client()
+    up = _upload()
+    r = c.get(f"/api/debug/sessions/{up['session']}/starter_crop?print_w=17&print_h=22")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"starter_crop": up["starter_crop"]}
+
+
+def test_starter_crop_takes_the_shape_of_the_print_size():
+    c, _ = _client()
+    up = _upload()
+    r = c.get(f"/api/debug/sessions/{up['session']}/starter_crop?print_w=11&print_h=17")
+    x0, y0, x1, y1 = r.json()["starter_crop"]
+    assert x0 < x1 and y0 < y1
+    # the shape is judged on the ground, where the proof judges it
+    region = main.REGIONS[up["region"]].geo
+    left, top = geo.overview_px_to_crs(region, x0, y0)
+    right, bottom = geo.overview_px_to_crs(region, x1, y1)
+    assert abs((right - left) / (top - bottom) - 11 / 17) < 1e-6
+    assert [x0, y0, x1, y1] != up["starter_crop"]
+
+
+def test_starter_crop_of_an_unknown_session_is_a_404_that_names_the_cause():
+    c, _ = _client()
+    r = c.get("/api/debug/sessions/nope/starter_crop?print_w=17&print_h=22")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown session"
+
+
+def test_starter_crop_of_a_session_on_an_unknown_plate_is_a_404():
+    c, _ = _client()
+    sid = session.create({"region_id": "no_such_plate", "tracks": [_track()],
+                          "hotspots": []})
+    r = c.get(f"/api/debug/sessions/{sid}/starter_crop?print_w=17&print_h=22")
+    assert r.status_code == 404 and r.json()["detail"] == "Unknown region 'no_such_plate'"
+
+
+@pytest.mark.parametrize("query", ["print_w=0&print_h=22", "print_w=17&print_h=0",
+                                   "print_w=-17&print_h=22", "print_w=17&print_h=-22",
+                                   "print_w=nan&print_h=22", "print_w=17&print_h=nan",
+                                   "print_w=inf&print_h=22", "print_w=17&print_h=-inf",
+                                   "print_w=wide&print_h=22",
+                                   "print_w=17", "print_h=22", ""])
+def test_starter_crop_refuses_a_size_that_is_not_finite_and_positive(query):
+    c, _ = _client()
+    sid = _make_session()
+    r = c.get(f"/api/debug/sessions/{sid}/starter_crop?{query}")
+    assert r.status_code == 422, r.text
+
+
+def test_gate_off_means_the_live_app_has_no_forms_and_no_starter_crop():
+    sid = _make_session()
+    live = TestClient(main.app)
+    for path in ("/forms", f"/sessions/{sid}/starter_crop?print_w=17&print_h=22"):
+        r = live.get("/api/debug" + path)
+        assert r.status_code == 404 and r.json() == {"detail": "Not Found"}, path
+
+
+def test_forms_and_starter_crop_leave_the_session_as_it_was():
+    c, _ = _client()
+    sid = _upload()["session"]
+    before = _frozen(sid)
+    assert c.get("/api/debug/forms").status_code == 200
+    for size in ("print_w=17&print_h=22", "print_w=11&print_h=17"):
+        assert c.get(f"/api/debug/sessions/{sid}/starter_crop?{size}").status_code == 200
+    assert _frozen(sid) == before
+    assert set(session.get(sid)) == set(json.loads(before))
+
+
 LOCAL_ONLY = "Debug routes answer only a local Host header."
 
 
@@ -131,7 +247,8 @@ def test_a_foreign_host_header_is_refused_on_every_route():
     c, _ = _client()
     sid = _make_session(with_spec=True)
     for path in ("/engine", "/jobs", "/sessions", "/sessions/x?full=1",
-                 f"/sessions/{sid}?full=1", "/caches"):
+                 f"/sessions/{sid}?full=1", "/caches", "/forms",
+                 f"/sessions/{sid}/starter_crop?print_w=17&print_h=22"):
         r = c.get("/api/debug" + path, headers={"Host": "attacker.example:8848"})
         assert r.status_code == 403, path
         # 403 and not 404: the tecopa tool reads a 404 "Not Found" as "the gate is off"

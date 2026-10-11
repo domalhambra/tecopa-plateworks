@@ -111,15 +111,9 @@ TIMELAPSE_DEFAULT_DPI = PROOF_DPI
 # the tests reads the schema, so the pages go rather than the promise.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
-# Debug routes for the `tecopa` tool: read-only, and present only under
-# TECOPA_DEBUG=1, which the macOS launcher sets. With the gate off this router is
-# never included, so every /api/debug path falls through to the static mount's 404.
+# The engine's start time, for the debug routes. They are included at the end of
+# this file, after the route functions that /api/debug/forms names.
 STARTED = time.time()
-if debug.enabled():
-    app.include_router(debug.build_router(
-        queues={"render": QUEUE, "build": BUILD_QUEUE, "proof": PROOF_QUEUE},
-        caches={"base": BASE_CACHE, "ink": INK_CACHE},
-        started=STARTED))
 
 # The deliverable isn't only a print: a PDF suits "an image someone saves for
 # themselves" and is what a print shop asks for anyway (V1-10). Both encode the
@@ -1918,6 +1912,21 @@ async def continue_poster(file: UploadFile = File(...),
             "journey_light": _journey_light_meta(tracks),
             "final_dpi": FINAL_DPI,        # same client-truth contract as /api/upload
             "prefill": prefill}
+
+# Debug routes for the `tecopa` tool: read-only, and present only under
+# TECOPA_DEBUG=1, which the macOS launcher sets. With the gate off this router is
+# never included, so every /api/debug path falls through to the static mount's 404.
+# DEBUG_FORMS holds the functions and not their names, so a renamed route breaks
+# this import. It is built with the gate off too, so the tests see that break.
+DEBUG_FORMS = {"proof": proof, "final_submit": final_submit,
+               "wallpapers_submit": wallpapers_submit,
+               "timelapse_submit": timelapse_submit,
+               "reprint": reprint, "continue": continue_poster}
+if debug.enabled():
+    app.include_router(debug.build_router(
+        queues={"render": QUEUE, "build": BUILD_QUEUE, "proof": PROOF_QUEUE},
+        caches={"base": BASE_CACHE, "ink": INK_CACHE},
+        started=STARTED, forms=DEBUG_FORMS, regions=REGIONS))
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
