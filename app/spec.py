@@ -1,7 +1,8 @@
 # app/spec.py
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 import math
+import numbers
 
 # All three are "this picture can't be made here" conditions, not bugs: the API maps
 # any SpecError to a humanized 422 (like the zoom cap), so a single except catches them.
@@ -61,6 +62,9 @@ EDITION_MAX = 999
 # for a plate built on more (or wordier) sources while still bounding what a crafted
 # manifest can ride into the cartouche painter.
 CREDIT_MAX_CHARS = 200
+# The title's own bound. The studio's field stops at 60 characters and a region name
+# at 80; a file from outside can carry any length into the cartouche painter.
+TITLE_MAX_CHARS = 200
 
 
 def year_span(track_days) -> str:
@@ -110,6 +114,10 @@ STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 "soft_light": (0.0, 1.0), "haze_strength": (0.0, 1.0),
                 # Water (v1.14): the lake depth vignette (Imhof's littoral shelf).
                 "water_depth": (0.0, 1.0)}
+
+_KIND_WORDS = {"float": "a number", "int": "a whole number", "str": "text",
+               "bool": "true or false", "list": "a list", "list | None": "a list"}
+
 
 @dataclass
 class CompositionSpec:
@@ -287,7 +295,46 @@ class CompositionSpec:
         # same ratio, so this is bleed-invariant by construction
         return (self.crop[2] - self.crop[0]) / max(1, round(self.print_w_in * dpi))
 
+    def _require_types(self):
+        """Each field holds the kind of value its annotation names, or SpecError.
+
+        A spec can come out of an uploaded file, where any field can hold any JSON
+        value. Every check in validate() below reads a number as a number, so a
+        string print size was a TypeError: a 500, not the 422 that the manifest door
+        promises. serialize.spec_from_json stays read-tolerant (invariant 7), so the
+        type rule lives here, in the one validator every path already calls.
+
+        A bool is refused where a number belongs. Python counts True as 1, so a JSON
+        true passed every range check and then rode the spec as a bool."""
+        for f in fields(self):
+            v = getattr(self, f.name)
+            kind = f.type if isinstance(f.type, str) else getattr(f.type, "__name__", "")
+            if kind == "float":
+                ok = isinstance(v, numbers.Real) and not isinstance(v, bool)
+            elif kind == "int":
+                ok = isinstance(v, numbers.Integral) and not isinstance(v, bool)
+            elif kind == "str":
+                ok = isinstance(v, str)
+            elif kind == "bool":
+                # a numpy bool is not a Python bool, and a render path may set one
+                ok = isinstance(v, bool) or type(v).__name__ in ("bool_", "bool")
+            elif kind == "list":
+                ok = isinstance(v, (list, tuple))
+            elif kind == "list | None":
+                ok = v is None or isinstance(v, (list, tuple))
+            else:
+                continue                      # the two tuples have their own rule below
+            if not ok:
+                raise SpecError(f"{f.name} must be {_KIND_WORDS[kind]}")
+        if (not isinstance(self.crop, (list, tuple)) or len(self.crop) != 4
+                or not all(isinstance(c, numbers.Real) and not isinstance(c, bool)
+                           for c in self.crop)):
+            raise SpecError("crop must be four numbers")
+        if len(self.title_text) > TITLE_MAX_CHARS:
+            raise SpecError(f"title_text must be at most {TITLE_MAX_CHARS} characters")
+
     def validate(self, dpi: int = 300):
+        self._require_types()
         # finiteness first: a NaN/inf print size or crop (a client can POST print_w=nan)
         # would make round() raise ValueError/OverflowError -- which are NOT SpecError, so
         # they'd escape the endpoint's `except SpecError` as an uncaught 500. Convert to a

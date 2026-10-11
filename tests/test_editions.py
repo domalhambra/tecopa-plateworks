@@ -514,6 +514,73 @@ def test_continue_rejects_a_png_without_a_manifest():
     r = c.post("/api/continue", files={"file": ("plain.png", buf.getvalue(), "image/png")})
     assert r.status_code == 422 and "manifest" in r.json()["detail"].lower()
 
+_VALID_MANIFEST = None
+
+def _valid_manifest():
+    """One real edition-1 manifest for the crafted cases below, rendered one time."""
+    global _VALID_MANIFEST
+    if _VALID_MANIFEST is None:
+        _VALID_MANIFEST = json.dumps(_base_manifest(_client()))
+    return json.loads(_VALID_MANIFEST)
+
+# A crafted file can put any JSON value in any spec field. Each of these reached the
+# render path as a TypeError or an IndexError, which is a 500 and not the 422 that
+# provenance.spec_from_manifest promises (it "raises only SpecError").
+_WRONG_TYPES = [
+    ("print_w_in", "6"), ("print_h_in", None), ("print_w_in", [6]),
+    ("native_resolution_m", "10"), ("bleed_in", "0.1"), ("top_clear_frac", [0]),
+    ("bottom_clear_frac", {}), ("screen_ppi", "460"),
+    ("crop", ["a", "b", "c", "d"]), ("crop", [1.0, 2.0, 3.0]), ("crop", "abcd"),
+    ("crop", None), ("crop", [0.0, 0.0, True, 1.0]),
+    # a JSON true is an int in Python, so it passed every range check as 1
+    ("oblique", True), ("track_width_pt", True), ("soft_light", False),
+    ("oblique", "0.5"), ("terrain_depth", None), ("track_max_darken", "x"),
+    ("grain_strength", None), ("photo_box_in", {}), ("title_pt", "big"),
+    ("label_pt", [9]), ("grain_cell_in", "0.01"),
+    ("seed", "7"), ("seed", 7.5), ("seed", True),
+    ("title_text", ["x", "y"]), ("title_text", {"a": 1}), ("title_text", 5),
+    ("title_text", "x" * 201),
+    ("region_id", ["lassen_ca"]), ("region_id", 5), ("region_id", {"a": 1}),
+    ("crs", 7), ("crs", None),
+    ("contours", "yes"), ("compass", [1]), ("dry_lakes", {}), ("profile", None),
+    ("tracks", 5), ("tracks", "abc"),
+]
+# The reader is tolerant on purpose (invariant 7): it turns these into an empty list,
+# so the file opens. The rule for them is only "never a 500".
+_TOLERATED = [("hotspots", 5), ("hotspots", "abc"), ("track_days", 5)]
+
+@pytest.mark.parametrize("field,value", _WRONG_TYPES,
+                         ids=[f"{f}={json.dumps(v)[:24]}" for f, v in _WRONG_TYPES])
+def test_a_crafted_field_type_is_a_422_on_both_file_verbs(field, value):
+    c = _client()
+    m = _valid_manifest()
+    m["spec"][field] = value
+    if field == "screen_ppi":                      # read only for a wallpaper
+        m["spec"]["output_kind"] = "wallpaper"
+    png = _embed(m)
+    for verb in ("/api/continue", "/api/reprint"):
+        r = c.post(verb, files={"file": ("x.png", png, "image/png")})
+        assert r.status_code == 422, f"{verb}: {r.status_code} {r.text[:200]}"
+        assert isinstance(r.json()["detail"], str)
+
+@pytest.mark.parametrize("field,value", _TOLERATED,
+                         ids=[f"{f}={json.dumps(v)}" for f, v in _TOLERATED])
+def test_a_field_the_reader_tolerates_is_never_a_500(field, value):
+    c = _client()
+    m = _valid_manifest()
+    m["spec"][field] = value
+    png = _embed(m)
+    for verb in ("/api/continue", "/api/reprint"):
+        r = c.post(verb, files={"file": ("x.png", png, "image/png")})
+        assert r.status_code in (200, 422), f"{verb}: {r.status_code} {r.text[:200]}"
+
+def test_the_valid_manifest_behind_the_crafted_cases_still_reprints():
+    # the cases above prove nothing if the base file is refused for another reason
+    c = _client()
+    png = _embed(_valid_manifest())
+    assert c.post("/api/reprint", files={"file": ("x.png", png, "image/png")}).status_code == 200
+    assert c.post("/api/continue", files={"file": ("x.png", png, "image/png")}).status_code == 200
+
 def test_continue_rejects_an_unbuilt_region():
     c = _client()
     m = _base_manifest(c)

@@ -384,7 +384,15 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
         raise
     except Exception as e:
         raise ManifestError("This file's Tecopa Plateworks manifest is malformed.") from e
-    drop_unembedded_photos(spec)
-    bound_geometry(spec)
-    spec.validate(spec.final_dpi())
+    # The same rule for the three steps below. validate() names a field of the wrong
+    # type itself; this catches what it does not name (a hotspot list that is a number,
+    # a track that is not a list), so the promise above holds: only SpecError leaves.
+    try:
+        drop_unembedded_photos(spec)
+        bound_geometry(spec)
+        spec.validate(spec.final_dpi())
+    except SpecError:
+        raise
+    except Exception as e:
+        raise ManifestError("This file's Tecopa Plateworks manifest is malformed.") from e
     return spec

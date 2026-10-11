@@ -93,3 +93,37 @@ def test_style_defaults_validate():
     # the Style panel's server defaults pass validation on a cap-clearing crop
     s = CompositionSpec(**base_kwargs(crop=(430000.0, 4345000.0, 484000.0, 4417000.0)))
     assert s.validate(dpi=300) is s
+
+
+# ---- field types: a spec can come out of an uploaded file ----
+
+_OK_CROP = (430000.0, 4345000.0, 484000.0, 4417000.0)   # clears the zoom cap at 18 x 24
+
+@pytest.mark.parametrize("kw,names", [
+    ({"print_w_in": "18"}, "print_w_in"), ({"print_h_in": None}, "print_h_in"),
+    ({"native_resolution_m": "10"}, "native_resolution_m"),
+    ({"oblique": True}, "oblique"), ({"soft_light": False}, "soft_light"),
+    ({"track_width_pt": "2.6"}, "track_width_pt"), ({"title_pt": [9]}, "title_pt"),
+    ({"seed": 7.5}, "seed"), ({"seed": True}, "seed"),
+    ({"title_text": ["a"]}, "title_text"), ({"region_id": 5}, "region_id"),
+    ({"crs": None}, "crs"), ({"contours": "yes"}, "contours"),
+    ({"tracks": 5}, "tracks"), ({"hotspots": "abc"}, "hotspots"),
+    ({"track_days": 5}, "track_days"),
+    ({"crop": "abcd"}, "crop"), ({"crop": (1.0, 2.0, 3.0)}, "crop"),
+    ({"crop": (0.0, 0.0, True, 1.0)}, "crop"), ({"crop": None}, "crop"),
+    ({"title_text": "x" * 201}, "title_text"),
+])
+def test_a_field_of_the_wrong_type_is_a_spec_error_that_names_it(kw, names):
+    # each of these was a TypeError or an IndexError, which an endpoint cannot map
+    # to a 422: the validator must refuse it by name first
+    with pytest.raises(SpecError, match=names):
+        CompositionSpec(**base_kwargs(**{"crop": _OK_CROP, **kw})).validate(dpi=300)
+
+def test_the_number_types_a_real_spec_holds_all_pass():
+    # an int where a float belongs is a number, and numpy's scalars are what the
+    # render path and the wallpaper presets put on a spec
+    s = CompositionSpec(**base_kwargs(
+        crop=tuple(np.float64(c) for c in _OK_CROP), print_w_in=18, print_h_in=np.float64(24),
+        native_resolution_m=np.int64(10), oblique=np.float32(0.5), seed=np.int64(7),
+        contours=np.bool_(True), track_days=None, title_text="x" * 200))
+    assert s.validate(dpi=300) is s
