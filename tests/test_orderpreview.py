@@ -7,7 +7,7 @@ import pytest
 
 from app import orderprep as op
 from app import orderpreview as opv
-from app.orderplate import PlateError, nestled_frame, track_shares
+from app.orderplate import CoverageError, PlateError, nestled_frame, track_shares
 from tests.test_orderprep import WIDE, _make_order, tools  # noqa: F401
 
 KM = 1000.0
@@ -72,6 +72,19 @@ def test_a_panel_with_no_track_refuses_the_set():
     assert plan["two"]["offered"], plan["two"]["why"]
 
 
+def test_two_panels_with_no_track_are_named_in_the_plural():
+    cand = [c for c in opv.candidates("three") if c.orientation == "landscape"][0]   # 70 x 17 in
+    frame = (0.0, 0.0, 70 * KM, 17 * KM)                      # 1 km of ground for each inch
+    middle = [_line(30, 8, 40, 8)]                            # all of it on panel 2 (24-46 in)
+    entry = opv.judge(cand, frame, (30 * KM, 8 * KM, 40 * KM, 8 * KM), middle)
+    assert not entry["offered"]
+    # 14 % of the width would refuse it first; a route across 30 % that the frame
+    # holds on one panel is the case of test_a_widened_frame_is_judged_as_widened
+    wide = [_line(24.5, 8, 45.5, 8)]
+    entry = opv.judge(cand, frame, (24.5 * KM, 8 * KM, 45.5 * KM, 8 * KM), wide)
+    assert entry["why"] == "panels 1 and 3 hold no track"
+
+
 def test_the_rule_follows_the_line_and_not_its_vertices():
     cand = [c for c in opv.candidates("three") if c.orientation == "landscape"][0]
     track = [_line(0, 0, 200, 5)]                             # two vertices, at the ends
@@ -112,6 +125,15 @@ def test_terrain_too_coarse_refuses_a_size_and_the_list_cannot_force_it():
     assert plan["17x22"]["offered"]
 
 
+def test_a_failed_coverage_query_is_not_a_refused_size():
+    def widen(cand, frame):
+        if cand.key == "three":
+            raise CoverageError("The 3DEP coverage check failed:\nboom")
+        return frame
+    with pytest.raises(CoverageError, match="coverage check failed"):
+        _plan([_line(0, 0, 200, 5)], widen=widen)
+
+
 def test_a_widened_frame_is_judged_as_widened():
     def widen(cand, frame):                                   # the 2x rule doubled the frame
         cx, cy = (frame[0] + frame[2]) / 2, (frame[1] + frame[3]) / 2
@@ -124,7 +146,7 @@ def test_a_widened_frame_is_judged_as_widened():
     # on 70 x 17 in the same route runs from 24.5 to 45.5 in: all of it is on panel 2
     # (24-46), so the other rule refuses the set
     assert plan["three"]["width_share"] == 0.3 and not plan["three"]["offered"]
-    assert plan["three"]["why"].endswith("holds no track")
+    assert plan["three"]["why"] == "panels 1 and 3 hold no track"
     plan = _plan([_line(0, 0, 200, 5)], widen=lambda c, f: widen(c, widen(c, f)))
     for key in ("two", "three"):                             # 15 % of the width
         assert plan[key]["why"] == "the tracks span 15% of the sheet's width, under 30%"
@@ -219,3 +241,74 @@ def test_a_folder_with_no_track_stops_the_preview(tmp_path, tools):
     (d / "in" / "trip.gpx").write_text("<gpx></gpx>")
     with pytest.raises(opv.OrderError, match="no track points"):
         _preview(d, tools)
+
+
+# A query of the 3DEP index that fails only for a box wider than 1 degree: the
+# single sheets of WIDE are 0.5 degrees across, and a set is wider.
+STUB_COVERAGE_FAILS_WHEN_WIDE = """
+import json, os, sys
+w, s, e, n = map(float, sys.argv[1:5])
+with open(os.environ["STUB_COVERAGE_LOG"], "a") as f:
+    f.write("failed\\n" if e - w > 1.0 else "answered\\n")
+if e - w > 1.0:
+    sys.exit("the index did not answer")
+print(json.dumps({"1": 1.0, "3": 0.0, "10": 1.0, "30": 1.0, "60": 0.0}))
+"""
+
+
+def test_a_failed_coverage_query_stops_the_whole_preview(tmp_path, tools, monkeypatch):
+    # it must not read as "this size is refused": the client would lose a size to a
+    # network fault and nobody would know
+    bad = tmp_path / "stubs" / "wide_fails.py"
+    bad.write_text(STUB_COVERAGE_FAILS_WHEN_WIDE)
+    asked = tmp_path / "coverage_asks.txt"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    calls, pdfs = [], []
+    with pytest.raises(CoverageError, match=r"(?s)coverage check failed.*the index did not answer"):
+        _preview(d, tools, calls, pdfs)
+    # the single sheets were answered; the fault came at a later size
+    assert asked.read_text().split() == ["answered", "answered", "failed"]
+    assert calls == [] and pdfs == []
+    assert not (d / "work" / "preview" / "preview.json").exists()
+
+
+def test_a_coverage_query_with_no_result_stops_the_preview(tmp_path, tools):
+    bad = tmp_path / "stubs" / "silent.py"
+    bad.write_text("print('not json')\n")
+    tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    with pytest.raises(CoverageError, match="printed no result"):
+        _preview(d, tools)
+    assert not (d / "work" / "preview" / "preview.json").exists()
+
+
+def test_terrain_too_coarse_for_one_size_still_gives_a_preview(tmp_path, tools, monkeypatch):
+    real = op._plan_grid
+
+    def plan(tools, frame, epsg, print_w_in, env):
+        if print_w_in > 60:                                  # the three-panel set only
+            raise PlateError("The terrain data is still too coarse for this print size "
+                             "after 5 widenings.")
+        return real(tools, frame, epsg, print_w_in, env)
+    monkeypatch.setattr(op, "_plan_grid", plan)
+    d = _make_order(tmp_path, bbox=(-117.9, 35.80, -115.7, 35.86), size="11x17")
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22", "three"]\n')
+    state = _preview(d, tools)
+    by_key = {e["key"]: e for e in state["sizes"]}
+    assert by_key["three"]["blocked"] and not by_key["three"]["offered"]
+    assert by_key["three"]["why"].startswith("The terrain data is still too coarse")
+    assert by_key["17x22"]["offered"]
+    assert (d / "work" / "preview" / "preview.json").exists()
+
+
+def test_the_preview_keeps_its_own_build_log(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    op.prepare(str(d), tools, log=lambda s: None)
+    before = (d / "work" / "build.log").read_bytes()
+    assert before
+    state = _preview(d, tools)
+    assert state["plate"]["kind"] == "built"
+    assert (d / "work" / "build.log").read_bytes() == before
+    assert b"cache=" in (d / "work" / "preview" / "build.log").read_bytes()

@@ -459,6 +459,23 @@ def test_coverage_failure_is_a_plate_error(tmp_path, tools):
         op.prepare(str(d), tools, log=lambda s: None)
 
 
+@pytest.mark.parametrize("body,words", [
+    ('import sys\nsys.exit("boom")\n', "coverage check failed:\nboom"),
+    ("print('no json here')\n", "printed no result"),
+    ("", "printed no result"),
+    ("print('[1, 2]')\n", "printed no result"),
+    ("print('{\"10\": null}')\n", "printed no result"),
+])
+def test_a_coverage_query_that_fails_has_its_own_error(tmp_path, tools, body, words):
+    # the preview must tell "the query failed" from "the terrain is too coarse"
+    bad = tmp_path / "stubs" / "bad_coverage.py"
+    bad.write_text(body)
+    tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
+    with pytest.raises(opl.CoverageError, match=words) as caught:
+        op.read_coverage(tools, SMALL, dict(os.environ))
+    assert isinstance(caught.value, opl.PlateError)
+
+
 def test_failed_build_keeps_the_log(tmp_path, tools):
     bad = tmp_path / "stubs" / "bad_prep.py"
     bad.write_text("import os, sys\n"

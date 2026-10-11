@@ -40,6 +40,12 @@ class PlateError(ValueError):
     """An order's plate cannot be planned or built. The message is for Dom."""
 
 
+class CoverageError(PlateError):
+    """The 3DEP index could not be read: the query failed or printed no result. This
+    says nothing about the terrain, so the preview must not read it as "this size is
+    refused". Every `except PlateError` still catches it."""
+
+
 def conus_covered(bbox) -> bool:
     w, s, e, n = bbox
     return w >= CONUS[0] and s >= CONUS[1] and e <= CONUS[2] and n <= CONUS[3]

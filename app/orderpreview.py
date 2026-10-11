@@ -20,8 +20,8 @@ from app.geo import RegionGeo
 from app.ingest import load_tracks, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
                        parse_order_size, refuse_inside_repo)
-from app.orderplate import (ALBERS_EPSG, MAX_UPSAMPLE, PLATE_PAD_M, PlateError, choose_grid,
-                            conus_covered, nestled_frame, order_epsg, plate_bounds,
+from app.orderplate import (ALBERS_EPSG, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
+                            PlateError, choose_grid, conus_covered, nestled_frame, order_epsg, plate_bounds,
                             project_bbox, to_lonlat_bbox, track_shares)
 from app.regionbuild import slugify
 from app.spec import CompositionSpec
@@ -112,6 +112,13 @@ def gaps_hiding_ends(tracks_m, frame, cand) -> list:
     return sorted(hidden)
 
 
+def _no_track(numbers) -> str:
+    """'panel 2 holds no track', 'panels 1 and 3 hold no track'."""
+    if len(numbers) == 1:
+        return f"panel {numbers[0]} holds no track"
+    return f"panels {', '.join(numbers[:-1])} and {numbers[-1]} hold no track"
+
+
 def judge(cand, frame, bounds_m, tracks_m) -> dict:
     """One size's entry: its frame, its shares, and the fit rule's answer."""
     w_share, h_share = track_shares(bounds_m, frame)
@@ -128,7 +135,7 @@ def judge(cand, frame, bounds_m, tracks_m) -> dict:
             entry.update(offered=False, why=f"the tracks span {w_share:.0%} of the sheet's "
                                             f"width, under {SET_MIN_FILL:.0%}")
         elif empty:
-            entry.update(offered=False, why=f"panel {' and '.join(empty)} holds no track")
+            entry.update(offered=False, why=_no_track(empty))
     return entry
 
 
@@ -137,7 +144,9 @@ def plan_sizes(bounds_m, tracks_m, widen=None, forced=()) -> list:
 
     `widen(cand, frame)` returns the frame the real print would get under the 2x
     rule, or raises PlateError when the terrain cannot hold the size. `forced` is
-    the `sizes` list of order.toml: it overrides the fit rule, never the terrain."""
+    the `sizes` list of order.toml: it overrides the fit rule, never the terrain.
+    A CoverageError from `widen` is not caught: the 3DEP index did not answer, which
+    says nothing about the size, so the whole preview stops."""
     entries = []
     for key in SIZE_KEYS:
         cand = choose(candidates(key), bounds_m)
@@ -146,6 +155,8 @@ def plan_sizes(bounds_m, tracks_m, widen=None, forced=()) -> list:
             if widen is not None:
                 frame = widen(cand, frame)
             entry = judge(cand, frame, bounds_m, tracks_m)
+        except CoverageError:
+            raise
         except PlateError as ex:
             entry = judge(cand, frame, bounds_m, tracks_m)
             entry.update(offered=False, why=str(ex), blocked=True)
@@ -253,7 +264,8 @@ def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log) -> dict
         raise PlateError("The terrain data here is too coarse even for a preview.")
     plate, _ = _build(order, tools, union, epsg, grid, env, log, cwd=cache_dir,
                       root=os.path.join(order.work_dir, "preview", "plate"),
-                      rid="preview_" + order.id[len("order_"):])
+                      rid="preview_" + order.id[len("order_"):],
+                      build_log=os.path.join(order.work_dir, "preview", "build.log"))
     return plate
 
 

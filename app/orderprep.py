@@ -20,8 +20,8 @@ from dataclasses import dataclass
 from app.ingest import lonlat_extent
 from app.order import (OrderError, cache_path, load, orders_root, read_state,
                        refuse_inside_repo, write_state)
-from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, PlateError,
-                            choose_grid, conus_covered, curated_fit, needed_resolution,
+from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
+                            PlateError, choose_grid, conus_covered, curated_fit, needed_resolution,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
                             reference_share, to_lonlat_bbox, track_fill,
                             widen_for_upsample)
@@ -133,19 +133,21 @@ def curated_regions(root: str) -> list:
 
 def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
     """{layer metres: covered share}, for `layers` only when given. choose_grid
-    reads a layer left out as uncovered."""
+    reads a layer left out as uncovered. A query that fails, or prints no result,
+    raises CoverageError: a PlateError that the preview does not take for a size
+    the terrain refuses."""
     cmd = [tools.prep_python, tools.coverage_script, *map(str, bbox)]
     if layers:
         cmd += ["--layers", ",".join(str(r) for r in layers)]
     run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
                          env=env)
     if run.returncode != 0:
-        raise PlateError("The 3DEP coverage check failed:\n" + run.stderr[-800:])
+        raise CoverageError("The 3DEP coverage check failed:\n" + run.stderr[-800:])
     try:
         raw = json.loads(run.stdout.strip().splitlines()[-1])
         return {int(k): float(v) for k, v in raw.items()}
-    except (ValueError, IndexError) as ex:
-        raise PlateError(f"The 3DEP coverage check printed no result: {ex}") from ex
+    except (ValueError, IndexError, AttributeError, TypeError) as ex:
+        raise CoverageError(f"The 3DEP coverage check printed no result: {ex}") from ex
 
 
 def _plate_present(plate, landcover_rebuilds=0) -> bool:
@@ -367,9 +369,12 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     return state
 
 
-def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=None):
+def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=None,
+           build_log=None):
     """Build a plate. By default it is the order's own, under work/plate/<order id>/.
     `root` and `rid` name another place and id: the preview's coarse plate.
+    `build_log` is the file that keeps the build's lines, work/build.log by default:
+    the preview names its own, so it never replaces the log of the order's plate.
     region.json keeps the name as it was at build time, and a title change does not
     rebuild the plate, so later steps must take the title from order.title, never
     from region.json. `cwd`, when given, is the folder the prep subprocess runs in
@@ -388,9 +393,11 @@ def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=N
     started = time.monotonic()
     # work/build.log keeps every line of the build, so a failure can be read after
     # run_build sweeps the partial plate.
-    with open(os.path.join(order.work_dir, "build.log"), "w") as build_log:
+    build_log = build_log or os.path.join(order.work_dir, "build.log")
+    os.makedirs(os.path.dirname(build_log), exist_ok=True)
+    with open(build_log, "w") as log_file:
         def progress(line):
-            build_log.write(line + "\n")
+            log_file.write(line + "\n")
             log(line)
         result = run_build(params, repo_root=tools.repo_root,
                            regions_root=root,
