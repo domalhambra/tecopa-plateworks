@@ -4112,3 +4112,29 @@ between 0.7 and 1.9 GB: thin. The peak changes from run to run because the relie
 passes run at the same time. Pillow also prints a `DecompressionBombWarning` at 108.8
 megapixels. It is a warning below 179 megapixels, and the largest set is 116.8. A task
 that makes the final of a set larger must run this gate again.
+
+### Memory in the engine's own process (found in the review of task 6)
+
+The gate of task 1 measured a script that renders one sheet and exits. The review of
+task 6 measured the API path: a 71 megapixel final of a two-panel set, after a proof in
+the same process, painted at a peak of 15.0 GB. The cut and the zip ran at 2.7 GB and
+did not raise the peak. So the peak does not follow the pixel count, and the gate's
+14 to 15 GB for 116.8 megapixels does not prove the engine's own process stays under
+16 GB for the largest set.
+
+Open, to close with the engine running (task 13's smoke test starts it): render one
+three-panel final of 59 x 22 in on `rifle_aspen` through the engine, read the engine
+process's peak memory, and record it here. If it is over 16 GB, find what holds the
+memory (the relief passes run at the same time, and the proof caches stay loaded) and
+lower it before the branch is merged.
+
+### Found, and not part of this build
+
+- **PNG finals differ by a few bytes between two engine processes.** The colour profile
+  is made when the engine starts, and its header holds the clock. It is older than this
+  build and true for a single sheet. Pixels are the same. A separate task is proposed.
+- **A long title can leave panel 1.** The title block has no width limit: an 80-character
+  title at furniture scale 1.0 is 22 in wide on a 17 in panel. A single 17 x 22 already
+  cuts the same title at the sheet edge. The proof shows it.
+- **A marker behind a gap of a window set is not printed.** The proof covers it with the
+  wall tone, as the spec says. An order has no markers yet.
