@@ -101,8 +101,9 @@ one image per panel and drops the gap strips.
 tone, so the proof shows the set as it hangs.
 
 **The final** for a set is a zip with one file per panel, PNG or PDF. The zip's name
-ends in `_panels.zip`, and the members end in `_1of3`, `_2of3` and `_3of3`. The zip is
-byte-deterministic. A single sheet's final does not change.
+ends in `_panels.zip` for PNG and `_panels_pdf.zip` for PDF, and the members end in
+`_1of3`, `_2of3` and `_3of3`. A PNG zip is byte-deterministic. Only a PNG panel carries
+the manifest, so only a PNG panel can reprint the set. A single sheet's final does not change.
 
 ## 3. Labels and furniture
 

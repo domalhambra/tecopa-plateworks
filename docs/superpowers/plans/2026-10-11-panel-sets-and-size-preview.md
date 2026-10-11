@@ -37,7 +37,7 @@ Five read-only passes over the code found facts that the spec did not have. Each
 | 4 | The panel mark uses the `body` type role at the credit line's size. | `TYPE_ROLES` has no `caption` role. |
 | 5 | The proof form fields are `panels` and `panel_gap`. The spec fields are `panels` and `panel_gap_in`. | The route already names `bleed` for `bleed_in`. |
 | 6 | The per-file manifest key is `"panel": {"index": k, "of": n}`. It is present only on a set. | All panels share one spec, so the number cannot be a spec field. |
-| 7 | The zip is byte-deterministic: stored, with 1980 dates. Its name is `<stem>_panels.zip`. Members are `<stem>_1of3.png`. | Invariant 3. `scripts/pack_region.py` has the pattern. |
+| 7 | The zip is byte-deterministic: stored, with 1980 dates. Its name is `<stem>_panels.zip` for PNG and `<stem>_panels_pdf.zip` for PDF (task 7: one name for both let a PDF final replace the PNG one in a session). Members are `<stem>_1of3.png`. A PDF zip is not byte-deterministic, because Pillow's PDF writer is not. | Invariant 3. `scripts/pack_region.py` has the pattern. |
 | 8 | The wall tone of a gap strip is `(236, 232, 224)`. | One constant in `app/panels.py`. |
 | 9 | A set's furniture scale comes from one panel's area. | `_furniture_scale` reads the sheet's area, and a 74 × 17 sheet would draw furniture at 183 %. |
 | 10 | The watermark word is a parameter. On a set it is drawn once on each panel. | The word "PROOF" is a literal, and a two-panel sheet's centre is the gap. |
@@ -1779,7 +1779,7 @@ git commit -m "Any panel reprints its whole set, inspect names the panel, and a 
 - [ ] The size menu has "Two panels" and "Three panels". Choosing one shows the gap control and hides the bleed control.
 - [ ] The frame on the map has the set's shape and shows each gap strip.
 - [ ] A proof of a set arrives with the wall tone in each gap.
-- [ ] "Accept" on a set downloads a file whose name ends in `_panels.zip`.
+- [ ] "Accept" on a set downloads a file whose name ends in `_panels.zip` (PNG) or `_panels_pdf.zip` (PDF). The name comes from the server.
 - [ ] A panel file dropped on the library card shows "3 panels, 70×17 in" and "Panel 2 of 3".
 - [ ] `node --check` passes for each edited module, and `tests/test_static_registry.py` passes.
 
