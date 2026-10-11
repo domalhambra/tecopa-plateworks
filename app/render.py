@@ -1473,17 +1473,19 @@ PROFILE_INSET_IN = 0.35         # rev-2 strip inset from the sheet corner: physi
                                 # kept the shipped MARGIN_FRAC proportion for
                                 # byte-identity)
 PROFILE_GAP_IN = 0.16           # clear air between the cartouche stack and the strip
-FURNITURE_BASE_IN2 = 18.0 * 24.0   # the sheet all furniture sizes were designed on
-FURNITURE_SCALE_MIN = 0.75         # small sheets: shrink a little, stay legible
+FURNITURE_BASE_IN2 = 17.0 * 22.0   # the sheet all furniture sizes are designed on:
+                                   # the large sheet of the two-size menu (2026-10-11)
+FURNITURE_SCALE_MIN = 0.80         # the 11 x 17: smaller, with a 6 pt credit line
 FURNITURE_SCALE_MAX = 2.0          # oversize sheets: grow, never into novelty
 # ------------------------------------------------------------------------------------
 
 def _furniture_scale(spec):
-    """Furniture grows with the sheet (Dom): a 24x36 hangs farther from the eye than
-    an 18x24, so the compass, cartouche and scale bar scale with the sheet's linear
-    size (sqrt of area) relative to the 18x24 they were designed on -- then the
-    client's furniture_scale slider multiplies the auto-appropriate size. A pure
-    function of the spec, so proof == final at any DPI (invariant 1)."""
+    """Furniture grows with the sheet (Dom): a larger sheet hangs farther from the
+    eye, so the compass, cartouche and scale bar scale with the sheet's linear size
+    (sqrt of area) relative to the 17x22 they are designed on -- then the client's
+    furniture_scale slider multiplies the auto-appropriate size. A set is sized as one
+    of its panels. A pure function of the spec, so proof == final at any DPI
+    (invariant 1)."""
     # a set hangs as panels of 17 x 22 in, so its furniture is sized for one panel
     w, h = panel_geo.panel_size_in(spec)
     s = (w * h / FURNITURE_BASE_IN2) ** 0.5

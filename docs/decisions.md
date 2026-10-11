@@ -299,6 +299,12 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | A script that reads the network starts detached as a tracked run, in its own session, with a record on disk. | A plate build takes minutes and an MCP call must return at once. The run must also outlive the tool. | `tools/tecopa/Sources/TecopaKit/Runs.swift` |
 | `spec.validate()` refuses a field of the wrong type by name, and a JSON `true` where a number belongs. | A crafted poster file reached the render path as a `TypeError`, which is a 500. Forty cases now give a 422. | `app/spec.py`, `_require_types`; `tests/test_spec.py` |
 
+## 2026-10-11 (print sizes, panel sets and the size preview)
+
+| Decision | Why | Source |
+|---|---|---|
+| The furniture is designed on 17×22, not 18×24. The floor for a small sheet is 80 %, not 75 %. A reprint of an older file draws its furniture about 7 % larger. | The menu is 17×22 and 11×17. The 11×17 was a reduced 18×24 with a 6 pt credit line at the old floor. Invariant 7 allows the drift. | `superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md` §4 |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

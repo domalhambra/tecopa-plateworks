@@ -2,6 +2,7 @@
 # Finished-sheet furniture (V1-10 print-correctness): the keyline frame, the title
 # block with its deterministic stats caption. Blank canvases -- no DEM needed.
 import numpy as np
+import pytest
 from PIL import Image
 from app.spec import CompositionSpec
 from app import render
@@ -131,10 +132,16 @@ def test_compass_draws_above_title_block_and_toggles_off():
 # ---- furniture scales with the sheet (Dom): same crop, bigger print -> bigger
 # compass/cartouche, but the scale bar keeps telling the truth ----
 
+def _auto(w, h):
+    """The scale the engine gives a w x h sheet before the slider."""
+    s = (w * h / render.FURNITURE_BASE_IN2) ** 0.5
+    return min(max(s, render.FURNITURE_SCALE_MIN), render.FURNITURE_SCALE_MAX)
+
+
 def test_furniture_scale_tracks_sheet_size():
-    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24)) == 1.0
+    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24)) == pytest.approx(_auto(18, 24))
     big = render._furniture_scale(_spec(print_w_in=24, print_h_in=36))
-    assert abs(big - (864 / 432) ** 0.5) < 1e-9                  # sqrt(area ratio)
+    assert big == pytest.approx(_auto(24, 36))                   # sqrt(area ratio)
     assert render._furniture_scale(_spec(print_w_in=9, print_h_in=12)) == \
         render.FURNITURE_SCALE_MIN                               # clamped, not tiny
     assert render._furniture_scale(_spec(print_w_in=60, print_h_in=90)) == \
@@ -155,11 +162,11 @@ def test_furniture_slider_multiplies_the_auto_scale():
     # the Style panel's "Legend & compass size" knob rides the spec and multiplies
     # the sheet-appropriate automatic scale -- proof == final, and 1.0 is a no-op
     base = _spec(print_w_in=18, print_h_in=24)
-    assert render._furniture_scale(base) == 1.0
+    assert render._furniture_scale(base) == pytest.approx(_auto(18, 24))
     assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24,
-                                         furniture_scale=1.4)) == 1.4
+                                         furniture_scale=1.4)) == pytest.approx(_auto(18, 24) * 1.4)
     big = _spec(print_w_in=24, print_h_in=36, furniture_scale=0.75)
-    assert abs(render._furniture_scale(big) - (864 / 432) ** 0.5 * 0.75) < 1e-9
+    assert render._furniture_scale(big) == pytest.approx(_auto(24, 36) * 0.75)
 
 
 def test_scale_bar_stays_truthful_when_furniture_scales():
@@ -218,3 +225,19 @@ def test_label_keepout_does_not_blot_the_sheet_beyond_the_stack():
     ys, xs = np.nonzero(_painted(spec, w, h, dpi))
     ky, kx = np.nonzero(_kept_out(spec, w, h, dpi))
     assert kx.max() <= xs.max() + 1 and ky.min() >= ys.min() - 1
+
+
+def test_the_two_sheets_on_the_menu_set_the_furniture_scale():
+    """The menu is 17 x 22 and 11 x 17 (decisions, 2026-10-10). The large sheet is
+    the design size. The small sheet stops at the floor."""
+    assert render.FURNITURE_BASE_IN2 == 17.0 * 22.0
+    assert render._furniture_scale(_spec(print_w_in=17, print_h_in=22)) == 1.0
+    assert render._furniture_scale(_spec(print_w_in=22, print_h_in=17)) == 1.0
+    assert render._furniture_scale(_spec(print_w_in=11, print_h_in=17)) == render.FURNITURE_SCALE_MIN
+
+
+def test_the_smallest_furniture_text_on_the_smallest_sheet_is_six_points():
+    """The credit line is the smallest furniture text: label_pt x 0.62. At the floor
+    it must still be legible on paper."""
+    spec = _spec(print_w_in=11, print_h_in=17)
+    assert spec.label_pt * 0.62 * render._furniture_scale(spec) >= 6.0
