@@ -46,6 +46,9 @@ export function updateSaveFileNote() {
   if (!el) return;
   if (!state.embedSpec) {
     el.textContent = 'Reprintable file is off: this download is a share copy — your exact route coordinates stay out of the file, and it can never reprint or continue. Keep a reprintable copy as your save file.';
+  } else if (state.output !== 'wallpaper' && state.panels > 1 && state.finalFormat === 'pdf') {
+    // a set with PDF chosen: before the single-sheet PDF branch, which would claim it
+    el.textContent = 'The PDF panels are for the print shop: they can’t carry the reprint recipe. Download the set as PNG as well, and keep those files — each PNG panel is a save file for the whole set.';
   } else if (state.output !== 'wallpaper' && state.finalFormat === 'pdf') {
     el.textContent = 'A PDF is for the print shop: it can’t carry the reprint recipe. Download a PNG as well — that file is your save file and reprints from itself alone.';
   } else if (state.output !== 'wallpaper' && state.panels > 1) {

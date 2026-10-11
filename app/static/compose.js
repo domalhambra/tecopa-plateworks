@@ -54,7 +54,8 @@ export function initCompose(h = {}) {
   });
   $('size').onchange = (e) => { savePref('printSize', e.target.value); reframe(); };
   segGap = wireSegmented($('gapField').querySelector('.segmented'), (v) => {
-    state.panelGap = Number(v); savePref('panelGap', state.panelGap); reframe();
+    const was = setShape();       // read before the gap changes: a new gap is a new sheet
+    state.panelGap = Number(v); savePref('panelGap', state.panelGap); reframe(was);
   });
   $('bleed').oninput = (e) => {
     state.style.bleedIn = parseFloat(e.target.value) || 0;
@@ -142,11 +143,27 @@ export function applyOutputVisibility() {
   $('titleField').hidden = wp;
 }
 
-function reframe() {
+// What the set controls say about the sheet: one sheet, or a count of panels and a gap.
+// Orientation and the single sizes are not part of it.
+function setShape() {
+  return state.panels > 1 ? `${state.panels}:${state.panelGap}` : '1';
+}
+
+// `was` is the set shape before the change. It is read on entry, before applyPrintSize
+// reads the size menu. The gap control passes its own, because it writes the gap first.
+function reframe(was = setShape()) {
   // the size decides whether this is a set, and a set shows the gap and hides the bleed
   applyPrintSize(); applyOutputVisibility();
   updateSaveFileNote();           // a set's save file is each panel PNG in the zip
-  canvas.refitForSize(); markers.refreshOutOfFrame(); updateFrameFeasibility();
+  // A change of the set shape (one sheet to a set, a set to one sheet, two panels to
+  // three, a new gap) frames the journey afresh, as Reset frame does. refitForSize keeps
+  // the old frame's width: the wide frame of a set became a single sheet of that width,
+  // taller than the plate, so the frame was the whole plate until Reset frame. A screen
+  // is one sheet, so going to or from a wallpaper with a set chosen is such a change.
+  // Orientation and the single sizes still re-fit the frame in place.
+  if (setShape() !== was && state.starterCrop) canvas.resetFrame();
+  else canvas.refitForSize();
+  markers.refreshOutOfFrame(); updateFrameFeasibility();
   stalePicture(); proof.scheduleAutoProof(); proof.refreshProofUI();
 }
 

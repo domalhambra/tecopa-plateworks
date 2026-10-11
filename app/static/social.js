@@ -227,6 +227,13 @@ function renderKitListSelectionOnly() {
 }
 
 async function buildKit() {
+  // The kit is a poster PNG, the social stills and a film of one sheet. The engine has
+  // no wallpaper bundle and no film of a set, and the poster final was queued before
+  // that refusal came back. So a set stops here, before anything is submitted.
+  if (state.output !== 'wallpaper' && state.panels > 1) {
+    toast('A set of panels has no share kit yet. Choose one sheet for a kit.', 'info');
+    return;
+  }
   if (!proof.hasFreshProof()) { toast('Re-proof first — the kit renders the accepted composition.', 'error'); return; }
   const group = 'Share kit';
   const queued = [];

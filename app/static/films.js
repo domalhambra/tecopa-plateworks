@@ -106,6 +106,12 @@ subscribe((path) => { if (path === null || path === 'lightMotion' || path === 't
 
 export async function renderTimelapse() {
   if (tlInFlight) return;
+  // The engine has no film of a set (422), for the accepted sheet or for a device. So a
+  // set stops here, before anything is submitted.
+  if (state.output !== 'wallpaper' && state.panels > 1) {
+    toast('A set of panels has no film yet. Choose one sheet for a film.', 'info');
+    return;
+  }
   if (!proof.hasFreshProof()) { toast('Re-proof first — the film renders the accepted composition.', 'error'); return; }
   tlInFlight = true; refreshGate();
   const fmt = state.tlFormat;

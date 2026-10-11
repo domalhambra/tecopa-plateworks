@@ -55,10 +55,25 @@ export function setMode(m) {
 // something else, re-fit so the crop matches that aspect and meets ITS 1x framing
 // target on entry (else a returning operator's first proof would need more than
 // the zoom cap's upsampling allows).
+// A continued poster's starter is not that 17x22 crop: it is the poster's own crop, at
+// the poster's own sheet (/api/continue). It is used as it is while the sheet is still
+// that one. When the sheet is another shape (a continued set, then one sheet), the
+// starter is first given the sheet's shape at the same centre and the same area, the
+// rule of the engine's refit_crop_aspect (app/geo.py). Used as it was, it was a wide
+// frame on a tall sheet, and the proof was refused for its aspect.
 export function resetFrame() {
   if (!state.starterCrop) return;
   const s = state.scale;
   const [x0, y0, x1, y1] = state.starterCrop;         // overview px -> canvas px
+  const sheet = state.printW / state.printH, shape = (x1 - x0) / (y1 - y0);
+  const near = (a, b) => Math.abs(a - b) < 0.02 * b;
+  if (!near(shape, sheet) && !near(shape, 17 / 22)) {
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    const w = Math.sqrt((x1 - x0) * (y1 - y0) * sheet), h = w / sheet;
+    state.crop = [(cx - w / 2) * s, (cy - h / 2) * s, (cx + w / 2) * s, (cy + h / 2) * s];
+    refitForSize();                                    // clamp to the plate, meet the 1x target
+    return;
+  }
   state.crop = [x0 * s, y0 * s, x1 * s, y1 * s];
   if (state.printW !== 17 || state.printH !== 22) { refitForSize(); return; }
   draw();

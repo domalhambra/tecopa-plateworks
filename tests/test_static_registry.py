@@ -222,3 +222,110 @@ def test_the_provenance_card_escapes_every_value_it_is_given():
     # the text values are escaped where they are read
     for field in ("title", "region_id"):
         assert re.search(rf"escapeHtml\(info\.{field}\b", body.group(1)), field
+
+
+def _function_body(module, name):
+    """The source of one top-level function of a studio module (its `}` is in column 0)."""
+    src = (STATIC / module).read_text(encoding="utf-8")
+    m = re.search(rf"^(?:export )?(?:async )?function {name}\([^\n]*\) \{{\n(.*?)\n\}}", src,
+                  re.S | re.M)
+    assert m, f"{name} not found in {module}"
+    return m.group(1)
+
+
+SET_GUARD = "if (state.output !== 'wallpaper' && state.panels > 1) {"
+
+
+def test_a_change_of_the_set_shape_frames_the_journey_afresh():
+    """refitForSize keeps the old frame's width. The wide frame of a set became a single
+    sheet of that width, taller than the plate. So a change of the panel count or of the
+    gap takes the Reset frame path, and orientation and the single sizes do not."""
+    shape = _function_body("compose.js", "setShape")
+    assert "state.panels > 1 ? `${state.panels}:${state.panelGap}` : '1'" in shape
+    src = (STATIC / "compose.js").read_text(encoding="utf-8")
+    assert "function reframe(was = setShape()) {" in src, \
+        "reframe reads the set shape on entry, before applyPrintSize changes it"
+    body = _function_body("compose.js", "reframe")
+    assert re.search(r"if \(setShape\(\) !== was && state\.starterCrop\) canvas\.resetFrame\(\);"
+                     r"\s+else canvas\.refitForSize\(\);", body)
+    assert body.index("applyPrintSize()") < body.index("setShape() !== was")
+    # the gap control writes the gap itself, so it reads the shape first and passes it
+    gap = re.search(r"segGap = wireSegmented\(.*?\n  \}\);", src, re.S)
+    assert gap, "the gap control's handler not found"
+    assert re.search(r"const was = setShape\(\);.*?state\.panelGap = Number\(v\);.*?reframe\(was\);",
+                     gap.group(0), re.S)
+    # every other caller lets reframe read the shape itself
+    assert len(re.findall(r"\breframe\(was\)", src)) == 1
+    assert not re.findall(r"\breframe\((?!was\)|\)|was = )", src)
+
+
+def test_a_restored_set_keeps_the_crop_the_engine_returns():
+    """"Add this year" on a panel file restores the set through ensurePrintSize, which
+    sets the size without reframe. The frame is then the starter /api/continue returns,
+    the poster's own crop. A reframe there would frame the journey afresh instead."""
+    for name in ("ensurePrintSize", "applyPrefill"):
+        body = _function_body("compose.js", name)
+        assert "reframe(" not in body and "resetFrame" not in body, name
+    cont = _function_body("compose.js", "continueFromPoster")
+    assert "state.starterCrop = j.starter_crop; state.crop = null;" in cont
+    assert "reframe(" not in cont
+    # Reset frame gives a starter of another shape the sheet's shape. Used as it was, it
+    # was a wide frame on a tall sheet and the proof was refused for its aspect.
+    reset = _function_body("canvas.js", "resetFrame")
+    assert "if (!near(shape, sheet) && !near(shape, 17 / 22)) {" in reset
+    assert "Math.sqrt((x1 - x0) * (y1 - y0) * sheet)" in reset
+
+
+def test_a_set_stops_each_job_it_cannot_have_before_anything_is_submitted():
+    """The engine has no wallpaper bundle, no film and no mockup of a set. The share kit
+    queued the 71 megapixel poster final first and was refused after it. Each of these
+    stops for a set before its first request and before it disables its control."""
+    for module, name, first in (("social.js", "buildKit", "proof.hasFreshProof()"),
+                                ("social.js", "stageMockups", ".disabled = true"),
+                                ("films.js", "renderTimelapse", "tlInFlight = true")):
+        body = _function_body(module, name)
+        assert SET_GUARD in body, f"{name} has no stop for a set"
+        guard = body.index(SET_GUARD)
+        assert guard < body.index(first), f"{name}: the stop for a set comes too late"
+        assert guard < body.index("api.submit"), f"{name} submits before the stop"
+        stop = body[guard:body.index("}", guard)]
+        assert "toast(" in stop and "'info'" in stop and "return;" in stop, name
+    assert ("toast('A set of panels has no share kit yet. Choose one sheet for a kit.', 'info');"
+            in _function_body("social.js", "buildKit"))
+    # A new place that submits a job from the stamped session must decide what a set does
+    # there. These are all of them: the proof refine and the final work for a set.
+    found = {}
+    for path in sorted(STATIC.glob("*.js")):
+        n = len(re.findall(r"\bapi\.submit\w+\(state\.session\b", path.read_text(encoding="utf-8")))
+        if n:
+            found[path.name] = n
+    assert found == {"films.js": 1, "proof.js": 2, "social.js": 4}, found
+
+
+def test_the_save_file_note_has_its_own_sentence_for_a_set_as_pdf():
+    """The PDF branch came before the set branch, so a set with PDF chosen was told about
+    one sheet. The set-and-PDF branch comes first, and the other sentences are as they
+    were."""
+    body = _function_body("ui.js", "updateSaveFileNote")
+    set_pdf = "state.output !== 'wallpaper' && state.panels > 1 && state.finalFormat === 'pdf'"
+    pdf = "} else if (state.output !== 'wallpaper' && state.finalFormat === 'pdf') {"
+    a_set = "} else if (state.output !== 'wallpaper' && state.panels > 1) {"
+    assert body.index("if (!state.embedSpec) {") < body.index(set_pdf) < body.index(pdf) \
+        < body.index(a_set)
+    for sentence in (
+        "'The PDF panels are for the print shop: they can’t carry the reprint recipe. "
+        "Download the set as PNG as well, and keep those files — each PNG panel is a save "
+        "file for the whole set.'",
+        "'A PDF is for the print shop: it can’t carry the reprint recipe. Download a PNG "
+        "as well — that file is your save file and reprints from itself alone.'",
+        "`Each panel PNG in the zip is a save file for the whole set: the set reprints "
+        "from any one of them, for as long as its terrain plate survives. Keep them — next "
+        "year the set becomes Edition ${state.edition + 1}.`",
+        "`This PNG is your save file: the whole poster rides inside it and reprints from "
+        "the file alone, for as long as its terrain plate survives. Keep it — next year it "
+        "becomes Edition ${state.edition + 1}.`",
+        "'Reprintable file is off: this download is a share copy — your exact route "
+        "coordinates stay out of the file, and it can never reprint or continue. Keep a "
+        "reprintable copy as your save file.'",
+    ):
+        assert sentence in body, sentence
