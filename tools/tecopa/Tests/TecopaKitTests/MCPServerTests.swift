@@ -6,12 +6,12 @@ import XCTest
 final class MCPServerTests: XCTestCase {
     private let readOnly: Set<String> = [
         "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
-        "reprint_inspect", "studio_state", "studio_errors"]
+        "reprint_inspect", "studio_state", "studio_errors", "runs", "runs_show"]
     /// Not read-only: the entries that control the engine, and the ones that write a file.
     private let writes: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
-        "reprint", "continue"]
+        "reprint", "continue", "runs_cancel"]
 
     private var binary: URL {
         // the test bundle sits beside the products of the same build
@@ -116,7 +116,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 21)
+        XCTAssertEqual(tools.count, 24)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -159,6 +159,15 @@ final class MCPServerTests: XCTestCase {
         }
         let state = tools.first { $0["name"]?.stringValue == "studio_state" }
         XCTAssertNil(state?["inputSchema"]?["properties"]?["tab"])
+        // a run is named by a string, and only `runs show` takes a number of lines
+        for name in ["runs_show", "runs_cancel"] {
+            let tool = tools.first { $0["name"]?.stringValue == name }
+            XCTAssertEqual(tool?["inputSchema"]?["properties"]?["run"]?["type"]?.stringValue, "string", name)
+        }
+        let show = tools.first { $0["name"]?.stringValue == "runs_show" }
+        XCTAssertEqual(show?["inputSchema"]?["properties"]?["lines"]?["type"]?.stringValue, "integer")
+        let cancel = tools.first { $0["name"]?.stringValue == "runs_cancel" }
+        XCTAssertNil(cancel?["inputSchema"]?["properties"]?["lines"])
         let inspect = tools.first { $0["name"]?.stringValue == "reprint_inspect" }
         XCTAssertEqual(inspect?["inputSchema"]?["properties"]?["file"]?["type"]?.stringValue, "string")
     }

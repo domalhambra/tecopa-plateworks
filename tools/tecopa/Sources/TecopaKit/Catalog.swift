@@ -73,7 +73,7 @@ public enum Catalog {
     public static let all: [CatalogEntry] =
         [Doctor.entry] + EngineEntries.all + Launcher.entries
         + [LogReader.entry, ScriptRunner.verifyEntry] + Render.entries + Reprint.entries
-        + Studio.entries
+        + Studio.entries + Runs.entries
 
     public static func named(_ name: String) -> CatalogEntry? {
         all.first { $0.name == name }

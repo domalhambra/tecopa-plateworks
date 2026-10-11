@@ -6,6 +6,15 @@ private struct BrokenRunner: ProcessRunning {
     func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
         throw CocoaError(.fileNoSuchFile)
     }
+
+    func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                       environment: [String: String]) throws -> Int32 {
+        throw CocoaError(.fileNoSuchFile)
+    }
+
+    func signalGroup(_ group: Int32, _ signal: Int32) throws {
+        throw CocoaError(.fileNoSuchFile)
+    }
 }
 
 final class DoctorTests: XCTestCase {

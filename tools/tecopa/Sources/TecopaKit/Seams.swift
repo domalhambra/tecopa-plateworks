@@ -38,6 +38,16 @@ public struct ProcessResult: Equatable, Sendable {
 
 public protocol ProcessRunning: Sendable {
     func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult
+
+    /// Start one program and return its process id at once. The tool does not wait
+    /// for it. The program is the leader of a new session, so it outlives the tool
+    /// and a closed terminal, and its process group has its own process id.
+    /// `environment` is all of the program's environment.
+    func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                       environment: [String: String]) throws -> Int32
+
+    /// Send one signal to every process of one process group.
+    func signalGroup(_ group: Int32, _ signal: Int32) throws
 }
 
 /// Refuses every redirect, so the 3xx itself comes back as the reply. A program on
@@ -177,5 +187,88 @@ public struct SystemProcessRunner: ProcessRunning {
         return ProcessResult(exitCode: exitCode,
                              stdout: String(decoding: outBox.get(), as: UTF8.self),
                              stderr: String(decoding: errBox.get(), as: UTF8.self))
+    }
+    /// The real detached start, with `posix_spawn`. `Process` cannot make a new
+    /// session, and a run must have one.
+    ///
+    /// - `POSIX_SPAWN_SETSID`: the child is the leader of a new session and of a
+    ///   new process group. A closed terminal sends it no hang-up, and one signal
+    ///   to the group reaches the child and each process under it.
+    /// - `POSIX_SPAWN_CLOEXEC_DEFAULT`: the child gets descriptors 0, 1 and 2 and
+    ///   no other, with or without a close-on-exec flag. Under `tecopa mcp` the
+    ///   tool's own descriptors carry the protocol.
+    /// - All three are the null device. The caller's command sends its output
+    ///   where it must go.
+    /// - The signal mask is empty and each signal has its default action, so a
+    ///   signal that the tool's parent ignored still ends the child.
+    public func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                              environment: [String: String]) throws -> Int32 {
+        // A C string ends at its first NUL byte, so the child would get another text.
+        let texts = [executable] + arguments + environment.map { $0.key + "=" + $0.value } + [cwd ?? ""]
+        guard !texts.contains(where: { $0.utf8.contains(0) }) else {
+            throw TecopaFailure(.usage, "A command, an argument or an environment value cannot hold a NUL byte.")
+        }
+        func failure(_ code: Int32) -> TecopaFailure {
+            TecopaFailure(.environment, "Could not start \(executable): \(String(cString: strerror(code)))")
+        }
+
+        var actions: posix_spawn_file_actions_t?
+        var code = posix_spawn_file_actions_init(&actions)
+        guard code == 0 else { throw failure(code) }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        var attributes: posix_spawnattr_t?
+        code = posix_spawnattr_init(&attributes)
+        guard code == 0 else { throw failure(code) }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        code = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
+        if code == 0 { code = posix_spawn_file_actions_addopen(&actions, 1, "/dev/null", O_WRONLY, 0) }
+        if code == 0 { code = posix_spawn_file_actions_addopen(&actions, 2, "/dev/null", O_WRONLY, 0) }
+        if code == 0, let cwd { code = posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var none = sigset_t()
+        sigemptyset(&none)
+        if code == 0 { code = posix_spawnattr_setsigmask(&attributes, &none) }
+        var every = sigset_t()
+        sigfillset(&every)
+        if code == 0 { code = posix_spawnattr_setsigdefault(&attributes, &every) }
+        let flags = POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGMASK
+            | POSIX_SPAWN_SETSIGDEF
+        if code == 0 { code = posix_spawnattr_setflags(&attributes, Int16(flags)) }
+        guard code == 0 else { throw failure(code) }
+
+        var argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) }
+        var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0.key + "=" + $0.value) }
+        defer { (argv + envp).forEach { free($0) } }
+        argv.append(nil)
+        envp.append(nil)
+        var pid: pid_t = 0
+        // no search of PATH: the caller names the program by its path
+        code = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
+        guard code == 0 else { throw failure(code) }
+
+        // The child is the tool's own until the tool ends. A child that ends first
+        // stays in the process table until its parent reads its status, and under
+        // `tecopa mcp` the tool can live for days. One thread waits for the child
+        // and does nothing more. When the tool ends first, launchd takes the child.
+        Thread.detachNewThread {
+            var status: Int32 = 0
+            while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+        }
+        return pid
+    }
+
+    /// The real signal: `kill` with a negative id, which names a process group.
+    ///
+    /// Group 1 and group 0 are refused. `kill(-1)` signals every process of the
+    /// user, and `kill(0)` signals the tool's own group.
+    public func signalGroup(_ group: Int32, _ signal: Int32) throws {
+        guard group > 1 else {
+            throw TecopaFailure(.environment, "\(group) is not the process group of a run.")
+        }
+        guard kill(-group, signal) == 0 else {
+            throw TecopaFailure(
+                .environment,
+                "Could not signal the process group \(group): \(String(cString: strerror(errno)))")
+        }
     }
 }

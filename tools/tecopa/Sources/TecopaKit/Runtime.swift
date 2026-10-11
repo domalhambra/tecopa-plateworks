@@ -33,6 +33,15 @@ public struct Runtime: Sendable {
     /// its output path before its first request, so a long render is not lost to a
     /// path that `writeNew` will refuse.
     public var pathKind: @Sendable (String) -> PathKind?
+    /// The time now. A run id and a run's start time come from it.
+    public var now: @Sendable () -> Date
+    /// This many random hexadecimal digits, in lower case: the end of a run id.
+    public var randomHex: @Sendable (Int) -> String
+    /// Make a folder that only the user can read, and each folder above it that
+    /// is missing. A folder that exists is not changed.
+    public var makeFolder: @Sendable (String) throws -> Void
+    /// The names in one folder, in no order, or nil when it cannot be read.
+    public var listFolder: @Sendable (String) -> [String]?
 
     public init(
         repoFlag: String? = nil,
@@ -54,7 +63,13 @@ public struct Runtime: Sendable {
         writeNew: @escaping @Sendable (String, Data) throws -> Void = {
             try Runtime.writeNewFile($0, $1)
         },
-        pathKind: @escaping @Sendable (String) -> PathKind? = { Runtime.kindOfPath($0) }
+        pathKind: @escaping @Sendable (String) -> PathKind? = { Runtime.kindOfPath($0) },
+        now: @escaping @Sendable () -> Date = { Date() },
+        randomHex: @escaping @Sendable (Int) -> String = { Runtime.randomHexDigits($0) },
+        makeFolder: @escaping @Sendable (String) throws -> Void = { try Runtime.makePrivateFolder($0) },
+        listFolder: @escaping @Sendable (String) -> [String]? = {
+            try? FileManager.default.contentsOfDirectory(atPath: $0)
+        }
     ) {
         self.repoFlag = repoFlag
         self.port = port
@@ -68,6 +83,10 @@ public struct Runtime: Sendable {
         self.readData = readData
         self.writeNew = writeNew
         self.pathKind = pathKind
+        self.now = now
+        self.randomHex = randomHex
+        self.makeFolder = makeFolder
+        self.listFolder = listFolder
     }
 
     public var client: EngineClient { EngineClient(port: port, http: http) }
@@ -79,6 +98,9 @@ public struct Runtime: Sendable {
 
     /// The launcher's log. The launcher and its engine both write here.
     public var logPath: String { home + "/Library/Logs/TecopaPlateworks.log" }
+
+    /// The folder of the run records, the run logs and the exit files.
+    public var runsFolder: String { home + "/Library/Application Support/TecopaPlateworks/runs" }
 
     /// Run one program. A program that cannot start is an environment fault.
     public func exec(_ executable: String, _ arguments: [String], cwd: String? = nil) throws -> ProcessResult {
@@ -103,6 +125,26 @@ extension Runtime {
     /// The real `writeNew`: create the file at `path` and write all the bytes to it.
     public static func writeNewFile(_ path: String, _ data: Data) throws {
         try writeExclusive(path, data, write: { Darwin.write($0, $1, $2) })
+    }
+
+    /// The real `randomHex`, from the system's random source.
+    public static func randomHexDigits(_ count: Int) -> String {
+        var generator = SystemRandomNumberGenerator()
+        return String((0..<max(0, count)).map { _ in
+            Character(String(Int.random(in: 0..<16, using: &generator), radix: 16))
+        })
+    }
+
+    /// The real `makeFolder`. Mode 0700: a run's log can hold a path or a name
+    /// that is the user's own business. A folder that exists keeps its mode.
+    public static func makePrivateFolder(_ path: String) throws {
+        do {
+            try FileManager.default.createDirectory(
+                atPath: path, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        } catch {
+            throw TecopaFailure(.environment,
+                                "Could not make the folder \(path): \(error.localizedDescription)")
+        }
     }
 
     /// The real `pathKind`. The first look does not follow a link, so a link that

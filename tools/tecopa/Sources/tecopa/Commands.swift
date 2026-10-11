@@ -359,6 +359,57 @@ struct ContinueCommand: AsyncParsableCommand {
     func run() async throws { try await execute("continue", global, arguments) }
 }
 
+struct RunsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "runs",
+        abstract: "List the tracked runs of the long scripts, show one, or stop one.",
+        discussion: "`tecopa runs` is `tecopa runs list`.",
+        subcommands: [List.self, Show.self, Cancel.self],
+        defaultSubcommand: List.self)
+
+    struct List: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "list", abstract: "List every run, newest first, each with its state.")
+        @OptionGroup var global: GlobalOptions
+        func run() async throws { try await execute("runs", global) }
+    }
+
+    struct Show: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "show",
+            abstract: "Show one run: its record, its state, its exit code and the end of its log.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The run id.")
+        var id: String?
+        @Option(name: .long, help: "How many lines of the log to return, from 1 to 2000. Default 40.")
+        var lines: Int?
+
+        var arguments: [String: JSONValue] {
+            var arguments: [String: JSONValue] = [:]
+            if let id { arguments["run"] = .string(id) }
+            if let lines { arguments["lines"] = .int(Int64(lines)) }
+            return arguments
+        }
+
+        func run() async throws { try await execute("runs_show", global, arguments) }
+    }
+
+    struct Cancel: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "cancel",
+            abstract: "Stop one run: send SIGTERM to its process group. Refuses a run that is not running.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The run id.")
+        var id: String?
+
+        var arguments: [String: JSONValue] {
+            id.map { ["run": .string($0)] } ?? [:]
+        }
+
+        func run() async throws { try await execute("runs_cancel", global, arguments) }
+    }
+}
+
 struct StudioCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "studio",

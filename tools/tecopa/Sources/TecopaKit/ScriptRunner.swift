@@ -9,25 +9,87 @@ public enum ScriptRunner {
         case prep = ".venv-prep"
     }
 
-    /// Add a row in the same change as the command that needs it.
-    public static let table: [String: Venv] = [
-        "scripts/verify_regions.py": .app,
+    /// One row of the table: what the name is, and the venv that runs it.
+    public struct Row: Equatable, Sendable {
+        public enum Kind: Equatable, Sendable {
+            /// The name is a path under the repo: `python <name> …`.
+            case script
+            /// The name is a Python module: `python -m <name> …`.
+            case module
+        }
+
+        public let kind: Kind
+        public let venv: Venv
+
+        public static func script(_ venv: Venv) -> Row { Row(kind: .script, venv: venv) }
+        public static func module(_ venv: Venv) -> Row { Row(kind: .module, venv: venv) }
+    }
+
+    /// The key is the script's path under the repo, or the module's name. Add a row
+    /// in the same change as the command that needs it.
+    public static let table: [String: Row] = [
+        "scripts/verify_regions.py": .script(.app),
     ]
 
-    public static func run(_ script: String, _ arguments: [String],
-                           _ runtime: Runtime) throws -> ProcessResult {
-        guard let venv = table[script] else {
+    /// One command that the table allows: the interpreter of the row's venv, its
+    /// arguments, and the repo as the working directory.
+    struct Command: Equatable, Sendable {
+        let python: String
+        let arguments: [String]
+        let repo: String
+    }
+
+    /// Check the table and the interpreter. `run` and `start` both begin here, so
+    /// a script cannot run in the call by one rule and detached by another.
+    static func command(_ name: String, _ arguments: [String], _ runtime: Runtime,
+                        table: [String: Row]) throws -> Command {
+        guard let row = table[name] else {
             throw TecopaFailure(
-                .usage, "\(script) has no row in the script table.",
+                .usage, "\(name) has no row in the script table.",
                 hint: "Add a row to ScriptRunner.table in the same change as the command.")
         }
         let repo = try runtime.repo()
-        let python = repo + "/" + venv.rawValue + "/bin/python"
+        let python = repo + "/" + row.venv.rawValue + "/bin/python"
         guard runtime.fileExists(python) else {
             throw TecopaFailure(.environment, "No interpreter at \(python).",
                                 hint: "Read docs/changing-things.md, Set up a machine.")
         }
-        return try runtime.exec(python, [script] + arguments, cwd: repo)
+        let target = row.kind == .module ? ["-m", name] : [name]
+        return Command(python: python, arguments: target + arguments, repo: repo)
+    }
+
+    /// Run one row of the table and wait for it.
+    public static func run(_ name: String, _ arguments: [String],
+                           _ runtime: Runtime) throws -> ProcessResult {
+        try run(name, arguments, runtime, table: table)
+    }
+
+    /// `run` over a given table. Only a test gives another table than the tool's
+    /// own: a row that the tool does not have yet.
+    static func run(_ name: String, _ arguments: [String], _ runtime: Runtime,
+                    table: [String: Row]) throws -> ProcessResult {
+        let command = try command(name, arguments, runtime, table: table)
+        return try runtime.exec(command.python, command.arguments, cwd: command.repo)
+    }
+
+    /// Start one row of the table as a tracked run, and return at once. The checks
+    /// are those of `run`. `command` is the catalog name of the entry that starts
+    /// the run, for example `plate_build`. A run whose log holds `failureText` is
+    /// `failed` whatever its exit code.
+    ///
+    /// The result is `{"run", "pid", "log", "hint"}`: see `Runs.start`.
+    public static func start(_ name: String, _ arguments: [String], command: String,
+                             failureText: String? = nil, _ runtime: Runtime) throws -> JSONValue {
+        try start(name, arguments, command: command, failureText: failureText, runtime, table: table)
+    }
+
+    /// `start` over a given table, for a test.
+    static func start(_ name: String, _ arguments: [String], command: String,
+                      failureText: String? = nil, _ runtime: Runtime,
+                      table: [String: Row]) throws -> JSONValue {
+        let row = try self.command(name, arguments, runtime, table: table)
+        return try Runs.start(program: row.python, arguments: row.arguments, cwd: row.repo,
+                              command: command, failureText: failureText, runtime)
     }
 
     /// The engine's own rule for a region id, `^[a-z0-9_]{1,64}$` (app/main.py). The

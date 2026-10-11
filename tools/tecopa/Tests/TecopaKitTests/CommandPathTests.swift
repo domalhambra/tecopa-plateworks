@@ -126,6 +126,32 @@ final class CommandPathTests: XCTestCase {
         XCTAssertNil(try? Tecopa.parseAsRoot(["reprint", "inspect", "lassen.png", "--out", "a.png"]))
     }
 
+    // MARK: The tracked runs
+
+    func testRunsWithNoSubcommandIsTheList() throws {
+        XCTAssertNotNil(try Tecopa.parseAsRoot(["runs"]) as? RunsCommand.List)
+        XCTAssertNotNil(try Tecopa.parseAsRoot(["runs", "--json"]) as? RunsCommand.List)
+        XCTAssertNotNil(try Tecopa.parseAsRoot(["runs", "list"]) as? RunsCommand.List)
+    }
+
+    func testRunsShowAndRunsCancelTakeTheRunId() throws {
+        let show = try XCTUnwrap(try Tecopa.parseAsRoot(
+            ["runs", "show", "20261010-185515-a1b2c3", "--lines", "5"]) as? RunsCommand.Show)
+        XCTAssertEqual(show.arguments, ["run": .string("20261010-185515-a1b2c3"), "lines": .int(5)])
+        // the default is the entry's own, so the command does not send one
+        let plain = try XCTUnwrap(try Tecopa.parseAsRoot(["runs", "show", "20261010-185515-a1b2c3"])
+            as? RunsCommand.Show)
+        XCTAssertEqual(plain.arguments, ["run": .string("20261010-185515-a1b2c3")])
+        // without an id, the entry says that it is missing
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["runs", "show"]) as? RunsCommand.Show).arguments,
+                       [:])
+
+        let cancel = try XCTUnwrap(try Tecopa.parseAsRoot(["runs", "cancel", "20261010-185515-a1b2c3"])
+            as? RunsCommand.Cancel)
+        XCTAssertEqual(cancel.arguments, ["run": .string("20261010-185515-a1b2c3")])
+        XCTAssertNil(try? Tecopa.parseAsRoot(["runs", "cancel", "20261010-185515-a1b2c3", "--lines", "5"]))
+    }
+
     func testContinueTakesTheFileThenItsOptions() throws {
         let here = FileManager.default.currentDirectoryPath
         let command = try Tecopa.parseAsRoot([

@@ -36,6 +36,22 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         let data: Data
     }
 
+    /// One call of `startDetached`: a program that the tool started and did not wait for.
+    struct Detached: Equatable {
+        let executable: String
+        let arguments: [String]
+        let cwd: String?
+        let environment: [String: String]
+        /// The process id that the call returned.
+        let pid: Int32
+    }
+
+    /// One call of `signalGroup`.
+    struct Signal: Equatable {
+        let group: Int32
+        let signal: Int32
+    }
+
     private struct Route {
         let status: Int
         /// nil is a reply with no Content-Type header.
@@ -69,6 +85,18 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private var taken: Set<String> = []
     private var folders: Set<String> = []
     private var launcherProcess: Bool?
+    /// The process table that `ps -o command= -p <pid>` reads: a pid and its command line.
+    private var processes: [Int32: String] = [:]
+    private var nextPID: Int32 = 4001
+    private var clockDate = FakeWorld.date("2026-10-10T18:55:15Z")
+    private var hexDigits = "a1b2c3"
+    private var startError: TecopaFailure?
+    /// Every `startDetached`, in order.
+    private(set) var detached: [Detached] = []
+    /// Every `signalGroup`, in order.
+    private(set) var signals: [Signal] = []
+    /// Every folder that `Runtime.makeFolder` made, in order.
+    private(set) var madeFolders: [String] = []
     private(set) var commands: [[String]] = []
     /// The working directory of each command, in the order of `commands`.
     private(set) var workingDirectories: [String?] = []
@@ -146,6 +174,44 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     var launcherRunning: Bool? {
         get { lock.withLock { launcherProcess } }
         set { lock.withLock { launcherProcess = newValue } }
+    }
+
+    /// A date from its ISO 8601 text, "2026-10-10T18:55:15Z".
+    static func date(_ text: String) -> Date {
+        ISO8601DateFormatter().date(from: text) ?? Date(timeIntervalSince1970: 0)
+    }
+
+    /// What `Runtime.now` returns. A test sets it before each start that needs
+    /// another run id: `world.now = FakeWorld.date("2026-10-11T07:00:00Z")`.
+    var now: Date {
+        get { lock.withLock { clockDate } }
+        set { lock.withLock { clockDate = newValue } }
+    }
+
+    /// The digits `Runtime.randomHex` returns, cut to the count asked for:
+    /// `world.hex = "00ff9e"`.
+    var hex: String {
+        get { lock.withLock { hexDigits } }
+        set { lock.withLock { hexDigits = newValue } }
+    }
+
+    /// After this, `startDetached` throws the failure and starts nothing:
+    /// `world.startFailure = TecopaFailure(.environment, "no more processes")`.
+    var startFailure: TecopaFailure? {
+        get { lock.withLock { startError } }
+        set { lock.withLock { startError = newValue } }
+    }
+
+    /// Put one process in the table that `ps` reads: a run that an earlier call
+    /// started, or another program that macOS gave the pid to.
+    /// `world.process(4001, "/bin/sh -c … tecopa-run-20261010-185515-a1b2c3 …")`.
+    func process(_ pid: Int32, _ command: String) {
+        lock.lock(); processes[pid] = command; lock.unlock()
+    }
+
+    /// The process ended: `ps` finds no such pid. `world.endProcess(4001)`.
+    func endProcess(_ pid: Int32) {
+        lock.lock(); processes[pid] = nil; lock.unlock()
     }
 
     /// The text `Runtime.readFile` returns for `path`. Any other path reads as nil.
@@ -270,11 +336,53 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
 
     /// The fake `Runtime.writeNew`. It keeps the real rule: a path holds one file,
     /// and the second write to it is refused.
+    /// A file that was written can be read back, as on a real disk.
     private func write(_ path: String, _ data: Data) throws {
         try lock.withLock {
             guard !taken.contains(path) else { throw fileAlreadyThere(path) }
             taken.insert(path)
+            binaries[path] = data
             written.append(Written(path: path, data: data))
+        }
+    }
+
+    /// The fake `Runtime.listFolder`: the names of the files and the folders that
+    /// a test put directly in `path`, sorted. A path that is not a folder and
+    /// holds nothing reads as nil, as a missing folder does.
+    private func list(_ path: String) -> [String]? {
+        lock.withLock {
+            let prefix = path.hasSuffix("/") ? path : path + "/"
+            let known = Set(files.keys).union(binaries.keys).union(taken).union(folders)
+            let names = Set(known.filter { $0.hasPrefix(prefix) }
+                .map { String($0.dropFirst(prefix.count)) }
+                .filter { !$0.isEmpty && !$0.contains("/") })
+            guard !names.isEmpty || folders.contains(path) else { return nil }
+            return names.sorted()
+        }
+    }
+
+    /// The fake detached start. It records the call and puts the program in the
+    /// process table with its command line, so `ps` finds the run until a test
+    /// ends it with `endProcess` or a SIGTERM reaches its group.
+    func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                       environment: [String: String]) throws -> Int32 {
+        try lock.withLock {
+            if let startError { throw startError }
+            let pid = nextPID
+            nextPID += 1
+            detached.append(Detached(executable: executable, arguments: arguments, cwd: cwd,
+                                     environment: environment, pid: pid))
+            processes[pid] = ([executable] + arguments).joined(separator: " ")
+            return pid
+        }
+    }
+
+    /// The fake signal. It records the call. SIGTERM also ends the process whose
+    /// pid is the group: a session leader's group has its own pid.
+    func signalGroup(_ group: Int32, _ signal: Int32) throws {
+        lock.withLock {
+            signals.append(Signal(group: group, signal: signal))
+            if signal == SIGTERM { processes[group] = nil }
         }
     }
 
@@ -288,6 +396,14 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         if name == "pgrep", results[name] == nil, let launcherProcess {
             result = ProcessResult(exitCode: launcherProcess ? 0 : 1, stdout: "", stderr: "")
         }
+        // `ps -o command= -p <pid>` reads the process table, unless a test gave ps
+        // its own `result(for:)`. It prints the command line, or exits 1 for no process.
+        if name == "ps", results[name] == nil, arguments.count == 4,
+           arguments[0] == "-o", arguments[1] == "command=", arguments[2] == "-p" {
+            let line = Int32(arguments[3]).flatMap { processes[$0] }
+            result = ProcessResult(exitCode: line == nil ? 1 : 0, stdout: line.map { $0 + "\n" } ?? "",
+                                   stderr: "")
+        }
         lock.unlock()
         onRun?(self, command)
         return result
@@ -300,7 +416,11 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                 http: self, runner: self,
                 fileExists: { _ in true },
                 sleep: { seconds in self.lock.withLock { self.slept.append(seconds) } },
-                readFile: { path in self.lock.withLock { self.files[path] } },
+                readFile: { path in
+                    self.lock.withLock {
+                        self.files[path] ?? self.binaries[path].flatMap { String(data: $0, encoding: .utf8) }
+                    }
+                },
                 readData: { path in
                     self.lock.withLock { self.binaries[path] ?? self.files[path].map { Data($0.utf8) } }
                 },
@@ -309,6 +429,15 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                     self.lock.withLock {
                         self.taken.contains(path) ? .file : self.folders.contains(path) ? .folder : nil
                     }
-                })
+                },
+                now: { self.now },
+                randomHex: { count in String(self.hex.prefix(count)) },
+                makeFolder: { path in
+                    self.lock.withLock {
+                        self.folders.insert(path)
+                        self.madeFolders.append(path)
+                    }
+                },
+                listFolder: { path in self.list(path) })
     }
 }
