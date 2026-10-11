@@ -4,8 +4,12 @@
 # tool answers through MCP.
 # Phase 2: a final from `tecopa render final` is byte-identical to the same requests
 # sent by hand.
-# Phase 3: the run list and the order status answer. No plate is built here: a build
-# reads the network and takes minutes.
+# Panel sets: the final of a set of two panels is one zip. The zip from `tecopa render
+# final` is byte-identical to the zip from the same requests sent by hand, it holds a
+# file for each panel, and the tool does not write over it. The set is a 36 by 22 in
+# sheet, so each of its two finals is 71 megapixels: allow ten minutes for this block.
+# Phase 3: the run list and the order status answer. No plate is built here and no
+# order preview is started: each reads the network and takes minutes.
 # Phase 4: a studio report that is posted to the engine shows in `tecopa studio errors`.
 # Requires port 8848 to be free, the real lassen_ca DEM, and a human for the one-time
 # macOS Automation prompt on the first quit.
@@ -86,7 +90,7 @@ REPLY="$( ( printf '%s\n' "$INIT" "$NOTE" "$LIST"; sleep 3 ) | "$TECOPA" mcp )"
 TOOLS="$(grep '"id":3' <<<"$REPLY")" || fail "the MCP tools/list sent no reply"
 grep -qF '"name":"doctor"' <<<"$TOOLS" || fail "tools/list does not name doctor"
 grep -qF '"name":"engine_restart"' <<<"$TOOLS" || fail "tools/list does not name engine_restart"
-for tool in render_final reprint continue runs_show plate_build order_status studio_errors; do
+for tool in render_final reprint continue runs_show plate_build order_preview order_status studio_errors; do
   grep -qF "\"name\":\"$tool\"" <<<"$TOOLS" || fail "tools/list does not name $tool"
 done
 echo "  MCP tools/list: OK"
@@ -120,6 +124,36 @@ cmp -s "$WORK/hand.png" "$WORK/tool.png" || fail "the tool's final differs from 
   && fail "tecopa wrote over an existing file"
 echo "  render final, byte-identical, and no overwrite: OK"
 
+# 7b. Panel sets: the tool's zip of a set and a zip made by hand are the same bytes.
+#     The format is PNG: the engine's PDF zip is not the same bytes each time.
+CROP="$(curl -s "$ENGINE/api/debug/sessions/$SID/starter_crop?print_w=36&print_h=22")" \
+  || fail "the starter crop by hand got no answer"
+grep -q '"starter_crop"' <<<"$CROP" || fail "no starter crop for a 36 by 22 in set: $CROP"
+read -r PX0 PY0 PX1 PY1 <<<"$(/usr/bin/python3 -c 'import json,sys; print(*json.load(sys.stdin)["starter_crop"])' <<<"$CROP")"
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -F "session_id=$SID" -F "x0=$PX0" -F "y0=$PY0" \
+  -F "x1=$PX1" -F "y1=$PY1" -F "title=Smoke set" -F "print_w=36" -F "print_h=22" \
+  -F "panels=2" -F "panel_gap=2" "$ENGINE/api/proof")"
+[[ "$CODE" == 200 ]] || fail "the proof of a set by hand answered $CODE"
+SUBMIT="$(curl -s -F "session_id=$SID" "$ENGINE/api/final/submit")"
+grep -q '"job"' <<<"$SUBMIT" || fail "the final of a set by hand was refused: $SUBMIT"
+JID="$(/usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["job"])' <<<"$SUBMIT")"
+STATE=""
+for _ in $(seq 1 300); do
+  STATE="$(curl -s "$ENGINE/api/jobs/$JID")"
+  case "$STATE" in *'"done"'*) break ;; *'"state":"error"'*) fail "the final of a set by hand failed: $STATE" ;; esac
+  sleep 2
+done
+case "$STATE" in *'"done"'*) ;; *) fail "the final of a set by hand did not end in 600 seconds: $STATE" ;; esac
+curl -sf -o "$WORK/hand.zip" "$ENGINE/api/jobs/$JID/result" || fail "the zip by hand could not be saved"
+"$TECOPA" render final --tracks "$GPX" --set "title=Smoke set" --set "print_w=36" --set "print_h=22" \
+  --set "panels=2" --set "panel_gap=2" --out "$WORK/tool.zip" >/dev/null \
+  || fail "tecopa render final of a set failed"
+cmp -s "$WORK/hand.zip" "$WORK/tool.zip" || fail "the tool's zip of a set differs from the zip made by hand"
+[[ "$(unzip -Z1 "$WORK/tool.zip" | wc -l | tr -d ' ')" == 2 ]] || fail "the zip of a two-panel set does not hold two files"
+"$TECOPA" render final --tracks "$GPX" --set "panels=2" --set "panel_gap=2" --set "print_w=36" \
+  --set "print_h=22" --out "$WORK/tool.zip" >/dev/null 2>&1 && fail "tecopa wrote over an existing zip"
+echo "  a set of two panels, byte-identical, and no overwrite: OK"
+
 # 8. Phase 3: the run list and the order status answer
 OUT="$("$TECOPA" runs --json)" || fail "tecopa runs failed"
 grep -q '"ok" : true' <<<"$OUT" || fail "tecopa runs did not answer ok"
@@ -143,4 +177,4 @@ if serving; then fail "port 8848 still answers after engine stop"; fi
 STARTED=0
 echo "  engine stop: OK"
 
-echo "PASS: phases 1 to 4"
+echo "PASS: phases 1 to 4, and panel sets"

@@ -1,8 +1,8 @@
 import XCTest
 @testable import TecopaKit
 
-/// The `order` entries on the fake machine: Prepare as a tracked run, and the
-/// order's own state file read back whole.
+/// The `order` entries on the fake machine: Prepare and the size preview as
+/// tracked runs, and the order's own state file read back whole.
 final class OrdersTests: XCTestCase {
     private let runs = "/home/Library/Application Support/TecopaPlateworks/runs"
     /// The id of a start at the fake's default clock and digits.
@@ -111,7 +111,7 @@ final class OrdersTests: XCTestCase {
             // a file is not a folder
             ("/Users/dom/Tecopa Orders/order.toml", "/Users/dom/Tecopa Orders/order.toml is not a folder."),
         ]
-        for name in ["order_prepare", "order_status"] {
+        for name in ["order_prepare", "order_preview", "order_status"] {
             for (folder, said) in refused {
                 let (data, failure) = await call(name, world, folder.map { ["folder": .string($0)] } ?? [:])
                 XCTAssertNil(data, "\(name) \(said)")
@@ -128,6 +128,34 @@ final class OrdersTests: XCTestCase {
         let (_, failure) = await call("order_prepare", world, ["folder": .string("/repo/orders/2026-10-001-smith")])
         XCTAssertNil(failure)
         XCTAssertEqual(world.detached.first?.arguments.last, "/repo/orders/2026-10-001-smith")
+    }
+
+    // MARK: order preview
+
+    func testOrderPreviewStartsTheScriptAsATrackedRun() async throws {
+        let world = FakeWorld()
+        world.folder(order)
+        let runtime = world.runtime()
+        let (envelope, failure) = await Catalog.call("order_preview", runtime, ["folder": .string(order)])
+        XCTAssertNil(failure)
+        // the same script as Prepare, with its other command, and the folder as one argument
+        XCTAssertEqual(world.detached.map { Array($0.arguments.dropFirst(5)) },
+                       [["/repo/.venv/bin/python", "scripts/order.py", "preview", order]])
+        XCTAssertEqual(world.detached.first?.cwd, "/repo")
+        let written = try JSONValue.parse(
+            try XCTUnwrap(world.written.first { $0.path.hasSuffix(".json") }).data)
+        XCTAssertEqual(written["command"]?.stringValue, "order_preview")
+        XCTAssertEqual(written["failure_text"], .null)
+        XCTAssertEqual(written["argv"], .array([
+            .string("/repo/.venv/bin/python"), .string("scripts/order.py"), .string("preview"), .string(order)]))
+        XCTAssertEqual(envelope["data"], .object([
+            "run": .string(run), "pid": .int(4001), "log": .string("\(runs)/\(run).log"),
+            "hint": .string("Run `tecopa runs show \(run)`.")]))
+        // the call returns at once, and it writes only the run's own two files
+        XCTAssertEqual(world.commands, [])
+        XCTAssertEqual(world.slept, [])
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written.map(\.path), ["\(runs)/\(run).log", "\(runs)/\(run).json"])
     }
 
     // MARK: order status
@@ -207,10 +235,12 @@ final class OrdersTests: XCTestCase {
     // MARK: The catalog
 
     func testOrderStatusIsReadOnlyAndOrderPrepareIsNot() {
-        XCTAssertEqual(Catalog.all.map(\.name).filter { $0.hasPrefix("order_") }, ["order_prepare", "order_status"])
+        XCTAssertEqual(Catalog.all.map(\.name).filter { $0.hasPrefix("order_") },
+                       ["order_prepare", "order_preview", "order_status"])
         XCTAssertEqual(Catalog.named("order_prepare")?.readOnly, false)
+        XCTAssertEqual(Catalog.named("order_preview")?.readOnly, false)
         XCTAssertEqual(Catalog.named("order_status")?.readOnly, true)
-        for name in ["order_prepare", "order_status"] {
+        for name in ["order_prepare", "order_preview", "order_status"] {
             XCTAssertEqual((Catalog.named(name)?.parameters ?? []).map { "\($0.name):\($0.kind.rawValue)" },
                            ["folder:string"], name)
         }
@@ -243,15 +273,17 @@ final class OrdersTests: XCTestCase {
                        "Not prepared: the order has no work/state.json. Run `tecopa order prepare`.")
     }
 
-    func testTheTextOfOrderPrepareNamesTheRunAndTheNextCommand() {
+    func testTheTextOfATrackedOrderCommandNamesTheRunAndTheNextCommand() {
         let data: JSONValue = .object([
             "run": .string(run), "pid": .int(4001), "log": .string("\(runs)/\(run).log"),
             "hint": .string("Run `tecopa runs show \(run)`.")])
-        XCTAssertEqual(Catalog.named("order_prepare")?.text?(data), """
-            run: \(run)
-            pid: 4001
-            log: \(runs)/\(run).log
-            Run `tecopa runs show \(run)`.
-            """)
+        for name in ["order_prepare", "order_preview"] {
+            XCTAssertEqual(Catalog.named(name)?.text?(data), """
+                run: \(run)
+                pid: 4001
+                log: \(runs)/\(run).log
+                Run `tecopa runs show \(run)`.
+                """, name)
+        }
     }
 }

@@ -725,6 +725,9 @@ final class PlatesTests: XCTestCase {
             "order_prepare": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 1) {
                 $0.folder("/orders/2026-10-001-smith")
             },
+            "order_preview": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 1) {
+                $0.folder("/orders/2026-10-001-smith")
+            },
             // it reads the order's own files and runs no program
             "order_status": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 0) { world in
                 world.folder("/orders/2026-10-001-smith")

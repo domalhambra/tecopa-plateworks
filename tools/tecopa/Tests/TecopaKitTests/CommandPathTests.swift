@@ -261,6 +261,13 @@ final class CommandPathTests: XCTestCase {
             as? OrderCommand.Prepare)
         XCTAssertEqual(prepare.order.arguments,
                        ["folder": .string(NSHomeDirectory() + "/Tecopa Orders/2026-10-001-smith")])
+        let preview = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview", "~/Tecopa Orders/2026-10-001-smith"])
+            as? OrderCommand.Preview)
+        XCTAssertEqual(preview.order.arguments,
+                       ["folder": .string(NSHomeDirectory() + "/Tecopa Orders/2026-10-001-smith")])
+        let relative = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview", "2026-10-001-smith", "--json"])
+            as? OrderCommand.Preview)
+        XCTAssertEqual(relative.order.arguments, ["folder": .string(here + "/2026-10-001-smith")])
         let status = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "status", "2026-10-001-smith", "--json"])
             as? OrderCommand.Status)
         XCTAssertEqual(status.order.arguments, ["folder": .string(here + "/2026-10-001-smith")])
@@ -270,8 +277,11 @@ final class CommandPathTests: XCTestCase {
         // without a folder, the entry says that it is missing
         XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["order", "prepare"]) as? OrderCommand.Prepare)
             .order.arguments, [:])
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview"]) as? OrderCommand.Preview)
+            .order.arguments, [:])
         // an order command has no option of its own
         XCTAssertNil(try? Tecopa.parseAsRoot(["order", "prepare", "/o/a", "--out", "/tmp"]))
+        XCTAssertNil(try? Tecopa.parseAsRoot(["order", "preview", "/o/a", "--out", "/tmp"]))
     }
 
     func testContinueTakesTheFileThenItsOptions() throws {

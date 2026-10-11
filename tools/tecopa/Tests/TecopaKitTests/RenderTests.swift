@@ -177,6 +177,69 @@ final class RenderTests: XCTestCase {
         XCTAssertNil(data?["session"])
     }
 
+    func testAZipOfPanelsIsWrittenToOutUnchanged() async {
+        // a set comes back as one zip; the tool has no format logic, so the bytes
+        // and the path are the caller's
+        let zip = Data([0x50, 0x4B, 0x03, 0x04, 0x00, 0xFF, 0x0A])
+        let world = engine()
+        world.serveData("GET /api/jobs/cd34/result", 200, "application/zip", zip)
+        let (data, failure) = await call("render_final", world, [
+            "session": .string("ab12"), "out": .string("/out/set.zip")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(world.written, [.init(path: "/out/set.zip", data: zip)])
+        XCTAssertEqual(data?["out"]?.stringValue, "/out/set.zip")
+        XCTAssertEqual(data?["bytes"]?.intValue, 7)
+
+        let later = engine()
+        later.serveData("GET /api/jobs/cd34/result", 200, "application/zip", zip)
+        let (fetched, fetchFailure) = await call("render_fetch", later, [
+            "job": .string("cd34"), "out": .string("/out/late.zip")])
+        XCTAssertNil(fetchFailure)
+        XCTAssertEqual(later.written, [.init(path: "/out/late.zip", data: zip)])
+        XCTAssertEqual(fetched?["out"]?.stringValue, "/out/late.zip")
+        XCTAssertEqual(fetched?["bytes"]?.intValue, 7)
+
+        // the tool gives the file no name of its own: a path with another ending,
+        // or with none, holds the same bytes
+        for out in ["/out/set.png", "/out/set"] {
+            let named = engine()
+            named.serveData("GET /api/jobs/cd34/result", 200, "application/zip", zip)
+            let (_, namedFailure) = await call("render_fetch", named, [
+                "job": .string("cd34"), "out": .string(out)])
+            XCTAssertNil(namedFailure, out)
+            XCTAssertEqual(named.written, [.init(path: out, data: zip)], out)
+        }
+    }
+
+    func testAnExistingZipOfPanelsIsRefusedBeforeAnyRequest() async {
+        let world = engine()
+        world.serveData("GET /api/jobs/cd34/result", 200, "application/zip", Data([0x50, 0x4B, 0x03, 0x04]))
+        world.existingFile("/out/set.zip")
+        let commands: [(String, [String: JSONValue])] = [
+            ("render_final", ["session": .string("ab12")]),
+            ("render_final", ["tracks": tracks, "set": list("panels=2", "panel_gap=2")]),
+            ("render_fetch", ["job": .string("cd34")]),
+        ]
+        for (name, arguments) in commands {
+            var arguments = arguments
+            arguments["out"] = .string("/out/set.zip")
+            let (data, failure) = await call(name, world, arguments)
+            XCTAssertNil(data, name)
+            XCTAssertEqual(failure, TecopaFailure(.usage, "A file is already at /out/set.zip."), name)
+        }
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testTheSummariesOfAFinalAndAFetchSayThatASetIsAZip() {
+        // a caller reads the summary to choose `out`: the tool does not name the file
+        for name in ["render_final", "render_fetch"] {
+            let summary = Catalog.named(name)?.summary ?? ""
+            XCTAssertTrue(summary.contains("set of panels"), name)
+            XCTAssertTrue(summary.contains("zip"), name)
+        }
+    }
+
     func testRenderFetchOnARunningJobPassesThe409ThroughAndWritesNothing() async {
         let world = engine()
         world.serve("GET /api/jobs/cd34/result", 409, #"{"detail":"job is running"}"#)

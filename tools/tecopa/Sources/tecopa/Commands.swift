@@ -552,12 +552,13 @@ struct PlateCommand: AsyncParsableCommand {
 struct OrderCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "order",
-        abstract: "Prepare a customer order, or read what Prepare decided.",
-        discussion: "`order prepare` starts a tracked run and returns at once. "
-            + "Read it with `tecopa runs show <id>`, then run `tecopa order status <folder>`.",
-        subcommands: [Prepare.self, Status.self])
+        abstract: "Prepare a customer order, preview its sizes, or read what Prepare decided.",
+        discussion: "`order prepare` and `order preview` each start a tracked run and return at once. "
+            + "Read a run with `tecopa runs show <id>`. After Prepare, run `tecopa order status <folder>`. "
+            + "The preview writes its PDF under the order's out/preview/ folder.",
+        subcommands: [Prepare.self, Preview.self, Status.self])
 
-    /// The one argument of both commands.
+    /// The one argument of each command.
     struct Folder: ParsableArguments {
         @Argument(help: "The order folder, which holds in/ and order.toml.")
         var folder: String?
@@ -574,6 +575,15 @@ struct OrderCommand: AsyncParsableCommand {
         @OptionGroup var global: GlobalOptions
         @OptionGroup var order: Folder
         func run() async throws { try await execute("order_prepare", global, order.arguments) }
+    }
+
+    struct Preview: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "preview",
+            abstract: "Start the size preview as a tracked run: every size that suits the tracks, as one PDF.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var order: Folder
+        func run() async throws { try await execute("order_preview", global, order.arguments) }
     }
 
     struct Status: AsyncParsableCommand {

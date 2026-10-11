@@ -124,6 +124,39 @@ final class ReprintTests: XCTestCase {
         XCTAssertNil(data?["session"])
     }
 
+    func testReprintWritesTheZipOfASet() async {
+        // one panel file gives the whole set, as one zip: the reply is written as it came
+        let zip = Data([0x50, 0x4B, 0x03, 0x04, 0x01, 0x02])
+        let world = engine()
+        world.serveData("POST /api/reprint", 200, "application/zip", zip)
+        let (data, failure) = await call("reprint", world, [
+            "file": lassen, "out": .string("/out/set.zip")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(world.calls, ["POST /api/reprint", "GET /api/debug/engine"])
+        XCTAssertEqual(world.written, [.init(path: "/out/set.zip", data: zip)])
+        XCTAssertEqual(data?["out"]?.stringValue, "/out/set.zip")
+        XCTAssertEqual(data?["bytes"]?.intValue, 6)
+        // a zip is not a job: nothing is polled and no job is named
+        XCTAssertNil(data?["job"])
+    }
+
+    func testReprintRefusesAnExistingZipBeforeAnyRequest() async {
+        let world = engine()
+        world.serveData("POST /api/reprint", 200, "application/zip", Data([0x50, 0x4B, 0x03, 0x04]))
+        world.existingFile("/out/set.zip")
+        let (data, failure) = await call("reprint", world, ["file": lassen, "out": .string("/out/set.zip")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure, TecopaFailure(.usage, "A file is already at /out/set.zip."))
+        XCTAssertEqual(world.calls, [])
+        XCTAssertEqual(world.written, [])
+    }
+
+    func testTheSummaryOfAReprintSaysThatOnePanelGivesTheSetAsAZip() {
+        let summary = Catalog.named("reprint")?.summary ?? ""
+        XCTAssertTrue(summary.contains("One panel of a set"))
+        XCTAssertTrue(summary.contains("zip"))
+    }
+
     func testReprintSendsEachOptToTheReprintRoute() async {
         let world = engine()
         let pdf = Data("%PDF-1.7".utf8)

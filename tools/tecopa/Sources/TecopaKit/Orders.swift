@@ -1,13 +1,14 @@
 import Foundation
 
-/// The two entries of an order: Prepare as a tracked run, and the order's own
-/// state read back.
+/// The three entries of an order: Prepare and the size preview as tracked runs,
+/// and the order's own state read back.
 ///
 /// The tool holds no order logic. `scripts/order.py` builds or reuses the plate,
-/// frames the tracks, and writes `work/state.json` and `work/report.txt`. No entry
+/// frames the tracks, and writes `work/state.json` and `work/report.txt`. Its
+/// preview frames every size and writes the PDF under `out/preview/`. No entry
 /// writes under the order folder: only the script does.
 enum Orders {
-    static let entries: [CatalogEntry] = [prepareEntry, statusEntry]
+    static let entries: [CatalogEntry] = [prepareEntry, previewEntry, statusEntry]
 
     // MARK: Entries
 
@@ -26,6 +27,20 @@ enum Orders {
         // The tool does not judge where the folder is. The script refuses a folder
         // inside the repo, with exit 1 and its reason in the run's log.
         return try ScriptRunner.start("scripts/order.py", ["prepare", folder], command: "order_prepare", runtime)
+    }
+
+    static let previewEntry = CatalogEntry(
+        name: "order_preview",
+        summary: "Start the size preview for one order folder with scripts/order.py, as a tracked run: "
+            + "frame the tracks at every size, build one coarse plate, and write the preview PDF under "
+            + "out/preview/. It takes minutes and reads the network.",
+        readOnly: false,
+        parameters: [folderParameter],
+        text: Runs.startedText
+    ) { runtime, arguments in
+        let folder = try folder(arguments, runtime)
+        // The same script as Prepare, and the same rule: the script judges the folder.
+        return try ScriptRunner.start("scripts/order.py", ["preview", folder], command: "order_preview", runtime)
     }
 
     static let statusEntry = CatalogEntry(

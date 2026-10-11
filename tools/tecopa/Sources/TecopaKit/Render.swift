@@ -58,7 +58,8 @@ enum Render {
 
     static let finalEntry = CatalogEntry(
         name: "render_final",
-        summary: "Render the final poster from tracks or from a session, and write it to out.",
+        summary: "Render the final poster from tracks or from a session, and write it to out. "
+            + "A set of panels is written as one zip, with a file for each panel.",
         readOnly: false,
         parameters: Parameter.picture + [Parameter.opt, Parameter.crop, Parameter.out, Parameter.noWait],
         text: text
@@ -89,7 +90,8 @@ enum Render {
 
     static let fetchEntry = CatalogEntry(
         name: "render_fetch",
-        summary: "Write the file of a job that is done to out. A job that is not done is refused.",
+        summary: "Write the file of a job that is done to out. A job that is not done is refused. "
+            + "The file of a set of panels is a zip.",
         readOnly: false,
         parameters: [Parameter.job, Parameter.outAlways],
         text: text

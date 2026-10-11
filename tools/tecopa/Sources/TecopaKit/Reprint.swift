@@ -54,7 +54,7 @@ enum Reprint {
     static let reprintEntry = CatalogEntry(
         name: "reprint",
         summary: "Render a poster file again from its own manifest, and write it to out. "
-            + "A film is rendered as a job.",
+            + "A film is rendered as a job. One panel of a set gives the whole set, as a zip.",
         readOnly: false,
         parameters: [Parameter.file, Parameter.reprintOut, Parameter.reprintOpt,
                      Parameter.allowPlateMismatch, Parameter.reprintNoWait],
