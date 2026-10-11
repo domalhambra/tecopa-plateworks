@@ -7,14 +7,14 @@ import Foundation
 /// The tool sends each value as the caller wrote it. It has no default for a field,
 /// no range check and no copy of the engine's field names: the engine names its
 /// fields at /api/debug/forms, and the engine frames a crop. Each step below is one
-/// small function, so `reprint` and `continue` use the same steps.
+/// small function, so `reprint` and `continue` in Reprint.swift use the same steps.
 enum Render {
     static let entries: [CatalogEntry] = [proofEntry, finalEntry, wallpaperEntry, filmEntry, fetchEntry]
 
     // MARK: Entries
 
     /// The arguments of the entries. Each entry takes the ones that apply to it.
-    private enum Parameter {
+    enum Parameter {
         static let tracks = EntryParameter(
             "tracks", .stringArray, "Absolute GPX, KML or KMZ paths. Give tracks or session, never both.")
         static let session = EntryParameter(
@@ -108,7 +108,9 @@ enum Render {
     /// that the wallpaper route did not render.
     static let text: @Sendable (JSONValue) -> String = { data in
         var lines: [String] = []
-        for key in ["out", "bytes", "sha256", "session", "job", "region", "engine_version", "frames"] {
+        let keys = ["out", "bytes", "sha256", "session", "job", "region", "engine_version", "frames",
+                    "edition", "year_span"]
+        for key in keys {
             switch data[key] {
             case .string(let text)?: lines.append("\(key): \(text)")
             case .int(let number)?: lines.append("\(key): \(number)")
@@ -159,14 +161,17 @@ enum Render {
     }
 
     /// The names the tool sends from its own arguments. A caller who could set one
-    /// would move the request to another session, another crop or another file.
-    static let reserved: Set<String> = ["session_id", "x0", "y0", "x1", "y1", "files", "file", "presets"]
+    /// would move the request to another session, another crop or another file, or
+    /// would allow another plate without the argument that says so.
+    static let reserved: Set<String> = [
+        "session_id", "x0", "y0", "x1", "y1", "files", "file", "presets", "allow_plate_mismatch"]
 
     static func checkName(_ name: String, in parameter: String) throws {
         guard !reserved.contains(name) else {
             throw TecopaFailure(
                 .usage, "\(parameter) cannot name \(name).",
-                hint: "The tool sends the session, the crop, the files and the presets from their own arguments.")
+                hint: "The tool sends the session, the crop, the files, the presets and the plate flag "
+                    + "from their own arguments.")
         }
     }
 
@@ -449,11 +454,17 @@ enum Render {
         guard (200..<300).contains(reply.status) else {
             throw runtime.client.refusedFailure(reply.status, path, EngineClient.value(of: reply.body))
         }
-        guard reply.contentType?.lowercased().hasPrefix("application/json") != true else {
+        guard !isJSON(reply) else {
             throw TecopaFailure(.environment, "The engine answered \(path) with JSON, not with a file.",
                                 body: EngineClient.value(of: reply.body))
         }
         return reply.body
+    }
+
+    /// True when a reply says that its body is JSON. A route that answers with a
+    /// file or with JSON is read by this header, never by a look at the bytes.
+    static func isJSON(_ reply: HTTPReply) -> Bool {
+        reply.contentType?.lowercased().hasPrefix("application/json") == true
     }
 
     /// POST one output route: the session, then the fields. The answer names the job.
@@ -527,12 +538,18 @@ enum Render {
         }
     }
 
-    /// POST one output route and follow its job. The result has `job`, and
-    /// `skipped` or `frames` when the route gave one. `out` nil is `no_wait`: the
-    /// call returns after the submit, with no poll and no file.
+    /// POST one output route and follow its job.
     static func submitAndFetch(_ runtime: Runtime, path: String, session: String, fields: Fields,
                                out: String?) async throws -> [String: JSONValue] {
-        let answer = try await submit(runtime, path: path, session: session, fields: fields)
+        try await follow(runtime, answer: try await submit(runtime, path: path, session: session,
+                                                           fields: fields), out: out)
+    }
+
+    /// Follow the job that an answer names: an output route's, or a film reprint's.
+    /// The result has `job`, and `skipped` or `frames` when the answer gave one.
+    /// `out` nil is `no_wait`: the call returns at once, with no poll and no file.
+    static func follow(_ runtime: Runtime, answer: JSONValue,
+                       out: String?) async throws -> [String: JSONValue] {
         let job = try jobID(in: answer)
         var result: [String: JSONValue] = ["job": .string(job)]
         for key in ["skipped", "frames"] {
@@ -541,6 +558,24 @@ enum Render {
         guard let out else { return result }
         result.merge(try await waitAndFetch(runtime, job: job, out: out)) { _, new in new }
         return result
+    }
+
+    /// The fields and the crop of a proof that changes a picture the engine holds:
+    /// a session's own proof, or the proof of a poster file. `own` is the engine's
+    /// record of that picture. The fields are its own, then the change. The crop
+    /// is the caller's. Without one, a change that names the sheet asks the engine
+    /// to frame the tracks again, with the size the change does not name taken from
+    /// the picture's own. Without that too, the crop is the picture's own.
+    static func changedProof(_ runtime: Runtime, session: String,
+                             own: (fields: Fields, crop: [String]), change: Fields,
+                             crop: [String]?) async throws -> (crop: [String], fields: Fields) {
+        var fields = own.fields
+        fields.merge(change)
+        if let crop { return (crop, fields) }
+        if change.namesPrintSize {
+            return (try await starterCrop(runtime, session: session, fields: fields), fields)
+        }
+        return (own.crop, fields)
     }
 
     // MARK: Results
@@ -636,18 +671,9 @@ enum Render {
         if let given {
             session = given
             if output == nil || !change.isEmpty || crop != nil {
-                let own = try await proofForm(runtime, session: session)
-                var fields = own.fields
-                fields.merge(change)
-                let frame: [String]
-                if let crop {
-                    frame = crop
-                } else if change.namesPrintSize {
-                    frame = try await starterCrop(runtime, session: session, fields: fields)
-                } else {
-                    frame = own.crop
-                }
-                next = (frame, fields)
+                next = try await changedProof(
+                    runtime, session: session, own: try await proofForm(runtime, session: session),
+                    change: change, crop: crop)
             }
         } else {
             let answer = try await upload(runtime, files, region: region)

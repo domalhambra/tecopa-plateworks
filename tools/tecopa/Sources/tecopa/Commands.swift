@@ -260,6 +260,99 @@ struct RenderCommand: AsyncParsableCommand {
     }
 }
 
+/// The flag of the two commands that render a poster file.
+struct PlateFlag: ParsableArguments {
+    @Flag(name: .long, help: "Render on this engine's plate when it is not the plate of the file.")
+    var allowPlateMismatch = false
+}
+
+struct ReprintCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "reprint",
+        abstract: "Render a poster file again, or read what it holds.",
+        discussion: "`tecopa reprint <file> --out <path>` is `tecopa reprint run`.",
+        subcommands: [Run.self, Inspect.self],
+        defaultSubcommand: Run.self)
+
+    struct Inspect: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "inspect",
+            abstract: "Read a poster file's manifest: the plate, the sources, the edition. Renders nothing.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The poster file.")
+        var file: String?
+
+        var arguments: [String: JSONValue] {
+            file.map { ["file": .string(absolutePath($0))] } ?? [:]
+        }
+
+        func run() async throws { try await execute("reprint_inspect", global, arguments) }
+    }
+
+    struct Run: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "run",
+            abstract: "Render a poster file again from its own manifest, and write it to --out.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The poster file.")
+        var file: String?
+        @Option(name: .long, help: "The path of the file to write. It must hold no file. Required.")
+        var out: String?
+        @Option(name: .long, parsing: .upToNextOption,
+                help: "key=value, one field of the reprint route for each: format, embed_spec.")
+        var opt: [String] = []
+        @OptionGroup var plate: PlateFlag
+        @Flag(name: .long,
+              help: "For a film: return the job id at once. Then run `tecopa render fetch`. A still is always written.")
+        var noWait = false
+
+        var arguments: [String: JSONValue] {
+            var arguments: [String: JSONValue] = [:]
+            if let file { arguments["file"] = .string(absolutePath(file)) }
+            if let out { arguments["out"] = .string(absolutePath(out)) }
+            if !opt.isEmpty { arguments["opt"] = .array(opt.map { .string($0) }) }
+            if plate.allowPlateMismatch { arguments["allow_plate_mismatch"] = .bool(true) }
+            if noWait { arguments["no_wait"] = .bool(true) }
+            return arguments
+        }
+
+        func run() async throws { try await execute("reprint", global, arguments) }
+    }
+}
+
+/// `continue` is a Swift keyword, so the struct has another name than its command.
+struct ContinueCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "continue",
+        abstract: "Open a poster file for its next edition: add tracks, proof it, and render the final.")
+    @OptionGroup var global: GlobalOptions
+    @Argument(help: "The poster file. Give it before the options.")
+    var file: String?
+    @Option(name: .long, parsing: .upToNextOption, help: "GPX, KML or KMZ paths: the new tracks of this edition.")
+    var tracks: [String] = []
+    @Option(name: .long, parsing: .upToNextOption,
+            help: "key=value, one proof form field for each. Each one replaces a field of the file.")
+    var set: [String] = []
+    // a crop can start with a minus sign, so the next word is always its value
+    @Option(name: .long, parsing: .unconditional,
+            help: "x0,y0,x1,y1 in overview pixels. Without it, the crop is the file's own.")
+    var crop: String?
+    @OptionGroup var job: RenderJob
+    @OptionGroup var plate: PlateFlag
+
+    var arguments: [String: JSONValue] {
+        var arguments = job.arguments
+        if let file { arguments["file"] = .string(absolutePath(file)) }
+        if !tracks.isEmpty { arguments["tracks"] = .array(tracks.map { .string(absolutePath($0)) }) }
+        if !set.isEmpty { arguments["set"] = .array(set.map { .string($0) }) }
+        if let crop { arguments["crop"] = .string(crop) }
+        if plate.allowPlateMismatch { arguments["allow_plate_mismatch"] = .bool(true) }
+        return arguments
+    }
+
+    func run() async throws { try await execute("continue", global, arguments) }
+}
+
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",

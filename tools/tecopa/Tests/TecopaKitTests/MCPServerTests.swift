@@ -5,11 +5,13 @@ import XCTest
 /// test what a real client sees and depend on no client library.
 final class MCPServerTests: XCTestCase {
     private let readOnly: Set<String> = [
-        "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches"]
+        "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
+        "reprint_inspect"]
     /// Not read-only: the entries that control the engine, and the ones that write a file.
     private let control: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
-        "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch"]
+        "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
+        "reprint", "continue"]
 
     private var binary: URL {
         // the test bundle sits beside the products of the same build
@@ -114,7 +116,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 16)
+        XCTAssertEqual(tools.count, 19)
         XCTAssertEqual(names, readOnly.union(control))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -144,6 +146,14 @@ final class MCPServerTests: XCTestCase {
         let proof = tools.first { $0["name"]?.stringValue == "render_proof" }
         XCTAssertNil(proof?["inputSchema"]?["properties"]?["opt"])
         XCTAssertNil(proof?["inputSchema"]?["properties"]?["no_wait"])
+        // the plate flag is a boolean of the two entries that render a file, and of no other
+        for tool in tools {
+            let name = tool["name"]?.stringValue ?? ""
+            XCTAssertEqual(tool["inputSchema"]?["properties"]?["allow_plate_mismatch"]?["type"]?.stringValue,
+                           ["reprint", "continue"].contains(name) ? "boolean" : nil, name)
+        }
+        let inspect = tools.first { $0["name"]?.stringValue == "reprint_inspect" }
+        XCTAssertEqual(inspect?["inputSchema"]?["properties"]?["file"]?["type"]?.stringValue, "string")
     }
 
     func testEveryToolHasACommandOfTheSameWords() throws {
