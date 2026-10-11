@@ -29,7 +29,7 @@
 3. **The engine names its own form fields.** FastAPI ignores a form field that it does not know, and the tool must refuse a misspelled name, not ignore it. A new debug route, `GET /api/debug/forms`, returns the field names of each render route by introspection. The tool checks each `--set`, `--spec` and `--opt` name against that list. The tool holds no copy of the names.
 4. **`--set` is the picture, `--opt` is the container.** `--set` goes to `/api/proof`. `--opt` goes to the output route: `format` and `embed_spec` for a final, the pacing fields for a film.
 5. **The crop comes from the engine.** Without `--crop`, the tool uses the upload answer's `starter_crop`, which is for 17 × 22. When `print_w` or `print_h` is set, the tool asks a new debug route, `GET /api/debug/sessions/{sid}/starter_crop`, which calls `geo.starter_crop`. Coordinate math stays in `app/geo.py` (invariant 5).
-6. **`render` also takes `--session`.** With a session id and no tracks, the tool renders the session's stamped spec. This is how Claude renders a final from the studio session that Dom has open.
+6. **`render` also takes `--session`.** With a session id and no tracks, the tool renders the session's stamped spec. This is how Claude renders a final from the studio session that Dom has open. A change to that session (`--set`, `--spec` or `--crop`) starts from the session's own fields: a third debug route, `GET /api/debug/sessions/{sid}/proof_form`, returns them. Without it, one `--set` would put every other field back to the engine default.
 7. **A fifth render command, `render fetch`.** `--no-wait` returns a job id, and an MCP call must return quickly. `render fetch --job <jid> --out <path>` saves the result of a finished job. The spec had no way to do this.
 8. **`engine_version` in a render result is the running engine's.** It comes from `/api/debug/engine`, which is the value the engine stamps into the manifest. The tool does not decode a PNG. With the gate off the field is null.
 9. **`/api/continue` gains one additive key, `proof_form`.** A continued poster keeps its look only if the next proof sends the same fields. The studio maps `prefill` to form fields in JavaScript, and the tool must not copy that mapping. The engine now returns the exact `/api/proof` form fields for the file's spec. A round-trip test proves the mapping.
@@ -106,6 +106,22 @@
 - [ ] The existing continue tests pass unchanged.
 
 **Verify:** `.venv/bin/python -m pytest tests/test_editions.py tests/test_provenance.py tests/test_oblique.py tests/test_output_fitness.py -q`, then the fast suite.
+
+## Task 2b: The engine names a session's proof fields
+
+**Goal:** A third read-only debug route, so a change to an existing session keeps the session's look.
+
+**Files:** `app/debug.py`, `app/main.py` (pass the two helpers into `build_router`), `tests/test_debug.py`.
+
+**Route:** `GET /api/debug/sessions/{sid}/proof_form` returns `{"proof_form": {…}, "crop": [x0, y0, x1, y1]}`. `proof_form` is `_proof_form_for(spec)` for the session's stamped spec, the same helper as task 2. `crop` is the spec's crop in overview pixels, from the helper that `/api/continue` uses. An unknown session is 404 "Unknown session". A session with no stamped spec is 409 "This session has no proof yet."
+
+**Acceptance criteria:**
+
+- [ ] Round trip on a real session: proof with non-default fields, read the route, send `proof_form` and `crop` to `/api/proof` again, and the stamped spec is equal (crop within 1e-3 metres).
+- [ ] 404, 409, gate off 404, foreign Host 403, and the session is unchanged by the read.
+- [ ] `app/debug.py` still does not import `app.main`.
+
+**Verify:** `.venv/bin/python -m pytest tests/test_debug.py -q`, then the fast suite.
 
 ## Task 3: The Swift seams for a render
 
@@ -186,11 +202,13 @@ public func json(_ reply: HTTPReply, for path: String) throws -> JSONValue   // 
 1. Check the arguments. Refuse `out` if a file is there or its folder is missing. This is before any request.
 2. If `set`, `spec` or `opt` names a field: get `/api/debug/forms` and refuse an unknown name with the list of names. The reserved names `session_id`, `x0`, `y0`, `x1`, `y1`, `files`, `file`, `presets` are refused in `set`, `spec` and `opt`.
 3. With `tracks`: POST `/api/upload` with one `files` part for each path, and `region_id` if given. Keep `session` and `starter_crop` from the answer. Do not keep the track geometry in the result.
-4. The crop: `crop`, else the debug `starter_crop` route when `print_w` or `print_h` is set, else the upload's `starter_crop`. With `session` and no `crop`, and with any `set` or `spec`, the tool asks the debug route.
-5. The proof: POST `/api/proof`. It is skipped only for `session` with no `set`, no `spec` and no `crop`, where the stamped spec is used.
-6. `render proof` writes the proof PNG to `out`. The other three POST their route (`/api/final/submit`, `/api/wallpapers/submit`, `/api/timelapse/submit`) with `session_id` and the `opt` fields.
-7. With `no_wait`, return the job id. Else poll `GET /api/jobs/{jid}` each second through `runtime.sleep`, for at most 900 seconds. `done` leads to `GET /api/jobs/{jid}/result` and `writeNew`. `error` is a `refused` failure with the job's error text.
-8. A poll that runs out of time is a failure that names the job id and the hint "Run `tecopa render fetch`."
+4. With `tracks`, the proof fields are `spec` then `set`. The crop is `crop`, else the debug `starter_crop` route when `print_w` or `print_h` is among the fields, else the upload's `starter_crop`.
+5. With `session` and no `set`, `spec` or `crop`, there is no proof: the stamped spec is used. `render proof` with only `session` still sends the proof, with the session's own fields.
+6. With `session` and a change, the tool gets the debug `proof_form` route. The proof fields are that `proof_form`, then `spec`, then `set`. The crop is `crop`, else the debug `starter_crop` route when the change names `print_w` or `print_h` (with the missing one of the two taken from `proof_form`), else the route's `crop`. A 409 from the route passes through.
+7. The proof: POST `/api/proof` with `session_id`, the four crop values and the fields.
+8. `render proof` writes the proof PNG to `out`. The other three POST their route (`/api/final/submit`, `/api/wallpapers/submit`, `/api/timelapse/submit`) with `session_id` and the `opt` fields.
+9. With `no_wait`, return the job id. Else poll `GET /api/jobs/{jid}` each second through `runtime.sleep`, for at most 900 seconds. `done` leads to `GET /api/jobs/{jid}/result` and `writeNew`. `error` is a `refused` failure with the job's error text.
+10. A poll that runs out of time is a failure that names the job id and the hint "Run `tecopa render fetch`."
 
 **Result:** `{"out", "bytes", "sha256", "session", "job", "engine_version", "region", "skipped"}`. `skipped` is the wallpaper route's list. `frames` is added for a film. A key with no value is left out.
 
@@ -250,7 +268,7 @@ public func json(_ reply: HTTPReply, for path: String) throws -> JSONValue   // 
 
 **Acceptance criteria:**
 
-- [ ] The MCP test lists every phase 2 tool and checks each read-only annotation.
+- [ ] The MCP test already lists every phase 2 tool: each task that adds an entry also adds its name and the new count to `MCPServerTests.swift`, so the suite passes at each commit.
 - [ ] `smoke_test.sh` has a render block: `render final` on `tests/fixtures/sample.gpx`, then the same requests with `curl`, then `cmp` of the two files.
 - [ ] The documents name each new command, the two debug routes, the `proof_form` key and the `--set` and `--opt` rule. `tests/test_docs.py` passes.
 - [ ] **Proof (invariant 3):** on one engine build, the final PNG from `tecopa render final` is byte-identical to the final from the same form fields sent with `curl`. The `cmp` output and both SHA-256 values go into this plan under "What changed while it ran".
