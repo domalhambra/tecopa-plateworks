@@ -1,26 +1,44 @@
 # app/debug.py
-"""Read-only debug routes for the `tecopa` tool, behind TECOPA_DEBUG=1.
+"""Debug routes for the `tecopa` tool, behind TECOPA_DEBUG=1.
 
 The studio is the only client the engine was built for, and it holds its own state.
 A diagnosis from outside the browser needs to see what the engine holds: which jobs
 are queued or failed, which sessions exist, what the caches are doing. These routes
-show that and change nothing.
+show that.
+
+Every route is read-only except POST /api/debug/studio. That one changes the studio
+report buffer in this module and nothing else. No route here changes a session, a
+job, a cache or a plate, and no route writes to disk.
+
+The studio reports: the browser posts its small state and its errors, and
+GET /api/debug/studio returns them, so a fault in the page can be read from outside
+it. The reports stay in engine memory, in a buffer of fixed size, and a restart of
+the engine empties it. A report never holds journey data: the route keeps a fixed
+list of state keys and drops every other one.
 
 The gate is off by default. A route that lists sessions and tracks must not exist on
 a host that did not ask for it, so with the gate off app.main never includes this
-router and every /api/debug path is a plain 404. The macOS launcher sets the gate.
-With the gate on, the routes answer only a request whose Host header is local.
+router and every /api/debug path is a plain 404 (a POST gets the static mount's 405).
+The macOS launcher sets the gate. With the gate on, the routes answer only a request
+whose Host header is local, and the studio routes also refuse an Origin header that
+is not local.
 
 Design: docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md."""
 from __future__ import annotations
+import collections
 import inspect
+import json
+import logging
 import math
 import os
 import platform
 import re
+import threading
 import time
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from app import geo, provenance, serialize, session
+
+log = logging.getLogger("tecopa.debug")
 
 
 def enabled(env=None) -> bool:
@@ -43,6 +61,140 @@ def _local_host_only(request: Request) -> None:
     host = _PORT.sub("", request.headers.get("host", ""), count=1).lower()
     if host not in _LOCAL_HOSTS:
         raise HTTPException(403, "Debug routes answer only a local Host header.")
+
+
+# The Origin values the studio routes answer. A page on another website can send a
+# POST to 127.0.0.1, and the browser sends the local Host with it, so the Host check
+# passes. The browser also sends the page's own Origin, and that is refused here.
+# "null" (a sandboxed page, a file) is not local. A request with no Origin passes:
+# the tecopa tool sends none, and a browser adds one to every cross-site POST.
+_LOCAL_ORIGIN = re.compile(r"http://(?:127\.0\.0\.1|localhost|\[::1\])(?::[0-9]+)?")
+
+
+def _local_origin_only(request: Request) -> None:
+    origin = request.headers.get("origin")
+    if origin is not None and not _LOCAL_ORIGIN.fullmatch(origin):
+        raise HTTPException(403, "Debug routes answer only a local Origin header.")
+
+
+# ---- the studio reports ----
+
+MAX_BODY = 64 * 1024            # bytes in one studio post
+MAX_ERRORS_PER_POST = 20
+# The only keys a state keeps. This list is the privacy rule: a report never holds
+# tracks, markers, labels, filenames, the crop or the title, whatever the page sends.
+STATE_KEYS = ("session", "target", "view", "region", "output", "edition",
+              "has_spec", "proof_stale")
+STATE_TEXT = 200                # characters in one state value
+ERROR_KINDS = frozenset({"error", "rejection", "toast"})
+ERROR_TEXT = {"message": 2000, "source": 300, "stack": 8000}
+_TAB = re.compile(r"[a-z0-9]{8,32}")
+_SAFE_INT = 2 ** 53             # past this a JSON reader no longer holds the integer
+
+
+def _text(value: str, limit: int) -> str:
+    # Cut, not refused. A lone surrogate is legal in a JSON string and cannot be
+    # written back as UTF-8: one in the buffer would make every later GET a 500.
+    return value[:limit].encode("utf-8", "replace").decode("utf-8")
+
+
+def _whole(value) -> bool:
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and abs(value) <= _SAFE_INT)
+
+
+def _clean_state(raw) -> dict | None:
+    """The named keys with a scalar value. None if `raw` is not an object."""
+    if not isinstance(raw, dict):
+        return None
+    state = {}
+    for key in STATE_KEYS:
+        if key not in raw:
+            continue
+        v = raw[key]
+        if isinstance(v, str):
+            state[key] = _text(v, STATE_TEXT)
+        elif v is None or isinstance(v, bool) or _whole(v):
+            state[key] = v
+        elif isinstance(v, float) and math.isfinite(v):   # JSON has no NaN to send back
+            state[key] = v
+    return state
+
+
+def _clean_errors(raw) -> list[dict]:
+    """The first 20 entries of `raw`, without each one that is not an error of a
+    known kind. Each error that stays has the same five fields."""
+    if not isinstance(raw, list):
+        return []
+    errors = []
+    for e in raw[:MAX_ERRORS_PER_POST]:
+        if not isinstance(e, dict):
+            continue
+        kind = e.get("kind")
+        if not isinstance(kind, str) or kind not in ERROR_KINDS:
+            continue
+        message, source, line, stack = (e.get(k) for k in
+                                        ("message", "source", "line", "stack"))
+        errors.append({
+            "kind": kind,
+            "message": _text(message, ERROR_TEXT["message"]) if isinstance(message, str) else "",
+            "source": _text(source, ERROR_TEXT["source"]) if isinstance(source, str) else None,
+            "line": line if _whole(line) else None,
+            "stack": _text(stack, ERROR_TEXT["stack"]) if isinstance(stack, str) else None})
+    return errors
+
+
+class StudioReports:
+    """The studio's reports, in memory only: the latest state for each of at most
+    MAX_TABS tabs, and the last MAX_ERRORS errors from all tabs. `add` takes values
+    that are already clean. Nothing here goes to disk, so a restart empties it."""
+    MAX_TABS = 20
+    MAX_ERRORS = 50
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._tabs: dict[str, dict] = {}      # in report order, the oldest first
+        self._errors: collections.deque = collections.deque(maxlen=self.MAX_ERRORS)
+
+    def add(self, tab: str, state: dict | None, errors: list[dict]) -> None:
+        with self._lock:
+            received = time.time()            # the engine's clock, not the browser's
+            last = self._tabs.pop(tab, None)
+            if state is None and last is not None:
+                state = last["state"]         # errors alone keep the state
+            self._tabs[tab] = {"received": received, "state": state}
+            while len(self._tabs) > self.MAX_TABS:
+                del self._tabs[next(iter(self._tabs))]
+            for e in errors:
+                self._errors.append({"tab": tab, "received": received, **e})
+
+    def snapshot(self) -> dict:
+        """Both lists, newest first. The rows are copies."""
+        with self._lock:
+            tabs = [{"tab": tab, "received": row["received"],
+                     "state": None if row["state"] is None else dict(row["state"])}
+                    for tab, row in reversed(self._tabs.items())]
+            errors = [dict(e) for e in reversed(self._errors)]
+        return {"tabs": tabs, "errors": errors}
+
+
+async def _read_capped(request: Request, limit: int = MAX_BODY) -> bytes:
+    """The body, or a 413 as soon as it passes `limit`. Content-Length can refuse a
+    post early. It cannot admit one: the bytes are counted as they arrive, and the
+    read stops at the limit, so a sender cannot fill the engine's memory."""
+    too_large = HTTPException(413, "A studio report is at most 64 KB.")
+    try:
+        declared = int(request.headers.get("content-length", ""))
+    except ValueError:
+        declared = 0
+    if declared > limit:
+        raise too_large
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > limit:
+            raise too_large
+    return bytes(body)
 
 
 def _session_row(sid: str, data: dict) -> dict:
@@ -77,6 +229,10 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
     pixels: the two helpers /api/continue answers with. Passed in, not imported, so
     this module never imports app.main."""
     r = APIRouter(prefix="/api/debug", dependencies=[Depends(_local_host_only)])
+    # One buffer for the life of this router: an engine start, or a test client,
+    # begins with no report.
+    studio = StudioReports()
+    studio_only = [Depends(_local_origin_only)]
 
     @r.get("/engine")
     async def engine():
@@ -172,5 +328,37 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
     @r.get("/caches")
     async def list_caches():
         return {name: c.stats() for name, c in caches.items()}
+
+    @r.post("/studio", status_code=204, dependencies=studio_only)
+    async def studio_report(request: Request):
+        # The one debug route that changes anything: it adds to the report buffer.
+        # application/json is required because a page on another website cannot send
+        # it without a preflight, and the engine answers no preflight.
+        kind = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if kind != "application/json":
+            raise HTTPException(415, "A studio report is sent as application/json.")
+        body = await _read_capped(request)
+        try:
+            report = json.loads(body)
+        except (ValueError, RecursionError):
+            # not JSON, not UTF-8, or an integer too long to read. RecursionError is
+            # for a Python whose JSON reader has a depth limit: 3.14 has none.
+            raise HTTPException(422, "A studio report is one JSON object.")
+        if not isinstance(report, dict):
+            raise HTTPException(422, "A studio report is one JSON object.")
+        tab = report.get("tab")
+        if not isinstance(tab, str) or not _TAB.fullmatch(tab):
+            raise HTTPException(422, "tab is 8 to 32 characters of a-z and 0-9.")
+        state = _clean_state(report.get("state"))
+        errors = _clean_errors(report.get("errors"))
+        studio.add(tab, state, errors)
+        # the tab id and the counts, never a message or a stack
+        log.info("event=debug.studio tab=%s state=%d errors=%d",
+                 tab, state is not None, len(errors))
+        return Response(status_code=204)
+
+    @r.get("/studio", dependencies=studio_only)
+    async def studio_reports():
+        return studio.snapshot()
 
     return r

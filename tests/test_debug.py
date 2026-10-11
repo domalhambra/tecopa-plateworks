@@ -1,10 +1,13 @@
 # tests/test_debug.py
-# The read-only debug routes behind TECOPA_DEBUG=1 (the `tecopa` tool reads them).
+# The debug routes behind TECOPA_DEBUG=1 (the `tecopa` tool reads them). Each one is
+# read-only except the studio post, and that one changes only the report buffer.
 # The router is built on a small app of its own here, so the gate-on shape is tested
 # without re-importing app.main. The gate-off shape is tested on the live app.
 import ast
+import asyncio
 import inspect
 import json
+import logging
 import time
 import numpy as np
 import pytest
@@ -382,15 +385,23 @@ def test_a_foreign_host_header_is_refused_on_every_route():
     # a page that uses DNS rebinding reaches 127.0.0.1 with its own Host header
     c, _ = _client()
     sid = _make_session(with_spec=True)
-    for path in ("/engine", "/jobs", "/sessions", "/sessions/x?full=1",
-                 f"/sessions/{sid}?full=1", "/caches", "/forms",
-                 f"/sessions/{sid}/starter_crop?print_w=17&print_h=22",
-                 f"/sessions/{sid}/proof_form"):
-        r = c.get("/api/debug" + path, headers={"Host": "attacker.example:8848"})
-        assert r.status_code == 403, path
+    report = {"tab": TAB, "state": {"session": sid},
+              "errors": [{"kind": "error", "message": "from another site"}]}
+    for method, path in (("GET", "/engine"), ("GET", "/jobs"), ("GET", "/sessions"),
+                         ("GET", "/sessions/x?full=1"), ("GET", f"/sessions/{sid}?full=1"),
+                         ("GET", "/caches"), ("GET", "/forms"),
+                         ("GET", f"/sessions/{sid}/starter_crop?print_w=17&print_h=22"),
+                         ("GET", f"/sessions/{sid}/proof_form"),
+                         ("GET", "/studio"), ("POST", "/studio")):
+        r = c.request(method, "/api/debug" + path,
+                      headers={"Host": "attacker.example:8848"},
+                      json=report if method == "POST" else None)
+        assert r.status_code == 403, (method, path)
         # 403 and not 404: the tecopa tool reads a 404 "Not Found" as "the gate is off"
-        assert r.json() == {"detail": LOCAL_ONLY}, path
-        assert "1100.0" not in r.text, path
+        assert r.json() == {"detail": LOCAL_ONLY}, (method, path)
+        assert "1100.0" not in r.text, (method, path)
+    # the refused post left nothing in the buffer
+    assert c.get("/api/debug/studio").json() == {"tabs": [], "errors": []}
 
 
 @pytest.mark.parametrize("host", ["localhost:8848", "127.0.0.1", "[::1]:8848",
@@ -417,3 +428,472 @@ def test_a_request_with_no_host_header_is_refused():
     with pytest.raises(HTTPException) as refused:
         debug._local_host_only(Request({"type": "http", "headers": []}))
     assert refused.value.status_code == 403 and refused.value.detail == LOCAL_ONLY
+
+
+# ---- /api/debug/studio: the studio's reports, held in engine memory ----
+# The browser posts its small state and its errors, and the tecopa tool reads them
+# back. The post is the one debug route that changes anything, and it changes only
+# the report buffer. A report never holds journey data, so the route keeps a fixed
+# list of state keys and drops the rest.
+
+TAB = "tab00001"
+STUDIO = "/api/debug/studio"
+STATE = {"session": "0123abcd", "target": "print", "view": "proof",
+         "region": "lassen_ca", "output": "poster", "edition": 2,
+         "has_spec": True, "proof_stale": False}
+LOCAL_ORIGIN_ONLY = "Debug routes answer only a local Origin header."
+
+
+def _error(message="boom", kind="error", **more):
+    return {"kind": kind, "message": message, "source": "app.js", "line": 12,
+            "stack": "Error: boom\n    at app.js:12", **more}
+
+
+def _raw(c, content, **headers):
+    # the body as bytes, for a body that json= would not build
+    return c.post(STUDIO, content=content,
+                  headers={"Content-Type": "application/json", **headers})
+
+
+def test_studio_starts_empty_for_each_router():
+    a, _ = _client()
+    assert a.get(STUDIO).json() == {"tabs": [], "errors": []}
+    assert a.post(STUDIO, json={"tab": TAB, "state": STATE}).status_code == 204
+    # the buffer belongs to the router: a new engine starts with none
+    b, _ = _client()
+    assert b.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+def test_studio_post_is_a_204_and_the_get_returns_the_report():
+    c, _ = _client()
+    before = time.time()
+    r = c.post(STUDIO, json={"tab": TAB, "state": STATE, "errors": [_error()]})
+    after = time.time()
+    assert r.status_code == 204 and r.content == b""
+    body = c.get(STUDIO).json()
+    assert list(body) == ["tabs", "errors"]
+    assert len(body["tabs"]) == 1 and len(body["errors"]) == 1
+    tab, err = body["tabs"][0], body["errors"][0]
+    assert list(tab) == ["tab", "received", "state"]
+    assert tab["tab"] == TAB and tab["state"] == STATE
+    assert list(err) == ["tab", "received", "kind", "message", "source", "line", "stack"]
+    assert err == {"tab": TAB, "received": err["received"], **_error()}
+    # the engine's clock, not the browser's
+    for row in (tab, err):
+        assert type(row["received"]) is float and before <= row["received"] <= after
+
+
+def test_studio_state_keeps_only_the_named_keys():
+    c, _ = _client()
+    journey = {"tracks": [[1100.0, 2100.0]], "hotspots": [{"label": "SECRET-CAMP"}],
+               "markers": "SECRET-MARKER", "labels": "SECRET-LABEL",
+               "files": "SECRET-FILE.gpx", "filename": "SECRET-NAME.gpx",
+               "crop": "SECRET-CROP", "title": "SECRET-TITLE", "sid": "SECRET-SID",
+               "Session": "SECRET-CASE", "session ": "SECRET-SPACE"}
+    assert c.post(STUDIO, json={"tab": TAB, "state": {**STATE, **journey},
+                                "tracks": "SECRET-TOP", "extra": 1}).status_code == 204
+    r = c.get(STUDIO)
+    assert r.json()["tabs"][0]["state"] == STATE
+    assert set(r.json()["tabs"][0]) == {"tab", "received", "state"}
+    assert "SECRET" not in r.text and "1100.0" not in r.text
+
+
+def test_studio_state_keeps_only_scalar_values():
+    c, _ = _client()
+    state = {"session": ["0123abcd"], "target": {"kind": "print"}, "view": None,
+             "region": "r" * 201, "output": "o" * 200, "edition": 3,
+             "has_spec": True, "proof_stale": 0.5}
+    assert c.post(STUDIO, json={"tab": TAB, "state": state}).status_code == 204
+    # a list and an object are dropped, and a string is cut at 200 characters
+    assert c.get(STUDIO).json()["tabs"][0]["state"] == {
+        "view": None, "region": "r" * 200, "output": "o" * 200, "edition": 3,
+        "has_spec": True, "proof_stale": 0.5}
+
+
+def test_studio_drops_a_value_that_is_nested_deep():
+    # 30,000 levels fit in 64 KB. The value is dropped whole and never walked.
+    c, _ = _client()
+    deep = b"[" * 30000 + b"]" * 30000
+    body = (b'{"tab": "tab00001", "state": {"session": ' + deep + b', "view": "proof"},'
+            b' "errors": [{"kind": "error", "message": ' + deep[:2000] + deep[-2000:]
+            + b', "stack": "s"}]}')
+    assert _raw(c, body).status_code == 204
+    r = c.get(STUDIO)
+    assert r.status_code == 200, r.text
+    assert r.json()["tabs"][0]["state"] == {"view": "proof"}
+    assert (r.json()["errors"][0]["message"], r.json()["errors"][0]["stack"]) == ("", "s")
+    assert _raw(c, b'{"tab": "tab00001", "state": ' + deep + b"}").status_code == 204
+    assert c.get(STUDIO).json()["tabs"][0]["state"] == {"view": "proof"}
+
+
+def test_studio_drops_a_value_that_json_cannot_send_back():
+    # Python reads NaN, an infinity and a lone surrogate. JSON cannot write them, so
+    # one of them in the buffer would make every later GET a 500.
+    c, _ = _client()
+    body = (b'{"tab": "tab00001", "state": {"edition": NaN, "view": 1e999,'
+            b' "target": -Infinity, "region": "a\\ud800b", "output": "ok"},'
+            b' "errors": [{"kind": "toast", "message": "m\\udc00", "line": 1e999,'
+            b' "source": "s\\ud800", "stack": "k\\ud800"}]}')
+    assert _raw(c, body).status_code == 204
+    r = c.get(STUDIO)
+    assert r.status_code == 200, r.text
+    assert r.json()["tabs"][0]["state"] == {"region": "a?b", "output": "ok"}
+    err = r.json()["errors"][0]
+    assert (err["message"], err["source"], err["stack"], err["line"]) == (
+        "m?", "s?", "k?", None)
+
+
+def test_studio_state_that_is_not_an_object_counts_as_no_state():
+    c, _ = _client()
+    assert c.post(STUDIO, json={"tab": TAB, "state": STATE}).status_code == 204
+    for bad in ("print", 7, ["session"], None):
+        assert c.post(STUDIO, json={"tab": TAB, "state": bad}).status_code == 204
+        assert c.get(STUDIO).json()["tabs"][0]["state"] == STATE
+    # an empty object is a state: the studio holds nothing yet
+    assert c.post(STUDIO, json={"tab": TAB, "state": {}}).status_code == 204
+    assert c.get(STUDIO).json()["tabs"][0]["state"] == {}
+
+
+def test_studio_error_strings_are_cut_and_not_refused():
+    c, _ = _client()
+    long = {"kind": "error", "message": "m" * 2001, "source": "s" * 301,
+            "line": 4, "stack": "k" * 8001}
+    exact = {"kind": "error", "message": "m" * 2000, "source": "s" * 300,
+             "line": 4, "stack": "k" * 8000}
+    assert c.post(STUDIO, json={"tab": TAB, "errors": [long]}).status_code == 204
+    err = c.get(STUDIO).json()["errors"][0]
+    assert {k: err[k] for k in exact} == exact
+    assert c.post(STUDIO, json={"tab": TAB, "errors": [exact]}).status_code == 204
+    err = c.get(STUDIO).json()["errors"][0]
+    assert {k: err[k] for k in exact} == exact
+
+
+def test_studio_error_of_another_kind_is_dropped():
+    c, _ = _client()
+    errors = [_error("one", "error"), _error("two", "rejection"), _error("three", "toast"),
+              _error("four", "warning"), _error("five", "Error"), _error("six", 7),
+              _error("seven", None), {"message": "eight"}, "nine", 10, None, ["error"]]
+    assert c.post(STUDIO, json={"tab": TAB, "errors": errors}).status_code == 204
+    got = c.get(STUDIO).json()["errors"]
+    assert [(e["kind"], e["message"]) for e in got] == [
+        ("toast", "three"), ("rejection", "two"), ("error", "one")]
+    # a list of errors that is not a list holds no error
+    for bad in ("error", 7, _error(), None):
+        assert c.post(STUDIO, json={"tab": TAB, "errors": bad}).status_code == 204
+    assert len(c.get(STUDIO).json()["errors"]) == 3
+
+
+def test_studio_error_fields_have_one_type_each():
+    # the tecopa tool reads these: a message is text, the others are a value or null
+    c, _ = _client()
+    errors = [{"kind": "error"},
+              {"kind": "error", "message": 5, "source": 6, "line": "12", "stack": 7},
+              {"kind": "error", "message": "m", "line": 1.5},
+              {"kind": "error", "message": "m", "line": True},
+              {"kind": "error", "message": "m", "line": 2 ** 70},
+              {"kind": "error", "message": "m", "line": 0, "title": "SECRET-TITLE"}]
+    assert c.post(STUDIO, json={"tab": TAB, "errors": errors}).status_code == 204
+    r = c.get(STUDIO)
+    got = r.json()["errors"][::-1]
+    empty = {"kind": "error", "message": "", "source": None, "line": None, "stack": None}
+    assert [{k: e[k] for k in empty} for e in got] == [
+        empty, empty, {**empty, "message": "m"}, {**empty, "message": "m"},
+        {**empty, "message": "m"}, {**empty, "message": "m", "line": 0}]
+    assert "SECRET" not in r.text       # an error keeps its five fields and no other
+
+
+def test_studio_takes_the_first_20_errors_of_one_post():
+    c, _ = _client()
+    errors = [_error(f"m{i}") for i in range(25)]
+    assert c.post(STUDIO, json={"tab": TAB, "errors": errors}).status_code == 204
+    got = c.get(STUDIO).json()["errors"]
+    assert [e["message"] for e in got] == [f"m{i}" for i in range(19, -1, -1)]
+
+
+def test_studio_keeps_the_last_50_errors():
+    c, _ = _client()
+    for post in range(3):
+        errors = [_error(f"m{post * 20 + i}") for i in range(20)]
+        assert c.post(STUDIO, json={"tab": f"tab0000{post}",
+                                    "errors": errors}).status_code == 204
+    got = c.get(STUDIO).json()["errors"]
+    assert [e["message"] for e in got] == [f"m{i}" for i in range(59, 9, -1)]
+    assert got[0]["tab"] == "tab00002" and got[-1]["tab"] == "tab00000"
+
+
+def test_studio_keeps_20_tabs_and_drops_the_one_that_reported_longest_ago():
+    c, _ = _client()
+    tabs = [f"tab000{i:02d}" for i in range(21)]
+    for tab in tabs[:20]:
+        assert c.post(STUDIO, json={"tab": tab, "state": {"view": tab}}).status_code == 204
+    assert len(c.get(STUDIO).json()["tabs"]) == 20
+    # the first tab reports again, so the second is now the oldest
+    assert c.post(STUDIO, json={"tab": tabs[0], "errors": [_error()]}).status_code == 204
+    assert c.post(STUDIO, json={"tab": tabs[20], "state": {"view": "new"}}).status_code == 204
+    got = [t["tab"] for t in c.get(STUDIO).json()["tabs"]]
+    assert got == [tabs[20], tabs[0]] + tabs[19:1:-1]
+    assert tabs[1] not in got and len(got) == 20
+
+
+def test_studio_lists_are_newest_first():
+    c, _ = _client()
+    for n, tab in enumerate(("tab0000a", "tab0000b", "tab0000c")):
+        assert c.post(STUDIO, json={"tab": tab, "state": {"edition": n},
+                                    "errors": [_error(f"{tab}-1"), _error(f"{tab}-2")]}
+                      ).status_code == 204
+    assert c.post(STUDIO, json={"tab": "tab0000a", "state": {"edition": 9}}).status_code == 204
+    body = c.get(STUDIO).json()
+    assert [(t["tab"], t["state"]["edition"]) for t in body["tabs"]] == [
+        ("tab0000a", 9), ("tab0000c", 2), ("tab0000b", 1)]
+    # in one post the last error is the newest
+    assert [e["message"] for e in body["errors"]] == [
+        "tab0000c-2", "tab0000c-1", "tab0000b-2", "tab0000b-1", "tab0000a-2", "tab0000a-1"]
+    for rows in (body["tabs"], body["errors"]):
+        times = [row["received"] for row in rows]
+        assert times == sorted(times, reverse=True)
+
+
+def test_studio_errors_with_no_state_keep_the_state_and_move_the_time():
+    c, _ = _client()
+    assert c.post(STUDIO, json={"tab": TAB, "state": STATE}).status_code == 204
+    first = c.get(STUDIO).json()["tabs"][0]
+    time.sleep(0.01)
+    assert c.post(STUDIO, json={"tab": TAB, "errors": [_error()]}).status_code == 204
+    second = c.get(STUDIO).json()["tabs"]
+    assert len(second) == 1 and second[0]["state"] == STATE
+    assert second[0]["received"] > first["received"]
+    # a tab that has sent only errors is a tab with no state yet
+    assert c.post(STUDIO, json={"tab": "tab00002", "errors": [_error()]}).status_code == 204
+    newest = c.get(STUDIO).json()["tabs"][0]
+    assert newest["tab"] == "tab00002" and newest["state"] is None
+
+
+TOO_LARGE = "A studio report is at most 64 KB."
+
+
+def _padded(size):
+    # a valid report of exactly `size` bytes: JSON allows the spaces after it
+    body = json.dumps({"tab": TAB, "state": STATE}).encode()
+    return body + b" " * (size - len(body))
+
+
+def test_studio_body_of_64_kb_is_taken_and_one_byte_more_is_a_413():
+    c, _ = _client()
+    assert _raw(c, _padded(64 * 1024)).status_code == 204
+    r = _raw(c, _padded(64 * 1024 + 1))
+    assert r.status_code == 413 and r.json() == {"detail": TOO_LARGE}
+    assert len(c.get(STUDIO).json()["tabs"]) == 1
+
+
+def test_studio_body_is_measured_and_content_length_is_not_trusted():
+    c, _ = _client()
+    big = _padded(64 * 1024 + 1)
+    # a Content-Length that is small, one that is not a number, and none at all
+    for headers in ({"Content-Length": "10"}, {"Content-Length": "many"}):
+        r = _raw(c, big, **headers)
+        assert r.status_code == 413 and r.json() == {"detail": TOO_LARGE}, headers
+    chunked = c.post(STUDIO, content=iter([big[:1000], big[1000:]]),
+                     headers={"Content-Type": "application/json"})
+    assert "content-length" not in chunked.request.headers
+    assert chunked.status_code == 413 and chunked.json() == {"detail": TOO_LARGE}
+    # a Content-Length over the limit is refused, whatever the body is
+    r = _raw(c, _padded(100), **{"Content-Length": str(64 * 1024 + 1)})
+    assert r.status_code == 413
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+def test_studio_body_read_stops_at_the_limit():
+    # a sender with no Content-Length and no end: the read must stop, not fill memory
+    sent = []
+
+    async def receive():
+        sent.append(1)
+        return {"type": "http.request", "body": b"x" * 1024, "more_body": True}
+
+    request = Request({"type": "http", "method": "POST", "headers": []}, receive)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(debug._read_capped(request))
+    assert refused.value.status_code == 413 and refused.value.detail == TOO_LARGE
+    assert len(sent) == 65            # 64 KB, and the one chunk that passes it
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", "application/x-www-form-urlencoded",
+                                          "multipart/form-data", "application/jsonx",
+                                          "text/json", "application/json+x",
+                                          "x; application/json", ""])
+def test_studio_post_that_is_not_json_by_content_type_is_a_415(content_type):
+    # a page on another site can send these three form types with no preflight
+    c, _ = _client()
+    r = c.post(STUDIO, content=json.dumps({"tab": TAB, "state": STATE}),
+               headers={"Content-Type": content_type})
+    assert r.status_code == 415, r.text
+    assert r.json() == {"detail": "A studio report is sent as application/json."}
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+def test_studio_post_with_no_content_type_is_a_415():
+    c, _ = _client()
+    # httpx adds no Content-Type to a body given as text
+    r = c.post(STUDIO, content=json.dumps({"tab": TAB, "state": STATE}))
+    assert "content-type" not in r.request.headers
+    assert r.status_code == 415
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+@pytest.mark.parametrize("content_type", ["application/json",
+                                          "application/json; charset=utf-8",
+                                          "application/json;charset=UTF-8",
+                                          "Application/JSON", " application/json "])
+def test_studio_post_takes_json_with_parameters(content_type):
+    c, _ = _client()
+    r = c.post(STUDIO, content=json.dumps({"tab": TAB, "state": STATE}),
+               headers={"Content-Type": content_type})
+    assert r.status_code == 204, r.text
+
+
+@pytest.mark.parametrize("origin", ["https://attacker.example", "null", "",
+                                    "http://attacker.example",
+                                    "http://127.0.0.1.attacker.example",
+                                    "http://localhost.attacker.example:8848",
+                                    "https://127.0.0.1:8848", "https://localhost",
+                                    "http://127.0.0.1:8848/", "http://localhost:",
+                                    "http://localhost:8848:1", "http://127.0.0.2",
+                                    "http://::1", "http://[::1]x", "http://0.0.0.0:8848",
+                                    "http://LOCALHOST:8848", "127.0.0.1:8848",
+                                    "http://localhost:8848\n", "http://user@localhost"])
+def test_studio_refuses_an_origin_that_is_not_local(origin):
+    # A page on another site can post to 127.0.0.1, and the browser sends the local
+    # Host. The Origin header still names the page.
+    c, _ = _client()
+    r = c.post(STUDIO, json={"tab": TAB, "state": STATE}, headers={"Origin": origin})
+    assert r.status_code == 403 and r.json() == {"detail": LOCAL_ORIGIN_ONLY}
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+    r = c.get(STUDIO, headers={"Origin": origin})
+    assert r.status_code == 403 and r.json() == {"detail": LOCAL_ORIGIN_ONLY}
+
+
+@pytest.mark.parametrize("origin", ["http://127.0.0.1", "http://127.0.0.1:8848",
+                                    "http://localhost", "http://localhost:8848",
+                                    "http://[::1]", "http://[::1]:8848",
+                                    "http://localhost:3000"])
+def test_studio_answers_a_local_origin(origin):
+    c, _ = _client()
+    r = c.post(STUDIO, json={"tab": TAB, "state": STATE}, headers={"Origin": origin})
+    assert r.status_code == 204, r.text
+    r = c.get(STUDIO, headers={"Origin": origin})
+    assert r.status_code == 200 and len(r.json()["tabs"]) == 1
+
+
+def test_studio_answers_a_request_with_no_origin():
+    # the tecopa tool sends none, and a same-origin GET from the studio sends none
+    c, _ = _client()
+    r = c.post(STUDIO, json={"tab": TAB, "state": STATE})
+    assert "origin" not in r.request.headers
+    assert r.status_code == 204
+    assert c.get(STUDIO).status_code == 200
+
+
+@pytest.mark.parametrize("body", [
+    b"", b"not json", b"{", b'{"tab": "tab00001"', b"[]", b'["tab00001"]',
+    b'"tab00001"', b"7", b"null", b"true", b"{}", b'{"state": {}}',
+    b'{"tab": null}', b'{"tab": 12345678}', b'{"tab": ["tab00001"]}',
+    b'{"tab": "short77"}', b'{"tab": "' + b"a" * 33 + b'"}', b'{"tab": ""}',
+    b'{"tab": "TAB00001"}', b'{"tab": "tab-0001"}', b'{"tab": "tab 0001"}',
+    b'{"tab": "tab00001\\n"}', b'{"tab": "tab0000\xc3\xa9"}',
+    b'{"tab": "tab0000\xd9\xa1"}',                  # an Arabic-Indic digit
+    b'{"tab": "tab00001", "state": \xff}',          # not UTF-8
+    b'{"tab": "tab00001", "state": {"edition": ' + b"9" * 5000 + b"}}"])
+def test_studio_post_that_is_not_a_report_is_a_422(body):
+    c, _ = _client()
+    r = _raw(c, body)
+    assert r.status_code == 422, r.text
+    assert c.get(STUDIO).json() == {"tabs": [], "errors": []}
+
+
+@pytest.mark.parametrize("tab", ["abcdefgh", "a" * 32, "01234567", "k3j9x0q2m5"])
+def test_studio_takes_a_tab_id_of_8_to_32_lower_case_letters_and_digits(tab):
+    c, _ = _client()
+    assert c.post(STUDIO, json={"tab": tab}).status_code == 204
+    assert c.get(STUDIO).json()["tabs"] == [
+        {"tab": tab, "received": c.get(STUDIO).json()["tabs"][0]["received"],
+         "state": None}]
+
+
+class _Lines(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.DEBUG)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append((record.name, record.levelname, record.getMessage()))
+
+
+def test_studio_logs_one_line_with_the_counts_and_never_the_text():
+    # the handler goes on the module's own logger, so each record arrives one time
+    # whatever the loggers above it do
+    c, _ = _client()
+    logger, seen = logging.getLogger("tecopa.debug"), _Lines()
+    level = logger.level
+    logger.addHandler(seen)
+    logger.setLevel(logging.INFO)
+    try:
+        assert c.post(STUDIO, json={
+            "tab": TAB, "state": {**STATE, "title": "SECRET-TITLE"},
+            "errors": [_error("SECRET-MESSAGE", stack="SECRET-STACK"),
+                       _error("SECRET-TOAST", "toast", source="SECRET-SOURCE"),
+                       _error("dropped", "warning")]}).status_code == 204
+        assert c.post(STUDIO, json={"tab": "tab00002"}).status_code == 204
+        # a refused post and a read leave no line
+        assert c.post(STUDIO, json={"tab": "bad"}).status_code == 422
+        assert c.get(STUDIO).status_code == 200
+    finally:
+        logger.removeHandler(seen)
+        logger.setLevel(level)
+    assert seen.lines == [
+        ("tecopa.debug", "INFO", "event=debug.studio tab=tab00001 state=1 errors=2"),
+        ("tecopa.debug", "INFO", "event=debug.studio tab=tab00002 state=0 errors=0")]
+
+
+def test_studio_post_leaves_the_session_the_jobs_and_the_caches_as_they_were():
+    c, q = _client()
+    sid = _upload()["session"]
+    jid = q.submit(lambda: "done")
+    deadline = time.time() + 5
+    while q.status(jid)["state"] != "done" and time.time() < deadline:
+        time.sleep(0.01)
+    before = (_frozen(sid), sorted(session.ids()), q.snapshot(),
+              c.get("/api/debug/caches").json())
+    assert c.post(STUDIO, json={"tab": TAB, "state": {**STATE, "session": sid},
+                                "errors": [_error()]}).status_code == 204
+    assert c.get(STUDIO).json()["tabs"][0]["state"]["session"] == sid
+    assert (_frozen(sid), sorted(session.ids()), q.snapshot(),
+            c.get("/api/debug/caches").json()) == before
+
+
+def test_gate_off_means_the_live_app_takes_no_studio_report():
+    # The static mount answers the POST, with a 405 and not a 404. The studio hook
+    # stops on any first reply that is not 2xx.
+    live = TestClient(main.app)
+    r = live.post(STUDIO, json={"tab": TAB, "state": STATE})
+    assert r.status_code >= 400
+    r = live.get(STUDIO)
+    assert r.status_code == 404 and r.json() == {"detail": "Not Found"}
+
+
+def test_debug_module_writes_nothing_to_disk():
+    # The reports stay in engine memory. The module opens no file, and imports no
+    # module whose work is to write one.
+    tree = ast.parse(open(debug.__file__).read())
+    writers = {"pathlib", "tempfile", "shutil", "sqlite3", "pickle", "shelve", "io",
+               "csv", "dbm"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            assert not writers & {a.name.split(".")[0] for a in node.names}, node.lineno
+        if isinstance(node, ast.ImportFrom):
+            assert (node.module or "").split(".")[0] not in writers, node.lineno
+            if node.module == "app":
+                assert not {"blobs", "logconfig"} & {a.name for a in node.names}
+        if isinstance(node, ast.Call):
+            name = getattr(node.func, "id", getattr(node.func, "attr", ""))
+            assert name not in ("open", "write", "write_text", "write_bytes",
+                                "dump"), node.lineno
