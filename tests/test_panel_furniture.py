@@ -112,6 +112,94 @@ def test_the_label_of_a_marker_next_to_a_seam_ends_inside_its_panel():
     assert xs.min() >= lo and xs.max() < hi
 
 
+def _markers(spec, x_px, dpi, **hs):
+    """The marker layer alone, on a clear sheet, with one marker at x_px."""
+    w, h = spec.pixel_size(dpi)
+    blank = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    marked = replace(spec, hotspots=[_marker_at(spec, x_px, dpi, **hs)])
+    return np.asarray(render._draw_markers(blank, marked, np.ones((h, w), np.float32), w, h, dpi))
+
+
+def _disc_fill(out):
+    """How many pixels of a marker's disc can be seen."""
+    return int(np.all(out == render.MARKER_FILL + (255,), axis=2).sum())
+
+
+def test_a_label_that_will_not_fit_right_of_its_marker_goes_left_of_it():
+    # pulled left until it fits, the plate of a label lands on its own marker
+    dpi = 40
+    text = "A long marker label"
+    spec = _set(2, 2.0, "tall")
+    lo, hi = panels.panel_rects_px(spec, dpi)[0][0], panels.panel_rects_px(spec, dpi)[0][2]
+    x = hi - 60
+    bare = _disc_fill(_markers(spec, x, dpi, icon="tent"))
+    assert bare > 0
+
+    single = _set(2, 2.0, "tall", panels=1, panel_gap_in=0.0)
+    assert _disc_fill(_markers(single, x, dpi, icon="tent", label=text)) == bare   # the control
+
+    out = _markers(spec, x, dpi, icon="tent", label=text)
+    assert _disc_fill(out) == bare                   # the whole disc can be seen
+    xs = np.nonzero(out[..., 3] >= 200)[1]           # the disc and the plate; not the soft shadow
+    assert xs.min() >= lo and xs.max() < hi
+    plate = np.nonzero(np.any(out != _markers(spec, x, dpi, icon="tent"), axis=2))[1]
+    r = max(5, round(spec.marker_diameter_in * dpi)) / 2.0
+    assert plate.max() < x - r                       # the plate ends left of the disc
+
+
+def test_a_label_that_fits_on_neither_side_is_pulled_into_its_panel():
+    dpi = 40
+    text = "A marker label that is longer than one half of a panel is wide"
+    spec = _set(2, 2.0, "tall", label_pt=40.0)
+    lo, hi = panels.panel_rects_px(spec, dpi)[0][0], panels.panel_rects_px(spec, dpi)[0][2]
+    x = (lo + hi) // 2
+    bare = _markers(spec, x, dpi)
+    plate = np.nonzero(np.any(_markers(spec, x, dpi, label=text) != bare, axis=2))[1]
+    assert np.ptp(plate) > (hi - lo) / 2             # it fits on neither side of the marker
+    assert plate.min() >= lo and plate.max() == hi - 1
+
+
+def test_a_label_on_a_single_sheet_is_still_pulled_left_from_the_sheet_edge():
+    # the move to the left is for a set: a single sheet keeps its bytes
+    dpi = 40
+    single = _set(2, 2.0, "tall", panels=1, panel_gap_in=0.0)
+    w, _ = single.pixel_size(dpi)
+    bare = _markers(single, w - 60, dpi)
+    out = _markers(single, w - 60, dpi, label="A long marker label")
+    plate = np.nonzero(np.any(out != bare, axis=2))[1]
+    assert plate.max() == w - 1 and _disc_fill(out) < _disc_fill(bare)
+
+
+def test_the_label_of_a_marker_behind_a_gap_starts_inside_the_nearer_panel():
+    dpi = 40
+    spec = _set(2, 4.0, "tall")
+    lo, hi = panels.panel_rects_px(spec, dpi)[1][0], panels.panel_rects_px(spec, dpi)[1][2]
+    x = lo - 60                                      # in the gap strip, nearer panel 2
+    assert panels.gap_rects_px(spec, dpi)[0][0] < x and lo > 0
+    plate = np.nonzero(np.any(_markers(spec, x, dpi, label="Camp") != _markers(spec, x, dpi),
+                              axis=2))[1]
+    assert plate.min() == lo and plate.max() < hi    # at the left edge of panel 2, not before it
+
+
+def test_a_photo_box_behind_a_gap_starts_inside_the_nearer_panel(tmp_path):
+    dpi = 40
+    p = tmp_path / "pic.png"
+    Image.new("RGB", (80, 80), (255, 0, 255)).save(p)
+    spec = _set(2, 4.0, "tall", photo_box_in=2.0)
+    w, h = spec.pixel_size(dpi)
+    lo, hi = panels.panel_rects_px(spec, dpi)[1][0], panels.panel_rects_px(spec, dpi)[1][2]
+    x = lo - 60                                      # in the gap strip, nearer panel 2
+    assert panels.gap_rects_px(spec, dpi)[0][0] < x and lo > 0
+    blank = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    pinned = replace(spec, hotspots=[_marker_at(spec, x, dpi, photo=str(p))])
+    out = np.asarray(render._draw_photos(blank, pinned, w, h, dpi))
+    # the mat and the photo: the stem is in the edge colour, and it starts at the anchor
+    frame = np.all(out == render.PHOTO_FRAME + (255,), axis=2) | np.all(out == (255, 0, 255, 255), axis=2)
+    xs = np.nonzero(frame)[1]
+    assert xs.size and xs.min() >= lo and xs.max() < hi
+    assert xs.min() - lo <= round(2.0 * dpi * 0.05)   # hard on the left edge: only the frame's line is before the mat
+
+
 def test_a_photo_box_stays_inside_the_panel_of_its_anchor(tmp_path):
     dpi = 40
     p = tmp_path / "pic.png"

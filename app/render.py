@@ -1374,21 +1374,29 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
             _draw_glyph(dd, icon, cx, cy, r * 0.62, ICON_INK)
         label = (hs.get("label") or "").strip()
         if label:
-            # a marker label never crosses a seam: it stays in its anchor's panel
+            # a marker label never crosses a seam: it stays in its anchor's panel. On
+            # a set a seam can be anywhere on the map, so a label with no room on the
+            # right goes left of its marker; a single sheet keeps the one placement
             lo, hi = panel_geo.span_px_at(spec, cx, dpi, out_w)
             _draw_label(dd, label, cx + r + dia*0.25, cy, label_font, out_w, out_h,
-                        x_lo=lo, x_hi=hi)
+                        x_lo=lo, x_hi=hi,
+                        right_end=cx - r - dia*0.25 if panel_geo.is_set(spec) else None)
     if ghost is not None:
         img = _ghost_layer_alpha(img, ghost, OBLIQUE_SYMBOL_GHOST)
     return img
 
-def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None):
+def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None, right_end=None):
     """A label on a soft cream plate, left-anchored at x and vertically centred on cy.
-    x_lo and x_hi are the panel of a set: the plate stays inside it."""
+    x_lo and x_hi are the panel of a set: the plate stays inside it. right_end is the
+    second place: when the plate does not fit at x, it ends there, if it fits there.
+    Pulled left from x it would cover the marker it names."""
     l, t, rt, b = d.textbbox((0, 0), text, font=font)
     tw, th = rt - l, b - t
     pad = max(2, round(th * 0.3))
-    x = min(x, (out_w if x_hi is None else x_hi) - tw - 2*pad - 1)   # keep the plate inside
+    x_max = (out_w if x_hi is None else x_hi) - tw - 2*pad - 1
+    if right_end is not None and x > x_max and right_end - tw - 2*pad >= x_lo:
+        x = right_end - tw - 2*pad
+    x = min(x, x_max)                                                # keep the plate inside
     if x_lo:
         x = max(x, x_lo)
     y = float(np.clip(cy - th/2 - pad, 0, out_h - th - 2*pad - 1))
