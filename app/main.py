@@ -1793,29 +1793,35 @@ def _proof_form_for(spec):
     RESOLVED sun, which wins at re-proof), the two angles ride only in journey mode
     (archival ignores them), and the device fields ride only on a wallpaper."""
     r, g, b = (int(c) for c in spec.track_rgb)
+    # the spec came out of an uploaded file. validate() bounds the numbers and still
+    # lets a bool or a non-string title through, so each value is made a form scalar here
+    f = float
+    title = spec.title_text if isinstance(spec.title_text, str) else ""
     form = {
-        "print_w": spec.print_w_in, "print_h": spec.print_h_in,
+        "print_w": f(spec.print_w_in), "print_h": f(spec.print_h_in),
         # "" would re-resolve to the region name in _build_spec (the prefill rule)
-        "title": spec.title_text or "-",
+        "title": title.strip() or "-",
         "contours": bool(spec.contours), "compass": bool(spec.compass),
         "biome": bool(spec.biome), "labels": bool(spec.labels),
-        "track_width_pt": spec.track_width_pt, "track_halo": spec.track_halo,
+        "track_width_pt": f(spec.track_width_pt), "track_halo": f(spec.track_halo),
         "track_color": f"#{r:02x}{g:02x}{b:02x}",
-        "marker_size_in": spec.marker_diameter_in, "marker_ring": spec.marker_ring,
+        "marker_size_in": f(spec.marker_diameter_in), "marker_ring": f(spec.marker_ring),
         "photo_style": spec.photo_frame_style,
-        "furniture_scale": spec.furniture_scale, "terrain_depth": spec.terrain_depth,
-        "shadow_strength": spec.shadow_strength, "oblique": spec.oblique,
-        "soft_light": spec.soft_light, "haze_strength": spec.haze_strength,
-        "water_depth": spec.water_depth, "dry_lakes": bool(spec.dry_lakes),
-        "light_mode": spec.light_mode, "golden_strength": spec.golden_strength,
-        "profile": bool(spec.profile), "profile_height_in": spec.profile_height_in,
+        "furniture_scale": f(spec.furniture_scale), "terrain_depth": f(spec.terrain_depth),
+        "shadow_strength": f(spec.shadow_strength), "oblique": f(spec.oblique),
+        "soft_light": f(spec.soft_light), "haze_strength": f(spec.haze_strength),
+        "water_depth": f(spec.water_depth), "dry_lakes": bool(spec.dry_lakes),
+        "light_mode": spec.light_mode, "golden_strength": f(spec.golden_strength),
+        "profile": bool(spec.profile), "profile_height_in": f(spec.profile_height_in),
         "track_color_by": spec.track_color_by, "label_place": spec.label_place,
         "track_weave": bool(spec.track_weave),
-        "output": spec.output_kind, "bleed": spec.bleed_in,
+        "output": spec.output_kind, "bleed": f(spec.bleed_in),
     }
     if spec.light_mode == "journey":
-        form["sun_azimuth_deg"] = spec.sun_azimuth_deg
-        form["sun_altitude_deg"] = spec.sun_altitude_deg
+        for key, angle in (("sun_azimuth_deg", spec.sun_azimuth_deg),
+                           ("sun_altitude_deg", spec.sun_altitude_deg)):
+            if angle is not None:
+                form[key] = f(angle)
     if spec.output_kind == "wallpaper":
         # a device the table doesn't carry rides as the same custom device (px + ppi),
         # exactly as the prefill's custom_device does
@@ -1823,7 +1829,7 @@ def _proof_form_for(spec):
         if form["wallpaper_preset"] == "custom":
             form["custom_px_w"] = round(spec.print_w_in * spec.screen_ppi)
             form["custom_px_h"] = round(spec.print_h_in * spec.screen_ppi)
-            form["custom_ppi"] = spec.screen_ppi
+            form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
 @app.post("/api/continue")

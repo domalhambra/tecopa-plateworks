@@ -489,6 +489,22 @@ def test_proof_form_keys_are_proof_route_parameters():
     assert set().union(*forms) == params - _NOT_IN_PROOF_FORM
 
 
+def test_proof_form_makes_each_value_of_a_crafted_spec_a_form_scalar():
+    # the spec comes out of an uploaded file, and validate() still lets these through:
+    # a title that is not a string, a bool in a number field, a journey with no sun
+    from app import main
+    form = main._proof_form_for(_spec(title_text=["x", "y"], oblique=True,
+                                      track_width_pt=True, light_mode="journey",
+                                      sun_azimuth_deg=None, sun_altitude_deg=None))
+    assert form["title"] == "-"
+    assert form["oblique"] == 1.0 and type(form["oblique"]) is float
+    assert type(form["track_width_pt"]) is float
+    assert "sun_azimuth_deg" not in form and "sun_altitude_deg" not in form
+    assert all(isinstance(v, (str, bool, int, float)) for v in form.values())
+    # a title of spaces would regrow the region name at the next proof
+    assert main._proof_form_for(_spec(title_text="   "))["title"] == "-"
+
+
 # ---- endpoint: hostile manifests (the untrusted-input surface) ----
 
 def test_continue_rejects_a_png_without_a_manifest():
