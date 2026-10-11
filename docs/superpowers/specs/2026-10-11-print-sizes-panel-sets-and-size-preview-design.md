@@ -363,3 +363,12 @@ this document said:
   south into Albers, while Prepare keeps it in UTM up to 466 km. The map of the preview
   was 12.6 degrees off the print in the Sierra, and the fit rule judged the wrong box.
   This reverses decision 15 of the plan's table.
+- **A size that the painter refuses is left out** (§5, step 4): for example a frame with
+  too much ground past the terrain data. Its entry in `preview.json` holds the reason,
+  and the PDF and the report show the other sizes. A title longer than the map holds
+  stops the command before any query.
+- **The report's lines for `order.toml`** are one key on each line, so they can be pasted
+  (§5, "After the choice").
+- **The 2× rule is asked only of a size that can still be offered** (§5, step 2): each
+  query of the 3DEP index is a request, and a wider frame cannot bring back a set that
+  the width rule refuses.

@@ -1,6 +1,8 @@
 # tests/test_orderpreview.py
 import json
 import os
+import stat
+import tomllib
 
 import numpy as np
 import pytest
@@ -11,7 +13,7 @@ from app import order as od
 from app import orderplate as opl
 from app.orderplate import (CoverageError, PlateError, nestled_frame, order_epsg, project_bbox,
                             track_shares)
-from tests.test_orderprep import WIDE, _gpx, _make_order, tools  # noqa: F401
+from tests.test_orderprep import NO_LIDAR, SMALL, WIDE, _gpx, _make_order, tools  # noqa: F401
 
 KM = 1000.0
 
@@ -92,6 +94,13 @@ def test_the_rule_follows_the_line_and_not_its_vertices():
     cand = [c for c in opv.candidates("three") if c.orientation == "landscape"][0]
     track = [_line(0, 0, 200, 5)]                             # two vertices, at the ends
     frame = nestled_frame(_bounds(track), cand.aspect)
+    assert opv.panels_with_track(track, frame, cand) == [True, True, True]
+
+
+def test_a_vertex_that_is_not_a_number_is_left_out_of_the_line():
+    cand = [c for c in opv.candidates("three") if c.orientation == "landscape"][0]
+    track = [np.array([[0.0, 0.0], [np.nan, np.nan], [200 * KM, 5 * KM]])]
+    frame = nestled_frame((0.0, 0.0, 200 * KM, 5 * KM), cand.aspect)
     assert opv.panels_with_track(track, frame, cand) == [True, True, True]
 
 
@@ -269,6 +278,10 @@ def test_a_failed_coverage_query_stops_the_whole_preview(tmp_path, tools, monkey
     monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
     tools = op.Tools(**{**tools.__dict__, "coverage_script": str(bad)})
     d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    # the fit rule refuses both sets of this route, and a refused size is not queried:
+    # the list asks for the set of two
+    (d / "order.toml").write_text('title = "Smith home ground"\n'
+                                  'sizes = ["11x17", "17x22", "two"]\n')
     calls, pdfs = [], []
     with pytest.raises(CoverageError, match=r"(?s)coverage check failed.*the index did not answer"):
         _preview(d, tools, calls, pdfs)
@@ -385,12 +398,11 @@ def test_a_set_is_judged_at_the_share_prepare_frames():
 def test_the_lines_of_the_report_give_prepare_the_frame_of_the_preview(tmp_path, tools):
     d = _make_order(tmp_path, bbox=SIERRA_DIAGONAL, size="11x17")
     (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22", "two"]\n')
-    for e in _preview(d, tools)["sizes"]:
-        if not e["offered"]:
-            continue
-        gap = f"gap = {e['gap']:g}\n" if e["panels"] > 1 else ""
-        (d / "order.toml").write_text(f'title = "Smith home ground"\nsize = "{e["key"]}"\n'
-                                      f'orientation = "{e["orientation"]}"\n{gap}')
+    offered = {e["key"]: e for e in _preview(d, tools)["sizes"] if e["offered"]}
+    pasted = _toml_lines((d / "work" / "preview" / "report.txt").read_text())
+    assert list(pasted) == list(offered) == ["17x22", "two"]
+    for key, e in offered.items():
+        (d / "order.toml").write_text('title = "Smith home ground"\n' + pasted[key])
         state = op.prepare(str(d), tools, log=lambda s: None)
         assert state["epsg"] == e["epsg"] and state["print_in"] == e["print_in"]
         assert state["frame"] == pytest.approx(e["frame"], abs=1e-6)
@@ -521,7 +533,8 @@ def test_the_report_lists_each_size_and_the_lines_for_order_toml(tmp_path, tools
     small = [e for e in state["sizes"] if e["key"] == "11x17"][0]
     assert (f'- 11 × 17 in, {small["orientation"]}, 11 x 17 in: offered' in report
             or f'- 11 × 17 in, {small["orientation"]}, 17 x 11 in: offered' in report)
-    assert f'order.toml: size = "11x17", orientation = "{small["orientation"]}"' in report
+    assert (f'tracks fill {small["fill"]:.0%}. In order.toml:\n    size = "11x17"\n'
+            f'    orientation = "{small["orientation"]}"\n- 17 × 22 in') in report
     assert "- Three panels" in report and "not offered" in report
     assert report.rstrip().splitlines()[-1].startswith("Time: ")
 
@@ -545,8 +558,10 @@ def test_the_report_gives_a_set_its_gap_and_its_warnings(tmp_path, tools):
         "Preview: /x/out/preview/t-preview.pdf",
         "Plate: preview_x (built), 30 m grid",
         "Sizes:",
-        '- Three panels, landscape, 70 x 17 in: offered, tracks fill 60%. '
-        'order.toml: size = "three", orientation = "landscape", gap = 2',
+        "- Three panels, landscape, 70 x 17 in: offered, tracks fill 60%. In order.toml:",
+        '    size = "three"',
+        '    orientation = "landscape"',
+        "    gap = 2",
         "  Warning: the tracks span 24% of the sheet's width, under 30%.",
         "  Warning: a route end is behind gap 1.",
         "  Warning: a route end is behind gap 2.",
@@ -575,7 +590,7 @@ def test_the_command_prints_the_preview_report(tmp_path, tools, capsys, monkeypa
     out = capsys.readouterr().out
     assert "Order: Smith home ground" in out and "Sizes:" in out
     assert out.endswith((d / "work" / "preview" / "report.txt").read_text())
-    assert 'order.toml: size = "11x17"' in out and "not offered" in out
+    assert 'In order.toml:\n    size = "11x17"\n' in out and "not offered" in out
 
 
 def test_each_command_names_itself_when_it_stops(tmp_path, tools, capsys):
@@ -588,23 +603,22 @@ def test_each_command_names_itself_when_it_stops(tmp_path, tools, capsys):
     assert "prepare stopped: order.toml needs a title" in capsys.readouterr().err
 
 
-def test_a_title_the_map_cannot_hold_stops_the_command(tmp_path, tools, capsys, monkeypatch):
-    # render_maps raises SpecError for a title past the spec's limit
-    # (tests/test_orderpreview_render.py); the command must name it, not show a traceback
+def test_a_title_the_map_cannot_hold_stops_the_preview_before_any_query(
+        tmp_path, tools, capsys, monkeypatch):
+    # the painter refuses a title past the spec's limit; found there, it cost the plate
     from scripts import order as order_cli
-    from app.spec import SpecError
-
-    def render(entries, tracks, plate_dir, title, out_dir):
-        raise SpecError("title_text must be at most 200 characters")
-    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
-    monkeypatch.setattr(opv, "render_maps", render)
+    from app.spec import TITLE_MAX_CHARS
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17", title="x" * (TITLE_MAX_CHARS + 1))
+    with pytest.raises(opv.OrderError, match="the title in order.toml has 201 characters, "
+                                             "and a map holds at most 200"):
+        _preview(d, tools)
     assert order_cli.main(["preview", str(d)], tools=tools) == 1
-    captured = capsys.readouterr()
-    assert "preview stopped: title_text must be at most 200 characters" in captured.err
-    assert "Sizes:" not in captured.out
-    assert not (d / "work" / "preview" / "preview.json").exists()
-    assert not (d / "work" / "preview" / "report.txt").exists()
-    assert not (d / "out").exists()
+    assert "preview stopped: the title in order.toml has 201" in capsys.readouterr().err
+    assert not asked.exists() and not (d / "work").exists() and not (d / "out").exists()
+    _make_order(tmp_path, bbox=WIDE, size="11x17", title="x" * TITLE_MAX_CHARS)
+    assert _preview(d, tools)["sizes"]                       # the limit itself is a title
 
 
 def test_a_failed_coverage_query_stops_the_command(tmp_path, tools, capsys):
@@ -615,3 +629,258 @@ def test_a_failed_coverage_query_stops_the_command(tmp_path, tools, capsys):
     d = _make_order(tmp_path, bbox=WIDE, size="11x17")
     assert order_cli.main(["preview", str(d)], tools=tools) == 1
     assert "preview stopped: The 3DEP coverage check failed" in capsys.readouterr().err
+
+
+# ---- a size the painter refuses ----
+
+EAST_WEST = (-117.9, 35.80, -115.7, 35.86)             # 200 km by 7 km: every size is offered
+OFF_DEM = ("The selected frame extends past the available elevation data "
+           "(31% of it has no DEM coverage). Pan or shrink the crop to keep it inside the region.")
+
+
+def _painter(monkeypatch, refuses):
+    """The real render_maps over a stand-in for the engine's painter, which refuses
+    the sheets `refuses(spec)` names as it refuses a frame with too much no-data."""
+    from PIL import Image
+
+    from app import render
+    from app.spec import OffDemError
+
+    def rasterize(spec, dpi, **kw):
+        if refuses(spec):
+            raise OffDemError(OFF_DEM)
+        return Image.new("RGB", spec.pixel_size(dpi), "white")
+    monkeypatch.setattr(render, "rasterize", rasterize)
+
+
+def test_a_size_the_painter_refuses_is_left_out_and_the_others_are_drawn(
+        tmp_path, tools, monkeypatch):
+    _painter(monkeypatch, lambda spec: spec.panels == 2)
+    d = _make_order(tmp_path, bbox=EAST_WEST, size="11x17")
+    pdfs = []
+    state = opv.preview(str(d), tools, log=lambda s: None,
+                        write_pdf=lambda path, entries, names, title: pdfs.append(
+                            [e["key"] for e in entries if e["offered"]]))
+    by_key = {e["key"]: e for e in state["sizes"]}
+    work = d / "work" / "preview"
+    assert not by_key["two"]["offered"] and by_key["two"]["why"] == OFF_DEM
+    assert "image" not in by_key["two"] and "plate" not in by_key["two"]
+    assert not (work / "two.png").exists()
+    for key in ("11x17", "17x22", "three"):
+        assert by_key[key]["offered"] and os.path.isfile(by_key[key]["image"])
+    assert pdfs == [["11x17", "17x22", "three"]]             # the PDF shows what was drawn
+    assert state["plate"]["sizes"] == ["11x17", "17x22", "three"]
+    assert json.loads((work / "preview.json").read_text())["sizes"] == state["sizes"]
+    report = (work / "report.txt").read_text()
+    assert ("- Two panels, landscape, 46 x 17 in: not offered, The selected frame extends past "
+            "the available elevation data (31% of it has no DEM coverage). Pan or shrink the "
+            "crop to keep it inside the region.\n") in report
+    assert report.count("In order.toml:") == 3
+
+
+def test_no_size_the_painter_can_draw_stops_the_preview_before_the_pdf(
+        tmp_path, tools, monkeypatch):
+    _painter(monkeypatch, lambda spec: True)
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    pdfs = []
+    with pytest.raises(PlateError, match="No size could be drawn: 11x17: The selected frame "
+                                         "extends past .*; 17x22: The selected frame"):
+        opv.preview(str(d), tools, log=lambda s: None,
+                    write_pdf=lambda path, entries, names, title: pdfs.append(path))
+    assert pdfs == [] and not (d / "out").exists()
+    assert not (d / "work" / "preview" / "preview.json").exists()
+    assert not (d / "work" / "preview" / "report.txt").exists()
+
+
+def test_a_plate_with_no_size_drawn_is_not_in_the_report(tmp_path, tools, monkeypatch):
+    _painter(monkeypatch, lambda spec: spec.panels == 3)     # the one size of the Albers plate
+    d = _make_order(tmp_path, bbox=PLAINS, size="11x17")
+    state = opv.preview(str(d), tools, log=lambda s: None,
+                        write_pdf=lambda path, entries, names, title: None)
+    assert [p["epsg"] for p in state["plates"]] == [32614]
+    assert state["plates"][0]["sizes"] == ["11x17", "17x22", "two"]
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert report.count("Plate: ") == 1 and "- Three panels, portrait, 55 x 22 in: not offered" in report
+
+
+# ---- the preview's own wiring: each line of preview() that a test must hold ----
+
+def _asks(path):
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+def test_the_2x_rule_widens_each_sheet_by_its_own_width(tmp_path, tools, monkeypatch):
+    # 10 m data and a 4 km walk: at 2x a sheet shows 1,500 m of ground for each inch of width
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_LIDAR))
+    d = _make_order(tmp_path, bbox=SMALL, size="11x17")
+    by_key = {e["key"]: e for e in _preview(d, tools)["sizes"]}
+    for key, width_in in (("11x17", 11), ("17x22", 17)):
+        frame = by_key[key]["frame"]
+        assert by_key[key]["orientation"] == "portrait"
+        assert frame[2] - frame[0] == pytest.approx(width_in * 1500.0, rel=1e-3)
+    assert by_key["17x22"]["fill"] < 0.2                     # judged on the widened frame
+
+
+def test_the_sizes_list_of_the_order_reaches_the_fit_rule(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=EAST_WEST, size="11x17")
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22"]\n')
+    calls = []
+    state = _preview(d, tools, calls)
+    assert [e["key"] for e in state["sizes"] if e["offered"]] == ["17x22"] == calls[0]["keys"]
+    assert state["sizes"][0]["why"] == "it is not in the sizes list of order.toml"
+
+
+def test_only_a_size_that_can_be_offered_is_asked_of_the_3dep_index(tmp_path, tools, monkeypatch):
+    # each query is a subprocess and a request: a set the fit rule refuses needs none
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=SMALL, size="11x17")
+    state = _preview(d, tools)
+    offered = [e["key"] for e in state["sizes"] if e["offered"]]
+    assert offered == ["11x17", "17x22"]                     # a compact walk: no set
+    assert len(_asks(asked)) == len(offered) + len(state["plates"]) == 3
+    asked.unlink()
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22"]\n')
+    _preview(d, tools)
+    assert len(_asks(asked)) == 2                            # the one size, and the plate
+    asked.unlink()
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22", "three"]\n')
+    _preview(d, tools)
+    assert len(_asks(asked)) == 3                            # a forced set is asked: terrain can refuse it
+
+
+def _curated_plate(tmp_path, bounds, crs="EPSG:32611", grid_m=10.0, rid="big"):
+    """A curated plate with a real (tiny) DEM, as _curated of tests/test_orderprep.py
+    makes one, with its own bounds, projection and grid."""
+    import rasterio
+    from rasterio.transform import from_bounds
+    rdir = tmp_path / "curated" / rid
+    rdir.mkdir()
+    (rdir / "region.json").write_text(json.dumps({
+        "crs": crs, "bounds": list(bounds), "overview_size": [30, 40],
+        "native_resolution_m": grid_m}))
+    with rasterio.open(rdir / "dem.tif", "w", driver="GTiff", dtype="float32", count=1,
+                       width=30, height=40, crs=crs, nodata=np.nan,
+                       transform=from_bounds(*bounds, 30, 40)) as ds:
+        ds.write(np.full((40, 30), 900.0, dtype="float32"), 1)
+
+
+def _preview_needs(d, tools):
+    """(plate bounds, metres per pixel) that the preview of this order asks of a plate."""
+    offered = [e for e in _preview(d, tools)["sizes"] if e["offered"]]
+    return opl.plate_bounds(opv.union_frame(offered)), opv.preview_need_m(offered)
+
+
+def test_the_preview_reuses_a_curated_plate_that_holds_its_frames(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    hold, need = _preview_needs(d, tools)
+    # the coarsest grid that is still at most 2x upsampled, and 1 m of ground to spare
+    _curated_plate(tmp_path, (hold[0] - 1, hold[1] - 1, hold[2] + 1, hold[3] + 1),
+                   grid_m=need * opl.MAX_UPSAMPLE * 0.999)
+    built = d / "work" / "preview" / "plate" / "builds.log"
+    assert built.read_text().split() == ["preview_2026_10_001_smith"]
+    calls, lines = [], []
+    state = opv.preview(str(d), tools, log=lines.append, render=_fake_render(calls),
+                        write_pdf=lambda path, entries, names, title: None)
+    plate = state["plate"]
+    assert (plate["kind"], plate["id"], plate["root"]) == ("curated", "big", tools.curated_root)
+    assert plate["grid_m"] == pytest.approx(need * opl.MAX_UPSAMPLE * 0.999)
+    assert calls[0]["plate_dir"] == os.path.join(tools.curated_root, "big")
+    assert "Reusing curated plate big for the preview." in lines
+    assert built.read_text().split() == ["preview_2026_10_001_smith"]     # nothing new was built
+    assert "Plate: big (curated)," in (d / "work" / "preview" / "report.txt").read_text()
+
+
+@pytest.mark.parametrize("fault", ["west", "south", "east", "north", "projection", "grid"])
+def test_a_curated_plate_that_cannot_show_the_frames_is_not_reused(tmp_path, tools, fault):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    hold, need = _preview_needs(d, tools)
+    bounds = [hold[0] - 1, hold[1] - 1, hold[2] + 1, hold[3] + 1]
+    sides = ("west", "south", "east", "north")
+    if fault in sides:                                       # 1 m short on one side
+        k = sides.index(fault)
+        bounds[k] = hold[k] + (1 if k < 2 else -1)
+    _curated_plate(tmp_path, bounds,
+                   crs="EPSG:32610" if fault == "projection" else "EPSG:32611",
+                   grid_m=need * opl.MAX_UPSAMPLE * (1.001 if fault == "grid" else 0.999))
+    assert [r["id"] for r in op.curated_regions(tools.curated_root)] == ["big"]   # a real plate
+    state = _preview(d, tools)
+    assert state["plate"]["kind"] == "built"
+    assert state["plate"]["id"] == "preview_2026_10_001_smith"
+
+
+def test_the_preview_build_runs_in_the_shared_cache_folder(tmp_path, tools):
+    # a fetch library writes cache/failed_ids*.txt beside its working folder: that must
+    # be the orders' cache, never the public repo (orderprep.cache_env)
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _preview(d, tools)
+    lines = (d / "work" / "preview" / "build.log").read_text().splitlines()
+    cache_dir = str(tmp_path / "orders" / "_cache")
+    assert "prep_cwd=" + cache_dir in lines
+    assert "cache=" + os.path.join(cache_dir, "aiohttp_cache.sqlite") in lines
+
+
+def test_preview_refuses_an_orders_root_inside_the_repo(tmp_path, tmp_path_factory, tools,
+                                                        monkeypatch):
+    # the order folder is outside the patched repo: only the check of TECOPA_ORDERS_DIR,
+    # which the `tools` fixture sets under tmp_path, can refuse this
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path))
+    d = _make_order(tmp_path_factory.mktemp("external"), bbox=WIDE)
+    with pytest.raises(od.OrderError, match="Order folders must live outside the repo"):
+        _preview(d, tools)
+    assert not (d / "work").exists()
+
+
+def test_tracks_outside_the_lower_48_stop_the_preview(tmp_path, tools, monkeypatch):
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=(-150.1, 61.1, -149.9, 61.2))
+    with pytest.raises(PlateError, match="outside the lower 48"):
+        _preview(d, tools)
+    assert not asked.exists() and not (d / "work").exists()
+
+
+def test_a_missing_prep_venv_stops_the_preview(tmp_path, tools):
+    tools = op.Tools(**{**tools.__dict__,
+                        "prep_python": str(tmp_path / "no-venv" / "bin" / "python")})
+    d = _make_order(tmp_path, bbox=WIDE)
+    with pytest.raises(PlateError, match="The prep venv is missing: .*no-venv"):
+        _preview(d, tools)
+    assert not (d / "work").exists()
+
+
+def test_preview_json_has_the_mode_of_the_orders_other_files(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _preview(d, tools)
+    work = d / "work" / "preview"
+    mode = stat.S_IMODE(os.stat(work / "preview.json").st_mode)
+    assert mode == stat.S_IMODE(os.stat(work / "report.txt").st_mode)
+    assert mode & stat.S_IRGRP or not stat.S_IMODE(os.stat(d / "order.toml").st_mode) & stat.S_IRGRP
+    assert not list(work.glob("*.tmp"))
+
+
+def _toml_lines(report) -> dict:
+    """{size key: the lines the report gives for order.toml}, exactly as printed."""
+    out, lines = {}, report.splitlines()
+    for at, line in enumerate(lines):
+        if line.endswith("In order.toml:"):
+            block = []
+            for nxt in lines[at + 1:]:
+                if not nxt.startswith("    "):
+                    break
+                block.append(nxt)
+            out[tomllib.loads("\n".join(block))["size"]] = "\n".join(block) + "\n"
+    return out
+
+
+def test_the_lines_of_the_report_paste_into_order_toml(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=EAST_WEST, size="11x17")
+    state = _preview(d, tools)
+    pasted = _toml_lines((d / "work" / "preview" / "report.txt").read_text())
+    assert list(pasted) == [e["key"] for e in state["sizes"] if e["offered"]] == list(opv.SIZE_KEYS)
+    for e in state["sizes"]:
+        (d / "order.toml").write_text('title = "Smith home ground"\n' + pasted[e["key"]])
+        order = opv.load(str(d))
+        assert list(order.print_in()) == e["print_in"]
+        assert (order.orientation, order.panels, order.gap) == (
+            e["orientation"], e["panels"], e["gap"])

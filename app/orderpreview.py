@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 import time
 from dataclasses import dataclass
 
@@ -32,7 +31,7 @@ from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, CoverageError, PlateError
                             choose_grid, conus_covered, nestled_frame, order_epsg,
                             plate_bounds, project_bbox, to_lonlat_bbox, track_shares)
 from app.regionbuild import slugify
-from app.spec import CompositionSpec
+from app.spec import TITLE_MAX_CHARS, CompositionSpec, SpecError
 
 SET_MIN_FILL = 0.30        # a set is offered when the tracks span this share of its width
 PREVIEW_GAP_IN = 2.0       # every set is framed and shown at this gap
@@ -125,6 +124,7 @@ def _samples(tracks_m, step) -> np.ndarray:
     out = []
     for t in tracks_m:
         t = np.asarray(t, float).reshape(-1, 2)
+        t = t[np.isfinite(t).all(axis=1)]      # ingest drops such a vertex already
         if len(t) < 2:
             out.append(t)
             continue
@@ -206,7 +206,14 @@ def plan_sizes(bounds_m=None, tracks_m=None, widen=None, forced=(), ground=None)
     rule, or raises PlateError when the terrain cannot hold the size. `forced` is
     the `sizes` list of order.toml: it overrides the fit rule, never the terrain.
     A CoverageError from `widen` is not caught: the 3DEP index did not answer, which
-    says nothing about the size, so the whole preview stops."""
+    says nothing about the size, so the whole preview stops.
+
+    `widen` is a query of the 3DEP index, so only a size that can still be offered
+    pays for it: one in the list, or with no list one the fit rule accepts on its
+    nestled frame. A wider frame has less of its width under the tracks, so the 2x
+    rule never brings back a set that the width rule refuses. It could bring back a
+    set with an empty middle panel (two walks far apart, pulled toward the middle of
+    a wider frame). That set stays refused, and the list can ask for it."""
     if ground is None:
         one = Ground(None, bounds_m, tracks_m)
 
@@ -217,15 +224,14 @@ def plan_sizes(bounds_m=None, tracks_m=None, widen=None, forced=(), ground=None)
         cand = choose(candidates(key), ground)
         here = ground(cand)
         frame = nestled_frame(here.bounds_m, cand.aspect)
-        try:
-            if widen is not None:
-                frame = widen(cand, frame)
-            entry = judge(cand, frame, here.bounds_m, here.tracks_m)
-        except CoverageError:
-            raise
-        except PlateError as ex:
-            entry = judge(cand, frame, here.bounds_m, here.tracks_m)
-            entry.update(offered=False, why=str(ex), blocked=True)
+        entry = judge(cand, frame, here.bounds_m, here.tracks_m)
+        if widen is not None and (key in forced if forced else entry["offered"]):
+            try:
+                entry = judge(cand, widen(cand, frame), here.bounds_m, here.tracks_m)
+            except CoverageError:
+                raise
+            except PlateError as ex:
+                entry.update(offered=False, why=str(ex), blocked=True)
         entry["epsg"] = here.epsg
         if forced and not entry["blocked"]:
             if key in forced:
@@ -287,7 +293,12 @@ def load_tracks_m(payloads, epsg) -> list:
 
 def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
     """Draw each offered size at screen size with the word PREVIEW, as
-    out_dir/<key>.png, and record `image` and `dpi` on its entry."""
+    out_dir/<key>.png, and record `image` and `dpi` on its entry.
+
+    A size the painter refuses (SpecError: for one, OffDemError, a frame with too
+    much of its ground past the terrain data) gets no image. Its entry becomes
+    `offered` False with the refusal as `why`, and the other sizes are still drawn:
+    one refusal must not lose a preview whose plate is already built."""
     from app import render          # here, so the framing needs no renderer
     with open(os.path.join(plate_dir, "region.json")) as f:
         cfg = json.load(f)
@@ -297,15 +308,19 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
         if not e["offered"]:
             continue
         dpi = preview_dpi(e)
-        spec = CompositionSpec(
-            region_id=cfg["id"], crs=cfg["crs"], crop=tuple(e["frame"]),
-            print_w_in=e["print_in"][0], print_h_in=e["print_in"][1],
-            native_resolution_m=cfg["native_resolution_m"],
-            tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
-            hotspots=[], seed=7, title_text=title, labels=labels,
-            panels=e["panels"], panel_gap_in=e["gap"], **PREVIEW_LOOK)
-        img = render.rasterize(spec, dpi=dpi, region_dir=plate_dir, watermark=True,
-                               watermark_text="PREVIEW", cfg=cfg)
+        try:
+            spec = CompositionSpec(
+                region_id=cfg["id"], crs=cfg["crs"], crop=tuple(e["frame"]),
+                print_w_in=e["print_in"][0], print_h_in=e["print_in"][1],
+                native_resolution_m=cfg["native_resolution_m"],
+                tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
+                hotspots=[], seed=7, title_text=title, labels=labels,
+                panels=e["panels"], panel_gap_in=e["gap"], **PREVIEW_LOOK)
+            img = render.rasterize(spec, dpi=dpi, region_dir=plate_dir, watermark=True,
+                                   watermark_text="PREVIEW", cfg=cfg)
+        except SpecError as ex:
+            e.update(offered=False, why=str(ex))
+            continue
         img = panel_geo.paint_gaps(img, spec, dpi)
         path = os.path.join(out_dir, f"{e['key']}.png")
         img.save(path, "PNG")
@@ -341,9 +356,11 @@ def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log, suffix=
 
 
 def _dump(path, data) -> None:
+    """Write through a temp file, so a reader never sees half a file. open() gives
+    the file the mode of report.txt and the PDF; mkstemp would give it 0600."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), suffix=".tmp")
-    with os.fdopen(fd, "w") as f:
+    tmp = f"{path}.{os.getpid()}.tmp"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2, sort_keys=True)
         f.write("\n")
     os.replace(tmp, path)
@@ -351,7 +368,9 @@ def _dump(path, data) -> None:
 
 def write_preview_report(order, state, names) -> str:
     """What the preview decided, and the lines to write in order.toml for each size
-    the client can choose. Prepare then frames that size with the same rule."""
+    the client can choose. Prepare then frames that size with the same rule. Each
+    key is on a line of its own, so the lines can be pasted into order.toml as they
+    are: TOML takes the indent, and it does not take two keys on one line."""
     def sentence(text):          # one line, and the report adds the full stop
         return " ".join(str(text).split()).rstrip(".")
     plates = state.get("plates") or [state["plate"]]
@@ -368,10 +387,10 @@ def write_preview_report(order, state, names) -> str:
         if not e["offered"]:
             lines.append(f"- {what}: not offered, {sentence(e['why'])}.")
             continue
-        toml = f'size = "{e["key"]}", orientation = "{e["orientation"]}"'
+        lines += [f"- {what}: offered, tracks fill {e['fill']:.0%}. In order.toml:",
+                  f'    size = "{e["key"]}"', f'    orientation = "{e["orientation"]}"']
         if e["panels"] > 1:
-            toml += f", gap = {e['gap']:g}"
-        lines.append(f"- {what}: offered, tracks fill {e['fill']:.0%}. order.toml: {toml}")
+            lines.append(f"    gap = {e['gap']:g}")
         if e["warning"]:
             lines.append(f"  Warning: {sentence(e['warning'])}.")
         for k in e["ends_behind"]:
@@ -389,15 +408,19 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     """Frame every size, build one coarse plate for each projection the offered sizes
     use, draw the offered sizes, and write the PDF, work/preview/preview.json and
     work/preview/report.txt. `render` and `write_pdf` are for tests: stand-ins for
-    the two slow steps.
+    the two slow steps. A size that the painter refuses is left out, with its reason,
+    and the PDF and the report show the sizes that were drawn.
 
     preview.json: `sizes` holds every entry, each with the `epsg` it is framed in
-    and, when offered, the id of its `plate`. `plates` holds one plate for each
-    projection, with its `epsg` and the keys of its `sizes`. `plate` and `epsg` are
-    the first plate and its projection."""
+    and, when it was drawn, the id of its `plate`. `plates` holds one plate for each
+    projection, with its `epsg` and the keys of the `sizes` drawn on it. `plate` and
+    `epsg` are the first plate and its projection."""
     from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env
     refuse_inside_repo(orders_root())
     order = load(order_dir)
+    if len(order.title) > TITLE_MAX_CHARS:      # the painter's limit, before any plate
+        raise OrderError(f"the title in order.toml has {len(order.title)} characters, "
+                         f"and a map holds at most {TITLE_MAX_CHARS}")
     names = sizes.load()         # before the plate: a wrong file must not cost a build
     payloads = order.payloads()
     tracks_ll = lonlat_extent(payloads)["bbox"]
@@ -428,14 +451,20 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     for epsg, group in groups.items():       # every plate before any map
         plate = _preview_plate(order, tools, union_frame(group), epsg, preview_need_m(group),
                                env, cache_dir, log, suffix=f"_{epsg}" if plates else "")
-        plate.update(epsg=epsg, sizes=[e["key"] for e in group])
-        for e in group:
-            e["plate"] = plate["id"]
+        plate["epsg"] = epsg
         plates.append(plate)
     work = os.path.join(order.work_dir, "preview")
     for plate, group in zip(plates, groups.values()):
         (render or render_maps)(group, ground.tracks(plate["epsg"]),
                                 os.path.join(plate["root"], plate["id"]), order.title, work)
+        drawn = [e for e in group if e["offered"]]      # the painter can refuse a size
+        plate["sizes"] = [e["key"] for e in drawn]
+        for e in drawn:
+            e["plate"] = plate["id"]
+    plates = [plate for plate in plates if plate["sizes"]]
+    if not plates:
+        raise PlateError("No size could be drawn: " + "; ".join(
+            f"{e['key']}: {e['why']}" for e in offered))
     pdf = os.path.join(order.dir, "out", "preview", f"{slugify(order.title)}-preview.pdf")
     (write_pdf or previewpdf.write)(pdf, entries, names, order.title)
     state = {"epsg": plates[0]["epsg"], "plate": plates[0], "plates": plates, "sizes": entries,
