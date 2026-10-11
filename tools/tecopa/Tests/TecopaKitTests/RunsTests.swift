@@ -14,8 +14,9 @@ private final class PathLog: @unchecked Sendable {
 private struct SignalRefuser: ProcessRunning {
     let world: FakeWorld
 
-    func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
-        try world.run(executable, arguments, cwd: cwd)
+    func run(_ executable: String, _ arguments: [String], cwd: String?,
+             environment: [String: String]?) throws -> ProcessResult {
+        try world.run(executable, arguments, cwd: cwd, environment: environment)
     }
 
     func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
@@ -26,6 +27,31 @@ private struct SignalRefuser: ProcessRunning {
     func signalGroup(_ group: Int32, _ signal: Int32) throws {
         throw TecopaFailure(.environment, "Could not signal the process group \(group): Operation not permitted")
     }
+}
+
+/// A machine that notes, at each detached start, the files that were written
+/// before it. Each call goes to the fake.
+private final class StartWatcher: ProcessRunning, @unchecked Sendable {
+    let world: FakeWorld
+    private let lock = NSLock()
+    private var seen: [[String]] = []
+
+    init(world: FakeWorld) { self.world = world }
+
+    var writtenAtEachStart: [[String]] { lock.withLock { seen } }
+
+    func run(_ executable: String, _ arguments: [String], cwd: String?,
+             environment: [String: String]?) throws -> ProcessResult {
+        try world.run(executable, arguments, cwd: cwd, environment: environment)
+    }
+
+    func startDetached(_ executable: String, _ arguments: [String], cwd: String?,
+                       environment: [String: String]) throws -> Int32 {
+        lock.withLock { seen.append(world.written.map(\.path)) }
+        return try world.startDetached(executable, arguments, cwd: cwd, environment: environment)
+    }
+
+    func signalGroup(_ group: Int32, _ signal: Int32) throws { try world.signalGroup(group, signal) }
 }
 
 /// Tracked runs on the fake machine: the start, the record, each state, and the
@@ -42,13 +68,15 @@ final class RunsTests: XCTestCase {
     }
 
     /// Put one record in the fake's runs folder, as an earlier call wrote it.
+    /// `log` and `exitFile` are what the record says. Without them it says the run's own two paths.
     private func record(_ world: FakeWorld, _ id: String, pid: Int = 4001, command: String = "plate_build",
-                        failureText: String? = nil) {
+                        failureText: String? = nil, log: String? = nil, exitFile: String? = nil) {
         let value: JSONValue = .object([
             "id": .string(id), "command": .string(command),
             "argv": .array([.string("/repo/.venv-prep/bin/python"), .string("region_prep.py")]),
             "cwd": .string("/repo"), "pid": .int(Int64(pid)), "started": .string("2026-10-10T18:55:15Z"),
-            "log": .string("\(folder)/\(id).log"), "exit_file": .string("\(folder)/\(id).exit"),
+            "log": .string(log ?? "\(folder)/\(id).log"),
+            "exit_file": .string(exitFile ?? "\(folder)/\(id).exit"),
             "failure_text": failureText.map { .string($0) } ?? .null,
         ])
         world.file("\(folder)/\(id).json", value.text())
@@ -92,8 +120,10 @@ final class RunsTests: XCTestCase {
         // a detached start is not a command that the tool waits for
         XCTAssertEqual(world.commands, [])
 
-        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).json"])
-        let written = try JSONValue.parse(try XCTUnwrap(world.written.first).data)
+        // the empty log first, which takes the id, and the record after the start
+        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).log", "\(folder)/\(id).json"])
+        XCTAssertEqual(world.written.first?.data, Data())
+        let written = try JSONValue.parse(try XCTUnwrap(world.written.last).data)
         XCTAssertEqual(written, .object([
             "id": .string(id), "command": .string("order_prepare"),
             "argv": .array([.string("/repo/.venv/bin/python"), .string("scripts/order.py"),
@@ -115,7 +145,7 @@ final class RunsTests: XCTestCase {
         let result = try Runs.start(program: "/bin/true", arguments: [], cwd: "/", command: "test",
                                     failureText: "FAILED", world.runtime())
         XCTAssertEqual(result["run"]?.stringValue, "20260102-030405-00ff9e")
-        let written = try JSONValue.parse(try XCTUnwrap(world.written.first).data)
+        let written = try JSONValue.parse(try XCTUnwrap(world.written.last).data)
         XCTAssertEqual(written["started"]?.stringValue, "2026-01-02T03:04:05Z")
         XCTAssertEqual(written["failure_text"]?.stringValue, "FAILED")
         XCTAssertEqual(world.detached.first?.arguments[2], "tecopa-run-20260102-030405-00ff9e")
@@ -142,7 +172,10 @@ final class RunsTests: XCTestCase {
             XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)
         }
         XCTAssertEqual(world.detached, [])
-        XCTAssertEqual(world.written, [])
+        // The empty log was made before the start, and it stays: no command
+        // deletes a file of a run. It has no record, so it is not a run.
+        XCTAssertEqual(world.written, [.init(path: "\(folder)/\(id).log", data: Data())])
+        XCTAssertEqual(world.runtime().listFolder(folder), ["\(id).log"])
     }
 
     func testAnIdThatIsTakenStartsNothing() throws {
@@ -157,15 +190,22 @@ final class RunsTests: XCTestCase {
             XCTAssertTrue(failure?.message.contains(id) ?? false, failure?.message ?? "")
         }
         XCTAssertEqual(world.detached.count, 1)
-        XCTAssertEqual(world.written.count, 1)
+        // the first run's log and record, and nothing from the second start
+        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).log", "\(folder)/\(id).json"])
 
-        // a log, an exit file or a cancel marker with the id is the same refusal
+        // A log, an exit file or a cancel marker with the id is the same refusal.
+        // For the log, the refusal is the write itself: no look comes before it.
         for name in ["log", "exit", "cancelled"] {
             let other = FakeWorld()
             other.existingFile("\(folder)/\(id).\(name)")
             XCTAssertThrowsError(try Runs.start(program: "/bin/true", arguments: [], cwd: "/", command: "test",
-                                                failureText: nil, other.runtime()), name)
+                                                failureText: nil, other.runtime()), name) { error in
+                XCTAssertEqual(error as? TecopaFailure, TecopaFailure(
+                    .environment, "A run with the id \(id) is already in \(folder).",
+                    hint: "Run the command again."), name)
+            }
             XCTAssertEqual(other.detached, [], name)
+            XCTAssertEqual(other.written, [], name)
         }
     }
 
@@ -173,7 +213,11 @@ final class RunsTests: XCTestCase {
         // a run with no record cannot be read or stopped later, so it does not stay
         let world = FakeWorld()
         var runtime = world.runtime()
-        runtime.writeNew = { _, _ in throw TecopaFailure(.environment, "Could not write: the disk is full") }
+        let writeNew = runtime.writeNew
+        runtime.writeNew = { path, data in
+            guard path.hasSuffix(".json") else { return try writeNew(path, data) }
+            throw TecopaFailure(.environment, "Could not write: the disk is full")
+        }
         XCTAssertThrowsError(try Runs.start(program: "/bin/sleep", arguments: ["30"], cwd: "/", command: "test",
                                             failureText: nil, runtime)) { error in
             let failure = error as? TecopaFailure
@@ -196,6 +240,77 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(world.madeFolders, [])
     }
 
+    func testAProgramOrAWorkingDirectoryThatIsNotAnAbsolutePathStartsNothing() {
+        // The wrapper runs "$@". A bare name such as `eval` is a builtin of the
+        // shell there, and its next argument would go through the shell's parsing.
+        let cases: [(program: String, cwd: String)] = [
+            ("eval", "/repo"), ("python", "/repo"), (".venv/bin/python", "/repo"), ("", "/repo"),
+            ("./python", "/repo"), ("/repo/.venv/bin/python", "repo"), ("/repo/.venv/bin/python", ""),
+            ("/repo/.venv/bin/python", "."), ("/repo/.venv/bin/python", "~"),
+        ]
+        for (program, cwd) in cases {
+            let world = FakeWorld()
+            XCTAssertThrowsError(try Runs.start(program: program, arguments: ["touch /tmp/x"], cwd: cwd,
+                                                command: "test", failureText: nil, world.runtime()),
+                                 "\(program) in \(cwd)") { error in
+                XCTAssertEqual((error as? TecopaFailure)?.kind, .environment, "\(program) in \(cwd)")
+            }
+            XCTAssertEqual(world.detached, [], "\(program) in \(cwd)")
+            XCTAssertEqual(world.written, [], "\(program) in \(cwd)")
+            XCTAssertEqual(world.madeFolders, [], "\(program) in \(cwd)")
+        }
+    }
+
+    func testTheLogIsMadeBeforeTheStartSoTheIdIsTaken() throws {
+        // Two starts in the same second with the same six digits would share a
+        // log. The never-overwrite write of the log is the reservation of the id:
+        // the check and the create are one step.
+        let world = FakeWorld()
+        let watcher = StartWatcher(world: world)
+        var runtime = world.runtime()
+        runtime.runner = watcher
+        _ = try Runs.start(program: "/bin/true", arguments: [], cwd: "/", command: "test",
+                           failureText: nil, runtime)
+        // the empty log is there when the program starts, and the record is not
+        XCTAssertEqual(watcher.writtenAtEachStart, [["\(folder)/\(id).log"]])
+        XCTAssertEqual(world.written, [
+            .init(path: "\(folder)/\(id).log", data: Data()),
+            .init(path: "\(folder)/\(id).json", data: world.written.last?.data ?? Data()),
+        ])
+    }
+
+    func testALogThatCannotBeMadeStartsNothing() {
+        let world = FakeWorld()
+        var runtime = world.runtime()
+        runtime.writeNew = { _, _ in throw TecopaFailure(.environment, "Could not create: the disk is full") }
+        XCTAssertThrowsError(try Runs.start(program: "/bin/true", arguments: [], cwd: "/", command: "test",
+                                            failureText: nil, runtime)) { error in
+            let failure = error as? TecopaFailure
+            XCTAssertEqual(failure?.kind, .environment)
+            XCTAssertTrue(failure?.message.contains("the disk is full") ?? false, failure?.message ?? "")
+        }
+        XCTAssertEqual(world.detached, [])
+        XCTAssertEqual(world.signals, [])
+    }
+
+    func testAStartPassesNoPythonVariableOfTheCaller() throws {
+        // invariant 13: the table alone picks the interpreter, and these four
+        // change what that interpreter loads
+        let world = FakeWorld()
+        var runtime = world.runtime(repo: "/repo")
+        runtime.environment = [
+            "PYTHONHOME": "/opt/other", "PYTHONPATH": "/opt/other/site-packages",
+            "PYTHONSTARTUP": "/Users/dom/.pythonrc", "__PYVENV_LAUNCHER__": "/opt/other/bin/python",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "PYTHONUNBUFFERED": "0",
+        ]
+        _ = try ScriptRunner.start("region_prep.py", ["--id", "x"], command: "plate_build", runtime)
+        XCTAssertEqual(world.detached.first?.environment, [
+            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "PYTHONUNBUFFERED": "1",
+        ])
+    }
+
     // MARK: ScriptRunner.start
 
     func testScriptRunnerStartChecksTheTableAndTheInterpreterThenStarts() throws {
@@ -209,7 +324,7 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(Array(start.arguments.dropFirst(5)),
                        ["/repo/.venv/bin/python", "scripts/verify_regions.py", "lassen_ca"])
         XCTAssertEqual(start.cwd, "/repo")
-        let written = try JSONValue.parse(try XCTUnwrap(world.written.first).data)
+        let written = try JSONValue.parse(try XCTUnwrap(world.written.last).data)
         XCTAssertEqual(written["command"]?.stringValue, "regions_verify")
         XCTAssertEqual(written["cwd"]?.stringValue, "/repo")
         XCTAssertEqual(written["failure_text"]?.stringValue, "DRIFT")
@@ -480,6 +595,257 @@ final class RunsTests: XCTestCase {
         let (data, failure) = await call("runs_show", world, ["run": .string(id)])
         XCTAssertNil(data)
         XCTAssertEqual(failure?.kind, .environment)
+    }
+
+    func testAFailureTextThatIsPrintedWhileTheProcessTableIsReadIsNotMissed() async {
+        // The script prints its failure text and exits 0 after the tool found no
+        // exit file. The log is read after the exit code, never before it.
+        for name in ["runs_show", "runs"] {
+            let world = FakeWorld()
+            record(world, id, command: "plate_playa", failureText: "FAILED")
+            world.file("\(folder)/\(id).log", "lassen_ca: ok\n")
+            let folder = folder, id = id
+            world.onRun = { world, command in
+                guard command.first == "/bin/ps" else { return }
+                world.file("\(folder)/\(id).log", "lassen_ca: ok\nrifle_aspen: FAILED no lakebed\n")
+                world.file("\(folder)/\(id).exit", "0\n")
+            }
+            let (data, failure) = await call(name, world, name == "runs" ? [:] : ["run": .string(id)])
+            XCTAssertNil(failure, name)
+            let run = name == "runs" ? data?["runs"]?.arrayValue?.first : data
+            XCTAssertEqual(run?["state"]?.stringValue, "failed", name)
+            XCTAssertEqual(run?["exit_code"]?.intValue, 0, name)
+        }
+    }
+
+    func testTheRunNameMustBeAWordOfTheProcessLine() async {
+        // the name inside a longer word or inside a path is another program
+        let other = [
+            "/usr/bin/tail -f /x/tecopa-run-\(id).log",
+            "/usr/bin/less \(folder)/tecopa-run-\(id)",
+            "/bin/sh -c x xtecopa-run-\(id) python",
+            "/bin/sh -c x tecopa-run-\(id)0 python",
+            "/bin/sh -c x tecopa-run-\(id).log python",
+            "grep tecopa-run-\(id)| wc",
+            "tecopa-run-\(id) python",
+        ]
+        for line in other {
+            let world = FakeWorld()
+            record(world, id)
+            world.process(4001, line)
+            let (data, failure) = await call("runs_show", world, ["run": .string(id)])
+            XCTAssertNil(failure, line)
+            XCTAssertEqual(data?["state"]?.stringValue, "lost", line)
+            let (_, refused) = await call("runs_cancel", world, ["run": .string(id)])
+            XCTAssertEqual(refused?.kind, .refused, line)
+            XCTAssertEqual(world.signals, [], line)
+        }
+        // the name between two spaces, or at the end of the line, is the run
+        for line in [shell(id), "/bin/sh -c x tecopa-run-\(id)", "/bin/sh -c x tecopa-run-\(id) "] {
+            let world = FakeWorld()
+            record(world, id)
+            world.process(4001, line)
+            let (data, _) = await call("runs_show", world, ["run": .string(id)])
+            XCTAssertEqual(data?["state"]?.stringValue, "running", line)
+        }
+    }
+
+    // MARK: A record names no file
+
+    func testARecordCannotNameAnotherFileAsItsLogOrItsExitFile() async {
+        // A record file that another program put in the folder could name any file
+        // the user can read. The two paths come from the folder and the id only.
+        let world = FakeWorld()
+        record(world, id, command: "plate_playa", failureText: "KEY",
+               log: "/Users/dom/.ssh/id_ed25519", exitFile: "/Users/dom/planted.exit")
+        world.file("/Users/dom/.ssh/id_ed25519", "PRIVATE KEY\nline two\n")
+        world.file("/Users/dom/planted.exit", "0\n")
+        let reads = PathLog()
+        var runtime = world.runtime()
+        let readData = runtime.readData
+        let readFile = runtime.readFile
+        let readTail = runtime.readTail
+        runtime.readData = { path in reads.add(path); return readData(path) }
+        runtime.readFile = { path in reads.add(path); return readFile(path) }
+        runtime.readTail = { path, count in reads.add(path); return readTail(path, count) }
+
+        let (envelope, failure) = await Catalog.call("runs_show", runtime, ["run": .string(id)])
+        XCTAssertNil(failure)
+        let data = envelope["data"]
+        XCTAssertEqual(data?["lines"], .array([]))
+        XCTAssertFalse(envelope.text().contains("PRIVATE"), envelope.text())
+        XCTAssertFalse(envelope.text().contains("line two"), envelope.text())
+        XCTAssertFalse(envelope.text().contains("id_ed25519"), envelope.text())
+        // the planted exit file is not this run's: the run has none, and no process
+        XCTAssertEqual(data?["state"]?.stringValue, "lost")
+        XCTAssertEqual(data?["exit_code"], .null)
+        // what the tool prints is where it reads
+        XCTAssertEqual(data?["log"]?.stringValue, "\(folder)/\(id).log")
+        XCTAssertEqual(data?["exit_file"]?.stringValue, "\(folder)/\(id).exit")
+
+        let (list, _) = await Catalog.call("runs", runtime, [:])
+        XCTAssertFalse(list.text().contains("id_ed25519"), list.text())
+        XCTAssertEqual(list["data"]?["runs"]?.arrayValue?.first?["state"]?.stringValue, "lost")
+        _ = await Catalog.call("runs_cancel", runtime, ["run": .string(id)])
+
+        XCTAssertFalse(reads.all.contains { $0.hasPrefix("/Users/dom/") }, "\(reads.all)")
+        XCTAssertTrue(reads.all.allSatisfy { $0.hasPrefix(folder + "/") }, "\(reads.all)")
+
+        // the run's own files are read, whatever the record says
+        world.file("\(folder)/\(id).exit", "0\n")
+        world.file("\(folder)/\(id).log", "its own log\n")
+        let (own, _) = await Catalog.call("runs_show", runtime, ["run": .string(id)])
+        XCTAssertEqual(own["data"]?["state"]?.stringValue, "done")
+        XCTAssertEqual(own["data"]?["lines"], .array([.string("its own log")]))
+        XCTAssertTrue(reads.all.contains("\(folder)/\(id).log"))
+    }
+
+    func testARecordWithoutItsTwoPathsIsStillARecord() async {
+        // the two paths are not read from the file, so a file without them is read
+        let world = FakeWorld()
+        world.file("\(folder)/\(id).json", """
+            {"id": "\(id)", "command": "plate_build", "argv": ["/repo/.venv-prep/bin/python"], "cwd": "/repo",
+             "pid": 4001, "started": "2026-10-10T18:55:15Z", "failure_text": null}
+            """)
+        world.file("\(folder)/\(id).exit", "0\n")
+        let (data, failure) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data?["state"]?.stringValue, "done")
+        XCTAssertEqual(data?["log"]?.stringValue, "\(folder)/\(id).log")
+    }
+
+    // MARK: The log is read from its end
+
+    func testALogLongerThanTheWindowGivesOnlyWholeLinesFromItsEnd() async {
+        // 3000 lines of 1000 bytes: 3 MB. The window of `runs show` is 1 MB, which
+        // holds 1048 whole lines and a part of one more.
+        let world = FakeWorld()
+        record(world, id)
+        world.file("\(folder)/\(id).exit", "0\n")
+        let lines = (1...3000).map { number -> String in
+            let head = "line \(number) "
+            return head + String(repeating: "x", count: 999 - head.utf8.count)
+        }
+        world.file("\(folder)/\(id).log", lines.joined(separator: "\n") + "\n")
+        let (data, failure) = await call("runs_show", world, ["run": .string(id), "lines": .int(2000)])
+        XCTAssertNil(failure)
+        let shown = (data?["lines"]?.arrayValue ?? []).compactMap(\.stringValue)
+        XCTAssertEqual(shown.count, 1048)
+        XCTAssertEqual(shown, Array(lines.suffix(1048)))
+
+        // fewer lines than the window holds: the count is the caller's
+        let (few, _) = await call("runs_show", world, ["run": .string(id), "lines": .int(3)])
+        XCTAssertEqual((few?["lines"]?.arrayValue ?? []).compactMap(\.stringValue), Array(lines.suffix(3)))
+    }
+
+    func testAWindowThatStartsAtALineStartKeepsItsFirstLine() async {
+        // 1024 lines of 1024 bytes after one more line: the window starts at a line start
+        let world = FakeWorld()
+        record(world, id)
+        world.file("\(folder)/\(id).exit", "0\n")
+        let lines = (1...1025).map { number -> String in
+            let head = "line \(number) "
+            return head + String(repeating: "x", count: 1023 - head.utf8.count)
+        }
+        world.file("\(folder)/\(id).log", lines.joined(separator: "\n") + "\n")
+        let (data, _) = await call("runs_show", world, ["run": .string(id), "lines": .int(2000)])
+        let shown = (data?["lines"]?.arrayValue ?? []).compactMap(\.stringValue)
+        XCTAssertEqual(shown.count, 1024)
+        XCTAssertEqual(shown.first, lines[1])
+    }
+
+    func testALogOfOneLineLongerThanTheWindowHasNoWholeLine() async {
+        let world = FakeWorld()
+        record(world, id)
+        world.file("\(folder)/\(id).exit", "0\n")
+        world.file("\(folder)/\(id).log", String(repeating: "x", count: (1 << 20) + 10))
+        let (data, failure) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data?["lines"], .array([]))
+    }
+
+    func testNoEntryReadsAWholeLog() async {
+        // every read of a log is a read of its end, with a limit
+        let world = FakeWorld()
+        record(world, id, command: "plate_playa", failureText: "FAILED")
+        world.file("\(folder)/\(id).exit", "0\n")
+        world.file("\(folder)/\(id).log", "lassen_ca: ok\n")
+        let reads = PathLog()
+        var runtime = world.runtime()
+        let readData = runtime.readData
+        let readFile = runtime.readFile
+        runtime.readData = { path in reads.add(path); return readData(path) }
+        runtime.readFile = { path in reads.add(path); return readFile(path) }
+        let log = "\(folder)/\(id).log"
+        XCTAssertEqual(Runs.showWindow, 1 << 20)
+        XCTAssertEqual(Runs.failureWindow, 4 << 20)
+
+        _ = await Catalog.call("runs", runtime, [:])
+        XCTAssertEqual(world.tailReads, [.init(path: log, count: 4 << 20)])
+        _ = await Catalog.call("runs_cancel", runtime, ["run": .string(id)])
+        XCTAssertEqual(world.tailReads.count, 2)
+        _ = await Catalog.call("runs_show", runtime, ["run": .string(id), "lines": .int(2000)])
+        // the state first, and then the lines: one byte more than the window says
+        // if the log is longer than the window
+        XCTAssertEqual(Array(world.tailReads.dropFirst(2)), [
+            .init(path: log, count: 4 << 20), .init(path: log, count: (1 << 20) + 1)])
+        XCTAssertFalse(reads.all.contains(log), "\(reads.all)")
+    }
+
+    func testTheLogIsNotReadForTheFailureTextUntilTheExitFileHoldsZero() async {
+        let log = "\(folder)/\(id).log"
+        // no exit file: running, and lost
+        let running = FakeWorld()
+        record(running, id, command: "plate_playa", failureText: "FAILED")
+        running.file(log, "rifle_aspen: FAILED no lakebed\n")
+        running.process(4001, shell(id))
+        var (list, _) = await call("runs", running)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "running")
+        running.endProcess(4001)
+        (list, _) = await call("runs", running)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "lost")
+        XCTAssertEqual(running.tailReads, [])
+
+        // an exit code that is not 0, and an exit file with no number: failed with no look at the log
+        for text in ["3\n", ""] {
+            let ended = FakeWorld()
+            record(ended, id, command: "plate_playa", failureText: "FAILED")
+            ended.file(log, "rifle_aspen: FAILED no lakebed\n")
+            ended.file("\(folder)/\(id).exit", text)
+            (list, _) = await call("runs", ended)
+            XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "failed")
+            XCTAssertEqual(ended.tailReads, [], text)
+        }
+
+        // no failure text, or an empty one: nothing to look for
+        for mark in [nil, ""] as [String?] {
+            let plain = FakeWorld()
+            record(plain, id, failureText: mark)
+            plain.file(log, "FAILED\n")
+            plain.file("\(folder)/\(id).exit", "0\n")
+            (list, _) = await call("runs", plain)
+            XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "done")
+            XCTAssertEqual(plain.tailReads, [])
+        }
+    }
+
+    func testTheFailureTextIsLookedForInTheLast4MBOfTheLog() async {
+        let filler = String(repeating: String(repeating: "x", count: 1023) + "\n", count: 5 * 1024)
+        // inside the window: found
+        let world = FakeWorld()
+        record(world, id, command: "plate_playa", failureText: "FAILED")
+        world.file("\(folder)/\(id).exit", "0\n")
+        world.file("\(folder)/\(id).log", filler + "rifle_aspen: FAILED no lakebed\n1 plate\n")
+        var (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "failed")
+        let (list, _) = await call("runs", world)
+        XCTAssertEqual(list?["runs"]?.arrayValue?.first?["state"]?.stringValue, "failed")
+
+        // More than 4 MB before the end: not seen. This is the limit of the rule,
+        // and the one script with a failure text prints it at the end of a short log.
+        world.file("\(folder)/\(id).log", "rifle_aspen: FAILED no lakebed\n" + filler)
+        (data, _) = await call("runs_show", world, ["run": .string(id)])
+        XCTAssertEqual(data?["state"]?.stringValue, "done")
     }
 
     // MARK: runs
@@ -830,27 +1196,28 @@ final class RunsTests: XCTestCase {
     }
 
     func testNoEntryDeletesARecordALogAnExitFileOrAMarker() async throws {
-        // A run has two writes: its record at the start, and its marker at a cancel.
-        // Each is a new file. The two entries that read write nothing.
+        // A run has three writes: its empty log and its record at the start, and its
+        // marker at a cancel. Each is a new file. The two entries that read write nothing.
         let world = FakeWorld()
         _ = try Runs.start(program: "/bin/sleep", arguments: ["30"], cwd: "/", command: "test",
                            failureText: nil, world.runtime())
-        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).json"])
+        let started = ["\(folder)/\(id).log", "\(folder)/\(id).json"]
+        XCTAssertEqual(world.written.map(\.path), started)
         _ = await call("runs", world)
         _ = await call("runs_show", world, ["run": .string(id)])
-        XCTAssertEqual(world.written.count, 1)
-        _ = await call("runs_cancel", world, ["run": .string(id)])
-        XCTAssertEqual(world.written.map(\.path), ["\(folder)/\(id).json", "\(folder)/\(id).cancelled"])
-        _ = await call("runs_show", world, ["run": .string(id)])
-        _ = await call("runs", world)
-        _ = await call("runs_cancel", world, ["run": .string(id)])
         XCTAssertEqual(world.written.count, 2)
+        _ = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertEqual(world.written.map(\.path), started + ["\(folder)/\(id).cancelled"])
+        _ = await call("runs_show", world, ["run": .string(id)])
+        _ = await call("runs", world)
+        _ = await call("runs_cancel", world, ["run": .string(id)])
+        XCTAssertEqual(world.written.count, 3)
         XCTAssertEqual(world.madeFolders, [folder])
         // the record and the marker are still there, and no program ran but `ps`
         let (data, _) = await call("runs", world)
         XCTAssertEqual(data?["runs"]?.arrayValue?.count, 1)
         XCTAssertEqual(data?["runs"]?.arrayValue?.first?["state"]?.stringValue, "cancelled")
-        XCTAssertEqual(world.runtime().listFolder(folder), ["\(id).cancelled", "\(id).json"])
+        XCTAssertEqual(world.runtime().listFolder(folder), ["\(id).cancelled", "\(id).json", "\(id).log"])
         XCTAssertTrue(world.commands.allSatisfy { $0.first == "/bin/ps" })
     }
 
@@ -941,6 +1308,17 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(runtime.readFile("/f/c.json"), "{}")
         XCTAssertEqual(runtime.readData("/f/c.json"), Data("{}".utf8))
 
+        // the end of a file, and each read of one is recorded
+        world.file("/f/long.log", "0123456789")
+        XCTAssertEqual(runtime.readTail("/f/long.log", 4), Data("6789".utf8))
+        XCTAssertEqual(runtime.readTail("/f/long.log", 10), Data("0123456789".utf8))
+        XCTAssertEqual(runtime.readTail("/f/long.log", 99), Data("0123456789".utf8))
+        XCTAssertEqual(runtime.readTail("/f/long.log", 0), Data())
+        XCTAssertEqual(runtime.readTail("/f/a.log", 1), Data([1]))
+        XCTAssertNil(runtime.readTail("/f/none.log", 4))
+        XCTAssertEqual(world.tailReads.map(\.count), [4, 10, 99, 0, 1, 4])
+        XCTAssertEqual(world.tailReads.first?.path, "/f/long.log")
+
         try runtime.makeFolder("/made")
         XCTAssertEqual(world.madeFolders, ["/made"])
         XCTAssertEqual(runtime.pathKind("/made"), .folder)
@@ -949,6 +1327,9 @@ final class RunsTests: XCTestCase {
         XCTAssertEqual(runtime.randomHex(6), "a1b2c3")
 
         XCTAssertEqual(try runtime.exec("/bin/ps", ["-o", "command=", "-p", "77"]).exitCode, 1)
+        // a command with no environment of its own gets the tool's, and one with its own is recorded
+        _ = try runtime.exec("/usr/bin/true", [], environment: ["A": "1"])
+        XCTAssertEqual(world.environments, [nil, ["A": "1"]])
         world.process(77, "sleep 30")
         XCTAssertEqual(try runtime.exec("/bin/ps", ["-o", "command=", "-p", "77"]),
                        ProcessResult(exitCode: 0, stdout: "sleep 30\n", stderr: ""))
@@ -984,9 +1365,14 @@ final class TrackedRunTests: XCTestCase {
 
     /// End a process and its group at the end of the test, whatever the test
     /// found. The process too: with a fault in the start, it leads no group.
-    private func endAtTeardown(_ pid: Int32) {
+    ///
+    /// `exitFile` is the exit file of the run with this pid. A run that wrote it
+    /// has ended, and macOS can give its pid to another program: that pid gets no
+    /// signal. The look comes first, at the teardown and not at the start.
+    private func endAtTeardown(_ pid: Int32, exitFile: String? = nil) {
         addTeardownBlock {
             guard pid > 1 else { return }
+            if let exitFile, FileManager.default.fileExists(atPath: exitFile) { return }
             kill(-pid, SIGKILL)
             kill(pid, SIGKILL)
         }
@@ -999,7 +1385,7 @@ final class TrackedRunTests: XCTestCase {
                                     failureText: failureText, runtime)
         let id = try XCTUnwrap(result["run"]?.stringValue)
         let pid = Int32(try XCTUnwrap(result["pid"]?.intValue))
-        endAtTeardown(pid)
+        endAtTeardown(pid, exitFile: Runs.path(id, "exit", runtime))
         return (id, pid)
     }
 
@@ -1106,11 +1492,10 @@ final class TrackedRunTests: XCTestCase {
         XCTAssertEqual(again?.kind, .refused)
         XCTAssertEqual(again?.message, "Run \(run.id) is not running: its state is cancelled.")
         // Nothing was deleted, and the marker holds the time of the cancel. The
-        // log is there only if the shell came to open it before the signal.
+        // log is there too: the tool made it before the start.
         let folder = runsFolder(home)
-        let names = Set(try FileManager.default.contentsOfDirectory(atPath: folder))
-        XCTAssertTrue(names.isSuperset(of: ["\(run.id).cancelled", "\(run.id).json"]), "\(names)")
-        XCTAssertTrue(names.isSubset(of: ["\(run.id).cancelled", "\(run.id).json", "\(run.id).log"]), "\(names)")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder).sorted(),
+                       ["\(run.id).cancelled", "\(run.id).json", "\(run.id).log"])
         let marker = try String(contentsOfFile: "\(folder)/\(run.id).cancelled", encoding: .utf8)
         let time = try XCTUnwrap(ISO8601DateFormatter().date(from: marker), marker)
         XCTAssertLessThan(abs(time.timeIntervalSinceNow), 60)
@@ -1179,6 +1564,25 @@ final class TrackedRunTests: XCTestCase {
         XCTAssertEqual(data?["state"]?.stringValue, "done")
     }
 
+    func testARealRunGetsNoPythonVariableOfTheCaller() async throws {
+        let home = try temporaryHome()
+        var runtime = machine(home)
+        runtime.environment = [
+            "PYTHONHOME": "/opt/other", "PYTHONPATH": "/opt/other/lib", "PYTHONSTARTUP": "/x/.pythonrc",
+            "__PYVENV_LAUNCHER__": "/opt/other/bin/python", "TECOPA_ORDERS_DIR": "/orders", "PATH": "/usr/bin:/bin",
+        ]
+        let run = try start(runtime, "/usr/bin/env", [])
+        let exit = "\(runsFolder(home))/\(run.id).exit"
+        XCTAssertTrue(wait(seconds: 10) { FileManager.default.fileExists(atPath: exit) }, "no exit file")
+        let data = await Catalog.call("runs_show", runtime, ["run": .string(run.id), "lines": .int(200)])
+            .envelope["data"]
+        let lines = Set((data?["lines"]?.arrayValue ?? []).compactMap(\.stringValue))
+        XCTAssertTrue(lines.isSuperset(of: ["TECOPA_ORDERS_DIR=/orders", "PATH=/usr/bin:/bin", "PYTHONUNBUFFERED=1"]),
+                      "\(lines)")
+        XCTAssertFalse(lines.contains { $0.hasPrefix("PYTHONHOME=") || $0.hasPrefix("PYTHONPATH=")
+            || $0.hasPrefix("PYTHONSTARTUP=") || $0.hasPrefix("__PYVENV_LAUNCHER__=") }, "\(lines)")
+    }
+
     func testADetachedChildGetsNoDescriptorOfTheTool() async throws {
         // Under `tecopa mcp` the tool's descriptors carry the protocol. This one
         // has no close-on-exec flag, so only the start itself keeps it from the child.
@@ -1219,7 +1623,14 @@ final class TrackedRunTests: XCTestCase {
         // a working directory that is not there starts nothing
         XCTAssertThrowsError(try SystemProcessRunner().startDetached(
             "/usr/bin/true", [], cwd: "/no/such/folder", environment: [:])) { error in
-            XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)
+            XCTAssertEqual(error as? TecopaFailure,
+                           TecopaFailure(.environment, "The working directory /no/such/folder does not exist."))
+        }
+        // and a file is not a working directory
+        XCTAssertThrowsError(try SystemProcessRunner().startDetached(
+            "/usr/bin/true", [], cwd: "/usr/bin/true", environment: [:])) { error in
+            XCTAssertEqual(error as? TecopaFailure,
+                           TecopaFailure(.environment, "The working directory /usr/bin/true is not a folder."))
         }
         XCTAssertThrowsError(try SystemProcessRunner().startDetached(
             "/usr/bin/true", ["a\u{0}b"], cwd: nil, environment: [:])) { error in

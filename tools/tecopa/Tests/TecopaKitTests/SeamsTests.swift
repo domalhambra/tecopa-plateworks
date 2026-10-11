@@ -292,6 +292,65 @@ final class SeamsTests: XCTestCase {
         XCTAssertNil(Runtime().readData(folder))
     }
 
+    func testReadTailReadsTheEndOfAFile() throws {
+        let folder = try temporaryFolder()
+        let file = folder + "/run.log"
+        try Data("0123456789".utf8).write(to: URL(fileURLWithPath: file))
+        XCTAssertEqual(Runtime().readTail(file, 4), Data("6789".utf8))
+        XCTAssertEqual(Runtime().readTail(file, 10), Data("0123456789".utf8))
+        XCTAssertEqual(Runtime().readTail(file, 11), Data("0123456789".utf8))
+        XCTAssertEqual(Runtime().readTail(file, 1 << 30), Data("0123456789".utf8))
+        XCTAssertEqual(Runtime().readTail(file, 0), Data())
+        XCTAssertEqual(Runtime().readTail(file, -3), Data())
+        // an empty file is a file, and a missing file or a folder is not
+        try Runtime().writeNew(folder + "/empty.log", Data())
+        XCTAssertEqual(Runtime().readTail(folder + "/empty.log", 4), Data())
+        XCTAssertNil(Runtime().readTail(folder + "/none.log", 4))
+        XCTAssertNil(Runtime().readTail(folder, 4))
+
+        // 3 MB, of which only the end is read
+        let big = folder + "/big.log"
+        let line = Data((String(repeating: "x", count: 1023) + "\n").utf8)
+        var bytes = Data()
+        for _ in 0..<(3 * 1024) { bytes.append(line) }
+        bytes.append(Data("the end\n".utf8))
+        try bytes.write(to: URL(fileURLWithPath: big))
+        let tail = try XCTUnwrap(Runtime().readTail(big, 1 << 20))
+        XCTAssertEqual(tail.count, 1 << 20)
+        XCTAssertEqual(tail, bytes.suffix(1 << 20))
+    }
+
+    func testAProgramGetsTheEnvironmentItIsGivenOrTheToolsOwn() throws {
+        let given = try SystemProcessRunner().run("/usr/bin/env", [], cwd: nil,
+                                                  environment: ["TECOPA_TEST_VALUE": "given", "A": "1"])
+        XCTAssertEqual(Set(given.stdout.split(separator: "\n").map(String.init)), ["TECOPA_TEST_VALUE=given", "A=1"])
+        // with none given, the program has the variables of this process
+        setenv("TECOPA_TEST_INHERITED", "from the tool", 1)
+        defer { unsetenv("TECOPA_TEST_INHERITED") }
+        let own = try SystemProcessRunner().run("/usr/bin/env", [], cwd: nil)
+        XCTAssertTrue(own.stdout.contains("TECOPA_TEST_INHERITED=from the tool\n"), own.stdout)
+        let viaRuntime = try Runtime().exec("/usr/bin/env", [], environment: ["B": "2"])
+        XCTAssertEqual(viaRuntime.stdout, "B=2\n")
+    }
+
+    func testACCopyThatCannotBeMadeFailsTheStart() throws {
+        // a nil in the list is the list's end: the program would get fewer arguments
+        var asked: [String] = []
+        XCTAssertThrowsError(try SystemProcessRunner.cStrings(["/bin/sh", "-c", "exit 0", "x"], copy: { text in
+            asked.append(text)
+            return text == "exit 0" ? nil : strdup(text)
+        })) { error in
+            XCTAssertEqual((error as? TecopaFailure)?.kind, .environment)
+        }
+        // it stops at the first copy that fails
+        XCTAssertEqual(asked, ["/bin/sh", "-c", "exit 0"])
+
+        let copies = try SystemProcessRunner.cStrings(["/bin/sh", "a b", ""])
+        defer { copies.forEach { free($0) } }
+        XCTAssertEqual(copies.map { $0.map { String(cString: $0) } }, ["/bin/sh", "a b", ""])
+        XCTAssertEqual(try SystemProcessRunner.cStrings([]).count, 0)
+    }
+
     func testTheFakeKeepsBinaryFilesAndRecordsEachWrite() throws {
         let world = FakeWorld()
         world.binary("/tracks/a.kmz", Data([0x50, 0x4B, 0x00, 0xFF]))

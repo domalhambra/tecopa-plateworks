@@ -8,6 +8,43 @@ final class ScriptRunnerTests: XCTestCase {
         XCTAssertEqual(w.commands, [["/repo/.venv/bin/python", "scripts/verify_regions.py", "lassen_ca"]])
     }
 
+    func testAScriptInTheCallGetsNoPythonVariableOfTheCaller() async throws {
+        // invariant 13: the table alone picks the interpreter. These four change
+        // what that interpreter loads, so the caller's shell does not pass them.
+        let w = FakeWorld()
+        var runtime = w.runtime(repo: "/repo")
+        runtime.environment = [
+            "PYTHONHOME": "/opt/other", "PYTHONPATH": "/opt/other/site-packages",
+            "PYTHONSTARTUP": "/Users/dom/.pythonrc", "__PYVENV_LAUNCHER__": "/opt/other/bin/python",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "PYTHONUNBUFFERED": "0",
+        ]
+        let kept = [
+            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "PYTHONUNBUFFERED": "0",
+        ]
+        _ = try ScriptRunner.run("scripts/pack_region.py", ["lassen_ca"], runtime)
+        _ = try ScriptRunner.run("app.plates", ["verify", "/p/a.png"], runtime)
+        let (_, failure) = await Catalog.call("regions_verify", runtime, [:])
+        XCTAssertNil(failure)
+        XCTAssertEqual(w.commands.count, 3)
+        // each other variable goes through as it is, and a script in the call gets
+        // no PYTHONUNBUFFERED from the tool: its output is read when it ends
+        XCTAssertEqual(w.environments, [kept, kept, kept])
+        XCTAssertEqual(ScriptRunner.droppedVariables,
+                       ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "__PYVENV_LAUNCHER__"])
+    }
+
+    func testACommandThatIsNotAScriptGetsTheToolsOwnEnvironment() throws {
+        // the launcher's `pgrep` is not a script: nothing changes for it
+        let w = FakeWorld()
+        var runtime = w.runtime()
+        runtime.environment = ["PYTHONPATH": "/opt/other", "PATH": "/usr/bin:/bin"]
+        _ = try Launcher.launcherRuns(runtime)
+        XCTAssertEqual(w.commands.count, 1)
+        XCTAssertEqual(w.environments, [nil])
+    }
+
     func testAScriptWithNoRowDoesNotRun() {
         // invariant 13: a prep script in .venv would pull the prep stack's pins into
         // the app venv. A script gets a venv only by a row in the table, and

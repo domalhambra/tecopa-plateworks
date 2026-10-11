@@ -3,7 +3,8 @@ import XCTest
 
 /// A machine where no program can start.
 private struct BrokenRunner: ProcessRunning {
-    func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
+    func run(_ executable: String, _ arguments: [String], cwd: String?,
+             environment: [String: String]?) throws -> ProcessResult {
         throw CocoaError(.fileNoSuchFile)
     }
 

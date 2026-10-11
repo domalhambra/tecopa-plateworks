@@ -22,9 +22,9 @@ final class PlatesTests: XCTestCase {
         world.detached.map { Array($0.arguments.dropFirst(5)) }
     }
 
-    /// The record that a tracked start wrote.
+    /// The record that a tracked start wrote. The run's empty log is written before it.
     private func record(_ world: FakeWorld) throws -> JSONValue {
-        try JSONValue.parse(try XCTUnwrap(world.written.first).data)
+        try JSONValue.parse(try XCTUnwrap(world.written.first { $0.path.hasSuffix(".json") }).data)
     }
 
     /// What `ScriptRunner.start` returns for a start at the fake's default clock.

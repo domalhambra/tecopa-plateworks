@@ -46,6 +46,12 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         let pid: Int32
     }
 
+    /// One call of `Runtime.readTail`.
+    struct TailRead: Equatable {
+        let path: String
+        let count: Int
+    }
+
     /// One call of `signalGroup`.
     struct Signal: Equatable {
         let group: Int32
@@ -100,6 +106,11 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var commands: [[String]] = []
     /// The working directory of each command, in the order of `commands`.
     private(set) var workingDirectories: [String?] = []
+    /// The environment that each command was given, in the order of `commands`.
+    /// nil is a command that gets the tool's own.
+    private(set) var environments: [[String: String]?] = []
+    /// Every call of `Runtime.readTail`, in order: the path and the count of bytes.
+    private(set) var tailReads: [TailRead] = []
     /// Every URL a test asked for, served or not.
     private(set) var requests: [URL] = []
     /// Every request as "METHOD path", in order, served or not: "POST /api/upload".
@@ -346,6 +357,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         }
     }
 
+    /// The fake `Runtime.readTail`: the last `count` bytes of a file that a test
+    /// put on the machine or that the tool wrote. It records each call.
+    private func tail(_ path: String, _ count: Int) -> Data? {
+        lock.withLock {
+            tailReads.append(TailRead(path: path, count: count))
+            let data = binaries[path] ?? files[path].map { Data($0.utf8) }
+            return data.map { Data($0.suffix(max(0, count))) }
+        }
+    }
+
     /// The fake `Runtime.listFolder`: the names of the files and the folders that
     /// a test put directly in `path`, sorted. A path that is not a folder and
     /// holds nothing reads as nil, as a missing folder does.
@@ -386,11 +407,13 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         }
     }
 
-    func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
+    func run(_ executable: String, _ arguments: [String], cwd: String?,
+             environment: [String: String]?) throws -> ProcessResult {
         let command = [executable] + arguments
         lock.lock()
         commands.append(command)
         workingDirectories.append(cwd)
+        environments.append(environment)
         let name = (executable as NSString).lastPathComponent
         var result = results[name] ?? ProcessResult(exitCode: 0, stdout: "", stderr: "")
         if name == "pgrep", results[name] == nil, let launcherProcess {
@@ -424,6 +447,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                 readData: { path in
                     self.lock.withLock { self.binaries[path] ?? self.files[path].map { Data($0.utf8) } }
                 },
+                readTail: { path, count in self.tail(path, count) },
                 writeNew: { path, data in try self.write(path, data) },
                 pathKind: { path in
                     self.lock.withLock {

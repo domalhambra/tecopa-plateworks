@@ -11,7 +11,9 @@ import Foundation
 ///   <id>.exit        the script's exit code, written when the script ends
 ///   <id>.cancelled   the marker of `runs cancel`: the time the signal went
 ///
-/// No function here deletes one of these files, and none writes over one.
+/// No function here deletes one of these files, and none writes over one. The
+/// tool writes the record and the marker, and makes the log empty before the
+/// start. The run's own shell writes the rest.
 enum Runs {
     static let entries: [CatalogEntry] = [listEntry, showEntry, cancelEntry]
 
@@ -90,10 +92,12 @@ enum Runs {
 
     /// Start one program detached, and write its record.
     ///
-    /// The order: the folder, a new id whose four paths are free, the start, the
-    /// record. The record holds the process id, so it cannot be written first. If
-    /// the record cannot be written, the run is stopped: a run with no record
-    /// cannot be read or stopped later.
+    /// The order: the folder, a new id, the empty log, the start, the record. The
+    /// log is made first with the write that never writes over a file, and that
+    /// write is the reservation of the id: of two starts with one id, one makes
+    /// the log and the other starts nothing. The record holds the process id, so
+    /// it cannot be written before the start. If the record cannot be written,
+    /// the run is stopped: a run with no record cannot be read or stopped later.
     ///
     /// `command` is the catalog name of the entry that starts the run. `cwd` is
     /// the program's working directory. The result is
@@ -104,6 +108,17 @@ enum Runs {
         guard !([program, cwd] + arguments).contains(where: { $0.utf8.contains(0) }) else {
             throw TecopaFailure(.usage, "An argument of a run cannot hold a NUL byte.")
         }
+        // The wrapper runs the program as `"$@"`. A name with no folder is looked
+        // for by the shell, and a name such as `eval` is a builtin of the shell:
+        // its next argument would go through the shell's parsing. Each caller
+        // gives an absolute path, so this is a fault in the tool and not in a call.
+        guard program.hasPrefix("/") else {
+            throw TecopaFailure(.environment, "The program of a run must be an absolute path: \(program)")
+        }
+        guard cwd.hasPrefix("/") else {
+            throw TecopaFailure(.environment,
+                                "The working directory of a run must be an absolute path: \(cwd)")
+        }
         try runtime.makeFolder(runtime.runsFolder)
 
         let now = runtime.now()
@@ -111,25 +126,37 @@ enum Runs {
         guard isRunID(id) else {
             throw TecopaFailure(.environment, "The tool made a run id that is not a run id: \(id)")
         }
-        let record = Record(
-            id: id, command: command, argv: [program] + arguments, cwd: cwd, pid: 0,
-            started: stamp(now).iso, log: path(id, "log", runtime), exitFile: path(id, "exit", runtime),
-            failureText: failureText)
+        let logPath = path(id, "log", runtime)
+        let exitPath = path(id, "exit", runtime)
         let recordPath = path(id, "json", runtime)
+        let taken = TecopaFailure(.environment, "A run with the id \(id) is already in \(runtime.runsFolder).",
+                                  hint: "Run the command again.")
         // The same second and the same six digits: the first run keeps its files.
         // A marker with the id would make the new run read as cancelled.
-        let paths = [recordPath, record.log, record.exitFile, path(id, "cancelled", runtime)]
-        for taken in paths where runtime.pathKind(taken) != nil {
-            throw TecopaFailure(.environment, "A run with the id \(id) is already in \(runtime.runsFolder).",
-                                hint: "Run the command again.")
+        for file in [recordPath, exitPath, path(id, "cancelled", runtime)] where runtime.pathKind(file) != nil {
+            throw taken
+        }
+        // The reservation. The wrapper adds to the log, so an empty log changes
+        // nothing for the script.
+        do {
+            try runtime.writeNew(logPath, Data())
+        } catch let failure as TecopaFailure where failure == fileAlreadyThere(logPath) {
+            throw taken
+        } catch {
+            let said = (error as? TecopaFailure)?.message ?? error.localizedDescription
+            throw TecopaFailure(.environment,
+                                "The log of the run could not be made, so nothing was started. "
+                                    + Render.sentence(said))
         }
 
-        var environment = runtime.environment
+        var environment = ScriptRunner.environment(runtime)
         // Python holds back its output when it does not write to a terminal. With
         // this, each line is in the log when the script prints it.
         environment["PYTHONUNBUFFERED"] = "1"
-        let shell = ["-c", wrapper, processName(id), record.log, record.exitFile, program] + arguments
+        let shell = ["-c", wrapper, processName(id), logPath, exitPath, program] + arguments
         let pid: Int32
+        // When the start fails, the empty log stays: no command deletes a file of
+        // a run. It has no record, so no entry lists it, and its id is not used again.
         do {
             pid = try runtime.runner.startDetached("/bin/sh", shell, cwd: cwd, environment: environment)
         } catch let failure as TecopaFailure {
@@ -138,8 +165,11 @@ enum Runs {
             throw TecopaFailure(.environment, "Could not start \(program): \(error.localizedDescription)")
         }
 
+        let record = Record(
+            id: id, command: command, argv: [program] + arguments, cwd: cwd, pid: pid,
+            started: stamp(now).iso, log: logPath, exitFile: exitPath, failureText: failureText)
         do {
-            try runtime.writeNew(recordPath, Data(record.with(pid: pid).json.text().utf8))
+            try runtime.writeNew(recordPath, Data(record.json.text().utf8))
         } catch {
             try? runtime.runner.signalGroup(pid, SIGTERM)
             let said = (error as? TecopaFailure)?.message ?? error.localizedDescription
@@ -149,7 +179,7 @@ enum Runs {
                     + Render.sentence(said))
         }
         return .object([
-            "run": .string(id), "pid": .int(Int64(pid)), "log": .string(record.log),
+            "run": .string(id), "pid": .int(Int64(pid)), "log": .string(logPath),
             "hint": .string(showHint(id)),
         ])
     }
@@ -169,15 +199,13 @@ enum Runs {
         let pid: Int32
         /// ISO 8601, UTC.
         let started: String
+        /// `<runs folder>/<id>.log`. A record that is read gets this path from the
+        /// folder and the id, never from its file: see `record(in:id:_:)`.
         let log: String
+        /// `<runs folder>/<id>.exit`, with the same rule.
         let exitFile: String
         /// A run whose log holds this text is `failed`, whatever its exit code.
         let failureText: String?
-
-        func with(pid: Int32) -> Record {
-            Record(id: id, command: command, argv: argv, cwd: cwd, pid: pid, started: started,
-                   log: log, exitFile: exitFile, failureText: failureText)
-        }
 
         var json: JSONValue {
             .object([
@@ -195,16 +223,20 @@ enum Runs {
     ///
     /// A process id of 1 or less is not a record. `runs cancel` signals the group
     /// with this id, and group 1 and group 0 are not one run's processes.
-    static func record(in data: Data, id: String) -> Record? {
+    ///
+    /// The file's own `log` and `exit_file` are not read. They are in the file for
+    /// a person who opens it. A record file that another program put in the
+    /// folder could name any file the user can read, and `runs show` would print
+    /// its last lines. So the two paths are always the run's own: the runs folder
+    /// and the id.
+    static func record(in data: Data, id: String, _ runtime: Runtime) -> Record? {
         guard let value = try? JSONValue.parse(data),
               value["id"]?.stringValue == id,
               let command = value["command"]?.stringValue,
               let argv = value["argv"]?.arrayValue, argv.allSatisfy({ $0.stringValue != nil }),
               let cwd = value["cwd"]?.stringValue,
               let number = value["pid"]?.intValue, number > 1, let pid = Int32(exactly: number),
-              let started = value["started"]?.stringValue,
-              let log = value["log"]?.stringValue,
-              let exitFile = value["exit_file"]?.stringValue else {
+              let started = value["started"]?.stringValue else {
             return nil
         }
         var failureText: String?
@@ -214,7 +246,8 @@ enum Runs {
         default: return nil
         }
         return Record(id: id, command: command, argv: argv.compactMap(\.stringValue), cwd: cwd, pid: pid,
-                      started: started, log: log, exitFile: exitFile, failureText: failureText)
+                      started: started, log: path(id, "log", runtime), exitFile: path(id, "exit", runtime),
+                      failureText: failureText)
     }
 
     /// The record of the run that a caller names. The id is checked before it
@@ -230,7 +263,7 @@ enum Runs {
         guard let data = runtime.readData(file) else {
             throw TecopaFailure(.usage, "No run has the id \(id).", hint: "Run `tecopa runs`.")
         }
-        guard let record = record(in: data, id: id) else {
+        guard let record = record(in: data, id: id, runtime) else {
             throw TecopaFailure(.environment, "The run record at \(file) cannot be read.")
         }
         return record
@@ -263,30 +296,56 @@ enum Runs {
         }
     }
 
-    /// The text of a run's log, or nil when the run has written none.
-    static func log(_ record: Record, _ runtime: Runtime) -> String? {
-        runtime.readData(record.log).map { String(decoding: $0, as: UTF8.self) }
+    /// The failure-text rule reads at most this many bytes from the end of a log.
+    ///
+    /// A failure text that is further back than this is not seen, and the run
+    /// reads as `done`. That is the cost of a read with a limit: `runs` does this
+    /// read for each record with a failure text, at each call, and nothing limits
+    /// the size of a log. The one script with a failure text is
+    /// `scripts/bake_playa.py`. It prints one short line for each plate and its
+    /// `FAILED` lines are among them, so its whole log is far smaller than this.
+    static let failureWindow = 4 << 20
+
+    /// The end of a run's log for the failure-text rule, or nil when the run has no log.
+    static func failureLog(_ record: Record, _ runtime: Runtime) -> Data? {
+        runtime.readTail(record.log, failureWindow)
     }
 
     /// The state of a run that has an exit file, or nil when it has none.
-    private static func ended(_ record: Record, _ runtime: Runtime, log: String?) -> Status? {
+    ///
+    /// `log` reads the log for the failure-text rule. It is called only after the
+    /// exit file was read and holds 0, and only for a record with a failure text.
+    /// The script writes its last line before the shell writes the exit code, so
+    /// a log that is read after the exit code is the whole log. A log that was
+    /// read before it can be without the failure text, and the run would read as
+    /// `done` one time.
+    private static func ended(_ record: Record, _ runtime: Runtime, log: () -> Data?) -> Status? {
         guard let text = runtime.readFile(record.exitFile) else { return nil }
         // An exit file with no number is not a run that ended well.
         guard let code = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             return Status(state: .failed, exitCode: nil)
         }
         guard code == 0 else { return Status(state: .failed, exitCode: code) }
-        if let mark = record.failureText, !mark.isEmpty, log?.contains(mark) == true {
+        if let mark = record.failureText, !mark.isEmpty, log()?.range(of: Data(mark.utf8)) != nil {
             return Status(state: .failed, exitCode: 0)
         }
         return Status(state: .done, exitCode: 0)
+    }
+
+    /// True when one line of `ps` has the run's name as a word of its own: a space
+    /// before it, and a space or the end of the line after it. That is how the
+    /// name is in the command line of a run's shell. The name inside a longer
+    /// word, or inside a path such as `/x/tecopa-run-<id>.log`, is another program.
+    static func hasProcessName(_ output: String, _ id: String) -> Bool {
+        let word = " " + processName(id) + " "
+        return output.split(whereSeparator: \.isNewline).contains { ($0 + " ").contains(word) }
     }
 
     /// The state of one run. The checks are in this order:
     ///
     /// 1. An exit file: `done` or `failed`.
     /// 2. No exit file, and `ps` prints a command line for the pid that holds
-    ///    the run's own name: `running`.
+    ///    the run's own name as a word: `running`.
     /// 3. No exit file, no such process, and the marker of `runs cancel`:
     ///    `cancelled`. The signal ends the run's shell before it writes an exit
     ///    file, so without the marker this run would read as one that vanished.
@@ -302,8 +361,10 @@ enum Runs {
     /// A run can end between check 1 and check 2. So when `ps` finds no process,
     /// the exit file is read one more time before the run is called cancelled or lost.
     ///
-    /// `log` is the log's text when the caller has read it, so it is read one time.
-    static func status(_ record: Record, _ runtime: Runtime, log: String?) throws -> Status {
+    /// The log is read only for the failure-text rule, and each time only after
+    /// the exit file: see `ended`.
+    static func status(_ record: Record, _ runtime: Runtime) throws -> Status {
+        let log = { failureLog(record, runtime) }
         if let status = ended(record, runtime, log: log) { return status }
         let found = try runtime.exec("/bin/ps", ["-o", "command=", "-p", String(record.pid)])
         // ps exits 1 when no process has the pid. Any other code is not an answer.
@@ -311,19 +372,12 @@ enum Runs {
             let said = found.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw TecopaFailure(.environment, "ps failed with exit \(found.exitCode): \(said)")
         }
-        if found.exitCode == 0, found.stdout.contains(processName(record.id)) {
+        if found.exitCode == 0, hasProcessName(found.stdout, record.id) {
             return Status(state: .running, exitCode: nil)
         }
         if let status = ended(record, runtime, log: log) { return status }
         let cancelled = runtime.pathKind(path(record.id, "cancelled", runtime)) != nil
         return Status(state: cancelled ? .cancelled : .lost, exitCode: nil)
-    }
-
-    /// The state of a run for the list: the log is read only when the record has
-    /// a failure text to look for.
-    static func status(_ record: Record, _ runtime: Runtime) throws -> Status {
-        let needsLog = record.failureText?.isEmpty == false
-        return try status(record, runtime, log: needsLog ? log(record, runtime) : nil)
     }
 
     // MARK: The log
@@ -337,6 +391,30 @@ enum Runs {
     /// after a carriage return, and each step is a line here.
     static func tail(_ text: String, lines count: Int) -> [String] {
         text.split(whereSeparator: \.isNewline).suffix(max(0, count)).map(String.init)
+    }
+
+    /// `runs show` reads at most this many bytes from the end of a log. 2000 lines
+    /// of 500 bytes fit in it.
+    static let showWindow = 1 << 20
+
+    /// The last `count` lines of a run's log, from at most its last `showWindow`
+    /// bytes. A run with no log has no lines.
+    ///
+    /// The read asks for one byte more than the window. When it gets that byte,
+    /// the log is longer than the window and the bytes can start in the middle of
+    /// a line, so everything up to the first line end is dropped: each line in
+    /// the result is a whole line of the log. When the byte before the window is
+    /// itself a line end, only that byte is dropped. A log that is longer than the
+    /// window and has no line end in it has no whole line, and gives none.
+    static func lastLines(_ record: Record, _ runtime: Runtime, lines count: Int) -> [String] {
+        guard var bytes = runtime.readTail(record.log, showWindow + 1) else { return [] }
+        if bytes.count > showWindow {
+            guard let end = bytes.firstIndex(where: { $0 == UInt8(ascii: "\n") || $0 == UInt8(ascii: "\r") }) else {
+                return []
+            }
+            bytes = bytes[(end + 1)...]
+        }
+        return tail(String(decoding: bytes, as: UTF8.self), lines: count)
     }
 
     // MARK: Entries
@@ -369,7 +447,7 @@ enum Runs {
         for name in names {
             let id = String(name.dropLast(".json".count))
             guard isRunID(id), let data = runtime.readData(runtime.runsFolder + "/" + name),
-                  let record = record(in: data, id: id) else {
+                  let record = record(in: data, id: id, runtime) else {
                 // never a crash, and never left out: the file is there
                 runs.append(.object(["file": .string(name), "state": .string(State.unreadable.rawValue)]))
                 continue
@@ -413,10 +491,11 @@ enum Runs {
         let record = try record(arguments, runtime)
         let asked = arguments["lines"]?.intValue ?? defaultLines
         let count = min(max(asked, lineRange.lowerBound), lineRange.upperBound)
-        let text = log(record, runtime)
         guard case .object(var result) = record.json else { return record.json }
-        result.merge(try status(record, runtime, log: text).json) { _, new in new }
-        result["lines"] = .array(tail(text ?? "", lines: count).map { .string($0) })
+        // The state first, then the lines: a run that reads as ended has its last
+        // lines in the answer.
+        result.merge(try status(record, runtime).json) { _, new in new }
+        result["lines"] = .array(lastLines(record, runtime, lines: count).map { .string($0) })
         return .object(result)
     }
 

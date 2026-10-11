@@ -26,6 +26,10 @@ public struct Runtime: Sendable {
     public var readFile: @Sendable (String) -> String?
     /// The bytes of one file, or nil when it cannot be read.
     public var readData: @Sendable (String) -> Data?
+    /// At most this many bytes from the end of one file, or nil when it cannot be
+    /// read. A log has no size limit, so a command that needs the end of one reads
+    /// it with this and never reads the whole file.
+    public var readTail: @Sendable (String, Int) -> Data?
     /// Write the bytes to a path that holds no file. A file at the path is a usage
     /// failure: the tool never overwrites.
     public var writeNew: @Sendable (String, Data) throws -> Void
@@ -60,6 +64,7 @@ public struct Runtime: Sendable {
         readData: @escaping @Sendable (String) -> Data? = {
             try? Data(contentsOf: URL(fileURLWithPath: $0))
         },
+        readTail: @escaping @Sendable (String, Int) -> Data? = { Runtime.tailOfFile($0, $1) },
         writeNew: @escaping @Sendable (String, Data) throws -> Void = {
             try Runtime.writeNewFile($0, $1)
         },
@@ -81,6 +86,7 @@ public struct Runtime: Sendable {
         self.sleep = sleep
         self.readFile = readFile
         self.readData = readData
+        self.readTail = readTail
         self.writeNew = writeNew
         self.pathKind = pathKind
         self.now = now
@@ -103,9 +109,12 @@ public struct Runtime: Sendable {
     public var runsFolder: String { home + "/Library/Application Support/TecopaPlateworks/runs" }
 
     /// Run one program. A program that cannot start is an environment fault.
-    public func exec(_ executable: String, _ arguments: [String], cwd: String? = nil) throws -> ProcessResult {
+    /// `environment` is all of the program's environment. Without it the program
+    /// gets the tool's own.
+    public func exec(_ executable: String, _ arguments: [String], cwd: String? = nil,
+                     environment: [String: String]? = nil) throws -> ProcessResult {
         do {
-            return try runner.run(executable, arguments, cwd: cwd)
+            return try runner.run(executable, arguments, cwd: cwd, environment: environment)
         } catch let failure as TecopaFailure {
             throw failure
         } catch {
@@ -125,6 +134,23 @@ extension Runtime {
     /// The real `writeNew`: create the file at `path` and write all the bytes to it.
     public static func writeNewFile(_ path: String, _ data: Data) throws {
         try writeExclusive(path, data, write: { Darwin.write($0, $1, $2) })
+    }
+
+    /// The real `readTail`: go to `count` bytes before the end of the file and
+    /// read from there. Only those bytes come into memory. A file that grows after
+    /// the seek still gives at most `count` bytes.
+    public static func tailOfFile(_ path: String, _ count: Int) -> Data? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        let wanted = UInt64(max(0, count))
+        do {
+            let size = try handle.seekToEnd()
+            try handle.seek(toOffset: size > wanted ? size - wanted : 0)
+            guard wanted > 0 else { return Data() }
+            return try handle.read(upToCount: Int(wanted)) ?? Data()
+        } catch {
+            return nil
+        }
     }
 
     /// The real `randomHex`, from the system's random source.

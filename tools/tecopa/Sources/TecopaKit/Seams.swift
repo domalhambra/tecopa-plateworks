@@ -37,7 +37,10 @@ public struct ProcessResult: Equatable, Sendable {
 }
 
 public protocol ProcessRunning: Sendable {
-    func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult
+    /// Run one program and wait for it. `environment` is all of the program's
+    /// environment, and nil gives it the tool's own.
+    func run(_ executable: String, _ arguments: [String], cwd: String?,
+             environment: [String: String]?) throws -> ProcessResult
 
     /// Start one program and return its process id at once. The tool does not wait
     /// for it. The program is the leader of a new session, so it outlives the tool
@@ -48,6 +51,13 @@ public protocol ProcessRunning: Sendable {
 
     /// Send one signal to every process of one process group.
     func signalGroup(_ group: Int32, _ signal: Int32) throws
+}
+
+extension ProcessRunning {
+    /// Run one program with the tool's own environment.
+    public func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
+        try run(executable, arguments, cwd: cwd, environment: nil)
+    }
 }
 
 /// Refuses every redirect, so the 3xx itself comes back as the reply. A program on
@@ -129,11 +139,14 @@ public struct SystemProcessRunner: ProcessRunning {
         self.timeout = timeout
     }
 
-    public func run(_ executable: String, _ arguments: [String], cwd: String?) throws -> ProcessResult {
+    public func run(_ executable: String, _ arguments: [String], cwd: String?,
+                    environment: [String: String]?) throws -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
+        // nil keeps the default of `Process`: the tool's own environment
+        if let environment { process.environment = environment }
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -188,6 +201,29 @@ public struct SystemProcessRunner: ProcessRunning {
                              stdout: String(decoding: outBox.get(), as: UTF8.self),
                              stderr: String(decoding: errBox.get(), as: UTF8.self))
     }
+
+    /// A C copy of each text, for `posix_spawn`. The caller frees each copy.
+    ///
+    /// A copy that cannot be made fails the call, and the copies made before it
+    /// are freed. A nil in the list would be the list's end for `posix_spawn`: the
+    /// program would start with fewer arguments, or with a part of its environment.
+    ///
+    /// `copy` is `strdup`. A test gives another to model a machine with no memory left.
+    static func cStrings(
+        _ texts: [String], copy: (String) -> UnsafeMutablePointer<CChar>? = { strdup($0) }
+    ) throws -> [UnsafeMutablePointer<CChar>?] {
+        var copies: [UnsafeMutablePointer<CChar>?] = []
+        for text in texts {
+            guard let pointer = copy(text) else {
+                copies.forEach { free($0) }
+                throw TecopaFailure(.environment,
+                                    "Could not start a program: no memory for its arguments or its environment.")
+            }
+            copies.append(pointer)
+        }
+        return copies
+    }
+
     /// The real detached start, with `posix_spawn`. `Process` cannot make a new
     /// session, and a run must have one.
     ///
@@ -210,6 +246,15 @@ public struct SystemProcessRunner: ProcessRunning {
         }
         func failure(_ code: Int32) -> TecopaFailure {
             TecopaFailure(.environment, "Could not start \(executable): \(String(cString: strerror(code)))")
+        }
+        // `posix_spawn` reports a working directory that is missing with the same
+        // code as a program that is missing. The look here gives the true cause.
+        if let cwd {
+            switch Runtime.kindOfPath(cwd) {
+            case .folder?: break
+            case .file?: throw TecopaFailure(.environment, "The working directory \(cwd) is not a folder.")
+            case nil: throw TecopaFailure(.environment, "The working directory \(cwd) does not exist.")
+            }
         }
 
         var actions: posix_spawn_file_actions_t?
@@ -236,9 +281,10 @@ public struct SystemProcessRunner: ProcessRunning {
         if code == 0 { code = posix_spawnattr_setflags(&attributes, Int16(flags)) }
         guard code == 0 else { throw failure(code) }
 
-        var argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) }
-        var envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup($0.key + "=" + $0.value) }
-        defer { (argv + envp).forEach { free($0) } }
+        var argv = try Self.cStrings([executable] + arguments)
+        defer { argv.forEach { free($0) } }
+        var envp = try Self.cStrings(environment.map { $0.key + "=" + $0.value })
+        defer { envp.forEach { free($0) } }
         argv.append(nil)
         envp.append(nil)
         var pid: pid_t = 0

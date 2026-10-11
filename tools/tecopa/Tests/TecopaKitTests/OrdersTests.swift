@@ -78,7 +78,8 @@ final class OrdersTests: XCTestCase {
         // the script reads TECOPA_ORDERS_DIR: the tool's own environment goes through
         XCTAssertEqual(world.detached.first?.environment, [
             "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "PYTHONUNBUFFERED": "1"])
-        let written = try JSONValue.parse(try XCTUnwrap(world.written.first).data)
+        let written = try JSONValue.parse(
+            try XCTUnwrap(world.written.first { $0.path.hasSuffix(".json") }).data)
         XCTAssertEqual(written["command"]?.stringValue, "order_prepare")
         XCTAssertEqual(written["cwd"]?.stringValue, "/repo")
         XCTAssertEqual(written["failure_text"], .null)
@@ -90,8 +91,9 @@ final class OrdersTests: XCTestCase {
         // the call returns at once: the tool waits for nothing and runs nothing in the call
         XCTAssertEqual(world.commands, [])
         XCTAssertEqual(world.slept, [])
-        // and the one file it writes is the run's record, never a file under the order
-        XCTAssertEqual(world.written.map(\.path), ["\(runs)/\(run).json"])
+        // and the two files it writes are the run's empty log and the run's record,
+        // never a file under the order
+        XCTAssertEqual(world.written.map(\.path), ["\(runs)/\(run).log", "\(runs)/\(run).json"])
     }
 
     func testOrderPrepareNeedsAnAbsolutePathToAFolderThatExists() async {

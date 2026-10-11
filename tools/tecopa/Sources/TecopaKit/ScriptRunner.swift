@@ -10,19 +10,19 @@ public enum ScriptRunner {
     }
 
     /// One row of the table: what the name is, and the venv that runs it.
-    public struct Row: Equatable, Sendable {
-        public enum Kind: Equatable, Sendable {
+    struct Row: Equatable, Sendable {
+        enum Kind: Equatable, Sendable {
             /// The name is a path under the repo: `python <name> …`.
             case script
             /// The name is a Python module: `python -m <name> …`.
             case module
         }
 
-        public let kind: Kind
-        public let venv: Venv
+        let kind: Kind
+        let venv: Venv
 
-        public static func script(_ venv: Venv) -> Row { Row(kind: .script, venv: venv) }
-        public static func module(_ venv: Venv) -> Row { Row(kind: .module, venv: venv) }
+        static func script(_ venv: Venv) -> Row { Row(kind: .script, venv: venv) }
+        static func module(_ venv: Venv) -> Row { Row(kind: .module, venv: venv) }
     }
 
     /// The key is the script's path under the repo, or the module's name. Add a row
@@ -30,7 +30,7 @@ public enum ScriptRunner {
     ///
     /// The two prep rows are the scripts that import the region-prep stack: the
     /// plate build, and the playa bake, which needs `pynhd`. No other row is prep.
-    public static let table: [String: Row] = [
+    static let table: [String: Row] = [
         "scripts/verify_regions.py": .script(.app),     // regions verify
         "region_prep.py": .script(.prep),               // plate build
         "scripts/build_labels.py": .script(.app),       // plate labels
@@ -46,6 +46,21 @@ public enum ScriptRunner {
         let python: String
         let arguments: [String]
         let repo: String
+    }
+
+    /// The variables of the caller that change what a Python interpreter loads:
+    /// its standard library, its module path, a file it runs at its start, and the
+    /// interpreter that a macOS launcher names. The table picks the interpreter,
+    /// and with one of these the caller's shell would pick what it loads. That
+    /// could load the prep stack into `.venv`, or the reverse (invariant 13).
+    static let droppedVariables = ["PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "__PYVENV_LAUNCHER__"]
+
+    /// The environment of a script: the tool's own, without `droppedVariables`.
+    /// A script that runs in the call and a script that starts detached both get
+    /// this one. Each other variable goes through: `scripts/order.py` reads
+    /// `TECOPA_ORDERS_DIR`.
+    static func environment(_ runtime: Runtime) -> [String: String] {
+        runtime.environment.filter { !droppedVariables.contains($0.key) }
     }
 
     /// Check the table and the interpreter. `run` and `start` both begin here, so
@@ -78,7 +93,8 @@ public enum ScriptRunner {
     static func run(_ name: String, _ arguments: [String], _ runtime: Runtime,
                     table: [String: Row]) throws -> ProcessResult {
         let command = try command(name, arguments, runtime, table: table)
-        return try runtime.exec(command.python, command.arguments, cwd: command.repo)
+        return try runtime.exec(command.python, command.arguments, cwd: command.repo,
+                                environment: environment(runtime))
     }
 
     /// Start one row of the table as a tracked run, and return at once. The checks
@@ -86,8 +102,9 @@ public enum ScriptRunner {
     /// the run, for example `plate_build`. A run whose log holds `failureText` is
     /// `failed` whatever its exit code.
     ///
-    /// The result is `{"run", "pid", "log", "hint"}`: see `Runs.start`.
-    public static func start(_ name: String, _ arguments: [String], command: String,
+    /// The result is `{"run", "pid", "log", "hint"}`: see `Runs.start`, which gives
+    /// the run the environment of `environment(_:)`.
+    static func start(_ name: String, _ arguments: [String], command: String,
                              failureText: String? = nil, _ runtime: Runtime) throws -> JSONValue {
         try start(name, arguments, command: command, failureText: failureText, runtime, table: table)
     }
