@@ -1,8 +1,8 @@
 # The `tecopa` Tool: a Swift CLI and MCP Server for the Engine — Design
 
 **Date:** 2026-10-09
-**Status:** Approved by Dom (brainstorming session, 2026-10-09). Phase 1 is built: see `../plans/2026-10-09-tecopa-tool-phase-1-diagnose.md`, whose "Decisions made while planning" refine this spec. Phases 2, 3 and 4 are not built.
-**Build:** Phase 1 was built on 2026-10-09. Dom opened the build before the 2026-10-21 Now review.
+**Status:** Approved by Dom (brainstorming session, 2026-10-09). All four phases are built. Phase 1: `../plans/2026-10-09-tecopa-tool-phase-1-diagnose.md`. Phases 2 to 4: `../plans/2026-10-10-tecopa-tool-phases-2-to-4.md`. Each plan's "Decisions made while planning" refine this spec, and the two sections at the end of this file list each change.
+**Build:** Phase 1 was built on 2026-10-09 and phases 2 to 4 on 2026-10-10. Dom opened each build before the 2026-10-21 Now review.
 **Extends:** `2026-07-18-macos-launcher-app-design.md` (the launcher, port 8848, engine ownership)
 **Amends:** nothing. No invariant in `CLAUDE.md` changes.
 
@@ -131,6 +131,7 @@ every read without a permission prompt.
 | | `regions verify` | Runs `scripts/verify_regions.py` | No |
 | | `jobs`, `sessions`, `caches` | Reads the debug routes | No |
 | 2 Render | `render proof`, `render final`, `render wallpaper`, `render film` | Runs upload, spec, submit, poll and download as one step | Output file |
+| | `render fetch` | Saves the result of a finished job | Output file |
 | | `reprint inspect`, `reprint`, `continue` | The three verbs that read a poster file | Output file, except `inspect` |
 | 3 Plates and orders | `plate plan` | Calls `/api/regions/plan` for a set of tracks | No |
 | | `plate build`, `plate labels`, `plate playa`, `plate pack`, `plate install` | Runs the matching script in the correct venv | Yes |
@@ -324,6 +325,40 @@ The phase 1 plan records each one under "What changed while it ran".
 - The debug routes refuse a request whose Host header is not local, with a 403.
 - `engine stop` and `engine restart` refuse while a job is running or queued, unless `--force` is given, and report how many jobs and sessions they ended.
 - Check 2 names the wrong mechanism for the desktop app. That app starts each server through its `disclaimer` helper, so the binary does not inherit the app's grant: it answers for its own access. The check passed in that launch form on 2026-10-09. `tools/tecopa/register_desktop.sh` registers the server there, with the app quit.
+
+## Changes made while phases 2 to 4 were built
+
+The plan of 2026-10-10 records each one under its decisions.
+
+**Render**
+
+- `--spec` is a flat JSON object of `/api/proof` form fields, because the proof route takes form fields and not a spec document. `--set` is one such field. A new option, `--opt`, is one field of the output route.
+- The tool checks each field name against a new debug route, `GET /api/debug/forms`. The engine names its own fields, and the tool holds no copy.
+- The crop comes from the engine: the upload answer's `starter_crop`, or `GET /api/debug/sessions/{sid}/starter_crop` for another print size. `--crop` overrides it.
+- `render` takes `--session`. A change to a session starts from `GET /api/debug/sessions/{sid}/proof_form`, so one `--set` keeps the rest of the look.
+- A fifth command, `render fetch`, saves the result of a finished job. `--no-wait` had no way to get its file.
+- `/api/continue` returns one additive key, `proof_form`. `continue` sends it to the proof unchanged.
+- A result names `out`, `bytes`, `sha256`, the session, the job, and the engine's own warnings. `engine_version` is the running engine's, from `/api/debug/engine`, and is left out with the gate off.
+- A path argument is absolute at the MCP level. The command line converts a relative path.
+- A poll that times out is one more wait, because a studio proof blocks the engine's event loop. A poll that gets no answer ends the wait and names the job.
+
+**Plates and orders**
+
+- A command may create a `sources.json` entry and never replaces one. The spec's "No command writes `sources.json`" could not hold: `region_prep.py`, `scripts/build_labels.py` and `scripts/bake_playa.py` each write it.
+- `plate install` takes a local file only and never passes `--replace`. `plate pack --resync` needs the explicit flag.
+- `plate build`, `plate labels`, `plate playa` and `order prepare` are tracked runs. `plate pack`, `plate install` and `plate check` run in the call.
+- A run has a fifth and sixth state: `cancelled` after `runs cancel`, and `lost` for a run with no exit code and no process.
+- `plate build --bbox` is one word with commas, because the argument parser reads a negative number as an option.
+- `scripts/dem_coverage.py` has no row in the script table. No command runs it.
+
+**Studio**
+
+- The hook compares its state each 2 seconds and does not subscribe, because the store announces only some changes.
+- "The last API error" is the error toast. The studio keeps no last error.
+- With the gate off the first post gets a 405, not a 404. Any first reply that is not 2xx stops the hook. A post with no answer does not stop it: the hook waits 30 seconds, so an engine restart does not end the reports.
+- The studio post needs a JSON content type and refuses an Origin header that is not local. The buffer holds 20 tabs and 50 errors.
+- The debug routes are no longer all read-only. The studio post changes its report buffer and nothing else.
+- Check 3 was made on 2026-10-10. `tests/test_marketing_page.py` tests only the published Ghost pages. A new text test holds each studio module to its own origin.
 
 ## Rejected
 

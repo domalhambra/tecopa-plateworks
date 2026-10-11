@@ -104,6 +104,21 @@ region is an outcome, not a first step. US only.
    `playa.json` and `sources.json`. `regions/<id>/dem.tif` stays local.
 5. `.venv/bin/python scripts/verify_regions.py`, then judge the plate by eye on the real DEM.
 
+The `tecopa` tool runs the same scripts, each in the venv that its script table names:
+`tecopa plate plan`, `plate build`, `plate labels`, `plate playa`, `plate pack`,
+`plate install` and `plate check`. Three rules differ from a hand run.
+
+- `plate build`, `plate labels` and `plate playa` are tracked runs. The command returns
+  a run id at once. `tecopa runs show <id>` gives the state and the end of the log, and
+  `tecopa runs cancel <id>` stops the run.
+- A command creates a `sources.json` entry and never replaces one (invariant 12).
+  `plate build` refuses a plate that exists. `plate labels` and `plate playa` refuse
+  when `sources.json` already lists their file. To bake again over a drifted asset, run
+  the script by hand and read "Repair an orphaned DEM" first.
+- `plate install` takes a local `.trailplate.zip` only and never passes `--replace`,
+  which deletes the installed plate. `--bbox` is one word with commas:
+  `--bbox -121.6,40.3,-121.2,40.6`.
+
 Traps already paid for:
 
 - `region_prep.py` sets `SSL_CERT_FILE` from `certifi` before importing py3dep and
@@ -134,6 +149,8 @@ Prepare's plate step only.
    (short side at most 17 in, the PRO-1100's width), `orientation` (`portrait` or `landscape`).
 3. Run `.venv/bin/python scripts/order.py prepare "<folder>"`. It needs `.venv-prep`.
    `TECOPA_PREP_PYTHON` overrides which prep interpreter it calls.
+   `tecopa order prepare "<folder>"` runs the same script as a tracked run, and
+   `tecopa order status "<folder>"` reads `work/state.json` and the report.
 4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the
    print can show, up to the 2x limit. A widened frame means the data could not hold
    the nestled look at this size; the warning names it, but naming the exact smaller
@@ -355,6 +372,10 @@ macOS Documents prompt and then 60 seconds for the engine to answer.
 `tecopa engine stop` and `tecopa engine restart` refuse while a job is running or
 queued, and `--force` overrides that.
 
+A tracked run keeps three small files under
+`~/Library/Application Support/TecopaPlateworks/runs/`: the record, the log and the exit
+code. No command deletes them. Remove old ones by hand when the folder grows.
+
 The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need
 `TECOPA_DEBUG=1` on the engine. The launcher sets it. For a development engine, set it
 by hand.
@@ -391,7 +412,10 @@ A command is one `CatalogEntry`. The CLI and the MCP server both read the catalo
    `execute` with the entry's name. The command's words are the name with a space
    for each underscore.
 3. A command that runs a Python script adds a row to `ScriptRunner.table` in the same
-   change. The row names the script's venv. A script with no row does not run.
+   change. The key is the script's path, or a module's name for `python -m`. The row
+   names the venv. A script with no row does not run. `ScriptRunner.run` waits for the
+   script. `ScriptRunner.start` starts it as a tracked run, for a script that reads the
+   network or can take minutes.
 4. Add the name to one of the two sets in `tools/tecopa/Tests/TecopaKitTests/MCPServerTests.swift`,
    `readOnly` or `writes`. The tools/list test in that file also pins the number of
    tools as a literal, so change that count too.
