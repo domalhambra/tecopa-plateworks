@@ -422,18 +422,241 @@ def test_a_set_is_judged_at_the_share_prepare_frames():
     assert two["why"] == "the tracks span 29% of the sheet's width, under 30%"
 
 
+def _prepare_from_the_report(d, tools, offered) -> dict:
+    """Paste the report's lines for each offered size into order.toml, run Prepare,
+    and hold its state.json to the preview's entry: the projection, the sheet, the
+    frame and the fill. Returns {size key: Prepare's state}."""
+    pasted = _toml_lines((d / "work" / "preview" / "report.txt").read_text())
+    assert list(pasted) == list(offered)
+    states = {}
+    for key, e in offered.items():
+        (d / "order.toml").write_text('title = "Smith home ground"\n' + pasted[key])
+        state = op.prepare(str(d), tools, log=lambda s: None)
+        assert state == json.loads((d / "work" / "state.json").read_text())
+        assert state["epsg"] == e["epsg"] and state["print_in"] == e["print_in"], key
+        assert (state["panels"], state["gap"]) == (e["panels"], e["gap"])
+        assert state["frame"] == pytest.approx(e["frame"], abs=1e-6), key
+        assert state["fill"] == e["fill"]
+        states[key] = state
+    return states
+
+
 def test_the_lines_of_the_report_give_prepare_the_frame_of_the_preview(tmp_path, tools):
     d = _make_order(tmp_path, bbox=SIERRA_DIAGONAL, size="11x17")
     (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["17x22", "two"]\n')
     offered = {e["key"]: e for e in _preview(d, tools)["sizes"] if e["offered"]}
-    pasted = _toml_lines((d / "work" / "preview" / "report.txt").read_text())
-    assert list(pasted) == list(offered) == ["17x22", "two"]
-    for key, e in offered.items():
-        (d / "order.toml").write_text('title = "Smith home ground"\n' + pasted[key])
-        state = op.prepare(str(d), tools, log=lambda s: None)
-        assert state["epsg"] == e["epsg"] and state["print_in"] == e["print_in"]
-        assert state["frame"] == pytest.approx(e["frame"], abs=1e-6)
-        assert state["fill"] == e["fill"]
+    assert list(offered) == ["17x22", "two"]
+    states = _prepare_from_the_report(d, tools, offered)
+    assert {s["plate"]["kind"] for s in states.values()} == {"built"}
+
+
+# ---- a route on a curated plate: Prepare reuses the plate, in the plate's projection ----
+
+# 54 km east to west in UTM zone 12, as the east part of regions/elko_bonneville is: a
+# curated plate in zone 11 (EPSG:32611) over zone 12 ground
+ZONE_12 = (-113.6, 36.50, -113.0, 36.53)
+OVER_ZONE_12 = (-115.5, 35.5, -111.5, 37.5)            # the ground of the curated plate
+
+
+def _plate_over_zone_12(tmp_path, grid_m):
+    _curated_plate(tmp_path, project_bbox(OVER_ZONE_12, 32611), crs="EPSG:32611", grid_m=grid_m)
+
+
+def test_a_candidate_that_fits_a_curated_plate_is_on_that_plates_ground(tmp_path, tools):
+    assert order_epsg(ZONE_12, 70 / 17) == order_epsg(ZONE_12, 17 / 11) == 32612
+    _plate_over_zone_12(tmp_path, grid_m=2.0)
+    regions = op.curated_regions(tools.curated_root)
+    assert [r["id"] for r in regions] == ["big"]
+    payloads = [(_gpx(*ZONE_12).encode(), "trip.gpx")]
+    ground = opv.OrderGround(payloads, ZONE_12, regions)
+    for key in opv.SIZE_KEYS:
+        for cand in opv.candidates(key):
+            fit = opl.curated_fit(ZONE_12, cand.aspect, cand.print_in[0], regions)
+            here = ground(cand)
+            assert (here.epsg, here.curated) == (32611, regions[0]) == (fit["epsg"], fit["region"])
+            assert here.bounds_m == project_bbox(ZONE_12, 32611)
+            assert nestled_frame(here.bounds_m, cand.aspect) == fit["frame"]
+    plan = opv.plan_sizes(ground=ground, widen=lambda cand, frame: 1 / 0)   # no widening is asked
+    assert [(e["epsg"], e["curated"], e["offered"]) for e in plan] == [(32611, "big", True)] * 4
+    # with no curated plate, the same route is on its own zone, and the entry says so
+    alone = opv.plan_sizes(ground=opv.OrderGround(payloads, ZONE_12))
+    assert [(e["epsg"], e["curated"]) for e in alone] == [(32612, None)] * 4
+    assert [e["curated"] for e in opv.plan_sizes(_bounds([_line(0, 0, 200, 5)]),
+                                                 [_line(0, 0, 200, 5)])] == [None] * 4
+
+
+def test_a_route_on_a_curated_plate_is_previewed_as_prepare_prints_it(tmp_path, tools,
+                                                                    monkeypatch):
+    # Prepare first asks curated_fit, and a fit gives the plate's projection and its
+    # nestled frame with no widening. The preview used the route's own zone: zone 12
+    # here, a degree or two off the print on a plate in zone 11.
+    _plate_over_zone_12(tmp_path, grid_m=2.0)
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_LIDAR))  # a built plate would widen
+    d = _make_order(tmp_path, bbox=ZONE_12, size="11x17")
+    calls, lines = [], []
+    state = opv.preview(str(d), tools, log=lines.append, render=_fake_render(calls),
+                        write_pdf=lambda path, entries, names, title: None)
+    offered = {e["key"]: e for e in state["sizes"] if e["offered"]}
+    assert list(offered) == list(opv.SIZE_KEYS)
+    regions = op.curated_regions(tools.curated_root)
+    for e in offered.values():
+        assert (e["epsg"], e["curated"], e["plate"]) == (32611, "big", "big")
+        fit = opl.curated_fit(ZONE_12, e["print_in"][0] / e["print_in"][1], e["print_in"][0],
+                              regions)
+        assert e["frame"] == list(fit["frame"]) and e["fill"] == 0.6     # nestled, not widened
+    assert _asks(asked) == []                                # no query of the 3DEP index
+    assert state["epsg"] == 32611 and state["plates"] == [state["plate"]] == [
+        {"id": "big", "root": tools.curated_root, "kind": "curated", "grid_m": 2.0,
+         "epsg": 32611, "sizes": list(opv.SIZE_KEYS)}]
+    assert not (d / "work" / "preview" / "plate").exists()   # and no build
+    assert "Reusing curated plate big for 11x17, 17x22, two, three, as Prepare does." in lines
+    # the maps are drawn on that plate, with the tracks in the plate's projection
+    assert [(c["plate_dir"], c["keys"]) for c in calls] == [
+        (os.path.join(tools.curated_root, "big"), list(opv.SIZE_KEYS))]
+    want = opv.load_tracks_m(opv.load(str(d)).payloads(), 32611)
+    assert np.array_equal(calls[0]["coords"][0], want[0].coords)
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert report.splitlines()[2:4] == ["Plate: big (curated), 2 m grid", "Sizes:"]
+    # the report's lines give Prepare the same projection and the same frame
+    states = _prepare_from_the_report(d, tools, offered)
+    for st in states.values():
+        assert (st["plate"]["id"], st["plate"]["kind"]) == ("big", "curated")
+    assert _asks(asked) == []
+
+
+def test_a_size_too_wide_for_the_curated_plate_takes_the_built_path(tmp_path, tools,
+                                                                   monkeypatch):
+    # at 10 m the plate holds the single sheets (17 in needs 17.6 m, 22 in 13.6 m) and
+    # not a set (46 in needs 6.5 m, 70 in 4.3 m): Prepare builds a plate for a set, in
+    # the route's own zone
+    _plate_over_zone_12(tmp_path, grid_m=10.0)
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=ZONE_12, size="11x17")
+    calls = []
+    state = _preview(d, tools, calls)
+    offered = {e["key"]: e for e in state["sizes"] if e["offered"]}
+    assert list(offered) == list(opv.SIZE_KEYS)
+    assert [(e["epsg"], e["curated"]) for e in offered.values()] == [
+        (32611, "big"), (32611, "big"), (32612, None), (32612, None)]
+    # the two sets are asked of the 3DEP index, and so is their plate: the sheets are not
+    assert len(_asks(asked)) == 3
+    curated, built = state["plates"]
+    assert state["plate"] == curated and state["epsg"] == 32611
+    assert curated == {"id": "big", "root": tools.curated_root, "kind": "curated",
+                       "grid_m": 10.0, "epsg": 32611, "sizes": ["11x17", "17x22"]}
+    assert (built["id"], built["kind"], built["epsg"], built["sizes"]) == (
+        "preview_2026_10_001_smith_32612", "built", 32612, ["two", "three"])
+    root = d / "work" / "preview" / "plate"
+    assert json.loads((root / built["id"] / "region.json").read_text())["crs"] == "EPSG:32612"
+    assert [offered[k]["plate"] for k in opv.SIZE_KEYS] == ["big", "big", built["id"], built["id"]]
+    payloads = opv.load(str(d)).payloads()
+    assert [(c["plate_dir"], c["keys"]) for c in calls] == [
+        (os.path.join(tools.curated_root, "big"), ["11x17", "17x22"]),
+        (os.path.join(str(root), built["id"]), ["two", "three"])]
+    for call, epsg in zip(calls, (32611, 32612)):
+        assert np.array_equal(call["coords"][0], opv.load_tracks_m(payloads, epsg)[0].coords)
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert report.splitlines()[2:5] == [
+        "Plate: big (curated), 10 m grid, EPSG:32611, for 11x17, 17x22",
+        f"Plate: {built['id']} (built), {built['grid_m']:g} m grid, EPSG:32612, for two, three",
+        "Sizes:"]
+    asked.unlink()
+    states = _prepare_from_the_report(d, tools, offered)
+    assert [states[k]["plate"]["kind"] for k in opv.SIZE_KEYS] == ["curated", "curated",
+                                                                  "built", "built"]
+    assert len(_asks(asked)) == 2                            # Prepare asks for the two sets only
+
+
+def test_a_curated_plate_that_shows_every_size_is_one_plate_in_the_report(tmp_path, tools,
+                                                                         monkeypatch):
+    # a route in the plate's own zone: the sheets fit the plate as prints, and the sets
+    # do not, but the plate holds the sets' frames at the preview's pixels. One plate
+    # draws all four sizes, and it is listed once.
+    route = (-117.6, 36.50, -117.0, 36.53)
+    assert order_epsg(route, 70 / 17) == 32611
+    _curated_plate(tmp_path, project_bbox((-119.0, 35.5, -115.5, 37.5), 32611), grid_m=10.0)
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
+    d = _make_order(tmp_path, bbox=route, size="11x17")
+    calls = []
+    state = _preview(d, tools, calls)
+    offered = {e["key"]: e for e in state["sizes"] if e["offered"]}
+    assert [(e["epsg"], e["curated"]) for e in offered.values()] == [
+        (32611, "big"), (32611, "big"), (32611, None), (32611, None)]
+    assert len(_asks(asked)) == 2                            # the 2x rule of the two sets
+    assert state["plates"] == [{"id": "big", "root": tools.curated_root, "kind": "curated",
+                                "grid_m": 10.0, "epsg": 32611, "sizes": list(opv.SIZE_KEYS)}]
+    assert [c["keys"] for c in calls] == [list(opv.SIZE_KEYS)]
+    assert (d / "work" / "preview" / "report.txt").read_text().count("Plate: ") == 1
+    states = _prepare_from_the_report(d, tools, offered)
+    assert [states[k]["plate"]["kind"] for k in opv.SIZE_KEYS] == ["curated", "curated",
+                                                                  "built", "built"]
+
+
+def test_a_set_the_curated_plate_cannot_hold_gets_a_built_plate_in_the_same_zone(
+        tmp_path, tools, monkeypatch):
+    # the route and the curated plate are both in zone 11. The plate holds the single
+    # sheets and ends 1 km past them. With 10 m data the 2x rule widens the set of
+    # three past the plate, so the sets get a built plate: one projection, two plates.
+    route = (-117.6, 36.50, -117.0, 36.53)
+    tallest = nestled_frame(project_bbox(route, 32611), 11 / 17)
+    hold = opl.plate_bounds(tallest)
+    _curated_plate(tmp_path, (hold[0] - KM, hold[1] - KM, hold[2] + KM, hold[3] + KM), grid_m=10.0)
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_LIDAR))
+    d = _make_order(tmp_path, bbox=route, size="11x17")
+    calls = []
+    state = _preview(d, tools, calls)
+    offered = {e["key"]: e for e in state["sizes"] if e["offered"]}
+    assert [(e["key"], e["epsg"], e["curated"]) for e in offered.values()] == [
+        ("11x17", 32611, "big"), ("17x22", 32611, "big"), ("two", 32611, None),
+        ("three", 32611, None)]
+    three, small = offered["three"]["frame"], offered["11x17"]["frame"]
+    assert three[2] - three[0] > (small[2] - small[0]) * 1.1          # widened, and the sheet is not
+    assert offered["11x17"]["fill"] == 0.6 > offered["three"]["fill"]
+    assert [(p["id"], p["kind"], p["epsg"], p["sizes"]) for p in state["plates"]] == [
+        ("big", "curated", 32611, ["11x17", "17x22"]),
+        ("preview_2026_10_001_smith_32611", "built", 32611, ["two", "three"])]
+    assert [c["keys"] for c in calls] == [["11x17", "17x22"], ["two", "three"]]
+    _prepare_from_the_report(d, tools, offered)
+
+
+def test_a_size_is_drawn_on_the_curated_plate_prepare_reuses_for_it(tmp_path, tools):
+    # two curated plates hold the frame. The first is fine enough for the preview's
+    # pixels and too coarse for the print: Prepare reuses the second, and so the map
+    # of the preview is drawn on the second.
+    bounds = project_bbox(OVER_ZONE_12, 32611)
+    _curated_plate(tmp_path, bounds, grid_m=8.0, rid="a_coarse")
+    _curated_plate(tmp_path, bounds, grid_m=2.0, rid="b_fine")
+    assert [r["id"] for r in op.curated_regions(tools.curated_root)] == ["a_coarse", "b_fine"]
+    d = _make_order(tmp_path, bbox=ZONE_12, size="11x17")
+    (d / "order.toml").write_text('title = "Smith home ground"\nsizes = ["three"]\n')
+    calls = []
+    state = _preview(d, tools, calls)
+    three = state["sizes"][3]
+    assert three["offered"] and (three["curated"], three["plate"]) == ("b_fine", "b_fine")
+    assert [p["id"] for p in state["plates"]] == ["b_fine"]
+    assert calls[0]["plate_dir"] == os.path.join(tools.curated_root, "b_fine")
+    states = _prepare_from_the_report(d, tools, {"three": three})
+    assert states["three"]["plate"]["id"] == "b_fine"
+
+
+def test_a_preview_on_curated_plates_only_needs_no_prep_venv(tmp_path, tools):
+    # as Prepare: reusing a curated plate runs no subprocess
+    _plate_over_zone_12(tmp_path, grid_m=2.0)
+    tools = op.Tools(**{**tools.__dict__,
+                        "prep_python": str(tmp_path / "no-venv" / "bin" / "python")})
+    d = _make_order(tmp_path, bbox=ZONE_12, size="11x17")
+    state = _preview(d, tools)
+    assert [e["curated"] for e in state["sizes"]] == ["big"] * 4
+    # one size on the built path needs the venv, and the preview says so before any work
+    (tmp_path / "curated" / "big" / "region.json").write_text(json.dumps({
+        **json.loads((tmp_path / "curated" / "big" / "region.json").read_text()),
+        "native_resolution_m": 10.0}))
+    with pytest.raises(PlateError, match="The prep venv is missing: .*no-venv"):
+        _preview(d, tools)
 
 
 def test_a_set_that_needs_albers_gets_a_plate_of_its_own(tmp_path, tools):

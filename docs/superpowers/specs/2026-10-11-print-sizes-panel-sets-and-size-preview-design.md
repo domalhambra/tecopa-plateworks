@@ -385,3 +385,14 @@ this document said:
   a sentence.
 - **The report states the price of each offered size**, as the PDF prints it, and
   `preview.json` holds `names`: the name and the price of every size (§5, "The folder").
+- **A size that a curated plate holds is framed on that plate** (§5, steps 1 and 3).
+  Prepare first asks `orderplate.curated_fit` with the sheet's aspect and print width.
+  A fit gives the curated plate, its projection and the nestled frame, with no widening
+  and no query of the 3DEP index. The preview now asks the same question for each
+  candidate, before `order_epsg`. The first build always used `order_epsg`: a route on
+  the east part of `regions/elko_bonneville` (EPSG:32611 over zone 12 ground) was
+  previewed in zone 12, a degree or two off its print. A size that fits is drawn on that
+  curated plate, and its entry in `preview.json` holds the plate's id as `curated`. A
+  size too wide for the plate's grid takes the built-plate path, so one preview can
+  show a curated plate and a built plate. A preview with every candidate on a curated
+  plate needs no prep venv, as Prepare.
