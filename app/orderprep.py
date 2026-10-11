@@ -209,6 +209,30 @@ def _plan_grid(tools, frame, epsg, print_w_in, env):
                      f"after {MAX_PLAN_PASSES} widenings.")
 
 
+def cache_env() -> tuple:
+    """(env, cache_dir) for a prep subprocess: the HyRiver caches under the orders
+    root, and the folder the subprocess runs in. Prepare and the preview share it."""
+    # absolute: a relative TECOPA_ORDERS_DIR would resolve against the
+    # subprocess's cwd (the repo root), not ours
+    cache = os.path.abspath(cache_path())
+    cache_dir = os.path.dirname(cache)
+    os.makedirs(cache_dir, exist_ok=True)
+    # async_retriever's own request cache (py3dep) follows HYRIVER_CACHE_NAME
+    # above; pygeoogc's separate HTTP cache (pynhd/pygeohydro's NHD and NLCD
+    # REST calls) defaults under the repo's own cache/ too, and needs its own
+    # env var to move (.venv-prep/.../pygeoogc/utils.py, HYRIVER_CACHE_NAME_HTTP).
+    env = dict(os.environ, HYRIVER_CACHE_NAME=cache,
+               HYRIVER_CACHE_NAME_HTTP=os.path.join(cache_dir, "http_cache.sqlite"))
+    # pygeoogc.core.ArcGISRESTful (pynhd's NHD queries) writes a retry log to a
+    # hardcoded "cache/failed_ids*.txt", relative to the process's cwd, with no
+    # env override at all (docs/changing-things.md, Run an order). _build runs the
+    # prep subprocess with its cwd here instead of the repo root, so that write
+    # lands beside the shared cache too; pre-create the folder so a retry never
+    # meets a missing directory.
+    os.makedirs(os.path.join(cache_dir, "cache"), exist_ok=True)
+    return env, cache_dir
+
+
 def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     # load() already refuses an order folder inside the repo; TECOPA_ORDERS_DIR
     # (orders_root(), which cache_path() derives from) is a separate setting and
@@ -280,24 +304,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         else:
             epsg = order_epsg(tracks, pw / ph)
             planned = nestled_frame(project_bbox(tracks, epsg), pw / ph)
-        # absolute: a relative TECOPA_ORDERS_DIR would resolve against the
-        # subprocess's cwd (the repo root), not ours
-        cache = os.path.abspath(cache_path())
-        cache_dir = os.path.dirname(cache)
-        os.makedirs(cache_dir, exist_ok=True)
-        # async_retriever's own request cache (py3dep) follows HYRIVER_CACHE_NAME
-        # above; pygeoogc's separate HTTP cache (pynhd/pygeohydro's NHD and NLCD
-        # REST calls) defaults under the repo's own cache/ too, and needs its own
-        # env var to move (.venv-prep/.../pygeoogc/utils.py, HYRIVER_CACHE_NAME_HTTP).
-        env = dict(os.environ, HYRIVER_CACHE_NAME=cache,
-                   HYRIVER_CACHE_NAME_HTTP=os.path.join(cache_dir, "http_cache.sqlite"))
-        # pygeoogc.core.ArcGISRESTful (pynhd's NHD queries) writes a retry log to a
-        # hardcoded "cache/failed_ids*.txt", relative to the process's cwd, with no
-        # env override at all (docs/changing-things.md, Run an order). _build below
-        # runs the prep subprocess with its cwd here instead of the repo root, so
-        # that write lands beside the shared cache too; pre-create the folder so a
-        # retry never meets a missing directory.
-        os.makedirs(os.path.join(cache_dir, "cache"), exist_ok=True)
+        env, cache_dir = cache_env()
         frame, grid, forced_by = _plan_grid(tools, planned, epsg, pw, env)
         if forced_by is not None:
             fill = track_fill(project_bbox(tracks, epsg), frame)
@@ -338,6 +345,14 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
             landcover_rebuilds = 0
             warnings.append(LANDCOVER_WARNING)
 
+    if order.panels > 1 and order.gap:
+        # a route end is tied to the ground: only the frame can move it out of a gap
+        from app.orderpreview import Candidate, gaps_hiding_ends, load_tracks_m
+        cand = Candidate("", order.panels, order.orientation, (pw, ph), order.gap)
+        ends = [t.coords for t in load_tracks_m(payloads, epsg)]
+        for k in gaps_hiding_ends(ends, frame, cand):
+            warnings.append(f"A route end is behind gap {k}. Move the frame, or use "
+                            f"gap = 0 to print every part of the map.")
     track_m = project_bbox(tracks, epsg)
     state = write_state(order, {
         "inputs_hash": inputs, "epsg": epsg, "print_in": [pw, ph],
@@ -352,20 +367,22 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     return state
 
 
-def _build(order, tools, frame, epsg, grid, env, log, cwd=None):
-    """Build the order's plate under work/plate/<order id>/. region.json keeps the
-    name as it was at build time, and a title change does not rebuild the plate, so
-    later steps must take the title from order.title, never from region.json.
-    `cwd`, when given, is the folder the prep subprocess runs in (see the comment
-    above the env dict in prepare()) -- everything it reads or writes is already
+def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=None):
+    """Build a plate. By default it is the order's own, under work/plate/<order id>/.
+    `root` and `rid` name another place and id: the preview's coarse plate.
+    region.json keeps the name as it was at build time, and a title change does not
+    rebuild the plate, so later steps must take the title from order.title, never
+    from region.json. `cwd`, when given, is the folder the prep subprocess runs in
+    (see the comments in cache_env()) -- everything it reads or writes is already
     an absolute path, so this only affects a library's own relative writes."""
-    rid = order.id
+    rid = rid or order.id
+    root = root or order.plate_root
     params = {"id": rid, "name": order.title,
               "bbox": to_lonlat_bbox(plate_bounds(frame), epsg, pad_m=PLATE_PAD_M),
               "epsg": epsg, "resolution": grid["grid_m"],
-              "out_root": order.plate_root}
-    os.makedirs(order.plate_root, exist_ok=True)
-    shutil.rmtree(os.path.join(order.plate_root, rid), ignore_errors=True)
+              "out_root": root}
+    os.makedirs(root, exist_ok=True)
+    shutil.rmtree(os.path.join(root, rid), ignore_errors=True)
     log(f"Building plate {rid}: {grid['grid_m']:g} m grid from the "
         f"{grid['layer_m']:g} m 3DEP layer.")
     started = time.monotonic()
@@ -376,11 +393,11 @@ def _build(order, tools, frame, epsg, grid, env, log, cwd=None):
             build_log.write(line + "\n")
             log(line)
         result = run_build(params, repo_root=tools.repo_root,
-                           regions_root=order.plate_root,
+                           regions_root=root,
                            prep_python=tools.prep_python, prep_script=tools.prep_script,
                            labels_script=tools.labels_script, set_progress=progress,
                            env=env, cwd=cwd)
-    plate = {"id": rid, "root": order.plate_root, "kind": "built",
+    plate = {"id": rid, "root": root, "kind": "built",
              "grid_m": grid["grid_m"], "layer_m": grid["layer_m"],
              "upsample": round(grid["upsample"], 3), "us_share": grid["us_share"],
              "build_seconds": round(time.monotonic() - started, 1)}

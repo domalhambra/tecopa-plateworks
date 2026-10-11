@@ -1,9 +1,14 @@
 # tests/test_orderpreview.py
+import json
+import os
+
 import numpy as np
 import pytest
 
+from app import orderprep as op
 from app import orderpreview as opv
 from app.orderplate import PlateError, nestled_frame, track_shares
+from tests.test_orderprep import WIDE, _make_order, tools  # noqa: F401
 
 KM = 1000.0
 
@@ -123,3 +128,94 @@ def test_a_widened_frame_is_judged_as_widened():
     plan = _plan([_line(0, 0, 200, 5)], widen=lambda c, f: widen(c, widen(c, f)))
     for key in ("two", "three"):                             # 15 % of the width
         assert plan[key]["why"] == "the tracks span 15% of the sheet's width, under 30%"
+
+
+# ---- the coarse plate and the maps: Prepare's stub subprocesses, no network ----
+
+def _fake_render(calls):
+    def render(entries, tracks, plate_dir, title, out_dir):
+        calls.append({"plate_dir": plate_dir, "title": title, "tracks": len(tracks),
+                      "keys": [e["key"] for e in entries if e["offered"]]})
+        for e in entries:
+            if e["offered"]:
+                e["image"], e["dpi"] = os.path.join(out_dir, e["key"] + ".png"), opv.preview_dpi(e)
+    return render
+
+
+def _tree(folder):
+    """Every file under `folder`, by its path. test_orderprep's _snapshot reads one
+    flat folder, and work/plate/ holds the plate's own folder beside builds.log."""
+    return {str(p.relative_to(folder)): p.read_bytes()
+            for p in sorted(folder.rglob("*")) if p.is_file()}
+
+
+def _preview(d, tools, calls=None, pdfs=None):
+    calls = [] if calls is None else calls
+    pdfs = [] if pdfs is None else pdfs
+    return opv.preview(str(d), tools, log=lambda s: None, render=_fake_render(calls),
+                       write_pdf=lambda path, entries, names, title: pdfs.append(path))
+
+
+def test_the_dpi_of_a_preview_map():
+    assert opv.preview_dpi({"panels": 1, "print_in": [17.0, 22.0]}) == pytest.approx(1600 / 22)
+    assert opv.preview_dpi({"panels": 1, "print_in": [17.0, 11.0]}) == pytest.approx(1600 / 17)
+    assert opv.preview_dpi({"panels": 3, "print_in": [70.0, 17.0]}) == 50.0
+
+
+def test_the_preview_plate_holds_every_offered_frame():
+    entries = [{"offered": True, "frame": [0, 0, 10, 10], "panels": 1, "print_in": [17.0, 22.0]},
+               {"offered": True, "frame": [-5, 2, 30, 8], "panels": 3, "print_in": [70.0, 17.0]},
+               {"offered": False, "frame": [-99, -99, 99, 99], "panels": 2, "print_in": [46.0, 17.0]}]
+    assert opv.union_frame(entries) == (-5, 0, 30, 10)
+    # the finest ground per pixel that any offered map needs
+    assert opv.preview_need_m(entries) == pytest.approx(min(10 / 17 / (1600 / 22), 35 / 70 / 50.0))
+
+
+def test_preview_builds_one_coarse_plate_beside_the_orders_own(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    calls, pdfs = [], []
+    state = _preview(d, tools, calls, pdfs)
+    plate = state["plate"]
+    assert plate["id"] == "preview_2026_10_001_smith" and plate["kind"] == "built"
+    assert plate["root"] == str(d / "work" / "preview" / "plate")
+    assert os.path.isfile(d / "work" / "preview" / "plate" / plate["id"] / "region.json")
+    assert plate["grid_m"] >= 10.0                           # the preview's pixels, not a print's
+    assert not (d / "work" / "plate").exists()               # the order's own plate is not built
+    assert [e["key"] for e in state["sizes"]] == ["11x17", "17x22", "two", "three"]
+    assert calls[0]["plate_dir"] == os.path.join(plate["root"], plate["id"])
+    assert calls[0]["keys"] == [e["key"] for e in state["sizes"] if e["offered"]]
+    assert calls[0]["tracks"] == 1 and calls[0]["title"] == "Smith home ground"
+    saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
+    assert saved["epsg"] == state["epsg"] and saved["plate"] == plate
+    assert len(saved["sizes"]) == 4 and saved["seconds"] >= 0
+    assert pdfs == [str(d / "out" / "preview" / "smith_home_ground-preview.pdf")]
+
+
+def test_a_preview_does_not_touch_a_prepared_order(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    op.prepare(str(d), tools, log=lambda s: None)
+    before = _tree(d / "work" / "plate")
+    assert "builds.log" in before and "order_2026_10_001_smith/region.json" in before
+    state_before = (d / "work" / "state.json").read_text()
+    state = _preview(d, tools)
+    assert state["plate"]["root"] == str(d / "work" / "preview" / "plate")
+    assert _tree(d / "work" / "plate") == before
+    assert (d / "work" / "state.json").read_text() == state_before
+    lines = []
+    op.prepare(str(d), tools, log=lines.append)
+    assert any("Plate is current" in l for l in lines)
+
+
+def test_a_preview_can_run_again(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    first = _preview(d, tools)
+    second = _preview(d, tools)
+    assert second["plate"]["id"] == first["plate"]["id"]
+    assert [e["frame"] for e in second["sizes"]] == [e["frame"] for e in first["sizes"]]
+
+
+def test_a_folder_with_no_track_stops_the_preview(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE)
+    (d / "in" / "trip.gpx").write_text("<gpx></gpx>")
+    with pytest.raises(opv.OrderError, match="no track points"):
+        _preview(d, tools)

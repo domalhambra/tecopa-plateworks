@@ -749,3 +749,23 @@ def test_a_changed_gap_rebuilds_a_set_once(tmp_path, tools):
     assert state["print_in"] == [38.0, 22.0] and state["gap"] == 4.0
     assert "Print: 2 panels, 38 x 22 in hung, 4 in gap\n" in (
         d / "work" / "report.txt").read_text()
+
+
+def _two_tracks_that_meet(w, s, e, n):
+    """Two tracks that both end at the middle of the box: the middle of a two-panel set."""
+    mx, my = (w + e) / 2, (s + n) / 2
+    seg = lambda a, b: "<trk><trkseg>" + "".join(
+        f'<trkpt lat="{lat}" lon="{lon}"/>' for lon, lat in (a, b)) + "</trkseg></trk>"
+    return ('<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            'xmlns="http://www.topografix.com/GPX/1/1">'
+            + seg((w, s), (mx, my)) + seg((mx, my), (e, n)) + "</gpx>")
+
+
+def test_prepare_warns_when_a_route_end_is_behind_a_gap(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="two")
+    (d / "in" / "trip.gpx").write_text(_two_tracks_that_meet(*WIDE))
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert any("A route end is behind gap 1." in w for w in state["warnings"])
+    (d / "order.toml").write_text('title = "Smith home ground"\nsize = "two"\ngap = 0\n')
+    state = op.prepare(str(d), tools, log=lambda s: None)
+    assert not any("behind gap" in w for w in state["warnings"])     # a cut set hides nothing
