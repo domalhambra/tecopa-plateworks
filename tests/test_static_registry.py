@@ -81,3 +81,86 @@ def test_index_html_ids_are_unique():
     ids = re.findall(r'\bid="([^"]+)"', html)
     dupes = sorted({i for i in ids if ids.count(i) > 1})
     assert not dupes, f"duplicate ids in index.html: {dupes}"
+
+
+# ---- the debug hook (app/static/debug.js) ----
+# The hook posts the studio's small state and its errors to the engine. The studio's
+# promise is that it goes online only to build a plate, and that a report never holds
+# journey data. With no JS runner, each of those promises is held here as text.
+
+DEBUG_JS = STATIC / "debug.js"
+# store.js field -> the key the engine keeps
+HOOK_FIELDS = {"session": "session", "target": "target", "view": "view",
+               "region": "region", "output": "output", "edition": "edition",
+               "hasSpec": "has_spec", "proofStale": "proof_stale"}
+
+
+def test_app_starts_the_debug_hook():
+    """A module nobody imports is dead code that still passes every other check here."""
+    src = (STATIC / "app.js").read_text(encoding="utf-8")
+    assert re.search(r"^import \* as debug from '\./debug\.js';$", src, re.M), \
+        "app.js does not import ./debug.js"
+    assert len(re.findall(r"\bdebug\.init\(", src)) == 1, \
+        "app.js calls debug.init( exactly one time"
+
+
+def test_debug_hook_posts_to_one_local_route():
+    """One fetch, to the hook's own engine route by a same-origin path. A second fetch,
+    or a second import, is a second door for data to leave by."""
+    src = DEBUG_JS.read_text(encoding="utf-8")
+    assert len(re.findall(r"\bfetch\(", src)) == 1, "debug.js holds exactly one fetch("
+    target = re.search(r"\bfetch\(\s*(['\"`])(.*?)\1", src)
+    assert target, "the fetch target is not a string literal"
+    assert target.group(2) == "/api/debug/studio"
+    assert re.findall(r"^\s*import\b[^;]*;", src, re.M) == \
+        ["import { state } from './store.js';"], "debug.js imports only ./store.js"
+    assert not re.search(r"\bimport\s*\(", src), "debug.js holds no dynamic import"
+    assert len(re.findall(r"\bfrom\s+['\"]", src)) == 1, "debug.js re-exports nothing"
+
+
+def test_debug_hook_names_no_journey_data():
+    """The privacy rule, held on the whole source text, comments included: the hook
+    cannot send a field it never names."""
+    src = DEBUG_JS.read_text(encoding="utf-8")
+    named = sorted({w.lower() for w in re.findall(
+        r"\b(tracks|hotspots|files|crop|title)\b", src, re.I)})
+    assert not named, f"debug.js names journey data: {named}"
+
+
+def test_debug_hook_leaves_no_other_trace():
+    """The hook writes nothing to the browser log, stores nothing, and has no second
+    way to send."""
+    src = DEBUG_JS.read_text(encoding="utf-8")
+    held = [w for w in ("console.", "localStorage", "sessionStorage", "sendBeacon",
+                        "XMLHttpRequest") if w in src]
+    assert not held, f"debug.js holds: {held}"
+
+
+def test_no_studio_module_names_an_outside_host():
+    """The studio goes online only to build a plate, and the engine does that. No
+    module in the browser names a host: each request is a same-origin path."""
+    modules = sorted(STATIC.glob("*.js"))
+    assert len(modules) > 20, "suspiciously few studio modules found -- glob broken?"
+    bad = [m.name for m in modules
+           if re.search(r"https?://", m.read_text(encoding="utf-8"))]
+    assert not bad, f"studio modules that name a host: {bad}"
+
+
+def test_debug_hook_sends_the_state_keys_the_engine_keeps():
+    """The engine drops each key it does not know without a word, so a renamed key is a
+    field that silently stops arriving. The eight keys sent are the eight kept, and the
+    eight store fields read are the only ones the hook reads."""
+    from app.debug import STATE_KEYS
+    src = DEBUG_JS.read_text(encoding="utf-8")
+    body = re.search(r"function snapshot\(\) \{(.*?)\n\}", src, re.S)
+    assert body, "snapshot() not found in debug.js"
+    pairs = re.findall(r"^\s*(\w+): scalar\(state\.(\w+)\),$", body.group(1), re.M)
+    assert len(pairs) == len(STATE_KEYS), f"snapshot() sends {len(pairs)} keys"
+    assert {key for key, _ in pairs} == set(STATE_KEYS)
+    assert {field: key for key, field in pairs} == HOOK_FIELDS
+    # no read of the store anywhere else in the module
+    assert set(re.findall(r"\bstate\.(\w+)", src)) == set(HOOK_FIELDS)
+    # each field read is a field the store has: a misspelled one is sent as null
+    store = (STATIC / "store.js").read_text(encoding="utf-8")
+    missing = [f for f in HOOK_FIELDS if not re.search(rf"^  {f}:", store, re.M)]
+    assert not missing, f"fields debug.js reads that store.js does not have: {missing}"

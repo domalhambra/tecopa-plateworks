@@ -21,6 +21,7 @@ import * as sunDial from './sunDial.js';
 import * as guided from './guided.js';
 import * as viewer from './viewer.js';
 import * as statusbar from './statusbar.js';
+import * as debug from './debug.js';
 import { initPalette, open as openPalette } from './palette.js';
 import { $, toast, wireSegmented, updateSaveFileNote, withTransition } from './ui.js';
 
@@ -312,6 +313,7 @@ function wireSegmentedReflect(fieldId, value) {
 
 // ---- bootstrap -------------------------------------------------------------------
 function initAll() {
+  debug.init();   // first: it cannot throw, and a failure in the init below is then reported
   markProofPaths(controls.proofAffectingPaths());   // the stale-proof rule, declared once
   buildPanels();
   wireShell();
