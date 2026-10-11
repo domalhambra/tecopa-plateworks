@@ -10,7 +10,7 @@ struct Tecopa: AsyncParsableCommand {
         subcommands: [
             DoctorCommand.self, EngineCommand.self, LogsCommand.self, RegionsCommand.self,
             JobsCommand.self, SessionsCommand.self, CachesCommand.self, RenderCommand.self,
-            ReprintCommand.self, ContinueCommand.self, RunsCommand.self, StudioCommand.self,
-            MCPCommand.self,
+            ReprintCommand.self, ContinueCommand.self, RunsCommand.self, PlateCommand.self,
+            StudioCommand.self, MCPCommand.self,
         ])
 }

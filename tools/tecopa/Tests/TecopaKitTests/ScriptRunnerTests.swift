@@ -9,13 +9,29 @@ final class ScriptRunnerTests: XCTestCase {
     }
 
     func testAScriptWithNoRowDoesNotRun() {
-        // invariant 13: region_prep.py in .venv would pull the prep stack's pins into
-        // the app venv. A script gets a venv only by a row in the table.
+        // invariant 13: a prep script in .venv would pull the prep stack's pins into
+        // the app venv. A script gets a venv only by a row in the table, and
+        // dem_coverage.py has none (plan decision 17).
         let w = FakeWorld()
-        XCTAssertThrowsError(try ScriptRunner.run("region_prep.py", [], w.runtime())) { error in
-            XCTAssertEqual((error as? TecopaFailure)?.kind, .usage)
+        for name in ["scripts/dem_coverage.py", "scripts/region_prep.py", "./region_prep.py", "app.main",
+                     "-m", "-c"] {
+            XCTAssertThrowsError(try ScriptRunner.run(name, [], w.runtime()), name) { error in
+                XCTAssertEqual((error as? TecopaFailure)?.kind, .usage, name)
+            }
         }
         XCTAssertEqual(w.commands, [])
+    }
+
+    func testTheTableIsTheWholeAllowlist() {
+        // A new row is a new program that the tool can run: this test names each one.
+        XCTAssertEqual(ScriptRunner.table, [
+            "scripts/verify_regions.py": .script(.app),
+            "region_prep.py": .script(.prep),
+            "scripts/build_labels.py": .script(.app),
+            "scripts/bake_playa.py": .script(.prep),
+            "scripts/pack_region.py": .script(.app),
+            "app.plates": .module(.app),
+        ])
     }
 
     func testAMissingInterpreterIsAnEnvironmentFault() {

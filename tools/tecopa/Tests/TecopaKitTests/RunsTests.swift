@@ -223,7 +223,7 @@ final class RunsTests: XCTestCase {
     func testScriptRunnerStartWithNoRowStartsNothing() {
         // invariant 13: a script gets a venv only by a row in the table
         let world = FakeWorld()
-        XCTAssertThrowsError(try ScriptRunner.start("region_prep.py", [], command: "plate_build",
+        XCTAssertThrowsError(try ScriptRunner.start("scripts/dem_coverage.py", [], command: "plate_build",
                                                     world.runtime())) { error in
             XCTAssertEqual((error as? TecopaFailure)?.kind, .usage)
         }
@@ -268,7 +268,7 @@ final class RunsTests: XCTestCase {
             ["/repo/.venv-prep/bin/python", "region_prep.py", "--id", "x"],
         ])
 
-        // the table of the tool itself still has its one script row, in the app venv
+        // the table of the tool itself is not the one that ran here
         XCTAssertEqual(ScriptRunner.table["scripts/verify_regions.py"], .script(.app))
         // a name that is not in the given table does not run, whatever its form
         XCTAssertThrowsError(try ScriptRunner.run("-m", ["app.plates"], world.runtime(), table: table))

@@ -77,6 +77,17 @@ enum Runs {
 
     static func showHint(_ id: String) -> String { "Run `tecopa runs show \(id)`." }
 
+    /// The result of a start as a few lines: the run, its process, its log, and the
+    /// command that reads it. Each entry that starts a tracked run prints this.
+    static let startedText: @Sendable (JSONValue) -> String = { data in
+        var lines: [String] = []
+        if let id = data["run"]?.stringValue { lines.append("run: \(id)") }
+        if let pid = data["pid"]?.intValue { lines.append("pid: \(pid)") }
+        if let log = data["log"]?.stringValue { lines.append("log: \(log)") }
+        if let hint = data["hint"]?.stringValue { lines.append(hint) }
+        return lines.joined(separator: "\n")
+    }
+
     /// Start one program detached, and write its record.
     ///
     /// The order: the folder, a new id whose four paths are free, the start, the

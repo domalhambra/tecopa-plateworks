@@ -294,14 +294,21 @@ enum Render {
         }
     }
 
+    /// True for the text of one finite decimal number: `-121.6`, `+40`, `4e2`, `.5`.
+    /// A form check, so that a text which goes on unchanged is one number and
+    /// nothing else. The characters are checked first: `Double` also reads `nan`,
+    /// `inf` and a hexadecimal number.
+    static func isNumber(_ text: String) -> Bool {
+        let digits = Set("0123456789+-.eE")
+        return text.allSatisfy(digits.contains) && Double(text)?.isFinite == true
+    }
+
     /// The four texts of a `crop` argument. The tool checks the form only, four
     /// finite numbers, and sends each text as the caller wrote it.
     static func cropArgument(_ text: String) throws -> [String] {
         // A form check: each text goes into a form field unchanged, and the engine owns the range.
-        let digits = Set("0123456789+-.eE")
         let parts = text.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 4,
-              parts.allSatisfy({ $0.allSatisfy(digits.contains) && Double($0)?.isFinite == true }) else {
+        guard parts.count == 4, parts.allSatisfy(isNumber) else {
             throw TecopaFailure(
                 .usage, "crop is four numbers, x0,y0,x1,y1, with no spaces: \(text.debugDescription)")
         }

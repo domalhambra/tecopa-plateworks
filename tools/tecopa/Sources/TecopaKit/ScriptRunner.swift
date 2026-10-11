@@ -27,8 +27,16 @@ public enum ScriptRunner {
 
     /// The key is the script's path under the repo, or the module's name. Add a row
     /// in the same change as the command that needs it.
+    ///
+    /// The two prep rows are the scripts that import the region-prep stack: the
+    /// plate build, and the playa bake, which needs `pynhd`. No other row is prep.
     public static let table: [String: Row] = [
-        "scripts/verify_regions.py": .script(.app),
+        "scripts/verify_regions.py": .script(.app),     // regions verify
+        "region_prep.py": .script(.prep),               // plate build
+        "scripts/build_labels.py": .script(.app),       // plate labels
+        "scripts/bake_playa.py": .script(.prep),        // plate playa
+        "scripts/pack_region.py": .script(.app),        // plate pack
+        "app.plates": .module(.app),                    // plate install, plate check
     ]
 
     /// One command that the table allows: the interpreter of the row's venv, its

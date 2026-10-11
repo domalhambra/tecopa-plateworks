@@ -410,6 +410,145 @@ struct RunsCommand: AsyncParsableCommand {
     }
 }
 
+struct PlateCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "plate",
+        abstract: "Plan, build, bake, pack, install or check a plate.",
+        discussion: "`plate build`, `plate labels` and `plate playa` start a tracked run and return at once. "
+            + "Read it with `tecopa runs show <id>`.",
+        subcommands: [Plan.self, Build.self, Labels.self, Playa.self, Pack.self, Install.self, Check.self])
+
+    struct Plan: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "plan",
+            abstract: "Price a new plate for these tracks. The engine fetches nothing and writes nothing.")
+        @OptionGroup var global: GlobalOptions
+        @Option(name: .long, parsing: .upToNextOption, help: "GPX, KML or KMZ paths.")
+        var tracks: [String] = []
+
+        var arguments: [String: JSONValue] {
+            tracks.isEmpty ? [:] : ["tracks": .array(tracks.map { .string(absolutePath($0)) })]
+        }
+
+        func run() async throws { try await execute("plate_plan", global, arguments) }
+    }
+
+    struct Build: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "build",
+            abstract: "Start the build of a new plate as a tracked run. Refuses a plate that exists.",
+            discussion: "`tecopa plate plan` gives the id, the bbox and the EPSG code.")
+        @OptionGroup var global: GlobalOptions
+        @Option(name: .long, help: "The region id: lower-case letters, digits and underscores.")
+        var id: String?
+        @Option(name: .long, help: "The plate's name.")
+        var name: String?
+        // One word, as `--crop` is. A western longitude starts with a minus sign, and
+        // the parser reads such a word as an option unless the next word is always
+        // the value. So the four numbers cannot be four words.
+        @Option(name: .long, parsing: .unconditional,
+                help: "west,south,east,north in degrees, as one word: --bbox -121.6,40.3,-121.2,40.6")
+        var bbox: String?
+        @Option(name: .long, help: "The EPSG code of the plate's projection.")
+        var epsg: Int?
+        @Option(name: .long, help: "The cell size in metres, or auto.")
+        var resolution: String?
+
+        var arguments: [String: JSONValue] {
+            var arguments: [String: JSONValue] = [:]
+            if let id { arguments["id"] = .string(id) }
+            if let name { arguments["name"] = .string(name) }
+            // the entry takes the four texts and checks each one
+            if let bbox {
+                arguments["bbox"] = .array(
+                    bbox.split(separator: ",", omittingEmptySubsequences: false).map { .string(String($0)) })
+            }
+            if let epsg { arguments["epsg"] = .int(Int64(epsg)) }
+            if let resolution { arguments["resolution"] = .string(resolution) }
+            return arguments
+        }
+
+        func run() async throws { try await execute("plate_build", global, arguments) }
+    }
+
+    /// The one argument of the commands that name a plate.
+    struct Plate: ParsableArguments {
+        @Argument(help: "The region id.")
+        var id: String?
+
+        var arguments: [String: JSONValue] {
+            id.map { ["id": .string($0)] } ?? [:]
+        }
+    }
+
+    struct Labels: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "labels",
+            abstract: "Start the label bake of a built plate as a tracked run. "
+                + "Refuses a plate that already lists labels.json.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        func run() async throws { try await execute("plate_labels", global, plate.arguments) }
+    }
+
+    struct Playa: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "playa",
+            abstract: "Start the playa bake of a built plate as a tracked run. "
+                + "Refuses a plate that already lists playa.json.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        func run() async throws { try await execute("plate_playa", global, plate.arguments) }
+    }
+
+    struct Pack: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "pack", abstract: "Pack a built plate into a .trailplate.zip file under plates/.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        @Flag(name: .long,
+              help: "Pack a drifted plate with the true hashes in the zip's copy of sources.json.")
+        var resync = false
+
+        var arguments: [String: JSONValue] {
+            var arguments = plate.arguments
+            if resync { arguments["resync"] = .bool(true) }
+            return arguments
+        }
+
+        func run() async throws { try await execute("plate_pack", global, arguments) }
+    }
+
+    struct Install: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "install",
+            abstract: "Install a plate from a local .trailplate.zip file. An installed plate is never replaced.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The .trailplate.zip file.")
+        var file: String?
+
+        var arguments: [String: JSONValue] {
+            file.map { ["file": .string(absolutePath($0))] } ?? [:]
+        }
+
+        func run() async throws { try await execute("plate_install", global, arguments) }
+    }
+
+    struct Check: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "check", abstract: "Check a poster file against the plate that is installed.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The poster PNG.")
+        var poster: String?
+
+        var arguments: [String: JSONValue] {
+            poster.map { ["poster": .string(absolutePath($0))] } ?? [:]
+        }
+
+        func run() async throws { try await execute("plate_check", global, arguments) }
+    }
+}
+
 struct StudioCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "studio",

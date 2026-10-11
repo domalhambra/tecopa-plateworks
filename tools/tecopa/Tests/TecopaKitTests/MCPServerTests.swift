@@ -6,12 +6,15 @@ import XCTest
 final class MCPServerTests: XCTestCase {
     private let readOnly: Set<String> = [
         "doctor", "engine_status", "logs", "regions", "regions_verify", "jobs", "sessions", "caches",
-        "reprint_inspect", "studio_state", "studio_errors", "runs", "runs_show"]
-    /// Not read-only: the entries that control the engine, and the ones that write a file.
+        "reprint_inspect", "studio_state", "studio_errors", "runs", "runs_show",
+        "plate_plan", "plate_check"]
+    /// Not read-only: the entries that control the engine, the ones that write a
+    /// file, and the ones that start or run a script that writes.
     private let writes: Set<String> = [
         "engine_start", "engine_stop", "engine_restart",
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
-        "reprint", "continue", "runs_cancel"]
+        "reprint", "continue", "runs_cancel",
+        "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install"]
 
     private var binary: URL {
         // the test bundle sits beside the products of the same build
@@ -116,7 +119,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 24)
+        XCTAssertEqual(tools.count, 31)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -170,6 +173,23 @@ final class MCPServerTests: XCTestCase {
         XCTAssertNil(cancel?["inputSchema"]?["properties"]?["lines"])
         let inspect = tools.first { $0["name"]?.stringValue == "reprint_inspect" }
         XCTAssertEqual(inspect?["inputSchema"]?["properties"]?["file"]?["type"]?.stringValue, "string")
+        // a plate build: the four bbox numbers are strings in a list, and the EPSG code is an integer
+        let build = tools.first { $0["name"]?.stringValue == "plate_build" }
+        XCTAssertEqual(build?["inputSchema"]?["properties"]?["bbox"]?["type"]?.stringValue, "array")
+        XCTAssertEqual(build?["inputSchema"]?["properties"]?["bbox"]?["items"]?["type"]?.stringValue, "string")
+        XCTAssertEqual(build?["inputSchema"]?["properties"]?["epsg"]?["type"]?.stringValue, "integer")
+        for name in ["id", "name", "resolution"] {
+            XCTAssertEqual(build?["inputSchema"]?["properties"]?[name]?["type"]?.stringValue, "string", name)
+        }
+        // only `plate pack` has the resync flag, and no plate tool has a flag that replaces or moves a folder
+        for tool in tools where (tool["name"]?.stringValue ?? "").hasPrefix("plate_") {
+            let name = tool["name"]?.stringValue ?? ""
+            XCTAssertEqual(tool["inputSchema"]?["properties"]?["resync"]?["type"]?.stringValue,
+                           name == "plate_pack" ? "boolean" : nil, name)
+            for flag in ["replace", "root", "out_root", "regions_root", "out"] {
+                XCTAssertNil(tool["inputSchema"]?["properties"]?[flag], "\(name) \(flag)")
+            }
+        }
     }
 
     func testEveryToolHasACommandOfTheSameWords() throws {

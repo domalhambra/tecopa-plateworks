@@ -152,6 +152,107 @@ final class CommandPathTests: XCTestCase {
         XCTAssertNil(try? Tecopa.parseAsRoot(["runs", "cancel", "20261010-185515-a1b2c3", "--lines", "5"]))
     }
 
+    // MARK: The plate commands
+
+    func testPlateBuildTakesTheBboxAsOneWordWithCommas() throws {
+        // a western longitude starts with a minus sign
+        let expected: [String: JSONValue] = [
+            "id": .string("lassen_ca"), "name": .string("Lassen Volcanic"),
+            "bbox": .array([.string("-121.6"), .string("40.3"), .string("-121.2"), .string("40.6")]),
+            "epsg": .int(32610),
+        ]
+        let build = try XCTUnwrap(try Tecopa.parseAsRoot([
+            "plate", "build", "--id", "lassen_ca", "--name", "Lassen Volcanic",
+            "--bbox", "-121.6,40.3,-121.2,40.6", "--epsg", "32610"]) as? PlateCommand.Build)
+        XCTAssertEqual(build.arguments, expected)
+        // the same with an equals sign, and in another order
+        let joined = try XCTUnwrap(try Tecopa.parseAsRoot([
+            "plate", "build", "--epsg", "32610", "--bbox=-121.6,40.3,-121.2,40.6", "--name", "Lassen Volcanic",
+            "--id", "lassen_ca", "--json"]) as? PlateCommand.Build)
+        XCTAssertEqual(joined.arguments, expected)
+        // the southern hemisphere, and the texts are the caller's own
+        let south = try XCTUnwrap(try Tecopa.parseAsRoot([
+            "plate", "build", "--bbox", "-70.50,-33.6,-.5,+1e1", "--resolution", "auto"]) as? PlateCommand.Build)
+        XCTAssertEqual(south.arguments, [
+            "bbox": .array([.string("-70.50"), .string("-33.6"), .string("-.5"), .string("+1e1")]),
+            "resolution": .string("auto")])
+        // The command does not count the numbers: the entry does, and says so.
+        let three = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "build", "--bbox", "1,2,,4,5"])
+            as? PlateCommand.Build)
+        XCTAssertEqual(three.arguments, [
+            "bbox": .array([.string("1"), .string("2"), .string(""), .string("4"), .string("5")])])
+        // an option that is not given is not an argument
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "build"]) as? PlateCommand.Build).arguments,
+                       [:])
+    }
+
+    func testFourSeparateBboxNumbersAreNotParsed() {
+        // The parser reads `-121.2` as an option, so four words cannot work for a
+        // western plate. The command has one form, and it does not half-work.
+        XCTAssertNil(try? Tecopa.parseAsRoot([
+            "plate", "build", "--id", "x", "--bbox", "-121.6", "40.3", "-121.2", "40.6", "--epsg", "32610"]))
+        XCTAssertNil(try? Tecopa.parseAsRoot([
+            "plate", "build", "--id", "x", "--bbox", "121.6", "40.3", "121.2", "40.6", "--epsg", "32610"]))
+        let help = PlateCommand.Build.helpMessage().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        XCTAssertTrue(help.contains("--bbox -121.6,40.3,-121.2,40.6"), help)
+    }
+
+    func testThePlateCommandsThatNameAPlateTakeTheId() throws {
+        let labels = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "labels", "lassen_ca"]) as? PlateCommand.Labels)
+        XCTAssertEqual(labels.plate.arguments, ["id": .string("lassen_ca")])
+        let playa = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "playa", "lassen_ca", "--json"])
+            as? PlateCommand.Playa)
+        XCTAssertEqual(playa.plate.arguments, ["id": .string("lassen_ca")])
+        // without an id, the entry says that it is missing
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "playa"]) as? PlateCommand.Playa)
+            .plate.arguments, [:])
+
+        // the flag is an argument only when it is given
+        let pack = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "pack", "lassen_ca"]) as? PlateCommand.Pack)
+        XCTAssertEqual(pack.arguments, ["id": .string("lassen_ca")])
+        let resync = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "pack", "lassen_ca", "--resync"])
+            as? PlateCommand.Pack)
+        XCTAssertEqual(resync.arguments, ["id": .string("lassen_ca"), "resync": .bool(true)])
+        // a bake has no flag at all
+        XCTAssertNil(try? Tecopa.parseAsRoot(["plate", "labels", "lassen_ca", "--resync"]))
+        XCTAssertNil(try? Tecopa.parseAsRoot(["plate", "labels", "lassen_ca", "--root", "/tmp"]))
+    }
+
+    func testEveryPathOfAPlateCommandIsMadeAbsolute() throws {
+        let here = FileManager.default.currentDirectoryPath
+        let plan = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "plan", "--tracks", "a.gpx", "/t/b.kml", "~/c.kmz"])
+            as? PlateCommand.Plan)
+        XCTAssertEqual(plan.arguments, ["tracks": .array([
+            .string(here + "/a.gpx"), .string("/t/b.kml"), .string(NSHomeDirectory() + "/c.kmz")])])
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "plan"]) as? PlateCommand.Plan).arguments, [:])
+
+        let install = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "install", "lassen_ca-1a2b.trailplate.zip"])
+            as? PlateCommand.Install)
+        XCTAssertEqual(install.arguments, ["file": .string(here + "/lassen_ca-1a2b.trailplate.zip")])
+        XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "install"]) as? PlateCommand.Install)
+            .arguments, [:])
+        // the command has no flag that replaces an installed plate, and none that moves the folder
+        for flag in ["--replace", "--root", "--out"] {
+            XCTAssertNil(try? Tecopa.parseAsRoot(["plate", "install", "/dl/a.trailplate.zip", flag]), flag)
+            XCTAssertNil(try? Tecopa.parseAsRoot(["plate", "pack", "lassen_ca", flag]), flag)
+        }
+
+        let check = try XCTUnwrap(try Tecopa.parseAsRoot(["plate", "check", "~/Desktop/lassen.png"])
+            as? PlateCommand.Check)
+        XCTAssertEqual(check.arguments, ["poster": .string(NSHomeDirectory() + "/Desktop/lassen.png")])
+    }
+
+    func testAURLGivenToPlateInstallIsStillRefusedAsAURL() async {
+        // The command line joins a relative word to the current directory. The
+        // entry still sees the `://`, so the caller reads the true reason.
+        let url = "https://plates.example/lassen_ca-1a2b.trailplate.zip"
+        let install = try? Tecopa.parseAsRoot(["plate", "install", url]) as? PlateCommand.Install
+        let (_, failure) = await Catalog.call("plate_install", Runtime(repoFlag: "/no/such/repo"),
+                                              install?.arguments ?? [:])
+        XCTAssertEqual(failure?.kind, .usage)
+        XCTAssertEqual(failure?.message, "plate install takes a local file.")
+    }
+
     func testContinueTakesTheFileThenItsOptions() throws {
         let here = FileManager.default.currentDirectoryPath
         let command = try Tecopa.parseAsRoot([
