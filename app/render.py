@@ -12,6 +12,7 @@ from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
                         _fill_nan, _resize_to)
 from app import provenance, serialize
+from app import panels as panel_geo
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
 # Fabricated-terrain guard (invariant 5 / red-team V1-1): if more than this fraction
@@ -1373,17 +1374,23 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
             _draw_glyph(dd, icon, cx, cy, r * 0.62, ICON_INK)
         label = (hs.get("label") or "").strip()
         if label:
-            _draw_label(dd, label, cx + r + dia*0.25, cy, label_font, out_w, out_h)
+            # a marker label never crosses a seam: it stays in its anchor's panel
+            lo, hi = panel_geo.span_px_at(spec, cx, dpi, out_w)
+            _draw_label(dd, label, cx + r + dia*0.25, cy, label_font, out_w, out_h,
+                        x_lo=lo, x_hi=hi)
     if ghost is not None:
         img = _ghost_layer_alpha(img, ghost, OBLIQUE_SYMBOL_GHOST)
     return img
 
-def _draw_label(d, text, x, cy, font, out_w, out_h):
-    """A label on a soft cream plate, left-anchored at x and vertically centred on cy."""
+def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None):
+    """A label on a soft cream plate, left-anchored at x and vertically centred on cy.
+    x_lo and x_hi are the panel of a set: the plate stays inside it."""
     l, t, rt, b = d.textbbox((0, 0), text, font=font)
     tw, th = rt - l, b - t
     pad = max(2, round(th * 0.3))
-    x = min(x, out_w - tw - 2*pad - 1)         # keep the plate inside the frame
+    x = min(x, (out_w if x_hi is None else x_hi) - tw - 2*pad - 1)   # keep the plate inside
+    if x_lo:
+        x = max(x, x_lo)
     y = float(np.clip(cy - th/2 - pad, 0, out_h - th - 2*pad - 1))
     d.rounded_rectangle([x, y, x + tw + 2*pad, y + th + 2*pad],
                         radius=pad, fill=LABEL_PLATE + (220,))
@@ -1428,8 +1435,10 @@ def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None):
         pw, ph = photo.size
         fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
         ax, ay, _ = _place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)
-        # place the framed photo up-and-right of the anchor, clamped to the frame
-        fx = int(np.clip(ax + box * 0.35, 0, out_w - fw - 1))
+        # place the framed photo up-and-right of the anchor, clamped to the frame.
+        # A photo box never crosses a seam: it stays in the panel that holds its anchor
+        lo, hi = panel_geo.span_px_at(spec, ax, dpi, out_w)
+        fx = int(np.clip(ax + box * 0.35, lo, hi - fw - 1))
         fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
         # stem from anchor to the frame's near corner
         d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
@@ -2149,11 +2158,13 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
     cartouche/compass/strip draw; the clear bands stay canvas-relative (they are
     wallpaper furniture, and bleed is print-only -- the two never coexist)."""
     tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
+    # the furniture sits in panel 1 of a set, so its keep-out does too
+    fx0, fy0, fx1, fy1 = panel_geo.furniture_trim_px(spec, dpi, (tx0, ty0, tx1, ty1))
     # the bottom-left stack as drawn: the cartouche's and the compass's own measured
     # boxes (_furniture_stack_rects), none when neither draws. This was a fixed
     # 3.4 x 2.5 in guess until 2026-09-27; a long title or credit line made the real
     # cartouche wider (about 5.9 in on the Tecopa sheet) and names ran under it.
-    keepout = _furniture_stack_rects(spec, d, tx0, ty1, dpi)
+    keepout = _furniture_stack_rects(spec, d, fx0, fy1, dpi)
     if spec.top_clear_frac > 0:
         # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
         # so auto-placed geography stays out of that band (user-placed markers don't).
@@ -2163,7 +2174,10 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
         # controls, a Reel's caption + action zone. Same contract as the clock band.
         keepout.append((0, out_h - round(spec.bottom_clear_frac * out_h), out_w, out_h))
     if spec.profile:
-        keepout.append(_profile_rect(spec, d, (tx0, ty0, tx1, ty1), dpi))
+        keepout.append(_profile_rect(spec, d, (fx0, fy0, fx1, fy1), dpi))
+    if panel_geo.is_set(spec):
+        # each seam acts as a sheet edge: no name is cut by one or hidden behind a gap
+        keepout += panel_geo.seam_bands_px(spec, dpi, round(GEO_EDGE_IN * dpi))
     return keepout
 
 

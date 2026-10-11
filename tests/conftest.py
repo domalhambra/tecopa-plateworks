@@ -174,7 +174,7 @@ import pytest  # noqa: E402
 _SLOW_MODULES = {
     "test_editions", "test_oblique", "test_timelapse", "test_credit_and_names",
     "test_labels", "test_render", "test_mockups_api", "test_wallpaper_api",
-    "test_output_fitness", "test_wallpaper",
+    "test_output_fitness", "test_wallpaper", "test_panel_render",
 }
 # Otherwise-fast modules with a heavy subset: mark only the renders, so their fast
 # validation/unit/security tests still run on PRs.
