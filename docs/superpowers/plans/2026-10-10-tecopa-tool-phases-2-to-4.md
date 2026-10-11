@@ -513,4 +513,49 @@ public func json(_ reply: HTTPReply, for path: String) throws -> JSONValue   // 
 
 ## What changed while it ran
 
-(Each task's result goes here.)
+Built on 2026-10-10 on the branch `build/tecopa-phases-2-4`, one builder and one independent reviewer for each task. The decisions above hold. These are the changes and the results.
+
+### The three proofs
+
+**Phase 2 (invariant 3): passed.** One engine build, `7425632`. A final made by hand with `curl` (upload, proof with `title` and `soft_light`, `/api/final/submit`, the job result) and the same final from `tecopa render final --tracks tests/fixtures/sample.gpx --set "title=Phase 2 proof" --set soft_light=0.35`:
+
+```
+cmp: identical
+4b4941678f19374f806999638fcd994634480cffd5a9dc50742702aa4a77bfed  A.png  (by hand, 34,650,144 bytes)
+4b4941678f19374f806999638fcd994634480cffd5a9dc50742702aa4a77bfed  B.png  (tecopa)
+```
+
+`tecopa reprint B.png` gave the same bytes a third time. `tecopa continue B.png` rendered edition 2. A session change (`--session <id> --set contours=true`) kept the title and the soft light.
+
+**Phase 3: passed on the second run.** `tecopa order prepare` on a new order folder outside the repo, with `tests/fixtures/sample.gpx` in `in/`, an `order.toml` for 11 x 17, and `TECOPA_ORDERS_DIR` set to the folder's parent.
+
+- Run `20261011-022958-da2544`: state `failed`, exit code 1. The USGS 3DEP service answered "Service is currently not available" after two retries. The tool reported the state and the script's own log. This is a correct answer, not a tool fault.
+- Run `20261011-033717-d81801`: state `done`. `order status` shows the plate `order_2026_10_001_proof`, kind `built`, a 6.75 m grid from the 1 m layer, build time 324 s, no warnings. The plate folder holds `dem.tif`, `hydro.json`, `labels.json`, `landcover.tif`, `overview.png`, `region.json` and `sources.json`.
+- `tecopa regions verify` before the first run and after the second gave byte-identical output. Nothing was written under `regions/`, and the repo tree was clean.
+
+A real `plate build` into `regions/` was not run. It waits for Dom's next plate (decision 18).
+
+**Phase 4: passed.** The studio at `http://127.0.0.1:8848/` in a browser, with the gate on. An error thrown in the page and a rejected promise both arrived, with the tab's state:
+
+```
+TAB l2y3246pm1okulvl {'session': None, 'target': 'poster', 'view': 'map', 'region': None, 'output': 'print', 'edition': 1, 'has_spec': False, 'proof_stale': False}
+ERR l2y3246pm1okulvl rejection | tecopa studio proof: rejected promise
+ERR l2y3246pm1okulvl error | tecopa studio proof: thrown in the page
+ERR l2y3246pm1okulvl rejection | Transition was aborted because of invalid state
+```
+
+The third error is the studio's own: a view transition that fails at each page load. The hook found it. It is not fixed here.
+
+### Changes to the plan's tasks
+
+- **Task 1** also changed `app/main.py`. The route functions go into `build_router` by reference, and the include block moved below the routes and above the two mounts. The review added a 422 for a size that the crop cannot frame (`1e308`, an aspect of 17 by 1e15).
+- **Task 2:** `proof_form` leaves the two sun angles out for an archival poster, because the proof route ignores them there. The review made each value a form scalar for a crafted file.
+- **Task 2b** was added during the build: `GET /api/debug/sessions/{sid}/proof_form` (decision 6).
+- **Task 3:** `Multipart.field` and `Multipart.file` throw. A name with a quote, a backslash, CR or LF, and an empty name, is a usage failure. A 2xx reply that is not JSON is an environment failure. `send` sets the request's own timeout.
+- **Task 4:** a new seam, `Runtime.pathKind`. A path argument is absolute at the catalog. A failure after the submit names the job. A poll that times out counts 10 seconds and is one more wait. A result carries `upload` (the engine's warnings) and, for a wallpaper, `fitted` and `count`.
+- **Task 5:** `reprint` always needs `out`, so a still is never thrown away. `continue` stops when the upload answers another session id, because the engine makes a new session for an id that it does not have.
+- **Task 7:** the exit code goes to `<id>.exit.tmp` and is renamed. A reaper thread waits for each child, so an ended run is not a zombie while `tecopa mcp` lives. A state `cancelled` was added. The review moved the log read after the exit code, made a record's stored paths untrusted, and removed four `PYTHON` variables from each script's environment.
+- **Task 8:** `plate check` reads the verdict from the last line, because the script prints one line for each asset first. A `sources.json` with no `assets` object is refused by the two bakes.
+- **Task 11:** the review dropped control characters from report text, and a page that closes while it sends no longer leaves a traceback.
+- **Task 12:** the hook starts before the boot code. A post with no answer does not stop it. The state goes again each 30 seconds. A post over 60 KB sends no errors.
+- **Not in the plan:** `spec.validate()` now refuses a field of the wrong type (commit `971daa5`). A review found that a crafted poster file gave a 500, and Dom asked for the fix in the same session.

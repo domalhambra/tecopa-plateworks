@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
-# The phase 1 proof: build, install, then drive the real launcher end to end.
-# With the engine stopped, doctor names the state. With it running, the jobs tool
-# answers through MCP. Requires port 8848 to be free, and a human for the one-time
+# The end-to-end check: build, install, then drive the real launcher.
+# Phase 1: with the engine stopped, doctor names the state. With it running, the jobs
+# tool answers through MCP.
+# Phase 2: a final from `tecopa render final` is byte-identical to the same requests
+# sent by hand.
+# Phase 3: the run list and the order status answer. No plate is built here: a build
+# reads the network and takes minutes.
+# Phase 4: a studio report that is posted to the engine shows in `tecopa studio errors`. Requires port 8848 to be free, and a human for the one-time
 # macOS Automation prompt on the first quit.
 set -euo pipefail
 
@@ -77,13 +82,57 @@ REPLY="$( ( printf '%s\n' "$INIT" "$NOTE" "$LIST"; sleep 3 ) | "$TECOPA" mcp )"
 TOOLS="$(grep '"id":3' <<<"$REPLY")" || fail "the MCP tools/list sent no reply"
 grep -qF '"name":"doctor"' <<<"$TOOLS" || fail "tools/list does not name doctor"
 grep -qF '"name":"engine_restart"' <<<"$TOOLS" || fail "tools/list does not name engine_restart"
+for tool in render_final reprint continue runs_show plate_build order_status studio_errors; do
+  grep -qF "\"name\":\"$tool\"" <<<"$TOOLS" || fail "tools/list does not name $tool"
+done
 echo "  MCP tools/list: OK"
 
-# 7. Stop through the launcher, and the port closes
+# 7. Phase 2: the tool's final and a final made by hand are the same bytes
+REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+GPX="$REPO/tests/fixtures/sample.gpx"
+WORK="$(mktemp -d)"
+ENGINE="http://127.0.0.1:8848"
+UP="$(curl -s -F "files=@$GPX" "$ENGINE/api/upload")" || fail "the upload by hand failed"
+read -r SID X0 Y0 X1 Y1 <<<"$(/usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["session"], *d["starter_crop"])' <<<"$UP")"
+curl -s -o /dev/null -F "session_id=$SID" -F "x0=$X0" -F "y0=$Y0" -F "x1=$X1" -F "y1=$Y1" \
+  -F "title=Smoke test" "$ENGINE/api/proof" || fail "the proof by hand failed"
+JID="$(curl -s -F "session_id=$SID" "$ENGINE/api/final/submit" \
+  | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["job"])')" || fail "the final by hand was refused"
+for _ in $(seq 1 150); do
+  STATE="$(curl -s "$ENGINE/api/jobs/$JID")"
+  case "$STATE" in *'"done"'*) break ;; *'"state":"error"'*) fail "the final by hand failed: $STATE" ;; esac
+  sleep 2
+done
+curl -s -o "$WORK/hand.png" "$ENGINE/api/jobs/$JID/result"
+"$TECOPA" render final --tracks "$GPX" --set "title=Smoke test" --out "$WORK/tool.png" >/dev/null \
+  || fail "tecopa render final failed"
+cmp -s "$WORK/hand.png" "$WORK/tool.png" || fail "the tool's final differs from the final made by hand"
+"$TECOPA" render final --tracks "$GPX" --out "$WORK/tool.png" >/dev/null 2>&1 \
+  && fail "tecopa wrote over an existing file"
+echo "  render final, byte-identical, and no overwrite: OK"
+
+# 8. Phase 3: the run list and the order status answer
+OUT="$("$TECOPA" runs --json)" || fail "tecopa runs failed"
+grep -q '"ok" : true' <<<"$OUT" || fail "tecopa runs did not answer ok"
+mkdir "$WORK/order"
+OUT="$("$TECOPA" order status "$WORK/order" --json)" || fail "tecopa order status failed"
+grep -q '"prepared" : false' <<<"$OUT" || fail "an empty order folder is not reported as not prepared"
+echo "  runs, order status: OK"
+
+# 9. Phase 4: a studio report shows in the tool
+curl -s -o /dev/null -H "Content-Type: application/json" \
+  -d '{"tab":"smoketest0001","errors":[{"kind":"error","message":"smoke test error"}]}' \
+  "$ENGINE/api/debug/studio" || fail "the studio report was not taken"
+OUT="$("$TECOPA" studio errors --tab smoketest0001 --json)" || fail "tecopa studio errors failed"
+grep -q 'smoke test error' <<<"$OUT" || fail "the studio report does not show in tecopa studio errors"
+echo "  studio errors: OK"
+rm -rf "$WORK"
+
+# 10. Stop through the launcher, and the port closes
 STOP="$("$TECOPA" engine stop --json)" || fail "engine stop failed: $STOP"
 grep -q '"stopped" : true' <<<"$STOP" || fail "engine stop did not stop the engine"
 if serving; then fail "port 8848 still answers after engine stop"; fi
 STARTED=0
 echo "  engine stop: OK"
 
-echo "PASS: phase 1 proof"
+echo "PASS: phases 1 to 4"
