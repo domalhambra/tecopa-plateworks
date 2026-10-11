@@ -319,3 +319,53 @@ def test_the_elevation_strip_of_a_set_is_in_panel_one_and_in_the_keepout():
     rest = painted[py0:py1, px0:px1].copy()
     rest[my0 - py0:my1 - py0, mx0 - px0:mx1 - px0] = False
     assert not rest.any()                                # panel 2 has its mark and no strip
+
+
+def test_each_mark_names_its_own_panel(monkeypatch):
+    # the one thing a mark is for: three loose panels can be put in order
+    drawn = []
+    real = ImageDraw.ImageDraw.text
+
+    def spy(self, xy, text, *args, **kw):
+        drawn.append((xy[0], text))
+        return real(self, xy, text, *args, **kw)
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", spy)
+    for n, shape in ((2, "tall"), (3, "wide")):
+        drawn.clear()
+        spec = _set(n, 2.0, shape)
+        dpi = 40
+        w, h = spec.pixel_size(dpi)
+        frames = panels.panel_rects_px(spec, dpi)
+        out = render._draw_panel_marks(Image.new("RGBA", (w, h), (128, 128, 128, 255)),
+                                       spec, frames, dpi)
+        assert [text for _, text in drawn] == [f"{k} / {n}" for k in range(1, n + 1)]
+        for (x, _), (x0, y0, x1, y1) in zip(drawn, frames):
+            assert x0 < x < x1                       # each text is in its own panel
+        rgb = np.asarray(out)[..., :3].astype(int)
+        d = ImageDraw.Draw(Image.new("RGBA", (w, h)))
+        for mx0, my0, mx1, my1 in render._panel_mark_rects(spec, d, frames, dpi):
+            plate = rgb[my0:my1, mx0:mx1].sum(axis=2)
+            assert plate.max() - plate.min() > 150   # dark text on the cream plate, not a blank
+
+
+def test_a_label_goes_left_of_its_marker_in_a_later_panel_too():
+    # panel 1 starts at 0, so only a later panel proves the left edge is the panel's
+    dpi = 40
+    text = "A long marker label"
+    spec = _set(3, 2.0, "tall")
+    for k in (1, 2):                                 # the middle panel, then the last one
+        lo, _, hi, _ = panels.panel_rects_px(spec, dpi)[k]
+        x = hi - 60
+        bare = _disc_fill(_markers(spec, x, dpi))
+        assert bare > 0
+        out = _markers(spec, x, dpi, label=text)
+        assert _disc_fill(out) == bare, k            # the whole disc can be seen
+        xs = np.nonzero(out[..., 3] >= 200)[1]
+        assert xs.min() >= lo and xs.max() < hi, k
+    # just inside the left edge of the middle panel the label has no room on the left:
+    # it goes right, and it does not start before the panel
+    lo, _, hi, _ = panels.panel_rects_px(spec, dpi)[1]
+    out = _markers(spec, lo + 12, dpi, label=text)
+    xs = np.nonzero(out[..., 3] >= 200)[1]
+    assert xs.min() >= lo and xs.max() < hi
+

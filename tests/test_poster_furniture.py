@@ -132,20 +132,19 @@ def test_compass_draws_above_title_block_and_toggles_off():
 # ---- furniture scales with the sheet (Dom): same crop, bigger print -> bigger
 # compass/cartouche, but the scale bar keeps telling the truth ----
 
-def _auto(w, h):
-    """The scale the engine gives a w x h sheet before the slider."""
-    s = (w * h / render.FURNITURE_BASE_IN2) ** 0.5
-    return min(max(s, render.FURNITURE_SCALE_MIN), render.FURNITURE_SCALE_MAX)
+def _scale(w, h, **kw):
+    return render._furniture_scale(_spec(print_w_in=w, print_h_in=h, **kw))
 
 
 def test_furniture_scale_tracks_sheet_size():
-    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24)) == pytest.approx(_auto(18, 24))
-    big = render._furniture_scale(_spec(print_w_in=24, print_h_in=36))
-    assert big == pytest.approx(_auto(24, 36))                   # sqrt(area ratio)
-    assert render._furniture_scale(_spec(print_w_in=9, print_h_in=12)) == \
-        render.FURNITURE_SCALE_MIN                               # clamped, not tiny
-    assert render._furniture_scale(_spec(print_w_in=60, print_h_in=90)) == \
-        render.FURNITURE_SCALE_MAX
+    # literal values, so a changed base, floor or ceiling fails here by number:
+    # sqrt(sheet area / 374 in2), held between 0.80 and 2.0
+    assert _scale(17, 22) == 1.0                                 # the design sheet
+    assert _scale(18, 24) == pytest.approx(1.0747466, abs=1e-6)  # sqrt(432 / 374)
+    assert _scale(24, 36) == pytest.approx(1.5199212, abs=1e-6)  # sqrt(864 / 374)
+    assert _scale(9, 12) == pytest.approx(0.80)                  # the floor, not tiny
+    assert _scale(36, 48) == 2.0                                 # the ceiling: raw 2.149
+    assert _scale(60, 90) == 2.0
 
 
 def test_cartouche_and_compass_grow_with_print_size():
@@ -161,12 +160,10 @@ def test_cartouche_and_compass_grow_with_print_size():
 def test_furniture_slider_multiplies_the_auto_scale():
     # the Style panel's "Legend & compass size" knob rides the spec and multiplies
     # the sheet-appropriate automatic scale -- proof == final, and 1.0 is a no-op
-    base = _spec(print_w_in=18, print_h_in=24)
-    assert render._furniture_scale(base) == pytest.approx(_auto(18, 24))
-    assert render._furniture_scale(_spec(print_w_in=18, print_h_in=24,
-                                         furniture_scale=1.4)) == pytest.approx(_auto(18, 24) * 1.4)
-    big = _spec(print_w_in=24, print_h_in=36, furniture_scale=0.75)
-    assert render._furniture_scale(big) == pytest.approx(_auto(24, 36) * 0.75)
+    assert _scale(17, 22) == 1.0                                 # 1.0 is a no-op
+    assert _scale(17, 22, furniture_scale=1.4) == 1.4            # the slider alone
+    assert _scale(24, 36, furniture_scale=0.75) == pytest.approx(1.1399409, abs=1e-6)
+    assert _scale(11, 17, furniture_scale=1.5) == pytest.approx(1.2)   # the floor, times 1.5
 
 
 def test_scale_bar_stays_truthful_when_furniture_scales():
@@ -233,7 +230,8 @@ def test_the_two_sheets_on_the_menu_set_the_furniture_scale():
     assert render.FURNITURE_BASE_IN2 == 17.0 * 22.0
     assert render._furniture_scale(_spec(print_w_in=17, print_h_in=22)) == 1.0
     assert render._furniture_scale(_spec(print_w_in=22, print_h_in=17)) == 1.0
-    assert render._furniture_scale(_spec(print_w_in=11, print_h_in=17)) == render.FURNITURE_SCALE_MIN
+    assert render._furniture_scale(_spec(print_w_in=11, print_h_in=17)) == pytest.approx(0.80)
+    assert render.FURNITURE_SCALE_MIN == 0.80 and render.FURNITURE_SCALE_MAX == 2.0
 
 
 def test_the_smallest_furniture_text_on_the_smallest_sheet_is_six_points():
