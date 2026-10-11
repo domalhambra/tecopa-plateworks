@@ -86,6 +86,14 @@ def track_fill(track_bounds_m, frame) -> float:
     return max(tw / (frame[2] - frame[0]), th / (frame[3] - frame[1]))
 
 
+def track_shares(track_bounds_m, frame) -> tuple:
+    """(width share, height share): how much of the frame the tracks' box spans on
+    each side. track_fill is the larger of the two."""
+    tw = track_bounds_m[2] - track_bounds_m[0]
+    th = track_bounds_m[3] - track_bounds_m[1]
+    return (tw / (frame[2] - frame[0]), th / (frame[3] - frame[1]))
+
+
 def order_epsg(bbox, aspect) -> int:
     """The UTM zone of the tracks' centre, unless the print's own nestled frame is
     wider than 600 km, in which case CONUS Albers.
