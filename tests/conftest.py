@@ -268,6 +268,9 @@ _SLOW_TESTS = {
         "test_rasterize_biome_tints_with_landcover",
         "test_rasterize_biome_falls_back_without_landcover",
     },
+    "test_panel_api": {
+        "test_a_final_of_a_set_is_a_zip_job",
+    },
 }
 
 

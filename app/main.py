@@ -1,5 +1,5 @@
 # app/main.py
-import io, json, os, re, shutil, time
+import io, json, os, re, shutil, time, zipfile
 import hashlib
 import logging
 from typing import List, Optional
@@ -16,6 +16,7 @@ from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
 from app import basecache, debug
+from app import panels as panel_geo
 from app import ingest, regionbuild
 
 logconfig.setup_logging()
@@ -152,6 +153,45 @@ def _encode_final(img, fmt: str, manifest=None, dpi: float = FINAL_DPI) -> bytes
         img.save(buf, pil_fmt, **kw)
     return buf.getvalue()
 
+ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)     # every member has the same date: same bytes each time
+
+
+def _panel_manifest(manifest, index, count):
+    """One panel's manifest: the set's own, plus which panel this file is. Any one
+    panel can then reprint the whole set."""
+    if manifest is None:
+        return None
+    return {**manifest, "panel": {"index": index, "of": count}}
+
+
+def _delivery_name(spec, fmt: str) -> str:
+    """The download name of a final: the file, or for a set the zip of its panels."""
+    if panel_geo.is_set(spec):
+        return download_name(spec, "_panels", "zip")
+    return download_name(spec, fmt=fmt)
+
+
+def _delivery_media(spec, fmt: str) -> str:
+    return "application/zip" if panel_geo.is_set(spec) else FINAL_FORMATS[fmt][1]
+
+
+def _encode_delivery(img, spec, fmt: str, manifest, dpi) -> bytes:
+    """The bytes a final delivers. A single sheet is one file. A set is painted as
+    one sheet, cut, and zipped: one file for each panel, stored, with fixed dates."""
+    if not panel_geo.is_set(spec):
+        return _encode_final(img, fmt, manifest, dpi=dpi)
+    parts = panel_geo.cut(img, spec, dpi)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for k, part in enumerate(parts, 1):
+            info = zipfile.ZipInfo(download_name(spec, f"_{k}of{len(parts)}", fmt),
+                                   date_time=ZIP_EPOCH)
+            info.create_system = 3
+            info.external_attr = 0o644 << 16
+            z.writestr(info, _encode_final(part, fmt, _panel_manifest(manifest, k, len(parts)),
+                                           dpi=dpi))
+    return buf.getvalue()
+
 def _require_format(fmt: str, spec=None) -> str:
     fmt = (fmt or "png").lower()
     if fmt not in FINAL_FORMATS:
@@ -177,7 +217,7 @@ def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     queue thread, so it touches only its arguments."""
     dpi = spec.final_dpi()
     img = render.rasterize(spec, dpi=dpi, region_dir=region_dir, watermark=False)
-    BLOBS.put(key, _encode_final(img, fmt, manifest, dpi=dpi))
+    BLOBS.put(key, _encode_delivery(img, spec, fmt, manifest, dpi))
     return key                                         # job result = the blob key
 
 def _render_timelapse_to_blob(spec, region_dir, key, dpi, pacing, sources, embed_spec,
@@ -1064,7 +1104,8 @@ async def proof(session_id: str = Form(...),
                 label_place: str = Form("smart"), track_weave: bool = Form(True),
                 output: str = Form("print"), wallpaper_preset: str = Form(""),
                 custom_px_w: int = Form(0), custom_px_h: int = Form(0),
-                custom_ppi: float = Form(0.0), bleed: float = Form(0.0)):
+                custom_ppi: float = Form(0.0), bleed: float = Form(0.0),
+                panels: int = Form(1), panel_gap: float = Form(0.0)):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
@@ -1080,7 +1121,8 @@ async def proof(session_id: str = Form(...),
              "bleed_in": bleed, "track_color_by": track_color_by,
              # smart label placement + chronological weave (v1.10): NEW posters default
              # to the enhanced look (the Form defaults above).
-             "label_place": label_place, "track_weave": track_weave}
+             "label_place": label_place, "track_weave": track_weave,
+             "panels": panels, "panel_gap_in": panel_gap}
     if track_color.strip():
         style["track_rgb"] = _parse_hex_rgb(track_color)
     if light_mode not in ("archival", "journey"):
@@ -1114,6 +1156,8 @@ async def proof(session_id: str = Form(...),
     log.info("event=proof session=%s region=%s kind=%s dpi=%.0f ms=%d",
              session_id, region.id, spec.output_kind, _proof_dpi(spec),
              int((time.time() - t0) * 1000))
+    # a set is shown as it hangs: each gap strip in the wall tone
+    img = panel_geo.paint_gaps(img, spec, _proof_dpi(spec))
     # A proof is the picture you judge AT THE TRIM LINE: crop the bleed band off the
     # PREVIEW (never the stamped spec -- the FINAL carries the bleed) so the wizard's
     # crop/marker registration (proof px == spec.crop) keeps holding exactly, with no
@@ -1139,6 +1183,7 @@ def _render_refine_to_blob(spec, region_dir, key, cfg=None, base_cache=None,
     img = render.rasterize(spec, dpi=dpi, region_dir=region_dir,
                            watermark=True, cfg=cfg, base_cache=base_cache,
                            ink_cache=ink_cache)
+    img = panel_geo.paint_gaps(img, spec, dpi)
     if spec.bleed_in:
         b = round(spec.bleed_in * dpi)
         w, h = img.size
@@ -1210,18 +1255,18 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # final_*.png. Same key + encoding as the async path, so both serve identically.
     # The KEY carries the self-documenting name, so every serving path (this
     # FileResponse, /api/jobs/{jid}/result) says what the file is for free.
-    key = f"{session_id}/{download_name(spec, fmt=fmt)}"
+    key = f"{session_id}/{_delivery_name(spec, fmt)}"
     # the file names its plate: hashed from the assets once per final, never cached.
     # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
-    BLOBS.put(key, _encode_final(img, fmt,
-                                 _final_manifest(spec, sources, embed_spec, lineage,
-                                                 region_pack=rp), dpi=dpi))
+    BLOBS.put(key, _encode_delivery(img, spec, fmt,
+                                    _final_manifest(spec, sources, embed_spec, lineage,
+                                                    region_pack=rp), dpi))
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
-    return FileResponse(BLOBS.path(key), media_type=FINAL_FORMATS[fmt][1],
-                        filename=download_name(spec, fmt=fmt))
+    return FileResponse(BLOBS.path(key), media_type=_delivery_media(spec, fmt),
+                        filename=_delivery_name(spec, fmt))
 
 @app.post("/api/final/submit")
 async def final_submit(session_id: str = Form(...), format: str = Form("png"),
@@ -1238,7 +1283,7 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir,
-                       f"{session_id}/{download_name(spec, fmt=fmt)}", fmt,
+                       f"{session_id}/{_delivery_name(spec, fmt)}", fmt,
                        _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
     return {"job": jid}
 
@@ -1816,6 +1861,7 @@ def _proof_form_for(spec):
         "track_color_by": spec.track_color_by, "label_place": spec.label_place,
         "track_weave": bool(spec.track_weave),
         "output": spec.output_kind, "bleed": f(spec.bleed_in),
+        "panels": int(spec.panels), "panel_gap": f(spec.panel_gap_in),
     }
     if spec.light_mode == "journey":
         for key, angle in (("sun_azimuth_deg", spec.sun_azimuth_deg),
@@ -1911,6 +1957,7 @@ async def continue_poster(file: UploadFile = File(...),
         # otherwise re-resolve to the region name in _build_spec and regrow a title block.
         "title": spec.title_text or "-", "print_w_in": spec.print_w_in,
         "print_h_in": spec.print_h_in, "output": output, "wallpaper_preset": matched,
+        "panels": spec.panels, "panel_gap_in": spec.panel_gap_in,
         "custom_device": custom_device,
         "contours": spec.contours, "compass": spec.compass, "biome": spec.biome,
         "labels": spec.labels, "edition": edition, "lineage": lineage,
