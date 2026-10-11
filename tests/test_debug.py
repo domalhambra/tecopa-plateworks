@@ -897,7 +897,7 @@ def test_studio_logs_one_line_with_the_counts_and_never_the_text():
     logger, seen = logging.getLogger("tecopa.debug"), _Lines()
     level = logger.level
     logger.addHandler(seen)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
     try:
         assert c.post(STUDIO, json={
             "tab": TAB, "state": {**STATE, "title": "SECRET-TITLE"},
@@ -911,9 +911,11 @@ def test_studio_logs_one_line_with_the_counts_and_never_the_text():
     finally:
         logger.removeHandler(seen)
         logger.setLevel(level)
+    # a post with no error is at DEBUG: an idle tab posts each 30 seconds, and the
+    # launcher log is at INFO
     assert seen.lines == [
         ("tecopa.debug", "INFO", "event=debug.studio tab=tab00001 state=1 errors=2"),
-        ("tecopa.debug", "INFO", "event=debug.studio tab=tab00002 state=0 errors=0")]
+        ("tecopa.debug", "DEBUG", "event=debug.studio tab=tab00002 state=0 errors=0")]
 
 
 def test_studio_post_leaves_the_session_the_jobs_and_the_caches_as_they_were():

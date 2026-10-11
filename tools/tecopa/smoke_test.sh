@@ -6,7 +6,8 @@
 # sent by hand.
 # Phase 3: the run list and the order status answer. No plate is built here: a build
 # reads the network and takes minutes.
-# Phase 4: a studio report that is posted to the engine shows in `tecopa studio errors`. Requires port 8848 to be free, and a human for the one-time
+# Phase 4: a studio report that is posted to the engine shows in `tecopa studio errors`.
+# Requires port 8848 to be free, the real lassen_ca DEM, and a human for the one-time
 # macOS Automation prompt on the first quit.
 set -euo pipefail
 
@@ -22,11 +23,14 @@ serving() { curl -s -o /dev/null --max-time 1 "$READY"; }  # exit 0 on any HTTP 
 # failed run does not leave the launcher and the engine behind. Best effort: the
 # original failure stays the exit code, and a failed stop is only reported.
 STARTED=0
+WORK=""
 cleanup() {
   local rc=$?
+  [[ -n "$WORK" ]] && rm -rf "$WORK"
   if [[ "$rc" -ne 0 && "$STARTED" == 1 ]]; then
     echo "  cleanup: stopping the engine this run started" >&2
-    "$TECOPA" engine stop >/dev/null 2>&1 || echo "  cleanup: engine stop failed. Quit the launcher by hand." >&2
+    # --force: the test owns this engine, and a failure can leave a render job in it
+    "$TECOPA" engine stop --force >/dev/null 2>&1 || echo "  cleanup: engine stop failed. Quit the launcher by hand." >&2
   fi
 }
 trap cleanup EXIT
@@ -92,18 +96,23 @@ REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 GPX="$REPO/tests/fixtures/sample.gpx"
 WORK="$(mktemp -d)"
 ENGINE="http://127.0.0.1:8848"
-UP="$(curl -s -F "files=@$GPX" "$ENGINE/api/upload")" || fail "the upload by hand failed"
+UP="$(curl -s -F "files=@$GPX" "$ENGINE/api/upload")" || fail "the upload by hand got no answer"
+grep -q '"session"' <<<"$UP" || fail "the upload by hand was refused: $UP"
 read -r SID X0 Y0 X1 Y1 <<<"$(/usr/bin/python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["session"], *d["starter_crop"])' <<<"$UP")"
-curl -s -o /dev/null -F "session_id=$SID" -F "x0=$X0" -F "y0=$Y0" -F "x1=$X1" -F "y1=$Y1" \
-  -F "title=Smoke test" "$ENGINE/api/proof" || fail "the proof by hand failed"
-JID="$(curl -s -F "session_id=$SID" "$ENGINE/api/final/submit" \
-  | /usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["job"])')" || fail "the final by hand was refused"
+CODE="$(curl -s -o /dev/null -w '%{http_code}' -F "session_id=$SID" -F "x0=$X0" -F "y0=$Y0" \
+  -F "x1=$X1" -F "y1=$Y1" -F "title=Smoke test" "$ENGINE/api/proof")"
+[[ "$CODE" == 200 ]] || fail "the proof by hand answered $CODE"
+SUBMIT="$(curl -s -F "session_id=$SID" "$ENGINE/api/final/submit")"
+grep -q '"job"' <<<"$SUBMIT" || fail "the final by hand was refused: $SUBMIT"
+JID="$(/usr/bin/python3 -c 'import json,sys; print(json.load(sys.stdin)["job"])' <<<"$SUBMIT")"
+STATE=""
 for _ in $(seq 1 150); do
   STATE="$(curl -s "$ENGINE/api/jobs/$JID")"
   case "$STATE" in *'"done"'*) break ;; *'"state":"error"'*) fail "the final by hand failed: $STATE" ;; esac
   sleep 2
 done
-curl -s -o "$WORK/hand.png" "$ENGINE/api/jobs/$JID/result"
+case "$STATE" in *'"done"'*) ;; *) fail "the final by hand did not end in 300 seconds: $STATE" ;; esac
+curl -sf -o "$WORK/hand.png" "$ENGINE/api/jobs/$JID/result" || fail "the final by hand could not be saved"
 "$TECOPA" render final --tracks "$GPX" --set "title=Smoke test" --out "$WORK/tool.png" >/dev/null \
   || fail "tecopa render final failed"
 cmp -s "$WORK/hand.png" "$WORK/tool.png" || fail "the tool's final differs from the final made by hand"
@@ -126,7 +135,6 @@ curl -s -o /dev/null -H "Content-Type: application/json" \
 OUT="$("$TECOPA" studio errors --tab smoketest0001 --json)" || fail "tecopa studio errors failed"
 grep -q 'smoke test error' <<<"$OUT" || fail "the studio report does not show in tecopa studio errors"
 echo "  studio errors: OK"
-rm -rf "$WORK"
 
 # 10. Stop through the launcher, and the port closes
 STOP="$("$TECOPA" engine stop --json)" || fail "engine stop failed: $STOP"

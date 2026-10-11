@@ -554,8 +554,22 @@ The third error is the studio's own: a view transition that fails at each page l
 - **Task 3:** `Multipart.field` and `Multipart.file` throw. A name with a quote, a backslash, CR or LF, and an empty name, is a usage failure. A 2xx reply that is not JSON is an environment failure. `send` sets the request's own timeout.
 - **Task 4:** a new seam, `Runtime.pathKind`. A path argument is absolute at the catalog. A failure after the submit names the job. A poll that times out counts 10 seconds and is one more wait. A result carries `upload` (the engine's warnings) and, for a wallpaper, `fitted` and `count`.
 - **Task 5:** `reprint` always needs `out`, so a still is never thrown away. `continue` stops when the upload answers another session id, because the engine makes a new session for an id that it does not have.
-- **Task 7:** the exit code goes to `<id>.exit.tmp` and is renamed. A reaper thread waits for each child, so an ended run is not a zombie while `tecopa mcp` lives. A state `cancelled` was added. The review moved the log read after the exit code, made a record's stored paths untrusted, and removed four `PYTHON` variables from each script's environment.
+- **Task 7:** the exit code goes to `<id>.exit.tmp` and is renamed. A reaper thread waits for each child, so an ended run is not a zombie while `tecopa mcp` lives. A state `cancelled` was added. The review moved the log read after the exit code, made a record's stored paths untrusted, and removed four `PYTHON` variables from each script's environment. The process is matched by its run name as a whole word, not by "contains" as the task text says. `runs show` reads at most the last 1 MB of the log. The failure-text rule reads the last 4 MB, so a failure text further back than that reads as `done`.
 - **Task 8:** `plate check` reads the verdict from the last line, because the script prints one line for each asset first. A `sources.json` with no `assets` object is refused by the two bakes.
 - **Task 11:** the review dropped control characters from report text, and a page that closes while it sends no longer leaves a traceback.
+- **Task 13:** `studio errors` also takes `kind`.
 - **Task 12:** the hook starts before the boot code. A post with no answer does not stop it. The state goes again each 30 seconds. A post over 60 KB sends no errors.
 - **Not in the plan:** `spec.validate()` now refuses a field of the wrong type (commit `971daa5`). A review found that a crafted poster file gave a 500, and Dom asked for the fix in the same session.
+
+### The whole-branch review
+
+One independent review of the 29 commits found no must-fix and said the branch was ready to merge. Three items were fixed after it: a studio post with no error is now logged at DEBUG and leaves no access line, the smoke test names each failure and removes its work folder, and eight stale sentences in the documents were corrected.
+
+Four notes from that review are open. None blocks the merge.
+
+| Note | Benefit of a fix | Cost | Risk of leaving it |
+|---|---|---|---|
+| Two quick `plate build` starts for one id both pass the guard, because the guard checks and then starts. | No second build over the first. | Small: refuse while a run of the same command and id is `running`. | Low. One caller starts one build. |
+| `reprint inspect`, `plate plan` and each upload send a caller-named file to the port that the caller names, without a check that the engine is there. | A track file never goes to another local program. | Small to medium: one `/readyz` check before a POST, and the fake needs it in many tests. | Low. The default port is the launcher's, and another port needs an explicit argument. |
+| The limits in `app/static/debug.js` and `app/debug.py`, and the state keys in `Studio.swift`'s printer, are each written twice with no test between them. | A change on one side cannot break the other silently. | Small. | Low. The eight state keys do have a test between the module and the route. |
+| The traceback rule is in `ScriptRunner.swift` and in `Plates.swift`. | One rule. | Small. | Low. |

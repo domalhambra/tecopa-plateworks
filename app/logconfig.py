@@ -20,6 +20,21 @@ import time
 _CONFIGURED = False
 
 
+class _QuietStudioPosts(logging.Filter):
+    """Drop uvicorn's access line for a studio report that was taken (a 204).
+
+    The studio's report module posts to /api/debug/studio every 30 seconds from each
+    open tab. One access line for each would fill the launcher log, which `tecopa logs`
+    reads from the end. A refused post keeps its line, and a post that carried an
+    error has its own `event=debug.studio` line from app/debug.py."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        return not (isinstance(args, tuple) and len(args) >= 5
+                    and args[1] == "POST" and args[2] == "/api/debug/studio"
+                    and args[4] == 204)
+
+
 class _JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -50,5 +65,6 @@ def setup_logging() -> logging.Logger:
     root.handlers[:] = [handler]
     root.setLevel(level)
     root.propagate = False        # don't double-log through the root logger
+    logging.getLogger("uvicorn.access").addFilter(_QuietStudioPosts())
     _CONFIGURED = True
     return root

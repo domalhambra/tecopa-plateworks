@@ -347,7 +347,9 @@ The plan of 2026-10-10 records each one under its decisions.
 - A command may create a `sources.json` entry and never replaces one. The spec's "No command writes `sources.json`" could not hold: `region_prep.py`, `scripts/build_labels.py` and `scripts/bake_playa.py` each write it.
 - `plate install` takes a local file only and never passes `--replace`. `plate pack --resync` needs the explicit flag.
 - `plate build`, `plate labels`, `plate playa` and `order prepare` are tracked runs. `plate pack`, `plate install` and `plate check` run in the call.
-- A run has a fifth and sixth state: `cancelled` after `runs cancel`, and `lost` for a run with no exit code and no process.
+- A run has five states: `running`, `done`, `failed`, `cancelled` after `runs cancel`, and `lost` for a run with no exit code and no process. The process is matched by its run name as a whole word. `runs show` reads at most the last 1 MB of the log, and the failure-text rule reads the last 4 MB.
+- A script gets the tool's environment without `PYTHONHOME`, `PYTHONPATH`, `PYTHONSTARTUP` and `__PYVENV_LAUNCHER__`, so no caller variable changes what the table's interpreter loads. `order prepare` still reads `TECOPA_PREP_PYTHON`, which is the order script's own setting.
+- "No command deletes a plate" holds for `regions/`. `order prepare` rebuilds the order's own plate under `work/plate/`, as the script always did.
 - `plate build --bbox` is one word with commas, because the argument parser reads a negative number as an option.
 - `scripts/dem_coverage.py` has no row in the script table. No command runs it.
 
@@ -357,6 +359,8 @@ The plan of 2026-10-10 records each one under its decisions.
 - "The last API error" is the error toast. The studio keeps no last error.
 - With the gate off the first post gets a 405, not a 404. Any first reply that is not 2xx stops the hook. A post with no answer does not stop it: the hook waits 30 seconds, so an engine restart does not end the reports.
 - The studio post needs a JSON content type and refuses an Origin header that is not local. The buffer holds 20 tabs and 50 errors.
+- `studio errors` takes `--tab` and `--kind` (`error`, `rejection` or `toast`).
+- A studio post that carried no error is logged at DEBUG, and its access line is dropped, so the reports do not fill the launcher log.
 - The debug routes are no longer all read-only. The studio post changes its report buffer and nothing else.
 - Check 3 was made on 2026-10-10. `tests/test_marketing_page.py` tests only the published Ghost pages. A new text test holds each studio module to its own origin.
 

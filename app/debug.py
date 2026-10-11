@@ -367,9 +367,12 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
         state = _clean_state(report.get("state"))
         errors = _clean_errors(report.get("errors"))
         studio.add(tab, state, errors)
-        # the tab id and the counts, never a message or a stack
-        log.info("event=debug.studio tab=%s state=%d errors=%d",
-                 tab, state is not None, len(errors))
+        # The tab id and the counts, never a message or a stack. A post with no error
+        # is routine: an idle tab sends its state each 30 seconds, so that line is at
+        # DEBUG and the launcher log keeps room for what matters.
+        log.log(logging.INFO if errors else logging.DEBUG,
+                "event=debug.studio tab=%s state=%d errors=%d",
+                tab, state is not None, len(errors))
         return Response(status_code=204)
 
     @r.get("/studio", dependencies=studio_only)

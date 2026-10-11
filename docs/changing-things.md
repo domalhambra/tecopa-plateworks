@@ -347,7 +347,9 @@ Only when the repo moves or the Swift code under `tools/tecopa/` changes.
 2. `tools/tecopa/build.sh --install` builds the release binary and copies it to
    `~/.local/bin/tecopa`. It bakes this repo's path into the binary.
 3. `tools/tecopa/smoke_test.sh` is the end-to-end check. Port 8848 must be free. The
-   first quit from a new calling app raises a macOS Automation prompt.
+   first quit from a new calling app raises a macOS Automation prompt. It renders two
+   finals of the fixture track and compares their bytes, so it needs the real
+   `lassen_ca` DEM and about one minute.
 4. `tecopa doctor` checks the repo, both venvs, the launcher, the port and the log. Its
    `repo` row reads `app/main.py`, so it fails when macOS refuses the Documents folder.
    Run it first when the engine does not start.
@@ -372,13 +374,16 @@ macOS Documents prompt and then 60 seconds for the engine to answer.
 `tecopa engine stop` and `tecopa engine restart` refuse while a job is running or
 queued, and `--force` overrides that.
 
-A tracked run keeps three small files under
-`~/Library/Application Support/TecopaPlateworks/runs/`: the record, the log and the exit
-code. No command deletes them. Remove old ones by hand when the folder grows.
+A tracked run keeps its files under
+`~/Library/Application Support/TecopaPlateworks/runs/`: the record, the log, the exit
+code, and a marker if it was cancelled. The log has no size limit. No command deletes
+them: remove old ones by hand when the folder grows. The record of an `order prepare`
+run holds the order folder's name, and its log holds the report.
 
 The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need
 `TECOPA_DEBUG=1` on the engine. The launcher sets it. For a development engine, set it
-by hand.
+by hand. An engine that started before a debug route was added answers 404 for it, and
+the tool reads that as a closed gate: run `tecopa engine restart` after a pull.
 
 The render commands are `render proof`, `render final`, `render wallpaper`,
 `render film` and `render fetch`, then `reprint`, `reprint inspect` and `continue`.
@@ -387,7 +392,9 @@ The render commands are `render proof`, `render final`, `render wallpaper`,
   one field of the output route: `format` and `embed_spec` for a final, the pacing
   fields for a film. The tool sends each value unchanged and has no default of its own.
 - The tool refuses a field name that the engine does not have. It reads the names from
-  `/api/debug/forms`, so a render with `--set`, `--spec` or `--opt` needs the gate.
+  `/api/debug/forms`, so a render with `--set`, `--spec` or `--opt` needs the gate. So
+  does a change to a session, `render proof --session`, and a print size that is not
+  the default.
 - `--session <id>` renders a session that exists, for example the one open in the
   studio. A change to it starts from the session's own fields, so one `--set` keeps
   the rest of the look.
