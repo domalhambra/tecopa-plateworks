@@ -71,3 +71,121 @@ def test_no_place_name_is_drawn_in_a_seam_band():
         # the set: nothing of a name is in the band
         bare = _render(_spec(2, gap))
         assert np.array_equal(_render(as_set, names)[:, x0:x1], bare[:, x0:x1]), gap
+
+
+LONG_NAMES = ["Seam Peak of the Long Name Told in Full Here",
+              "Gap Butte of the Long Name Told in Full Here",
+              "Edge Knob of the Long Name Told in Full Here"]
+
+
+def _summits_at(spec, x_px, names):
+    """Summits that share one anchor at x_px, clear of the route. Smart placement
+    gives the anchor to the first and pushes the next ones out, each with a leader."""
+    w, _ = spec.pixel_size(DPI)
+    x = spec.crop[0] + (spec.crop[2] - spec.crop[0]) * x_px / w
+    cy = (spec.crop[1] + spec.crop[3]) / 2
+    return {"crs": _cfg()["crs"], "features": [
+        {"name": name, "kind": "summit", "rank": 100, "coords": [[x, cy + 6000]]}
+        for name in names]}
+
+
+def _watch_leaders(monkeypatch):
+    """Each leader that is drawn from now on, as (anchor, label_box)."""
+    drawn = []
+    draw = render._draw_leader
+
+    def spy(d, anchor, label_box, dpi):
+        drawn.append((anchor, label_box))
+        return draw(d, anchor, label_box, dpi)
+    monkeypatch.setattr(render, "_draw_leader", spy)
+    return drawn
+
+
+def _leader_x(anchor, label_box):
+    """(lo, hi): the x span of a leader's line, as _draw_leader draws it."""
+    ax = anchor[0]
+    tx = min(max(ax, label_box[0]), label_box[2])
+    return min(ax, tx), max(ax, tx)
+
+
+def test_a_leader_stays_in_the_box_the_placement_reads():
+    from PIL import Image, ImageDraw
+    for dpi in (40, 96, 300):
+        for anchor, box in (((400, 400), (520, 300, 700, 330)),      # pushed up and right
+                            ((400, 400), (100, 480, 280, 510)),      # pushed down and left
+                            ((400, 400), (310, 250, 490, 280))):     # pushed above
+            img = Image.new("RGBA", (800, 800), (0, 0, 0, 0))
+            render._draw_leader(ImageDraw.Draw(img, "RGBA"), anchor, box, dpi)
+            ys, xs = np.nonzero(np.asarray(img)[..., 3])
+            x0, y0, x1, y1 = render._leader_bounds(anchor, box, dpi)
+            assert x0 <= xs.min() and xs.max() < x1 and y0 <= ys.min() and ys.max() < y1
+            slack = 0.1 * dpi + 2                # and the box is not a loose guess
+            assert xs.min() - x0 <= slack and x1 - 1 - xs.max() <= slack
+
+
+def test_no_leader_or_anchor_dot_is_drawn_in_a_seam_band(monkeypatch):
+    drawn = _watch_leaders(monkeypatch)
+    for gap in (2.0, 0.0):
+        as_set = _spec(2, gap, labels=True, label_place="smart")
+        unbroken = _spec(1, gap, labels=True, label_place="smart")
+        edge = round(render.GEO_EDGE_IN * DPI)
+        full = panels.seam_bands_px(as_set, DPI, edge)[0]
+        band = panels.seam_bands_px(as_set, DPI, edge // 2)[0]
+        x0, x1 = band[0], band[2]
+        # two names anchored on the middle of the gap strip, or on the seam of a cut set
+        names = _summits_at(as_set, (full[0] + full[2]) / 2, LONG_NAMES[:2])
+        # the control: with one panel a name is pushed out, and its leader starts in the band
+        plain = _render(_spec(1, gap))
+        drawn.clear()
+        assert (_render(unbroken, names)[:, x0:x1] != plain[:, x0:x1]).any()
+        assert [a for a, _ in drawn if x0 <= a[0] < x1], gap
+        # the set: no name, no leader and no anchor dot is in the band
+        bare = _render(_spec(2, gap))
+        drawn.clear()
+        assert np.array_equal(_render(as_set, names)[:, x0:x1], bare[:, x0:x1]), gap
+        assert not drawn, gap
+
+
+def test_no_leader_crosses_a_seam_band(monkeypatch):
+    drawn = _watch_leaders(monkeypatch)
+    for gap in (2.0, 0.0):
+        as_set = _spec(2, gap, labels=True, label_place="smart")
+        unbroken = _spec(1, gap, labels=True, label_place="smart")
+        edge = round(render.GEO_EDGE_IN * DPI)
+        full = panels.seam_bands_px(as_set, DPI, edge)[0]
+        band = panels.seam_bands_px(as_set, DPI, edge // 2)[0]
+        x0, x1 = band[0], band[2]
+
+        def crossing():
+            return [(a, b) for a, b in drawn
+                    if _leader_x(a, b)[0] < full[2] and _leader_x(a, b)[1] >= full[0]]
+
+        # three names anchored in panel 1, next to the band: two fit beside the anchor,
+        # and the only free place for a pushed-out name is on the far side of the seam
+        names = _summits_at(as_set, full[0] - 3, LONG_NAMES)
+        # the control: with one panel a leader runs through the band
+        plain = _render(_spec(1, gap))
+        drawn.clear()
+        assert (_render(unbroken, names)[:, x0:x1] != plain[:, x0:x1]).any()
+        assert crossing(), gap
+        # the set: the names that fit in panel 1 are drawn, and nothing is in the band
+        bare = _render(_spec(2, gap))
+        drawn.clear()
+        out = _render(as_set, names)
+        assert (out[:, :full[0]] != bare[:, :full[0]]).any(), gap
+        assert np.array_equal(out[:, x0:x1], bare[:, x0:x1]), gap
+        assert not crossing(), gap
+
+
+def test_a_name_whose_feature_is_in_a_seam_band_is_not_drawn(monkeypatch):
+    drawn = _watch_leaders(monkeypatch)
+    for gap in (2.0, 0.0):
+        as_set = _spec(2, gap, labels=True, label_place="smart")
+        unbroken = _spec(1, gap, labels=True, label_place="smart")
+        edge = round(render.GEO_EDGE_IN * DPI)
+        full = panels.seam_bands_px(as_set, DPI, edge)[0]
+        # the last pixel of the band: a slot up and right of the anchor is clear of it
+        names = _summits_at(as_set, full[2] - 1, LONG_NAMES[:1])
+        assert (_render(unbroken, names) != _render(_spec(1, gap))).any()   # the control
+        assert np.array_equal(_render(as_set, names), _render(_spec(2, gap))), gap
+    assert not drawn

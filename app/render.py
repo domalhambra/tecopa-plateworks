@@ -2107,15 +2107,30 @@ def _draw_leader(d, anchor, label_box, dpi):
     d.ellipse([ax - r, ay - r, ax + r, ay + r], fill=GEO_LABEL_INK + (255,),
               outline=GEO_LABEL_HALO + (235,), width=max(1, w))
 
+def _leader_bounds(anchor, label_box, dpi):
+    """The box a leader and its anchor dot are painted in: (x0, y0, x1, y1), right and
+    bottom exclusive. It repeats the arithmetic of _draw_leader, and a test holds the
+    two together. The dot is at least as wide as the haloed line, so its radius is
+    the margin on every side."""
+    ax, ay = anchor
+    lx0, ly0, lx1, ly1 = label_box
+    tx = min(max(ax, lx0), lx1)
+    ty = min(max(ay, ly0), ly1)
+    w = max(1, round(_pt_to_px(GEO_LEADER_PT, dpi)))
+    r = max(2, w + 2 * max(1, round(_pt_to_px(GEO_HALO_PT, dpi))))
+    return (min(ax, tx) - r, min(ay, ty) - r, max(ax, tx) + r + 1, max(ay, ty) + r + 1)
+
 def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask,
-                       out_w, out_h):
+                       out_w, out_h, leader_ok=None):
     """Smart point-label placement: try a ranked ring of offset positions (Imhof order --
     centered first so uncrowded sheets read as before, then the four adjacent diagonals,
     then pushed-out slots) and keep the first whose haloed box is in-frame, clears every
     placed box, and -- on the first pass -- avoids the drawn route. A second pass tolerates
     the route but widens the halo, because a name crossing the line still beats a dropped
     name. Returns (x0, y0, halo, leader_box): leader_box is the ink box when the chosen slot
-    is a pushed-out one (draw a leader) else None; or None to drop the name entirely."""
+    is a pushed-out one (draw a leader) else None; or None to drop the name entirely.
+    leader_ok(anchor, leader_box) is the test a set adds for a pushed-out slot: False
+    when the leader may not be drawn there. None, as on a single sheet, adds no test."""
     gap = max(2.0, _pt_to_px(GEO_LABEL_GAP_PT, dpi))
     dx, dy = tw / 2 + gap, th / 2 + gap
     ring = [(0.0, 0.0, False),                                   # centered on the anchor
@@ -2146,6 +2161,9 @@ def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask
             if not allow_route and route_frac(x0, y0, hl) > GEO_ROUTE_TOL:
                 continue
             leader_box = (x0, y0, x0 + tw, y0 + th) if is_leader else None
+            if (leader_box and leader_ok is not None
+                    and not leader_ok((round(ax), round(ay)), leader_box)):
+                continue
             return x0, y0, hl, leader_box
     return None
 
@@ -2192,6 +2210,8 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     In smart mode (spec.label_place == "smart") each point label tries a ranked ring of
     offset slots instead of a single centered box, treats the drawn route as an obstacle,
     and draws a leader from a pushed-out name back to its feature (_place_point_label).
+    On a set, a name whose feature lies in a seam band is not drawn, and a pushed-out
+    slot is refused when its leader would enter a band.
     "anchor" (the default) is the original single-centered-position, drop-on-overlap
     placement, byte-identical to before."""
     cands = _label_candidates(labels, hydro, spec, out_w, out_h, ctx=ctx)
@@ -2233,6 +2253,18 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
                                 _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
 
+    # smart mode on a set: a leader and its anchor dot stay out of each seam band, as
+    # the name does. A leader into a gap strip points at ground that is never printed,
+    # and a leader across a seam is cut in two. The bands are the ones in the keep-out.
+    seams, leader_ok = [], None
+    if spec.label_place == "smart" and panel_geo.is_set(spec):
+        seams = panel_geo.seam_bands_px(spec, dpi, edge)
+
+        def leader_ok(anchor, label_box):
+            lx0, ly0, lx1, ly1 = _leader_bounds(anchor, label_box, dpi)
+            return not any(lx0 < bx1 and bx0 < lx1 and ly0 < by1 and by0 < ly1
+                           for bx0, by0, bx1, by1 in seams)
+
     for rank, kind, name, (ax, ay), path in _label_order(cands, cap):
         if len(placed) >= cap:
             break
@@ -2259,8 +2291,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         l, t, r, b = d.textbbox((0, 0), text, font=font)
         th = b - t
         if spec.label_place == "smart":
+            if any(bx0 <= ax < bx1 and by0 <= ay < by1 for bx0, by0, bx1, by1 in seams):
+                continue          # the feature is behind a gap strip or on a seam
             place = _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps,
-                                       route_mask, out_w, out_h)
+                                       route_mask, out_w, out_h, leader_ok=leader_ok)
             if place is None:
                 continue
             x0, y0, lhalo, leader_box = place
