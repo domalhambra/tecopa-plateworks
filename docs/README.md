@@ -39,7 +39,7 @@ Undated documents that still govern something. Each is path-checked.
 | `superpowers/specs/2026-09-08-documentation-layout-design.md` | Changing how this repo is documented. The tier, what moved where, and what was deferred to Dom. |
 | `superpowers/specs/2026-09-24-order-pipeline-design.md` | Working on customer orders: the order folder, plate per order, nestled framing, the paper table, photo placement, the print TIFF, the customer package. |
 | `superpowers/specs/2026-09-24-ghost-landing-page-design.md` | Working on the landing page: the move to Ghost, the order page, the `custom-tecopa` template, the relief viewer and exporter, the live honesty tests. Draft for Dom's review. |
-| `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md` | Working on the `tecopa` tool: the Swift CLI and MCP server, the debug routes behind `TECOPA_DEBUG`, the studio's report module, the four build phases. Phase 1 is built. Phases 2, 3 and 4 are not. |
+| `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md` | Working on the `tecopa` tool: the Swift CLI and MCP server, the debug routes behind `TECOPA_DEBUG`, the studio's report module, the four build phases. Phase 1 is built. Phases 2, 3 and 4 are in work: see the plan of 2026-10-10. |
 | `superpowers/prototypes/2026-09-24-ghost-landing-preview.html` | Porting the landing page's shader, poster wall or relief viewer into the theme. The working prototype the spec approves. Its media files are not committed: the relief exporter makes them. |
 
 ## Plans
@@ -70,6 +70,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-09-01-dem-geometry-gate.md` | Changing `_ready_or_503` or readiness. Why there is no override, no hook, and no cache. |
 | `superpowers/plans/2026-09-24-order-plate-per-order.md` | Changing how an order's plate is planned or built. Build plan for sub-project 1 of the order pipeline. |
 | `superpowers/plans/2026-10-09-tecopa-tool-phase-1-diagnose.md` | Changing `tools/tecopa/` or `app/debug.py`. The build record of phase 1 of the `tecopa` tool: the catalog, the engine client, the launcher control, `doctor`, the MCP server. |
+| `superpowers/plans/2026-10-10-tecopa-tool-phases-2-to-4.md` | Changing a `tecopa` render, plate, order, run or studio command, the debug routes they read, or the studio's report module. The plan and build record of phases 2 to 4. |
 
 ## Handoffs
 
