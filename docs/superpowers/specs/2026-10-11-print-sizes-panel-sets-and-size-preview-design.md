@@ -1,7 +1,7 @@
 # Print Sizes, Panel Sets and the Size Preview — Design
 
 **Date:** 2026-10-11
-**Status:** Approved by Dom in parts (brainstorming session, 2026-10-11). The written spec waits for his review. Nothing is built.
+**Status:** Approved by Dom (brainstorming session and written review, 2026-10-11). Amended the same day while the plan was written: see "Amended while planning" at the end. The plan is `../plans/2026-10-11-panel-sets-and-size-preview.md`. Nothing is built.
 **Extends:** `2026-09-24-order-pipeline-design.md` (the order folder, Prepare, Finish, the customer package)
 **Amends:** `2026-09-24-order-pipeline-design.md` §2 (a new step before Prepare), §4 (the sizes) and §7 (the package for a set). No invariant in `CLAUDE.md` changes.
 
@@ -74,7 +74,8 @@ The sheet size is the hung size. No orientation field exists. The sheet size giv
 
 - `panels` is not 1, 2 or 3, or `panel_gap_in` is not 0, 2 or 4.
 - `panels` is above 1 and the sheet is not one of the four shapes for that gap.
-- `panels` is above 1 and the output is a wallpaper or a film.
+- `panels` is above 1 and the output is a wallpaper. A film is a route, not an output
+  kind: the film route and the wallpaper bundle route refuse a set with a 422.
 - `panels` is above 1 and `bleed_in` is above 0.
 - `panels` is 1 and `panel_gap_in` is above 0.
 
@@ -99,8 +100,9 @@ one image per panel and drops the gap strips.
 **The proof** is one image of the whole sheet. Each gap strip is painted in a plain wall
 tone, so the proof shows the set as it hangs.
 
-**The final** for a set is a zip with one file per panel. The names end in `-1of3`,
-`-2of3` and `-3of3`. A single sheet's final does not change.
+**The final** for a set is a zip with one file per panel, PNG or PDF. The zip's name
+ends in `_panels.zip`, and the members end in `_1of3`, `_2of3` and `_3of3`. The zip is
+byte-deterministic. A single sheet's final does not change.
 
 ## 3. Labels and furniture
 
@@ -114,7 +116,7 @@ a gap strip. Curved names obey the same rule.
   in the lower left of panel 1. The elevation strip ends inside panel 1.
 - The keyline is drawn on each panel, not round the sheet.
 - Each panel carries a panel mark, such as `2 / 3`, in its lower right corner. It uses
-  the caption type role.
+  the body type role at the credit line's size.
 - A photo box never crosses a seam. Its leader line can.
 
 **Things tied to the ground.** A route end, a marker or a hotspot cannot move. In a
@@ -152,8 +154,9 @@ the orientation with less wasted ground. A set is framed at a gap of 2 in.
 **Step 2: the fit rule.** The two single sheets are always offered. A set is offered
 when both of these are true:
 
-- The tracks span at least `SET_MIN_FILL` of the frame on both sides. The first value
-  is 0.30. Dom tunes it on real tracks.
+- The tracks span at least `SET_MIN_FILL` of the sheet's width. The first value is
+  0.30. Dom tunes it on real tracks. (The first draft said "on both sides". That
+  refused a thin east-west route, which is the route a set is for.)
 - Every panel holds some part of a track.
 
 The 2× rule applies with no new code. A small area cannot hold a 66 in set. Its frame
@@ -166,8 +169,9 @@ A `sizes` line in `order.toml` overrides the rule, for example
 the preview's pixels, not a print's. The command uses a curated plate when one holds
 the frames, as Prepare does.
 
-**Step 4: the maps.** Each offered size is rendered at screen size: about 1,600 px on
-the long side for a single sheet and about 2,400 px for a set. Each map carries the
+**Step 4: the maps.** Each offered size is rendered at screen size: 1,600 px on the
+long side for a single sheet, and 50 dpi for a set, so a panel is 1,100 px on its long
+side. Each map carries the
 engine's proof watermark, with the word "Preview". A set's map shows each gap strip in
 the wall tone, as the proof does.
 
@@ -189,9 +193,10 @@ price. A size with no price prints "Price on request". Dom sets the set prices.
 
 `preview.json` lists each size: its frame, its fill, whether it is offered, and why not.
 
-**After the choice.** Dom writes the size and the gap in `order.toml`. Prepare starts
-from the frame in `preview.json` and builds the real plate for that size only. It fits
-the frame again when the gap is not 2 in.
+**After the choice.** The preview's report gives, for each offered size, the lines to
+write in `order.toml`: the size, the orientation and the gap. Prepare then frames that
+size with the same rule and builds the real plate for it only. Prepare does not read
+`preview.json`: the whole preview uses one projection, and Prepare chooses its own.
 
 **Limits.**
 
@@ -211,7 +216,9 @@ the frame again when the gap is not 2 in.
 **Prepare.** No new step. A set is a wider sheet. The plate's grid follows the hung
 width. The report adds the "behind a gap" lines of §3.
 
-**Finish.**
+**Finish.** `order finish` is not built yet (found while planning). The lines below
+are requirements on that sub-project of the order pipeline. Until then a set order
+ends at the engine's zip of panel files.
 
 - `out/print/` gets one TIFF per panel, for example `<title>-three-1of3.tif`.
 - `PRINT.txt` lists each panel, its feed direction on the roll, the hang order and the gap.
@@ -235,7 +242,8 @@ width. The report adds the "behind a gap" lines of §3.
   entries to 34.
 - `render proof` needs no change. `--set panels=3` is one more field, and the tool
   still holds no field names.
-- `render final`, `render fetch` and `reprint` accept a zip as the result of a set.
+- `render final`, `render fetch` and `reprint` write the zip of a set to `out`. The
+  tool has no format logic, so this needs tests and no code.
   They still never overwrite a file.
 
 ## 9. The file
@@ -323,3 +331,20 @@ the rasterizer paints one panel at a time.
 | Set prices in `config/sizes.toml` | none: "Price on request" | Dom, after a set is printed |
 | `FURNITURE_SCALE_MIN` | 0.80 | the 11 × 17 test print |
 | `SET_MIN_FILL` | 0.30 | previews of real tracks |
+
+## Amended while planning (2026-10-11)
+
+Five read-only passes over the code found facts this design did not have. The plan's
+table "Decisions made while planning" holds all nineteen. The ones that change what
+this document said:
+
+- **The fit rule** reads the sheet's width, not both sides (§5, step 2).
+- **A set's preview map** is 50 dpi, not about 2,400 px (§5, step 4).
+- **Prepare does not read `preview.json`.** The report gives the lines for `order.toml` (§5).
+- **`order finish` is not built**, and Prepare renders no proof. The Finish lines of §6
+  wait for that sub-project.
+- **The engine has no TIFF writer.** The zip of a set holds PNG or PDF files (§2).
+- **A film is a route.** Two routes refuse a set. `validate` refuses a wallpaper (§1).
+- **No `caption` type role exists.** The panel mark uses the body role (§3).
+- **A route end behind a gap** is named by the preview's report and by Prepare's
+  warnings. An order has no markers or hotspots yet (§3).
