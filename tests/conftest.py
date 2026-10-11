@@ -270,6 +270,7 @@ _SLOW_TESTS = {
     },
     "test_panel_api": {
         "test_a_final_of_a_set_is_a_zip_job",
+        "test_any_panel_reprints_the_whole_set",
     },
 }
 

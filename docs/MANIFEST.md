@@ -44,6 +44,7 @@ renaming it would orphan those files.
 | `lineage`          | conditional | ancestor chain; present exactly when `edition` is |
 | `animation`        | conditional | time-lapse pacing + render dpi; APNG finals only |
 | `region_pack`      | conditional | the plate's hash identity (below) |
+| `panel`            | conditional | which panel of a set this file is (below) |
 
 Baseline example: `tests/fixtures/manifest_v1.json` (print) and
 `manifest_wallpaper_v1.json` (`spec.output_kind = "wallpaper"`).
@@ -57,6 +58,8 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `crs` — projected CRS of all coordinates, e.g. `"EPSG:32610"`
 - `crop` — `[min_x, min_y, max_x, max_y]` in CRS meters; maps to the full sheet
 - `print_w_in`, `print_h_in` — sheet size in inches (a wallpaper derives these from device px / ppi)
+- `panels` — 1, 2 or 3 (default 1). Above 1 the file is one panel of a set, and `print_w_in` × `print_h_in` is the hung size of the whole set, gaps included
+- `panel_gap_in` — 0, 2 or 4 (default 0). The unprinted strip between two panels, in inches. 0 is a cut set
 - `native_resolution_m` — the plate's ground resolution in meters/pixel; the zoom cap allows up to `MAX_UPSAMPLE` (2x) finer than this before it refuses
 - `tracks` — list of (N, 2) coordinate arrays in CRS meters
 - `track_days` — journey identity parallel to `tracks`, or `null` (each track its own journey)
@@ -157,6 +160,21 @@ Semantics on reprint/continue:
 
 Hashes, not URLs, identify a plate: URLs rot, mirrors move, but the bytes hash the
 same everywhere. Any archive holding the named assets can reconstitute the plate.
+
+## `panel` — one panel of a set
+
+Present only when `spec.panels` is above 1.
+
+    "panel": {"index": 2, "of": 3}
+
+Every panel of a set carries the same `spec`. `index` counts from 1, from the left.
+A reprint from any one panel renders the whole set again and returns a zip of all
+its panels. The panels are 17 × 22 in each. `app/panels.py` derives each panel's
+rectangle from `spec.panels`, `spec.panel_gap_in` and the sheet size.
+
+The zip is named `<stem>_panels.zip` for PNG panels and `<stem>_panels_pdf.zip` for
+PDF pages. A member is `<stem>_2of3.png` or `<stem>_2of3.pdf`. As for a single
+sheet, only a PNG carries the manifest.
 
 ## Schema evolution
 

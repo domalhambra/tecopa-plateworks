@@ -165,9 +165,12 @@ def _panel_manifest(manifest, index, count):
 
 
 def _delivery_name(spec, fmt: str) -> str:
-    """The download name of a final: the file, or for a set the zip of its panels."""
+    """The download name of a final: the file, or for a set the zip of its panels.
+    The name is also the blob key, and a set is a zip in both formats. So a format
+    other than PNG is in the name: a PDF final does not replace the PNG one of the
+    same session, and each job's result link keeps its own file."""
     if panel_geo.is_set(spec):
-        return download_name(spec, "_panels", "zip")
+        return download_name(spec, "_panels" if fmt == "png" else f"_panels_{fmt}", "zip")
     return download_name(spec, fmt=fmt)
 
 
@@ -201,6 +204,11 @@ def _require_format(fmt: str, spec=None) -> str:
         # can't carry the reprint manifest anyway -- refuse honestly, never coerce.
         raise HTTPException(422, "wallpapers are PNG-only — PDF is a print deliverable")
     return fmt
+
+def _refuse_set(spec, what: str):
+    """A set is a print of two or three panels. It has no film and no wallpaper."""
+    if panel_geo.is_set(spec):
+        raise HTTPException(422, f"A set of panels has no {what}. Choose one sheet first.")
 
 def _embed_photos(spec, dpi):
     """Canonicalize a spec's hotspot photos to embedded JPEG bytes at the render box for
@@ -1306,6 +1314,7 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
     satisfy (zoom cap / off-DEM) is skipped and reported, never silently dropped;
     if NO device fits, that's an honest 422."""
     spec, region, sources, lineage = _require_stamped(session_id)
+    _refuse_set(spec, "wallpaper bundle")
     # dedupe while keeping order: a repeated id would write two identical arcnames
     # into one zip (most unzip tools silently keep only one) and render twice.
     ids = list(dict.fromkeys(p.strip() for p in presets.split(",") if p.strip()))
@@ -1482,6 +1491,7 @@ async def timelapse_submit(session_id: str = Form(...),
     if light_motion not in ("none", "diurnal", "seasonal", "auto"):
         raise HTTPException(422, "light_motion must be none, diurnal, seasonal, or auto")
     spec, region, sources, lineage = _require_stamped(session_id)
+    _refuse_set(spec, "film")
     pacing = _timelapse_pacing_or_422(max_frames, step_ms, hold_ms, leader_ms)
     tspec, target_dpi = _timelapse_target(spec, region, wallpaper_preset, dpi)
     frames = _animation_ceiling_or_422(tspec, target_dpi, pacing["max_frames"])
@@ -1697,6 +1707,11 @@ async def reprint_inspect(file: UploadFile = File(...)):
         "region_available": region_id in REGIONS,
         "sources": manifest.get("sources", []),
         "print_size_in": [spec_d.get("print_w_in"), spec_d.get("print_h_in")],
+        # a set: how many panels, the gap, and which panel this file is (None for
+        # a single sheet). Read raw, as every key here is: inspect builds no spec.
+        "panels": spec_d.get("panels", 1),
+        "panel_gap_in": spec_d.get("panel_gap_in", 0.0),
+        "panel": manifest.get("panel"),
         "title": spec_d.get("title_text", ""),
         "tracks": len(spec_d.get("tracks", []) or []),
         "hotspots": len(spec_d.get("hotspots", []) or []),
@@ -1740,6 +1755,8 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     # synchronous contract below.
     anim = manifest.get("animation")
     if isinstance(anim, dict):
+        # no route makes a film of a set, so a file with both was crafted: refuse it
+        _refuse_set(spec, "film")
         # a reprint reproduces the ARCHIVAL artifact, so a film reprints as APNG only:
         # webp/mp4 share twins come from a live session (/api/timelapse/submit) and
         # already 422 at _require_format above (they are not FINAL_FORMATS); pdf is
@@ -1780,21 +1797,23 @@ async def reprint(file: UploadFile = File(...), format: str = Form("png"),
     # manifest's own lineage are re-embedded verbatim (never incremented here). The
     # region_pack is re-stamped from the CURRENT server's plate -- these pixels came
     # from THIS plate, and a pre-pack poster is truthfully upgraded on reprint.
-    out = _encode_final(img, fmt,
-                        _final_manifest(spec, manifest.get("sources", []), embed_spec,
-                                        manifest.get("lineage", []),
-                                        region_pack=provenance.region_pack_block(
-                                            region.dir, labels=spec.labels,
-                                            biome=spec.biome,
-                                            dry_lakes=spec.dry_lakes)),
-                        dpi=spec.final_dpi())
+    # A file that is one panel of a set carries the set's whole spec, so the render
+    # above is the whole sheet: it is cut and zipped again, one file for each panel.
+    out = _encode_delivery(img, spec, fmt,
+                           _final_manifest(spec, manifest.get("sources", []), embed_spec,
+                                           manifest.get("lineage", []),
+                                           region_pack=provenance.region_pack_block(
+                                               region.dir, labels=spec.labels,
+                                               biome=spec.biome,
+                                               dry_lakes=spec.dry_lakes)),
+                           spec.final_dpi())
     log.info("event=reprint region=%s fmt=%s embed=%s ms=%d",
              spec.region_id, fmt, embed_spec, int((time.time() - t0) * 1000))
     # named from the REPRINTED spec: its edition and years, not the server's clock
     # (there is no clock) -- the copy self-documents exactly like the original did.
-    return StreamingResponse(io.BytesIO(out), media_type=FINAL_FORMATS[fmt][1],
+    return StreamingResponse(io.BytesIO(out), media_type=_delivery_media(spec, fmt),
                              headers={"Content-Disposition":
-                                      f'attachment; filename="{download_name(spec, fmt=fmt)}"'})
+                                      f'attachment; filename="{_delivery_name(spec, fmt)}"'})
 
 
 # ---- living editions: the poster is the save file (POST /api/continue) ----

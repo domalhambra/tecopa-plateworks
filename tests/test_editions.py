@@ -544,6 +544,7 @@ _WRONG_TYPES = [
     ("crs", 7), ("crs", None),
     ("contours", "yes"), ("compass", [1]), ("dry_lakes", {}), ("profile", None),
     ("tracks", 5), ("tracks", "abc"),
+    ("panels", "3"), ("panels", 2.5), ("panel_gap_in", "2"),
 ]
 # The reader is tolerant on purpose (invariant 7): it turns these into an empty list,
 # so the file opens. The rule for them is only "never a 500".
@@ -557,6 +558,21 @@ def test_a_crafted_field_type_is_a_422_on_both_file_verbs(field, value):
     m["spec"][field] = value
     if field == "screen_ppi":                      # read only for a wallpaper
         m["spec"]["output_kind"] = "wallpaper"
+    png = _embed(m)
+    for verb in ("/api/continue", "/api/reprint"):
+        r = c.post(verb, files={"file": ("x.png", png, "image/png")})
+        assert r.status_code == 422, f"{verb}: {r.status_code} {r.text[:200]}"
+        assert isinstance(r.json()["detail"], str)
+
+@pytest.mark.parametrize("fields", [
+    {"panels": 7}, {"panel_gap_in": 1.0}, {"panels": 2}, {"panel_gap_in": 2.0},
+    {"panels": 3, "panel_gap_in": 4.0, "bleed_in": 0.125},
+], ids=["count", "gap", "sheet", "gap-on-a-single", "bleed"])
+def test_a_crafted_set_is_a_422_on_both_file_verbs(fields):
+    """A set has a fixed menu. A file that claims another is refused, never rendered."""
+    c = _client()
+    m = _valid_manifest()
+    m["spec"].update(fields)
     png = _embed(m)
     for verb in ("/api/continue", "/api/reprint"):
         r = c.post(verb, files={"file": ("x.png", png, "image/png")})

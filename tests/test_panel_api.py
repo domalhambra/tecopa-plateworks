@@ -127,7 +127,8 @@ def test_a_pdf_set_is_a_zip_of_one_page_per_panel():
     z = zipfile.ZipFile(io.BytesIO(main._encode_delivery(_fake_sheet(spec), spec, "pdf", None, 10)))
     assert z.namelist() == [f"tecopa_lassen_ca_{k}of3.pdf" for k in (1, 2, 3)]
     assert all(z.read(n).startswith(b"%PDF") for n in z.namelist())
-    assert main._delivery_name(spec, "pdf") == "tecopa_lassen_ca_panels.zip"
+    # both formats are a zip, so the PDF one says so in its name
+    assert main._delivery_name(spec, "pdf") == "tecopa_lassen_ca_panels_pdf.zip"
     assert main._delivery_media(spec, "pdf") == "application/zip"
 
 
@@ -196,3 +197,158 @@ def test_a_final_of_a_set_is_a_zip_job():
     assert len(z.namelist()) == 2
     for name in z.namelist():
         assert Image.open(io.BytesIO(z.read(name))).size == (5100, 6600)
+
+
+def test_a_set_is_refused_by_the_film_and_wallpaper_routes():
+    c = _client()
+    j, r = _proof(c)
+    assert r.status_code == 200, r.text
+    film = c.post("/api/timelapse/submit", data={"session_id": j["session"]})
+    assert film.status_code == 422 and "set of panels" in film.json()["detail"]
+    wall = c.post("/api/wallpapers/submit", data={"session_id": j["session"],
+                                                  "presets": "ig_portrait"})
+    assert wall.status_code == 422 and "set of panels" in wall.json()["detail"]
+
+
+def test_inspect_names_the_panel_of_a_set():
+    spec = set_spec(3, 2.0, "wide", region_id="lassen_ca")
+    manifest = provenance.build_manifest(spec, [])
+    z = zipfile.ZipFile(io.BytesIO(main._encode_delivery(_fake_sheet(spec), spec, "png",
+                                                         manifest, 10)))
+    png = z.read(z.namelist()[1])
+    body = _client().post("/api/reprint/inspect",
+                          files={"file": ("p.png", png, "image/png")}).json()
+    assert body["panels"] == 3 and body["panel_gap_in"] == 2.0
+    assert body["panel"] == {"index": 2, "of": 3}
+    assert body["print_size_in"] == [70.0, 17.0]
+
+
+def test_inspect_of_a_single_sheet_says_one_panel():
+    c = _client()
+    j = _upload(c)
+    c.post("/api/proof", data={"session_id": j["session"], **_crop(j, 40.0, 0.75),
+                               "print_w": 6, "print_h": 8})
+    png = c.post("/api/final", data={"session_id": j["session"]}).content
+    body = c.post("/api/reprint/inspect", files={"file": ("p.png", png, "image/png")}).json()
+    assert body["panels"] == 1 and body["panel_gap_in"] == 0.0 and body["panel"] is None
+
+
+def test_any_panel_reprints_the_whole_set():
+    c = _client()
+    j, r = _proof(c)
+    assert r.status_code == 200, r.text
+    first = c.post("/api/final", data={"session_id": j["session"]})
+    assert first.headers["content-type"] == "application/zip"
+    z1 = zipfile.ZipFile(io.BytesIO(first.content))
+    panel_two = z1.read(z1.namelist()[1])
+    again = c.post("/api/reprint", files={"file": ("two.png", panel_two, "image/png")})
+    assert again.status_code == 200, again.text
+    assert again.headers["content-type"] == "application/zip"
+    assert "_panels.zip" in again.headers["content-disposition"]
+    z2 = zipfile.ZipFile(io.BytesIO(again.content))
+    assert z2.namelist() == z1.namelist()
+    for name in z1.namelist():
+        a = np.asarray(Image.open(io.BytesIO(z1.read(name))).convert("RGB"))
+        b = np.asarray(Image.open(io.BytesIO(z2.read(name))).convert("RGB"))
+        assert np.array_equal(a, b), name
+        assert provenance.extract(z2.read(name))["panel"] == provenance.extract(z1.read(name))["panel"]
+
+
+def test_a_film_file_that_claims_a_set_is_refused_on_reprint():
+    # no route makes a film of a set, so a file with both was crafted: a 422, no job
+    c = _client()
+    _, spec = _stamp_a_set(c)
+    manifest = provenance.build_manifest(spec, [])
+    manifest["animation"] = {"max_frames": 8, "step_ms": 90, "hold_ms": 900,
+                             "leader_ms": 0, "dpi": 20}
+    buf = io.BytesIO()
+    Image.new("RGB", (16, 16)).save(buf, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
+    r = c.post("/api/reprint", files={"file": ("f.png", buf.getvalue(), "image/png")})
+    assert r.status_code == 422 and "set of panels has no film" in r.json()["detail"]
+
+
+def _stamp_a_set(c):
+    """A stamped set session that costs no render: the spec is built and stored the
+    way a clean proof stores it."""
+    j = _upload(c)
+    crop = _crop(j)
+    spec, _ = main._build_spec(j["session"], (crop["x0"], crop["y0"], crop["x1"], crop["y1"]),
+                               36, 22, style={"panels": 2, "panel_gap_in": 2.0})
+    main.session.update(j["session"], spec=spec)
+    return j["session"], spec
+
+
+def test_a_pdf_final_of_a_set_does_not_replace_the_png_one(monkeypatch):
+    # both are zips, so the format is in the name: one session holds both blobs
+    _flat_raster(monkeypatch)
+    c = _client()
+    sid, spec = _stamp_a_set(c)
+    assert main._delivery_name(spec, "png") != main._delivery_name(spec, "pdf")
+    jobs = {fmt: c.post("/api/final/submit", data={"session_id": sid, "format": fmt}).json()["job"]
+            for fmt in ("png", "pdf")}
+    done = {fmt: _wait(c, jid) for fmt, jid in jobs.items()}
+    assert all(s["state"] == "done" for s in done.values()), done
+    keys = {fmt: main.QUEUE.status(jid)["result"] for fmt, jid in jobs.items()}
+    assert keys["png"].endswith("_panels.zip") and keys["pdf"].endswith("_panels_pdf.zip")
+    for fmt, magic in (("png", b"\x89PNG"), ("pdf", b"%PDF")):
+        out = c.get(done[fmt]["result"])
+        assert out.status_code == 200
+        assert out.headers["content-type"] == "application/zip"
+        assert os.path.basename(keys[fmt]) in out.headers["content-disposition"]
+        z = zipfile.ZipFile(io.BytesIO(out.content))
+        assert [n[-9:] for n in z.namelist()] == [f"_1of2.{fmt}", f"_2of2.{fmt}"]
+        assert all(z.read(n).startswith(magic) for n in z.namelist())
+
+
+def test_a_panel_file_continues_as_the_set():
+    """The poster is the save file, and so is any one panel of a set: /api/continue
+    restores the set, and its proof_form proofs the same sheet again."""
+    from tests.test_editions import _as_form
+    c = _client()
+    j, r = _proof(c)
+    assert r.status_code == 200, r.text
+    st = main.session.get(j["session"])
+    first = st["spec"]
+    manifest = main._final_manifest(first, st.get("sources", []), True, [])
+    z = zipfile.ZipFile(io.BytesIO(main._encode_delivery(_fake_sheet(first), first, "png",
+                                                         manifest, 10)))
+    panel_two = z.read(z.namelist()[1])
+    r = c.post("/api/continue", files={"file": ("two.png", panel_two, "image/png")})
+    assert r.status_code == 200, r.text
+    cont = r.json()
+    pre, form = cont["prefill"], cont["proof_form"]
+    assert pre["panels"] == 2 and pre["panel_gap_in"] == 2.0
+    assert (pre["print_w_in"], pre["print_h_in"]) == (36.0, 22.0)
+    assert pre["edition"] == 2
+    assert form["panels"] == 2 and form["panel_gap"] == 2.0
+    assert (form["print_w"], form["print_h"]) == (36.0, 22.0)
+    x0, y0, x1, y1 = cont["starter_crop"]
+    r = c.post("/api/proof", data={"session_id": cont["session"], "x0": x0, "y0": y0,
+                                   "x1": x1, "y1": y1, **_as_form(form)})
+    assert r.status_code == 200, r.text
+    assert Image.open(io.BytesIO(r.content)).size == (3456, 2112)     # 36 x 22 in at 96 dpi
+    second = main.session.get(cont["session"])["spec"]
+    assert (second.panels, second.panel_gap_in) == (2, 2.0)
+    assert (second.print_w_in, second.print_h_in) == (36.0, 22.0)
+    assert second.edition == first.edition + 1
+    assert max(abs(p - q) for p, q in zip(first.crop, second.crop)) < 1e-3
+
+
+def test_one_panel_of_a_set_makes_a_mockup_of_that_panel():
+    # the mockup route reads the pixels of the file it gets and nothing else of the
+    # set, so a panel file is staged as the one sheet it is. The zip is not a PNG.
+    spec = set_spec(2, 2.0, "tall", region_id="lassen_ca", title_text="Set")
+    data = main._encode_delivery(_fake_sheet(spec, 20), spec, "png",
+                                 provenance.build_manifest(spec, []), 20)
+    z = zipfile.ZipFile(io.BytesIO(data))
+    c = _client()
+    r = c.post("/api/mockups/submit",
+               files={"file": ("two.png", z.read(z.namelist()[1]), "image/png")},
+               data={"variants": "frame", "sizes": "540x540"})
+    assert r.status_code == 200, r.text
+    s = _wait(c, r.json()["job"])
+    assert s["state"] == "done", s
+    out = zipfile.ZipFile(io.BytesIO(c.get(s["result"]).content))
+    assert out.namelist() == ["mockup_frame_540x540.jpg"]
+    whole = c.post("/api/mockups/submit", files={"file": ("set.zip", data, "application/zip")})
+    assert whole.status_code == 422 and "not a PNG" in whole.json()["detail"]
