@@ -327,6 +327,168 @@ def test_wallpaper_poster_continues_in_wallpaper_mode():
     assert cont["prefill"]["wallpaper_preset"] == "desktop_fhd"
 
 
+# ---- endpoint: proof_form, the proof fields that rebuild the file's spec ----
+# /api/continue names the exact /api/proof form fields for the poster it opened, so no
+# client (the studio, the tecopa tool) copies the spec -> form mapping. The proof of
+# the mapping is a round trip: send proof_form + starter_crop back to /api/proof, and
+# the spec it stamps is the file's spec.
+
+# The two spec fields the round trip does not compare exactly, and why:
+#   edition -- /api/continue bumps it: the child is one past the parent.
+#   crop    -- it goes CRS metres -> overview px -> CRS metres, so it is compared
+#              within 1e-3 m and not bit for bit.
+# Every other field must come back equal. No field is left out because the form
+# cannot carry it.
+_ROUND_TRIP_SKIP = {"edition", "crop"}
+
+# What /api/proof reads from the form that proof_form never holds: the session and
+# the crop are the caller's, and sun_hour is the scrubber's input -- a file carries
+# the RESOLVED sun (sun_azimuth_deg + sun_altitude_deg), which wins at re-proof.
+_NOT_IN_PROOF_FORM = {"session_id", "x0", "y0", "x1", "y1", "sun_hour"}
+
+def _proof_params():
+    import inspect
+    from app import main
+    return set(inspect.signature(main.proof).parameters)
+
+def _as_form(proof_form):
+    """proof_form the way a multipart form sends it: a boolean is "true"/"false"."""
+    return {k: ("true" if v else "false") if isinstance(v, bool) else v
+            for k, v in proof_form.items()}
+
+def _proof_form_round_trip(c, ar=0.75, **proof_fields):
+    """Upload -> proof -> final -> continue -> proof again from proof_form +
+    starter_crop. Returns (first stamped spec, second stamped spec, continue answer)."""
+    from app import session
+    j = c.post("/api/upload", files=[_gpx("2024.gpx", _sample())]).json()
+    sid1 = j["session"]
+    r = c.post("/api/proof", data={"session_id": sid1, **_crop(j, ar=ar), **proof_fields})
+    assert r.status_code == 200, r.text
+    first = session.get(sid1)["spec"]
+    png = c.post("/api/final", data={"session_id": sid1}).content
+    cont = c.post("/api/continue", files={"file": ("p.png", png, "image/png")}).json()
+    form = cont["proof_form"]
+    assert set(form) <= _proof_params() - _NOT_IN_PROOF_FORM, sorted(form)
+    assert all(v is not None for v in form.values()), form   # every value fits a form
+    x0, y0, x1, y1 = cont["starter_crop"]
+    r = c.post("/api/proof", data={"session_id": cont["session"], "x0": x0, "y0": y0,
+                                   "x1": x1, "y1": y1, **_as_form(form)})
+    assert r.status_code == 200, r.text
+    return first, session.get(cont["session"])["spec"], cont
+
+def _assert_same_picture(first, second):
+    """The second spec is the first in every field but the two named above; a
+    failure names each field that differs."""
+    from app import serialize
+    a, b = (json.loads(json.dumps(serialize.spec_to_json(s))) for s in (first, second))
+    diff = [f"{k}: {str(a.get(k))[:80]} -> {str(b.get(k))[:80]}"
+            for k in sorted(set(a) | set(b))
+            if k not in _ROUND_TRIP_SKIP and a.get(k) != b.get(k)]
+    assert not diff, "proof_form did not restore: " + "; ".join(diff)
+    assert second.edition == first.edition + 1
+    drift = max(abs(p - q) for p, q in zip(first.crop, second.crop))
+    assert drift < 1e-3, f"crop moved {drift} m: {first.crop} -> {second.crop}"
+
+def test_proof_form_restores_a_styled_poster():
+    c = _client()
+    styled = {"print_w": 6, "print_h": 8, "title": "Three Summers", "bleed": 0.125,
+              "contours": "true", "compass": "false", "biome": "true", "labels": "true",
+              "track_width_pt": 3.4, "track_halo": 0.4, "track_color": "#4a6936",
+              "marker_size_in": 0.31, "marker_ring": 0.12, "photo_style": "polaroid",
+              "furniture_scale": 1.2, "terrain_depth": 0.8, "shadow_strength": 0.3,
+              "oblique": 0.35, "soft_light": 0.4, "haze_strength": 0.25,
+              "water_depth": 0.5, "dry_lakes": "true", "golden_strength": 0.4,
+              "profile": "true", "profile_height_in": 1.1,
+              "track_color_by": "elevation", "label_place": "anchor",
+              "track_weave": "false"}
+    first, second, cont = _proof_form_round_trip(c, **styled)
+    # the first proof really left the defaults: a default-only round trip proves nothing
+    plain = _spec()
+    moved = {n for n in ("print_w_in", "print_h_in", "title_text", "bleed_in", "contours",
+                         "compass", "biome", "labels", "track_width_pt", "track_halo",
+                         "track_rgb", "marker_diameter_in", "marker_ring",
+                         "photo_frame_style", "furniture_scale", "terrain_depth",
+                         "shadow_strength", "oblique", "soft_light", "haze_strength",
+                         "water_depth", "dry_lakes", "golden_strength", "profile",
+                         "profile_height_in", "track_color_by")
+             if getattr(first, n) != getattr(plain, n)}
+    assert len(moved) == 26, moved
+    # these two leave the FORM defaults ("smart", true), which are not the spec's
+    assert first.label_place == "anchor" and first.track_weave is False
+    _assert_same_picture(first, second)
+    form = cont["proof_form"]
+    assert form["track_color"] == "#4a6936"       # the #rrggbb string the form takes
+    assert form["contours"] is True and form["compass"] is False   # JSON booleans
+    assert form["output"] == "print" and form["light_mode"] == "archival"
+    # an archival print holds no sun and no device
+    assert not {"sun_azimuth_deg", "sun_altitude_deg", "wallpaper_preset",
+                "custom_px_w", "custom_px_h", "custom_ppi"} & set(form)
+    # additive: the answer's other keys are the ones it had before
+    assert set(cont) - {"proof_form"} == {
+        "session", "region", "name", "overview", "overview_size", "tracks",
+        "track_days", "hotspots", "starter_crop", "recovered", "skipped_duplicates",
+        "edition", "files", "year_span", "journey_light", "final_dpi", "prefill"}
+
+def test_proof_form_restores_a_title_less_poster():
+    c = _client()
+    first, second, cont = _proof_form_round_trip(c, print_w=6, print_h=8, title="-")
+    assert first.title_text == ""
+    assert cont["proof_form"]["title"] == "-"     # "" would regrow the region name
+    _assert_same_picture(first, second)
+
+def test_proof_form_restores_journey_light():
+    # the rebuilt tracks carry no timestamps, so the light comes back only through the
+    # RESOLVED sun: light_mode + the two angles, and never the scrubber's sun_hour.
+    c = _client()
+    first, second, cont = _proof_form_round_trip(
+        c, print_w=6, print_h=8, light_mode="journey", sun_hour=17.5)
+    assert first.light_mode == "journey"
+    form = cont["proof_form"]
+    assert form["light_mode"] == "journey" and "sun_hour" not in form
+    assert form["sun_azimuth_deg"] == first.sun_azimuth_deg
+    assert form["sun_altitude_deg"] == first.sun_altitude_deg
+    _assert_same_picture(first, second)
+
+def test_proof_form_restores_a_wallpaper_preset():
+    c = _client()
+    p = wallpaper.PRESETS["desktop_fhd"]
+    first, second, cont = _proof_form_round_trip(
+        c, ar=p.aspect, output="wallpaper", wallpaper_preset="desktop_fhd")
+    form = cont["proof_form"]
+    assert form["output"] == "wallpaper" and form["wallpaper_preset"] == "desktop_fhd"
+    assert not {"custom_px_w", "custom_px_h", "custom_ppi"} & set(form)
+    _assert_same_picture(first, second)
+
+def test_proof_form_restores_a_custom_device():
+    # a device the table does not carry comes back as the same custom device
+    c = _client()
+    first, second, cont = _proof_form_round_trip(
+        c, ar=1600 / 900, output="wallpaper", wallpaper_preset="custom",
+        custom_px_w=1600, custom_px_h=900, custom_ppi=120)
+    form = cont["proof_form"]
+    assert form["output"] == "wallpaper" and form["wallpaper_preset"] == "custom"
+    assert (form["custom_px_w"], form["custom_px_h"], form["custom_ppi"]) == (1600, 900, 120.0)
+    _assert_same_picture(first, second)
+
+def test_proof_form_keys_are_proof_route_parameters():
+    # every key is a real /api/proof form field (FastAPI ignores an unknown one, so a
+    # misspelled key would silently lose a picture decision) -- and, between a
+    # journey-light print and a custom device, every form field the route reads is
+    # named, so a field added to the route cannot be forgotten here.
+    from app import main
+    params = _proof_params()
+    wp = wallpaper.custom_preset(1600, 900, 120.0).spec_fields()
+    forms = [main._proof_form_for(s) for s in (
+        _spec(),
+        _spec(light_mode="journey", sun_azimuth_deg=250.0, sun_altitude_deg=20.0),
+        _spec(**wp))]
+    for form in forms:
+        assert set(form) <= params, sorted(set(form) - params)
+        assert not set(form) & _NOT_IN_PROOF_FORM
+        assert all(v is not None for v in form.values())
+    assert set().union(*forms) == params - _NOT_IN_PROOF_FORM
+
+
 # ---- endpoint: hostile manifests (the untrusted-input surface) ----
 
 def test_continue_rejects_a_png_without_a_manifest():
