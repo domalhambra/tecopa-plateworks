@@ -127,6 +127,19 @@ def test_debug_hook_names_no_journey_data():
     assert not named, f"debug.js names journey data: {named}"
 
 
+def test_debug_hook_reads_the_store_only_as_its_eight_fields():
+    """The word list above cannot name every store field, and a field has more than
+    one spelling: state['tracks'], a destructure, a spread, JSON.stringify(state). So
+    the store may appear only as state.<one of the eight>. The one other use is the
+    import itself."""
+    src = DEBUG_JS.read_text(encoding="utf-8")
+    code = re.sub(r"//.*$", "", src, flags=re.M)
+    loose = re.findall(
+        r"(?<![\w$])(?<![^.]\.)state\b"
+        r"(?!\.(?:session|target|view|region|output|edition|hasSpec|proofStale)\b)", code)
+    assert loose == ["state"], f"debug.js uses the store outside its eight fields: {loose}"
+
+
 def test_debug_hook_leaves_no_other_trace():
     """The hook writes nothing to the browser log, stores nothing, and has no second
     way to send."""

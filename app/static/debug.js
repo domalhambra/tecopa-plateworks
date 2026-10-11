@@ -3,6 +3,7 @@
 // /api/debug/studio, so a fault in the browser can be read from outside. The route
 // exists only when the engine runs with TECOPA_DEBUG=1. Without it the first post is
 // refused, and the hook stops for the page load: one refused post is the only trace.
+// A post that gets no answer (the engine restarts) is silent, and the hook waits.
 //
 // Three rules hold in every line below.
 // 1. The hook can never break the studio. Each entry point swallows its own failure.
@@ -19,8 +20,13 @@ const MAX_STACK = 8000;
 const MAX_SOURCE = 300;
 const MAX_STATE_TEXT = 200;
 // The engine refuses a post over 64 KB, and a refused post stops the hook. A UTF-16
-// unit is 3 bytes at most in UTF-8, so 20,000 JSON characters are at most 60 KB.
+// unit is 3 bytes at most in UTF-8, so 20,000 JSON characters of errors are at most
+// 60 KB. One error alone can pass that (JSON writes a control character as 6), so
+// tick() also measures the bytes and sends no errors in a post that is too large.
 const MAX_POST_CHARS = 20000;
+const MAX_POST_BYTES = 60000;
+const RESEND_MS = 30000;        // the state goes again after this, changed or not
+const SEND_LIMIT_MS = 10000;    // a request with no answer ends after this
 const TOAST_REPEAT_MS = 5000;   // the same toast text inside this time is one report
 const ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
@@ -32,6 +38,8 @@ let timer = null;
 let observer = null;
 let toastEl = null;
 let lastSent = null;            // the JSON text of the last state sent
+let lastSentAt = 0;
+let waitUntil = 0;              // no post before this time, after one that got no answer
 let lastToast = '';
 let lastToastAt = 0;
 const waiting = [];             // oldest first
@@ -115,7 +123,9 @@ function onRejection(e) {
 
 // "The last API error" is the error toast: the studio keeps no last error, each caller
 // shows a toast. One toast() call sets three properties, so this can run more than one
-// time for one toast: the same text inside TOAST_REPEAT_MS is reported one time.
+// time for one toast: the same text inside TOAST_REPEAT_MS is reported one time. The
+// observer sees the toast as it is after the task, so an error toast that another
+// toast replaces in the same task is not reported.
 function onToast() {
   quiet(() => {
     if (!toastEl || toastEl.hidden || toastEl.dataset.kind !== 'error') return;
@@ -145,40 +155,54 @@ function takeErrors() {
 
 // The store notifies only for some changes, so the hook compares and does not
 // subscribe: it builds the state each tick and posts only when the text changed or
-// errors wait. The first tick always posts, so the tab shows soon after load.
+// errors wait. The first tick always posts, so the tab shows soon after load. The
+// state also goes again each RESEND_MS: a restart empties the engine's buffer, and
+// an idle tab must show there again.
 function tick() {
   quiet(() => {
-    if (stopped || busy) return;
+    const now = Date.now();
+    if (stopped || busy || now < waitUntil) return;
     const current = snapshot();
     const text = JSON.stringify(current);
-    const changed = text !== lastSent;
-    if (!changed && !waiting.length) return;
+    const due = text !== lastSent || now - lastSentAt >= RESEND_MS;
+    if (!due && !waiting.length) return;
     const report = { tab };
-    if (changed) report.state = current;
+    if (due) report.state = current;
     const errors = takeErrors();
     if (errors.length) report.errors = errors;
-    const body = JSON.stringify(report);
-    lastSent = text;            // a post that fails stops the hook, so "sent" is enough
+    let body = JSON.stringify(report);
+    if (new TextEncoder().encode(body).length > MAX_POST_BYTES) {
+      delete report.errors;     // a 413 would stop the hook: the errors go, the state stays
+      body = JSON.stringify(report);
+    }
+    lastSent = text;
+    lastSentAt = now;
     busy = true;
     send(body);
   });
 }
 
-// The stop rule: a reply that is not 2xx, or a request that fails, stops the hook for
-// the page load. That is the gate-off case (the route does not exist) on the first
-// post. A later failure stops it too, for example when the engine stops: this is the
-// simplest safe rule, because the hook then never sends again to an engine that
-// refused it. A reload starts it again.
+function limit() {
+  try { return AbortSignal.timeout(SEND_LIMIT_MS); } catch { return undefined; }
+}
+
+// The stop rule: a reply that is not 2xx stops the hook for the page load. That is
+// the gate-off case (the route does not exist) on the first post, and the hook then
+// never sends again to an engine that refused it. A reload starts it again.
+// A request with no answer is different: the engine is stopped or restarts. That is
+// silent. The hook waits RESEND_MS and then sends the state again.
 async function send(body) {
   try {
     const reply = await fetch('/api/debug/studio', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },   // the engine refuses any other type
       body,
+      signal: limit(),
     });
     if (!reply.ok) stop();
   } catch {
-    stop();
+    lastSent = null;
+    waitUntil = Date.now() + RESEND_MS;
   } finally {
     busy = false;
   }
@@ -205,7 +229,8 @@ export function init() {
     toastEl = document.getElementById('toast');
     if (!toastEl) return;
     observer = new MutationObserver(onToast);
-    observer.observe(toastEl, { attributes: true, childList: true, characterData: true, subtree: true });
+    observer.observe(toastEl, { attributeFilter: ['hidden', 'data-kind'], childList: true,
+                                characterData: true, subtree: true });
   });
   quiet(() => { timer = setInterval(tick, TICK_MS); });
 }

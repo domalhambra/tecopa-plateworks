@@ -313,7 +313,6 @@ function wireSegmentedReflect(fieldId, value) {
 
 // ---- bootstrap -------------------------------------------------------------------
 function initAll() {
-  debug.init();   // first: it cannot throw, and a failure in the init below is then reported
   markProofPaths(controls.proofAffectingPaths());   // the stale-proof rule, declared once
   buildPanels();
   wireShell();
@@ -371,6 +370,7 @@ function initAll() {
 // (it decides whether wallpaper mode exists and restores its pref) and before the regions
 // are PROCESSED -- but the regions REQUEST must not wait behind the presets fetch.
 (async () => {
+  debug.init();   // first: it cannot throw, and a failure in the boot below is then reported
   const pendingRegions = api.getRegions();
   await loadWallpaperPresets();
   initAll();
