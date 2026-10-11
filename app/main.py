@@ -1963,6 +1963,7 @@ async def continue_poster(file: UploadFile = File(...),
 # never included, so every /api/debug path falls through to the static mount's 404.
 # DEBUG_FORMS holds the functions and not their names, so a renamed route breaks
 # this import. It is built with the gate off too, so the tests see that break.
+# This block stays above the two mounts: the "/" mount answers every path below it.
 DEBUG_FORMS = {"proof": proof, "final_submit": final_submit,
                "wallpapers_submit": wallpapers_submit,
                "timelapse_submit": timelapse_submit,
