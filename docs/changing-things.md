@@ -245,6 +245,9 @@ longer a contract for outside implementers. `provenance.spec_from_manifest` is t
 untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate. Every
 new verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect`
 is the deliberate exception: it reads manifest fields only, and builds no spec.
+Nothing has checked those fields, so `main._inspect_fields` gives each one a type and a
+fallback. Add a new key of the reply there, never as a raw read: NaN in one key made
+the whole reply a 500. `tests/test_panel_api.py` holds the hostile files.
 The zTXt keyword `trailprint` is frozen forever, and
 `ENGINE_URL` must name the real repo. `engine_version` records drift and is never read
 back. Never reintroduce omit-at-default. Tests: `tests/test_provenance.py`,

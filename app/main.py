@@ -1,5 +1,5 @@
 # app/main.py
-import io, json, os, re, shutil, time, zipfile
+import io, json, math, os, re, shutil, time, zipfile
 import hashlib
 import logging
 from typing import List, Optional
@@ -13,7 +13,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks, load_waypoints, Track
 from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
-                      CREDIT_MAX_CHARS, year_span)
+                      CREDIT_MAX_CHARS, TITLE_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
 from app import basecache, debug
 from app import panels as panel_geo
@@ -1670,17 +1670,129 @@ def _manifest_region_or_422(spec, verb: str, manifest=None, allow_plate_mismatch
                          f"current plate, or install the original plate for an exact one.")
     return region
 
+# ---- inspect reads an untrusted manifest and builds no spec (invariant 8) ----
+# So nothing has checked the fields it reports. Each one is typed here: a value of the
+# wrong type, NaN, Infinity, a long string or a deep list reads as that field's
+# fallback. The reply is then small, it is JSON, and one bad value changes one key.
+INSPECT_ENGINE_MAX_CHARS = 64        # the longest engine name so far has 17
+INSPECT_REGION_ID_MAX_CHARS = 255    # a region id is a folder name
+INSPECT_VERSION_MAX = 999_999
+INSPECT_SIZE_MAX_IN = 1e6
+INSPECT_MAX_DEPTH = 8                # a source, an ancestor, a pacing block: flat records
+
+
+def _int_in(v, lo, hi):
+    """v, when it is an int from lo to hi. A bool and a float are not ints. Else None."""
+    return v if type(v) is int and lo <= v <= hi else None
+
+
+def _size_in(v) -> bool:
+    """True for a finite number that can be a length in inches. The compare is False
+    for NaN and for Infinity, and it cannot overflow on an int of 4,000 digits."""
+    return type(v) in (int, float) and -INSPECT_SIZE_MAX_IN <= v <= INSPECT_SIZE_MAX_IN
+
+
+def _text(v, max_chars):
+    """v, when it is a string of at most max_chars that UTF-8 can carry. Else None.
+    JSON text can hold half of a surrogate pair ("\\ud800"); a reply cannot send it."""
+    if type(v) is not str or len(v) > max_chars:
+        return None
+    try:
+        v.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    return v
+
+
+def _plain_json(v, depth=INSPECT_MAX_DEPTH) -> bool:
+    """True when v is JSON a client can take as given: text UTF-8 can carry, finite
+    numbers, and lists and dicts at most `depth` deep. The depth limit is also the
+    recursion limit."""
+    if type(v) is float:
+        return math.isfinite(v)
+    if type(v) is str:
+        return _text(v, len(v)) is not None
+    if v is None or type(v) in (int, bool):
+        return True
+    if depth <= 0 or type(v) not in (list, dict):
+        return False
+    if type(v) is dict:
+        return all(_plain_json(k, 0) and _plain_json(x, depth - 1) for k, x in v.items())
+    return all(_plain_json(x, depth - 1) for x in v)
+
+
+def _manifest_spec(manifest) -> dict:
+    """The manifest's spec block, or {} when it is not a dict."""
+    spec_d = manifest.get("spec")
+    return spec_d if isinstance(spec_d, dict) else {}
+
+
+def _inspect_fields(manifest: dict) -> dict:
+    """The fields /api/reprint/inspect reports from the file alone, each one typed.
+    A well-formed manifest reads as it always did. Pure: no region, no disk."""
+    spec_d = _manifest_spec(manifest)
+    # spec.region_id goes first, as in /api/reprint: see reprint_inspect
+    region_id = spec_d.get("region_id") or manifest.get("region_id")
+    w, h = spec_d.get("print_w_in"), spec_d.get("print_h_in")
+    # a set: the count, the gap, and which panel this file is. The count comes from the
+    # spec, as it does in a reprint. The file's own `panel` key must agree with it.
+    panels = _int_in(spec_d.get("panels"), 2, 3) or 1
+    gap = spec_d.get("panel_gap_in")
+    gap = float(gap) if panels > 1 and _size_in(gap) and gap in panel_geo.GAPS_IN else 0.0
+    panel = manifest.get("panel")
+    if panels > 1 and isinstance(panel, dict) and _int_in(panel.get("of"), panels, panels):
+        index = _int_in(panel.get("index"), 1, panels)
+        panel = {"index": index, "of": panels} if index else None
+    else:
+        panel = None
+    title = spec_d.get("title_text")          # a long one is cut where a spec stops it
+    title = _text(title[:TITLE_MAX_CHARS], TITLE_MAX_CHARS) if type(title) is str else None
+    tracks, spots = spec_d.get("tracks"), spec_d.get("hotspots")
+    sources, lineage = manifest.get("sources"), manifest.get("lineage")
+    animation = manifest.get("animation")
+    return {
+        "manifest_version": _int_in(manifest.get("manifest_version"), 0, INSPECT_VERSION_MAX),
+        "engine": _text(manifest.get("engine"), INSPECT_ENGINE_MAX_CHARS),
+        "region_id": _text(region_id, INSPECT_REGION_ID_MAX_CHARS),
+        "sources": sources if type(sources) is list and _plain_json(sources) else [],
+        "print_size_in": [w, h] if _size_in(w) and _size_in(h) else [None, None],
+        "panels": panels,
+        "panel_gap_in": gap,
+        "panel": panel,
+        "title": title or "",
+        "tracks": len(tracks) if type(tracks) is list else 0,
+        "hotspots": len(spots) if type(spots) is list else 0,
+        "edition": _int_in(manifest.get("edition", spec_d.get("edition")), 1, EDITION_MAX) or 1,
+        "lineage": lineage if type(lineage) is list and _plain_json(lineage) else [],
+        "animation": animation if type(animation) is dict and _plain_json(animation) else None,
+    }
+
+
+def _inspect_response(reply: dict) -> JSONResponse:
+    """The inspect reply, encoded here and only here. JSONResponse encodes in its
+    constructor and refuses NaN and Infinity, so a reply that cannot be JSON fails at
+    this line and not after the route returns. That reply loses its three free-form
+    parts; the typed fields that stay always encode. So the route has no 500."""
+    try:
+        return JSONResponse(reply)
+    except (ValueError, TypeError, RecursionError, OverflowError):
+        log.warning("event=inspect.unencodable")
+        return JSONResponse({**reply, "sources": [], "lineage": [], "animation": None})
+
+
 @app.post("/api/reprint/inspect")
 async def reprint_inspect(file: UploadFile = File(...)):
     """Read a poster's provenance without rendering: which region, the source-file
     hashes, and a spec summary. Pure read of the embedded manifest -- never decodes the
-    image, so it's cheap and safe on any uploaded PNG."""
+    image, so it's cheap and safe on any uploaded PNG. It builds no spec, so
+    _inspect_fields types each field it reports: a crafted file gets a reply, not a 500."""
     manifest = _manifest_or_422(await _read_capped(file))
-    spec_d = manifest.get("spec", {})
+    spec_d = _manifest_spec(manifest)
+    fields = _inspect_fields(manifest)
     # resolve the region the way /api/reprint does: spec.region_id is what
     # spec_from_manifest renders against; the top-level duplicate is a cheap-inspection
     # convenience a crafted file can diverge -- the verdict must follow the verb.
-    region_id = spec_d.get("region_id") or manifest.get("region_id")
+    region_id = fields["region_id"]
     # plate verdict, straight off the manifest + the server's own block -- no spec is
     # built (inspect stays a pure, cheap read). Mirrors _manifest_region_or_422's
     # decision, as a report instead of a refusal: same pack_version predicate
@@ -1700,31 +1812,31 @@ async def reprint_inspect(file: UploadFile = File(...)):
             plate = "unverifiable"                # pre-pack file, or a hand-built plate
         else:
             plate = "verified" if file_pv == server_pv else "mismatch"
-    return {
-        "manifest_version": manifest.get("manifest_version"),
-        "engine": manifest.get("engine"),
+    return _inspect_response({
+        "manifest_version": fields["manifest_version"],
+        "engine": fields["engine"],
         "region_id": region_id,
-        "region_available": region_id in REGIONS,
-        "sources": manifest.get("sources", []),
-        "print_size_in": [spec_d.get("print_w_in"), spec_d.get("print_h_in")],
+        "region_available": region is not None,
+        "sources": fields["sources"],
+        "print_size_in": fields["print_size_in"],
         # a set: how many panels, the gap, and which panel this file is (None for
-        # a single sheet). Read raw, as every key here is: inspect builds no spec.
-        "panels": spec_d.get("panels", 1),
-        "panel_gap_in": spec_d.get("panel_gap_in", 0.0),
-        "panel": manifest.get("panel"),
-        "title": spec_d.get("title_text", ""),
-        "tracks": len(spec_d.get("tracks", []) or []),
-        "hotspots": len(spec_d.get("hotspots", []) or []),
+        # a single sheet, and for a panel key that does not agree with the spec).
+        "panels": fields["panels"],
+        "panel_gap_in": fields["panel_gap_in"],
+        "panel": fields["panel"],
+        "title": fields["title"],
+        "tracks": fields["tracks"],
+        "hotspots": fields["hotspots"],
         # living editions: what edition this file is, and its ancestor chain.
-        "edition": manifest.get("edition", spec_d.get("edition", 1)),
-        "lineage": manifest.get("lineage", []),
+        "edition": fields["edition"],
+        "lineage": fields["lineage"],
         # time-lapse: the pacing block if this file is a film (None for a still).
-        "animation": manifest.get("animation"),
+        "animation": fields["animation"],
         # plate identity: can THIS server reproduce these exact pixels?
         "plate": plate,
         "plate_file": file_pv,
         "plate_server": server_pv,
-    }
+    })
 
 @app.post("/api/reprint")
 async def reprint(file: UploadFile = File(...), format: str = Form("png"),
