@@ -4099,3 +4099,15 @@ This section is the build record. Each task adds what it measured or changed her
 ```
 
 The gate passes: the 116.8 megapixel sheet rendered in 47 seconds with a peak of 14.07 GB, under the 16 GB limit.
+
+The coordinator ran the gate a second time, on its own, for the gate's rule:
+
+```
+{"region": "rifle_aspen", "sheet_in": [59.0, 22.0], "pixels_mp": 116.8, "seconds": 44.4, "peak_gb": 15.29, "limit_gb": 16.0, "pass": true}
+```
+
+Both runs pass. The two peaks are 14.07 GB and 15.29 GB, so the margin under 16 GB is
+between 0.7 and 1.9 GB: thin. The peak changes from run to run because the relief
+passes run at the same time. Pillow also prints a `DecompressionBombWarning` at 108.8
+megapixels. It is a warning below 179 megapixels, and the largest set is 116.8. A task
+that makes the final of a set larger must run this gate again.
