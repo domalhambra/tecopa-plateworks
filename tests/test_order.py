@@ -164,9 +164,24 @@ def test_a_bad_size_still_says_what_a_size_looks_like():
 
 def test_the_gap_is_zero_two_or_four():
     assert [od.parse_gap(g) for g in (0, 2, 4, 2.0)] == [0.0, 2.0, 4.0, 2.0]
-    for bad in (1, "2", True, 3.5, None, float("nan")):
+    for bad in (1, "2", True, False, 3.5, None, float("nan"), float("inf"), 10 ** 400, [2]):
         with pytest.raises(od.OrderError, match="gap must be 0, 2 or 4"):
             od.parse_gap(bad)
+    assert len(str(pytest.raises(od.OrderError, od.parse_gap, 10 ** 400).value)) < 100
+    assert repr(od.parse_gap(-0.0)) == "0.0"          # one hash, and "0 in gap" in the report
+
+
+def test_an_order_made_in_code_with_an_odd_orientation_reads_as_landscape():
+    # load() refuses any word but portrait and landscape; a directly built Order
+    # keeps the old rule, in which every other word is landscape
+    odd = od.Order("/x", "T", "", (11.0, 17.0), "sideways", "")
+    assert odd.print_in() == (17.0, 11.0)
+
+
+def test_a_sizes_list_leaves_the_hash_of_a_single_sheet_alone(tmp_path):
+    plain = od.load(_order(tmp_path, 'title = "T"\nsize = "11x17"\n'))
+    listed = od.load(_order(tmp_path / "b", 'title = "T"\nsize = "11x17"\nsizes = ["11x17", "two"]\n'))
+    assert listed.inputs_hash() == plain.inputs_hash()
 
 
 def test_a_set_order_has_the_hung_sheet(tmp_path):

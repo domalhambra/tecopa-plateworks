@@ -89,10 +89,12 @@ def parse_order_size(text) -> tuple:
 
 def parse_gap(value) -> float:
     """The gap of a set, in inches: 0, 2 or 4."""
+    # membership on the value itself: float() of a 400-digit integer overflows
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or float(value) not in panel_geo.GAPS_IN):
-        raise OrderError(f"gap must be 0, 2 or 4 (inches), not {value!r}")
-    return float(value)
+            or value not in panel_geo.GAPS_IN):
+        text = repr(value) if len(repr(value)) <= 40 else repr(value)[:40] + "..."
+        raise OrderError(f"gap must be 0, 2 or 4 (inches), not {text}")
+    return float(value) + 0.0          # -0.0 becomes 0.0: one hash, and "0 in gap"
 
 
 def parse_sizes(value) -> tuple:
