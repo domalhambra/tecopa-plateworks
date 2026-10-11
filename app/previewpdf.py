@@ -12,13 +12,24 @@ the engine's own font chain: the operator's TECOPA_FONT bindings, else Georgia o
 DejaVu. Colour is in the maps only.
 
 Each page is laid out first, as boxes, and drawn second. The tests read the boxes:
-nothing leaves the margins, no caption sits on another, every size is at one scale."""
+nothing leaves the margins, no caption sits on another, every size is at one scale.
+They read the drawn pixels too: each map, line and rule is where its box says.
+
+Every length is in inches or points and becomes pixels through PAGE_DPI (_px, _pt),
+so the page can change its resolution and keep its layout."""
 import os
 
 from PIL import Image, ImageDraw
 
+from app.order import OrderError
+
 PAGE_IN = (11.0, 8.5)        # US Letter, landscape
-PAGE_DPI = 150
+# 300, not 150: a set's map is 3,500 px wide, and at 150 dpi it was shown at 1,500 px
+# with place names about 4 px tall, and both rules below rounded to 2 px.
+PAGE_DPI = 300
+# 85 with no chroma subsampling: five pages are about 4.6 MB (90 gave 5.6 MB), and a
+# track's colour stays sharp on its edge.
+JPEG_QUALITY = 85
 MARGIN_IN = 0.5              # print-documents.md: a Letter piece
 PAPER = (255, 255, 255)      # black text on white paper
 INK = (0x1B, 0x1E, 0x26)     # body, canon --text
@@ -41,8 +52,10 @@ CAPTION_GAP_IN = 0.08        # between a map and its caption
 ROW_GAP_IN = 0.22            # between two rows of wall
 WALL_CAPTION_IN = 3.2        # a caption on the wall wraps at this width
 SIDE_CAPTION_IN = 2.6        # a caption beside a tall map wraps at this width
-BRAND = "Tecopa Plateworks"
+BRAND = "Tecopa Plateworks"     # in full, never the bare second word (invariant 14)
 WALL_LABEL = "Every size on one wall, at one scale"
+ELLIPSIS = "…"
+FOOT_LABEL_SHARE = 0.35      # of the page's width: the most "title · page" takes in the footer
 SOFA_LABEL = "A 7 ft sofa, for scale"
 NOTE = ("This is a preview. The final map is drawn from finer terrain data, "
         "and a place name can sit in another position.")
@@ -54,6 +67,25 @@ def _px(inches) -> int:
 
 def _pt(points) -> int:
     return round(points * PAGE_DPI / 72.0)
+
+
+def _rule(points) -> int:
+    """The weight of a rule in px, at least 1."""
+    return max(1, _pt(points))
+
+
+def document_title(title) -> str:
+    """The Title of the PDF document, as a reader's window and a file list show it."""
+    return f"{title}: size preview"
+
+
+def size_label(page=None, pages=None) -> str:
+    """The section label of a size page: the size's place among the offered sizes.
+    The wall is page 1, so page k shows size k - 1. The size's name is the first
+    line of the caption beside the map, and it is not said twice."""
+    if page is None:
+        return "One size"
+    return f"Size {page - 1} of {pages - 1}" if pages else f"Size {page - 1}"
 
 
 def _font(pt, role="body"):
@@ -68,6 +100,28 @@ def _width(text, font, track=0.0) -> float:
     return sum(font.getlength(ch) for ch in text) + track * max(0, len(text) - 1)
 
 
+def _split_word(word, font, width, track=0.0) -> list:
+    """A word wider than `width` px as pieces that fit, each as long as it can be and
+    at least one character. The cut is found by doubling and then halving, and each
+    measurement is of one piece, so the cost grows with the word's length and not
+    with its square: an unbroken 5,000-character word took minutes."""
+    pieces, at = [], 0
+    while at < len(word):
+        n = 1
+        while at + n < len(word) and _width(word[at:at + 2 * n], font, track) <= width:
+            n *= 2
+        lo, hi = n, min(2 * n, len(word) - at)      # n characters fit, 2n may not
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if _width(word[at:at + mid], font, track) <= width:
+                lo = mid
+            else:
+                hi = mid - 1
+        pieces.append(word[at:at + lo])
+        at += lo
+    return pieces
+
+
 def wrap(text, font, width, track=0.0) -> list:
     """`text` as lines no wider than `width` px. A word wider than the width is cut,
     so nothing runs off the page."""
@@ -79,16 +133,31 @@ def wrap(text, font, width, track=0.0) -> list:
             continue
         if line:
             lines.append(line)
-        line = word
-        while _width(line, font, track) > width and len(line) > 1:
-            n = len(line) - 1
-            while n > 1 and _width(line[:n], font, track) > width:
-                n -= 1
-            lines.append(line[:n])
-            line = line[n:]
+        if _width(word, font, track) <= width:
+            line = word
+        else:
+            *full, line = _split_word(word, font, width, track)
+            lines += full
     if line:
         lines.append(line)
     return lines or [""]
+
+
+def shorten(text, font, width) -> str:
+    """`text` on one line no wider than `width` px: whole when it fits, else cut at
+    the end of a word, with an ellipsis. A first word too long for the line is cut
+    inside the word."""
+    if font.getlength(text) <= width:
+        return text
+    kept = ""
+    for word in text.split():
+        trial = f"{kept} {word}" if kept else word
+        if font.getlength(trial + ELLIPSIS) > width:
+            break
+        kept = trial
+    if not kept and text.split():
+        kept = _split_word(text.split()[0], font, max(0.0, width - font.getlength(ELLIPSIS)))[0]
+    return kept + ELLIPSIS
 
 
 def _draw(d, x, y, text, font, fill, track=0.0) -> None:
@@ -157,78 +226,101 @@ def _content_width() -> int:
     return _px(PAGE_IN[0]) - 2 * _px(MARGIN_IN)
 
 
-def _header(d, title, label, first) -> int:
-    """Draw the header (or only measure it, with d=None) and return the y where the
-    page's content starts. Page 1: the product's name, the order's title, the section
-    label and its rule. A later page has no title (print-documents.md: page 1 only)."""
+def header_layout(title, label, first) -> dict:
+    """The header as lines and a rule. Page 1: the product's name, the order's title,
+    the section label and its rule. A later page has no title (print-documents.md:
+    page 1 only). Each line is a dict: its `part` ("brand", "title" or "label"), its
+    `text`, `pt`, `fill`, `role`, the `track` between glyphs in px, and its `box`.
+    `bottom` is the y where the page's content starts."""
     x, y, width = _px(MARGIN_IN), _px(MARGIN_IN), _content_width()
+    lines = []
 
-    def block(text, pt, fill, role="body", track=0.0):
+    def block(part, text, pt, fill, role="body", track=0.0):
         nonlocal y
         font = _font(pt, role)
         gap = track * _pt(pt)
         for line in wrap(text, font, width, gap):
-            if d is not None:
-                _draw(d, x, y, line, font, fill, gap)
+            lines.append({"part": part, "text": line, "pt": pt, "fill": fill, "role": role,
+                          "track": gap, "box": (x, y, int(_width(line, font, gap)) + 1,
+                                                _pt(LEADING[pt]))})
             y += _pt(LEADING[pt])
 
-    block(BRAND.upper(), LABEL_PT, INK_STRONG, track=LABEL_TRACK)
+    block("brand", BRAND.upper(), LABEL_PT, INK_STRONG, track=LABEL_TRACK)
     if first:
         y += _px(0.06)
-        block(title, TITLE_PT, INK_STRONG, role="title")
+        block("title", title, TITLE_PT, INK_STRONG, role="title")
     y += _px(0.10)
-    block(label.upper(), LABEL_PT, INK_STRONG, track=LABEL_TRACK)
+    block("label", label.upper(), LABEL_PT, INK_STRONG, track=LABEL_TRACK)
     y += _px(0.03)
-    rule = max(1, _pt(LABEL_RULE_PT))
-    if d is not None:
-        d.rectangle([x, y, x + width - 1, y + rule - 1], fill=INK_STRONG)
-    return y + rule + _px(0.18)
+    rule = (x, y, width, _rule(LABEL_RULE_PT))
+    return {"lines": lines, "rule": rule, "bottom": y + rule[3] + _px(0.18)}
+
+
+def _header(d, head) -> None:
+    for line in head["lines"]:
+        _draw(d, line["box"][0], line["box"][1], line["text"], _font(line["pt"], line["role"]),
+              line["fill"], line["track"])
+    x, y, w, h = head["rule"]
+    d.rectangle([x, y, x + w - 1, y + h - 1], fill=INK_STRONG)
 
 
 def footer_lines(title, page=None, pages=None) -> dict:
     """The footer's words: the note, wrapped to the left of the page label. The label
-    is the standard's "title · page"; a title too long for it leaves the number."""
+    is the standard's "title · page". A title too long for its share of the line is
+    cut at a word with an ellipsis, so every page names its order."""
     font, width = _font(MUTED_PT), _content_width()
     label = ""
     if page is not None:
-        number = f"{page} of {pages}" if pages else f"{page}"
-        label = f"{title}  ·  {number}"
-        if font.getlength(label) > 0.35 * width:
-            label = number
+        number = "  ·  " + (f"{page} of {pages}" if pages else f"{page}")
+        label = shorten(title, font, FOOT_LABEL_SHARE * width - font.getlength(number)) + number
     room = width - (font.getlength(label) + _px(0.3) if label else 0)
     return {"note": wrap(NOTE, font, room), "page": label}
 
 
 def _footer_height(foot) -> int:
-    return (max(1, _pt(FOOT_RULE_PT)) + _px(0.06)
+    return (_rule(FOOT_RULE_PT) + _px(0.06)
             + _pt(LEADING[MUTED_PT]) * max(1, len(foot["note"])))
 
 
-def _footer(d, foot) -> None:
+def footer_layout(foot) -> dict:
+    """The boxes of the footer: its `rule`, each line of the `note`, and the `page`
+    label on the right of the first line (None when the page has no label)."""
     font, x, width = _font(MUTED_PT), _px(MARGIN_IN), _content_width()
+    lead = _pt(LEADING[MUTED_PT])
     y = _px(PAGE_IN[1]) - _px(MARGIN_IN) - _footer_height(foot)
-    rule = max(1, _pt(FOOT_RULE_PT))
-    d.rectangle([x, y, x + width - 1, y + rule - 1], fill=INK_STRONG)
-    y += rule + _px(0.06)
+    rule = (x, y, width, _rule(FOOT_RULE_PT))
+    y += rule[3] + _px(0.06)
+    page = None
     if foot["page"]:
-        d.text((x + width - font.getlength(foot["page"]), y), foot["page"], fill=MUTED, font=font)
-    for line in foot["note"]:
-        d.text((x, y), line, fill=MUTED, font=font)
-        y += _pt(LEADING[MUTED_PT])
+        w = int(font.getlength(foot["page"])) + 1
+        page = (x + width - w, y, w, lead)
+    note = [(x, y + k * lead, int(font.getlength(line)) + 1, lead)
+            for k, line in enumerate(foot["note"])]
+    return {"rule": rule, "note": note, "page": page}
+
+
+def _footer(d, foot) -> None:
+    font, lay = _font(MUTED_PT), footer_layout(foot)
+    x, y, w, h = lay["rule"]
+    d.rectangle([x, y, x + w - 1, y + h - 1], fill=INK_STRONG)
+    if lay["page"]:
+        d.text(lay["page"][:2], foot["page"], fill=MUTED, font=font)
+    for line, box in zip(foot["note"], lay["note"]):
+        d.text(box[:2], line, fill=MUTED, font=font)
 
 
 def content_box(title, label, first, page=None, pages=None) -> tuple:
     """(x0, y0, x1, y1) in px: the part of the page between the header and the footer."""
     m = _px(MARGIN_IN)
     foot = footer_lines(title, page, pages)
-    return (m, _header(None, title, label, first), m + _content_width(),
+    return (m, header_layout(title, label, first)["bottom"], m + _content_width(),
             _px(PAGE_IN[1]) - m - _footer_height(foot) - _px(0.12))
 
 
 def _page(title, label, first, page=None, pages=None):
     img = Image.new("RGB", (_px(PAGE_IN[0]), _px(PAGE_IN[1])), PAPER)
     d = ImageDraw.Draw(img)
-    _header(d, title, label, first)
+    _header(d, header_layout(title, label, first))
     _footer(d, footer_lines(title, page, pages))
     return img, d, content_box(title, label, first, page, pages)
 
@@ -312,7 +404,7 @@ def wall_page(offered, names, title, page=None, pages=None):
         img.paste(thumb.resize((w, h), Image.LANCZOS), (x, y))
         _draw_caption(d, it["caption"][0], it["caption"][1], it["block"])
     x0, y, x1 = lay["sofa"]
-    weight, tick = max(1, _pt(FOOT_RULE_PT)), _px(0.06)
+    weight, tick = _rule(FOOT_RULE_PT), _px(0.06)
     d.rectangle([x0, y, x1 - 1, y + weight - 1], fill=INK)
     for end in (x0, x1 - weight):
         d.rectangle([end, y - tick, end + weight - 1, y + tick], fill=INK)
@@ -351,7 +443,7 @@ def size_layout(entry, names, box) -> dict:
 
 def size_page(entry, names, title, page=None, pages=None):
     """One size, its map as large as the page allows."""
-    img, d, box = _page(title, names[entry["key"]]["name"], False, page, pages)
+    img, d, box = _page(title, size_label(page, pages), False, page, pages)
     lay = size_layout(entry, names, box)
     x, y, w, h = lay["map"]
     art = Image.open(entry["image"]).convert("RGB")
@@ -363,23 +455,31 @@ def size_page(entry, names, title, page=None, pages=None):
 def write(path, entries, names, title) -> int:
     """Write the PDF and return its page count. A size that is not offered has no page.
     The file is written under a temporary name in its own folder and then renamed, so
-    a write that fails leaves no half file and keeps the last good preview."""
+    a write that fails leaves no half file and keeps the last good preview. A folder
+    or a file that cannot be written is an OrderError that names the path.
+
+    Pillow takes the document's Title from the file name, and that is the temporary
+    name: the title and the author are given."""
     offered = [e for e in entries if e["offered"]]
     count = 1 + len(offered)
     pages = [wall_page(offered, names, title, 1, count)]
     pages += [size_page(e, names, title, k, count) for k, e in enumerate(offered, start=2)]
     path = os.path.abspath(path)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     # not mkstemp: its file is owner-only, and this one goes to a client
     tmp = f"{path}.{os.getpid()}.tmp"
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         pages[0].save(tmp, "PDF", save_all=True, append_images=pages[1:],
-                      resolution=PAGE_DPI, quality=90, subsampling=0)
+                      resolution=PAGE_DPI, quality=JPEG_QUALITY, subsampling=0,
+                      title=document_title(title), author=BRAND)
         os.replace(tmp, path)
-    except BaseException:
+    except BaseException as ex:
         try:
             os.remove(tmp)
-        except FileNotFoundError:
+        except OSError:
             pass
+        if isinstance(ex, OSError):
+            raise OrderError(f"The preview PDF cannot be written to {path}: "
+                             f"{ex.strerror or ex}") from ex
         raise
     return count

@@ -173,6 +173,15 @@ def _no_track(numbers) -> str:
     return f"panels {', '.join(numbers[:-1])} and {numbers[-1]} hold no track"
 
 
+def _share_under(share, limit) -> str:
+    """A share that is under its limit, for a refusal: "24%". The rule compares at
+    three places, so a share that prints as the limit gets one decimal: "29.6%",
+    never "30% ..., under 30%"."""
+    share = round(share, 3)
+    whole = f"{share:.0%}"
+    return whole if whole != f"{limit:.0%}" else f"{share:.1%}"
+
+
 def judge(cand, frame, bounds_m, tracks_m) -> dict:
     """One size's entry: its frame, its shares, and the fit rule's answer."""
     w_share, h_share = track_shares(bounds_m, frame)
@@ -186,8 +195,9 @@ def judge(cand, frame, bounds_m, tracks_m) -> dict:
         empty = [str(k + 1) for k, has in enumerate(panels_with_track(tracks_m, frame, cand))
                  if not has]
         if round(w_share, 3) < SET_MIN_FILL:
-            entry.update(offered=False, why=f"the tracks span {w_share:.0%} of the sheet's "
-                                            f"width, under {SET_MIN_FILL:.0%}")
+            entry.update(offered=False,
+                         why=f"the tracks span {_share_under(w_share, SET_MIN_FILL)} of the "
+                             f"sheet's width, under {SET_MIN_FILL:.0%}")
         elif empty:
             entry.update(offered=False, why=_no_track(empty))
     return entry
@@ -370,7 +380,9 @@ def write_preview_report(order, state, names) -> str:
     """What the preview decided, and the lines to write in order.toml for each size
     the client can choose. Prepare then frames that size with the same rule. Each
     key is on a line of its own, so the lines can be pasted into order.toml as they
-    are: TOML takes the indent, and it does not take two keys on one line."""
+    are: TOML takes the indent, and it does not take two keys on one line. An offered
+    size has the price the PDF prints for it, in quotes, so the prices can be checked
+    without opening the PDF."""
     def sentence(text):          # one line, and the report adds the full stop
         return " ".join(str(text).split()).rstrip(".")
     plates = state.get("plates") or [state["plate"]]
@@ -387,7 +399,8 @@ def write_preview_report(order, state, names) -> str:
         if not e["offered"]:
             lines.append(f"- {what}: not offered, {sentence(e['why'])}.")
             continue
-        lines += [f"- {what}: offered, tracks fill {e['fill']:.0%}. In order.toml:",
+        lines += [f"- {what}: offered, price \"{names[e['key']]['price']}\", "
+                  f"tracks fill {e['fill']:.0%}. In order.toml:",
                   f'    size = "{e["key"]}"', f'    orientation = "{e["orientation"]}"']
         if e["panels"] > 1:
             lines.append(f"    gap = {e['gap']:g}")
@@ -414,7 +427,8 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     preview.json: `sizes` holds every entry, each with the `epsg` it is framed in
     and, when it was drawn, the id of its `plate`. `plates` holds one plate for each
     projection, with its `epsg` and the keys of the `sizes` drawn on it. `plate` and
-    `epsg` are the first plate and its projection."""
+    `epsg` are the first plate and its projection. `names` holds the name and the
+    price of every size as the PDF was given them, from config/sizes.toml."""
     from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env
     refuse_inside_repo(orders_root())
     order = load(order_dir)
@@ -468,7 +482,7 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     pdf = os.path.join(order.dir, "out", "preview", f"{slugify(order.title)}-preview.pdf")
     (write_pdf or previewpdf.write)(pdf, entries, names, order.title)
     state = {"epsg": plates[0]["epsg"], "plate": plates[0], "plates": plates, "sizes": entries,
-             "pdf": pdf, "seconds": round(time.monotonic() - started, 1)}
+             "names": names, "pdf": pdf, "seconds": round(time.monotonic() - started, 1)}
     _dump(os.path.join(work, "preview.json"), state)
     write_preview_report(order, state, names)
     return state

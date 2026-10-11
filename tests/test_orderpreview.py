@@ -164,6 +164,33 @@ def test_a_widened_frame_is_judged_as_widened():
         assert plan[key]["why"] == "the tracks span 15% of the sheet's width, under 30%"
 
 
+def _share_of_two(share):
+    """The entry of the 46 x 17 in set for tracks that span `share` of its width."""
+    cand = [c for c in opv.candidates("two") if c.orientation == "landscape"][0]
+    frame = (0.0, 0.0, 46 * KM, 17 * KM)
+    half = share * 46 / 2
+    box = ((23 - half) * KM, 8 * KM, (23 + half) * KM, 8 * KM)
+    return opv.judge(cand, frame, box, [_line(23 - half, 8, 23 + half, 8)])
+
+
+def test_a_refusal_never_says_30_percent_is_under_30_percent():
+    # the rule compares the share at three places, and the sentence printed none:
+    # "the tracks span 30% of the sheet's width, under 30%"
+    entry = _share_of_two(0.296)
+    assert not entry["offered"] and entry["width_share"] == 0.296
+    assert entry["why"] == "the tracks span 29.6% of the sheet's width, under 30%"
+    assert _share_of_two(0.2994)["why"] == "the tracks span 29.9% of the sheet's width, under 30%"
+    # 0.2996 is 0.300 at three places: the rule offers it, so there is no sentence
+    at_the_line = _share_of_two(0.2996)
+    assert at_the_line["offered"] and at_the_line["width_share"] == 0.3 and at_the_line["why"] == ""
+    # away from the line a whole number is enough
+    assert _share_of_two(0.2944)["why"] == "the tracks span 29% of the sheet's width, under 30%"
+    assert _share_of_two(0.15)["why"] == "the tracks span 15% of the sheet's width, under 30%"
+    for share in np.arange(0.2900, 0.2996, 0.0001):          # no share near the line contradicts itself
+        why = _share_of_two(float(share))["why"]
+        assert why and float(why.split("span ")[1].split("%")[0]) < 30.0, (share, why)
+
+
 # ---- the coarse plate and the maps: Prepare's stub subprocesses, no network ----
 
 def _fake_render(calls):
@@ -497,6 +524,9 @@ def test_every_entry_of_preview_json_says_why(tmp_path, tools):
     state = _preview(d, tools)
     saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
     assert saved["sizes"] == state["sizes"] and saved["pdf"] == state["pdf"]
+    # the names and prices the PDF was written with, as config/sizes.toml gave them
+    assert saved["names"] == state["names"] == opv.sizes.load()
+    assert saved["names"]["11x17"] == {"name": "11 × 17 in", "price": "$69"}
     for e in saved["sizes"]:
         assert {"ends_behind", "warning", "why", "blocked", "offered", "fill"} <= set(e)
         assert isinstance(e["ends_behind"], list) and isinstance(e["blocked"], bool)
@@ -560,6 +590,11 @@ def test_the_report_lists_each_size_and_the_lines_for_order_toml(tmp_path, tools
             or f'- 11 × 17 in, {small["orientation"]}, 17 x 11 in: offered' in report)
     assert (f'tracks fill {small["fill"]:.0%}. In order.toml:\n    size = "11x17"\n'
             f'    orientation = "{small["orientation"]}"\n- 17 × 22 in') in report
+    # each offered size with the price the PDF prints, so the PDF need not be opened
+    assert f': offered, price "$69", tracks fill {small["fill"]:.0%}. In order.toml:' in report
+    assert report.count('offered, price "$99", tracks fill') == 1
+    offered = [e for e in state["sizes"] if e["offered"]]
+    assert report.count(', price "') == len(offered)         # a refused size has no price
     assert "- Three panels" in report and "not offered" in report
     assert report.rstrip().splitlines()[-1].startswith("Time: ")
 
@@ -583,7 +618,8 @@ def test_the_report_gives_a_set_its_gap_and_its_warnings(tmp_path, tools):
         "Preview: /x/out/preview/t-preview.pdf",
         "Plate: preview_x (built), 30 m grid",
         "Sizes:",
-        "- Three panels, landscape, 70 x 17 in: offered, tracks fill 60%. In order.toml:",
+        '- Three panels, landscape, 70 x 17 in: offered, price "Price on request", '
+        "tracks fill 60%. In order.toml:",
         '    size = "three"',
         '    orientation = "landscape"',
         "    gap = 2",
@@ -701,6 +737,28 @@ def test_a_size_the_painter_refuses_is_left_out_and_the_others_are_drawn(
             "the available elevation data (31% of it has no DEM coverage). Pan or shrink the "
             "crop to keep it inside the region.\n") in report
     assert report.count("In order.toml:") == 3
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write to a read-only folder")
+def test_an_out_folder_that_cannot_be_written_stops_the_command_with_a_sentence(
+        tmp_path, tools, monkeypatch, capsys):
+    # the real PDF writer: a PermissionError was a traceback after the plate was built
+    from scripts import order as order_cli
+    _painter(monkeypatch, lambda spec: False)
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    (d / "out").mkdir()
+    (d / "out").chmod(0o555)
+    try:
+        assert order_cli.main(["preview", str(d)], tools=tools) == 1
+        err = capsys.readouterr().err
+        pdf = d / "out" / "preview" / "smith_home_ground-preview.pdf"
+        assert f"preview stopped: The preview PDF cannot be written to {pdf}: " in err
+        assert "Traceback" not in err and list((d / "out").iterdir()) == []
+        assert not (d / "work" / "preview" / "preview.json").exists()
+    finally:
+        (d / "out").chmod(0o755)
+    assert order_cli.main(["preview", str(d)], tools=tools) == 0      # the folder is fixed
+    assert pdf.read_bytes().startswith(b"%PDF")
 
 
 def test_no_size_the_painter_can_draw_stops_the_preview_before_the_pdf(

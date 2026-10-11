@@ -372,3 +372,16 @@ this document said:
 - **The 2× rule is asked only of a size that can still be offered** (§5, step 2): each
   query of the 3DEP index is a request, and a wider frame cannot bring back a set that
   the width rule refuses.
+- **The prices file is read strictly** (§5, "Prices"). `config/sizes.toml` is read before
+  any query or build. A name and a price are text in quotes. A row has `key`, `name` and
+  `price` and no other field. The file is UTF-8. A name has at most 40 characters and a
+  price at most 24. Each fault stops the command with a sentence that names the size and
+  the field. A test holds the two single-sheet prices to the prices of the live pages.
+- **The PDF** (§5, step 5). A page is 300 dpi, as JPEG of quality 85: five pages are about
+  5 MB. The document's title is "<order title>: size preview" and its author is Tecopa
+  Plateworks. The label of a size page is its place, "Size 2 of 4": the size's name is
+  the first line of the caption. Every page names its order in the footer, and a long
+  title is cut at a word. An `out/` folder that cannot be written stops the command with
+  a sentence.
+- **The report states the price of each offered size**, as the PDF prints it, and
+  `preview.json` holds `names`: the name and the price of every size (§5, "The folder").
