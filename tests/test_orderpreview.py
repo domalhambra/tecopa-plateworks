@@ -512,15 +512,40 @@ def test_the_real_pdf_writer_is_the_default(tmp_path, tools, monkeypatch):
     assert seen == [(state["pdf"], opv.sizes.load(), "Smith home ground")]
 
 
-def test_a_wrong_sizes_file_stops_the_preview_before_any_plate(tmp_path, tools, monkeypatch):
+SIZES_TOML = "".join(f'[[size]]\nkey = "{k}"\nname = "{k}"\n' for k in od.SIZE_KEYS)
+
+
+@pytest.mark.parametrize("body,words", [
+    (b'[[size]]\nkey = "11x17"\nname = "Small"\n', "has no row for 17x22, two, three"),
+    (SIZES_TOML.encode() + b"price = 69\n", 'size "three": price must be text in quotes, not 69'),
+    (SIZES_TOML.encode() + b'prise = "$69"\n', 'size "three" has an unknown field prise'),
+    (SIZES_TOML.replace('"11x17"\nname = "11x17"', '"11x17"\nname = "11 × 17 in"').encode("latin-1"),
+     "cannot be read: it is not UTF-8 text"),
+    (SIZES_TOML.replace('name = "two"', f'name = "{"n" * 500}"').encode(),
+     'size "two": name has 500 characters, and the page holds at most 40'),
+], ids=["a missing row", "a price that is a number", "an unknown field", "Latin-1", "a long name"])
+def test_a_wrong_sizes_file_stops_the_preview_before_any_query_or_build(
+        tmp_path, tools, monkeypatch, capsys, body, words):
     # the plate takes minutes to build: the names and prices are read first
+    from scripts import order as order_cli
     bad = tmp_path / "sizes.toml"
-    bad.write_text('[[size]]\nkey = "11x17"\nname = "Small"\n')
+    bad.write_bytes(body)
     monkeypatch.setattr(opv.sizes, "default_path", lambda: str(bad))
+    asked = tmp_path / "coverage_asks.jsonl"
+    monkeypatch.setenv("STUB_COVERAGE_LOG", str(asked))
     d = _make_order(tmp_path, bbox=WIDE, size="11x17")
-    with pytest.raises(opv.OrderError, match="has no row for 17x22, two, three"):
-        _preview(d, tools)
-    assert not (d / "work" / "preview").exists()
+    calls, pdfs = [], []
+    with pytest.raises(opv.OrderError, match=words):
+        _preview(d, tools, calls, pdfs)
+    # the command stops with a sentence, never a traceback
+    assert order_cli.main(["preview", str(d)], tools=tools) == 1
+    assert "preview stopped: config/sizes.toml" in capsys.readouterr().err
+    assert _asks(asked) == []                                # no query of the 3DEP index
+    assert calls == [] and pdfs == []
+    assert not (d / "work").exists() and not (d / "out").exists()      # and no build
+    bad.write_text(SIZES_TOML)                               # the same order, a good file
+    _preview(d, tools, calls, pdfs)
+    assert len(_asks(asked)) >= 2 and len(pdfs) == 1         # the count sees a real preview
 
 
 def test_the_report_lists_each_size_and_the_lines_for_order_toml(tmp_path, tools):

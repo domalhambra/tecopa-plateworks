@@ -1,7 +1,15 @@
 # config/sizes.toml
 # The sizes a preview can offer, in menu order. Dom owns the names and the prices.
 # A row with no price prints "Price on request".
-# The two single-sheet prices are the decision of 2026-10-10 (docs/decisions.md).
+# The two single-sheet prices are the decision of 2026-10-10 (docs/decisions.md), and
+# they are the prices on the live pages: tests/test_sizes.py holds the two together.
+#
+# The preview reads this file before it builds anything, and a wrong file stops it:
+# - Save the file as UTF-8 (it holds the sign "×").
+# - A row has three fields and no other: key, name, price.
+# - A name and a price are text in quotes: price = "$69", never price = 69.
+# - A name has at most 40 characters and a price at most 24 characters: a longer
+#   caption makes every size smaller on the wall page.
 
 [[size]]
 key = "11x17"
