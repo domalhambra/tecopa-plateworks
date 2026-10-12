@@ -2385,7 +2385,15 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
 def _dash_polygon(d, pts, ink, width_px, dash_px, gap_px):
     """Trace a closed ring with a broken line. The dash cycle is walked by ARC LENGTH,
     so a dash is the same printed length wherever the ring bends -- the edge convention
-    for an intermittent feature, which is what says 'dry' before any colour does."""
+    for an intermittent feature, which is what says 'dry' before any colour does.
+
+    Every step moves `s` by at least one float. The step to the end of a dash or a gap
+    can be smaller than the spacing of floats at `s` -- the phase lands one rounding
+    short of the boundary whenever `dash_px` or the period is not an exact float, as at
+    96 and 200 dpi -- and then `s + run` IS `s`, the phase never changes, and the walk
+    never returns. The next float crosses the boundary in a step or two. Where
+    `s + run` does move, it is the step taken, so every ring that used to finish draws
+    the same dashes to the last bit."""
     ring = list(pts) + [pts[0]]
     period = max(1e-6, dash_px + gap_px)
     carry = 0.0                                   # distance into the cycle at the seam
@@ -2402,9 +2410,9 @@ def _dash_polygon(d, pts, ink, width_px, dash_px, gap_px):
                 d.line([(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0),
                         (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)],
                        fill=ink, width=width_px)
-                s += run
             else:                                 # inside a gap: skip to the next dash
-                s += period - phase
+                run = period - phase
+            s = max(s + run, _m.nextafter(s, _m.inf))
         carry = (carry + seg) % period
 
 

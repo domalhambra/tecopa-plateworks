@@ -525,6 +525,51 @@ def test_the_pan_edge_is_broken_not_continuous():
     assert 0.3 < duty < nominal + 0.2, f"edge duty {duty:.2f} is not a broken line"
 
 
+class _InkedRuns:
+    """Stands in for an ImageDraw: keeps the length of every run the edge inks."""
+    def __init__(self):
+        self.px = []
+
+    def line(self, xy, fill=None, width=0):
+        (x0, y0), (x1, y1) = xy
+        self.px.append(float(np.hypot(x1 - x0, y1 - y0)))
+
+
+@pytest.mark.parametrize("dpi", [96, 200])     # the studio's proof and its refine
+def test_the_broken_edge_returns_at_the_proof_and_refine_sizes(dpi):
+    """A 17x22 in proof with dry lakes on hung the engine at 100% CPU. The walk stepped
+    to the end of a dash or a gap, and the step it had left was smaller than the spacing
+    of floats at its position, so adding it moved nothing and the loop read the same
+    phase forever. It needs a dash or a gap that is not an exact float: 96 and 200 dpi
+    give 4.0 + 3.2 px and 8.33 + 6.67 px, where 150 and 300 dpi give 6.25 + 5.0 and
+    12.5 + 10.0 -- which is why every other test here, at 150 dpi, never saw it.
+
+    A one inch square is enough: at 96 dpi the old walk stops in a gap, at 200 dpi in a
+    dash. The duty assert is what makes 'returns' mean 'walked the whole ring': a fix
+    that only left the loop early would ink less than the duty cycle."""
+    import signal
+    side = render._pt_to_px(72.0, dpi)
+    ring = [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side)]
+    dash, gap = render.PLAYA_DASH_PT, render.PLAYA_GAP_PT
+
+    def _stalled(*_):
+        raise AssertionError(f"_dash_polygon did not return at {dpi} dpi")
+    was = signal.signal(signal.SIGALRM, _stalled)      # the suite has no timeout of its
+    signal.setitimer(signal.ITIMER_REAL, 2.0)          # own: fail here, never hang it
+    try:
+        inked = _InkedRuns()
+        render._dash_polygon(inked, ring, 1, 1,
+                             render._pt_to_px(dash, dpi), render._pt_to_px(gap, dpi))
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, was)
+    inked_pt = sum(inked.px) * 72.0 / dpi
+    nominal_pt = 4 * 72.0 * dash / (dash + gap)
+    assert abs(inked_pt - nominal_pt) <= dash, \
+        f"inked {inked_pt:.1f} pt of edge, the duty cycle gives {nominal_pt:.1f} pt"
+    assert max(inked.px) <= render._pt_to_px(dash, dpi) + 1e-6, "a dash ran long"
+
+
 def test_a_plate_without_playa_draws_nothing_and_does_not_crash():
     """rifle_aspen is mountains: bake_playa wrote no sidecar there, and turning the
     knob on must be a no-op rather than an error."""
