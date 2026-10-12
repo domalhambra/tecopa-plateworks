@@ -206,6 +206,11 @@ def read_poster(path, allow_plate_mismatch=False):
         raise HeroError(f"{path} carries no Tecopa Plateworks manifest -- "
                         f"a hero plate is rendered FROM a poster, not from any PNG.")
     spec = provenance.spec_from_manifest(manifest)
+    if spec.panels > 1:
+        # A panel file holds the spec of the whole hung sheet, gap strips included.
+        raise HeroError(f"{path} is a panel of a set of {spec.panels} panels. A hero "
+                        f"plate is rendered from one sheet, and this script has no "
+                        f"rule for a set.")
     reg = regions.discover()
     region = reg.get(spec.region_id)
     if region is None:

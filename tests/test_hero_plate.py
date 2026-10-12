@@ -297,6 +297,25 @@ def test_a_png_without_a_manifest_is_refused_by_name(tmp_path):
     assert "manifest" in str(e.value)
 
 
+def test_a_panel_of_a_set_is_refused_before_anything_is_painted(tmp_path, monkeypatch):
+    """A panel file carries the spec of the whole hung sheet, gap strips included. A
+    hero plate of it would be one wide image with the hidden ground painted in, under
+    a manifest that still names one panel. The script has no rule for a set, so it
+    says so and stops: the refusal comes before the region is even looked up."""
+    from scripts import hero_plate
+    from app import provenance
+    from tests.test_panels import set_spec
+    manifest = provenance.build_manifest(set_spec(n=3, gap=2.0))
+    monkeypatch.setattr(hero_plate.provenance, "extract", lambda _bytes: manifest)
+    monkeypatch.setattr(hero_plate.regions, "discover",
+                        lambda: pytest.fail("the region was read for a set"))
+    p = tmp_path / "journey_2of3.png"
+    p.write_bytes(b"any bytes: extract is stubbed")
+    with pytest.raises(hero_plate.HeroError) as e:
+        hero_plate.read_poster(str(p))
+    assert "3 panels" in str(e.value) and "one sheet" in str(e.value)
+
+
 def test_scene_script_parses_and_imports_nothing_from_the_app():
     """hero_scene.py runs inside Blender's Python, which has neither the venv nor the
     engine on its path -- so it must parse standalone and import only bpy + stdlib."""
