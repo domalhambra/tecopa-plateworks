@@ -552,11 +552,13 @@ struct PlateCommand: AsyncParsableCommand {
 struct OrderCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "order",
-        abstract: "Prepare a customer order, preview its sizes, or read what Prepare decided.",
-        discussion: "`order prepare` and `order preview` each start a tracked run and return at once. "
+        abstract: "Make a customer order from the intake, preview its sizes, prepare it, or read what "
+            + "Prepare decided.",
+        discussion: "`order new` copies the intake's job folder into a new order folder and prints what it "
+            + "copied. `order prepare` and `order preview` each start a tracked run and return at once. "
             + "Read a run with `tecopa runs show <id>`. After Prepare, run `tecopa order status <folder>`. "
-            + "The preview writes its PDF under the order's out/preview/ folder.",
-        subcommands: [Prepare.self, Preview.self, Status.self])
+            + "The preview writes its PDF and its email under the order's out/preview/ folder.",
+        subcommands: [New.self, Prepare.self, Preview.self, Status.self])
 
     /// The one argument of each command.
     struct Folder: ParsableArguments {
@@ -565,6 +567,18 @@ struct OrderCommand: AsyncParsableCommand {
 
         var arguments: [String: JSONValue] {
             folder.map { ["folder": .string(absolutePath($0))] } ?? [:]
+        }
+    }
+
+    struct New: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "new",
+            abstract: "Copy the intake's job folder from Dropbox into a new order folder, with its order.toml.")
+        @OptionGroup var global: GlobalOptions
+        @Argument(help: "The order number, like TP-26-001.")
+        var number: String?
+        func run() async throws {
+            try await execute("order_new", global, number.map { ["number": .string($0)] } ?? [:])
         }
     }
 

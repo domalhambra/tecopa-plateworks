@@ -37,7 +37,7 @@ public enum ScriptRunner {
         "scripts/bake_playa.py": .script(.prep),        // plate playa
         "scripts/pack_region.py": .script(.app),        // plate pack
         "app.plates": .module(.app),                    // plate install, plate check
-        "scripts/order.py": .script(.app),              // order prepare, order preview
+        "scripts/order.py": .script(.app),              // order new, order prepare, order preview
     ]
 
     /// One command that the table allows: the interpreter of the row's venv, its

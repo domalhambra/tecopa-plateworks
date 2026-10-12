@@ -1,19 +1,54 @@
 import Foundation
 
-/// The three entries of an order: Prepare and the size preview as tracked runs,
-/// and the order's own state read back.
+/// The four entries of an order: `order new` from the intake's job folder, Prepare
+/// and the size preview as tracked runs, and the order's own state read back.
 ///
-/// The tool holds no order logic. `scripts/order.py` builds or reuses the plate,
-/// frames the tracks, and writes `work/state.json` and `work/report.txt`. Its
-/// preview frames every size and writes the PDF under `out/preview/`. No entry
-/// writes under the order folder: only the script does.
+/// The tool holds no order logic. `scripts/order.py` copies the job folder into a new
+/// order folder, builds or reuses the plate, frames the tracks, and writes
+/// `work/state.json` and `work/report.txt`. Its preview frames every size and writes
+/// the PDF and the email under `out/preview/`. No entry writes under the order
+/// folder: only the script does.
 enum Orders {
-    static let entries: [CatalogEntry] = [prepareEntry, previewEntry, statusEntry]
+    static let entries: [CatalogEntry] = [newEntry, prepareEntry, previewEntry, statusEntry]
 
     // MARK: Entries
 
     private static let folderParameter = EntryParameter(
         "folder", .string, "The absolute path of the order folder, which holds in/ and order.toml. Required.")
+
+    /// The intake's order number, `TP-YY-NNN` (the client intake spec, 2026-10-12),
+    /// the rule of `ORDER_NUMBER` in app/order.py. The check is on the UTF-8 bytes, so
+    /// a number can never be read as a flag or a path.
+    static func isOrderNumber(_ text: String) -> Bool {
+        let bytes = Array(text.utf8)
+        let digit = { (byte: UInt8) in (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte) }
+        guard (9...11).contains(bytes.count), bytes.starts(with: Array("TP-".utf8)),
+              bytes[5] == UInt8(ascii: "-") else { return false }
+        return digit(bytes[3]) && digit(bytes[4]) && bytes[6...].allSatisfy(digit)
+    }
+
+    static let newEntry = CatalogEntry(
+        name: "order_new",
+        summary: "Make the order folder of one order from the intake's job folder in Dropbox with "
+            + "scripts/order.py new: copy the client's files into in/ and write order.toml, and report the "
+            + "tracks, the photos and the files of a type it does not know. It never writes to Dropbox, and "
+            + "a second run adds only the files that arrived since.",
+        readOnly: false,
+        parameters: [EntryParameter("number", .string, "The order number, like TP-26-001. Required.")],
+        text: Plates.said
+    ) { runtime, arguments in
+        guard let number = arguments["number"]?.stringValue, !number.isEmpty else {
+            throw TecopaFailure(.usage, "number is required: an order number like TP-26-001.")
+        }
+        guard isOrderNumber(number) else {
+            throw TecopaFailure(.usage, "Not an order number: \(number). It is like TP-26-001.")
+        }
+        // It copies files and reads no network, so it runs in the call. The script
+        // judges the folders, and refuses with exit 1 and its reason on stderr.
+        let result = try ScriptRunner.run("scripts/order.py", ["new", number], runtime)
+        guard result.exitCode == 0 else { throw Plates.failure("order.py new", result, refusal: 1) }
+        return .object(["output": .string(Plates.words(result.stdout))])
+    }
 
     static let prepareEntry = CatalogEntry(
         name: "order_prepare",

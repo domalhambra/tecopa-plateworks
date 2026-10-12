@@ -61,6 +61,76 @@ final class OrdersTests: XCTestCase {
         XCTAssertEqual(ScriptRunner.table["scripts/order.py"], .script(.app))
     }
 
+    // MARK: order new
+
+    private let python = "/repo/.venv/bin/python"
+
+    func testOrderNewRunsTheScriptInTheCallWithTheNumber() async {
+        let world = FakeWorld()
+        let said = "Order: TP-26-001, \"Smith home ground\"\nCopied 2 files:\n- Tracks (2): a.gpx, b.gpx\n"
+        world.result(for: "python", ProcessResult(exitCode: 0, stdout: said, stderr: ""))
+        var runtime = world.runtime()
+        runtime.environment = ["TECOPA_INTAKE_DIR": "/Users/dom/Dropbox/Apps/Plateworks Lab/Tecopa"]
+        let (envelope, failure) = await Catalog.call("order_new", runtime, ["number": .string("TP-26-001")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(envelope["data"], .object(["output": .string(said.trimmingCharacters(in: .newlines))]))
+        // the number is one argument, and the script runs in the app venv, in the call
+        XCTAssertEqual(world.commands, [[python, "scripts/order.py", "new", "TP-26-001"]])
+        XCTAssertEqual(world.workingDirectories, ["/repo"])
+        // the script reads TECOPA_INTAKE_DIR: the tool's own environment goes through
+        XCTAssertEqual(world.environments.first??["TECOPA_INTAKE_DIR"], "/Users/dom/Dropbox/Apps/Plateworks Lab/Tecopa")
+        XCTAssertEqual(world.detached, [])
+        XCTAssertEqual(world.written, [])
+        XCTAssertEqual(Catalog.named("order_new")?.text?(envelope["data"] ?? .null),
+                       said.trimmingCharacters(in: .newlines))
+    }
+
+    func testOrderNewTakesAnOrderNumberAndNothingElse() async {
+        let world = FakeWorld()
+        let refused: [(String?, String)] = [
+            (nil, "number is required: an order number like TP-26-001."),
+            ("", "number is required: an order number like TP-26-001."),
+            ("26-001", "Not an order number: 26-001. It is like TP-26-001."),
+            ("tp-26-001", "Not an order number: tp-26-001. It is like TP-26-001."),
+            ("TP-26-1", "Not an order number: TP-26-1. It is like TP-26-001."),
+            ("TP-26-001234", "Not an order number: TP-26-001234. It is like TP-26-001."),
+            ("TP-26-001 ", "Not an order number: TP-26-001 . It is like TP-26-001."),
+            ("--help", "Not an order number: --help. It is like TP-26-001."),
+            ("TP-26-001/../x", "Not an order number: TP-26-001/../x. It is like TP-26-001."),
+            ("TP-٢٦-001", "Not an order number: TP-٢٦-001. It is like TP-26-001."),
+            ("/Users/dom/Tecopa Orders/TP-26-001-smith",
+             "Not an order number: /Users/dom/Tecopa Orders/TP-26-001-smith. It is like TP-26-001."),
+        ]
+        for (number, said) in refused {
+            let (data, failure) = await call("order_new", world, number.map { ["number": .string($0)] } ?? [:])
+            XCTAssertNil(data, said)
+            XCTAssertEqual(failure, TecopaFailure(.usage, said))
+        }
+        // the entry has no folder argument and no flag that moves or replaces a file
+        for name in ["folder", "replace", "move"] {
+            let (_, failure) = await call("order_new", world, ["number": .string("TP-26-001"), name: .bool(true)])
+            XCTAssertTrue(failure?.message.hasPrefix("Unknown argument for order_new") ?? false, name)
+        }
+        assertNothingHappened(world)
+        XCTAssertTrue(Orders.isOrderNumber("TP-26-001") && Orders.isOrderNumber("TP-27-12345"))
+    }
+
+    func testOrderNewExit1IsRefusedWithTheScriptsOwnWords() async {
+        let world = FakeWorld()
+        let said = "new stopped: cloud.gpx is not on this Mac yet: Dropbox lists 5,000 bytes and has not downloaded them."
+        world.result(for: "python", ProcessResult(exitCode: 1, stdout: "", stderr: said + "\n"))
+        let (data, failure) = await call("order_new", world, ["number": .string("TP-26-001")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .refused)
+        XCTAssertEqual(failure?.message, "order.py new refused: " + said)
+        // a crash is not a refusal
+        world.result(for: "python", ProcessResult(
+            exitCode: 1, stdout: "", stderr: "Traceback (most recent call last):\n  File x\nKeyError: 'title'\n"))
+        let (_, crashed) = await call("order_new", world, ["number": .string("TP-26-001")])
+        XCTAssertEqual(crashed?.kind, .environment)
+        XCTAssertEqual(crashed?.message, "order.py new crashed: KeyError: 'title'")
+    }
+
     // MARK: order prepare
 
     func testOrderPrepareStartsTheScriptInTheAppVenvAsATrackedRun() async throws {
@@ -236,7 +306,10 @@ final class OrdersTests: XCTestCase {
 
     func testOrderStatusIsReadOnlyAndOrderPrepareIsNot() {
         XCTAssertEqual(Catalog.all.map(\.name).filter { $0.hasPrefix("order_") },
-                       ["order_prepare", "order_preview", "order_status"])
+                       ["order_new", "order_prepare", "order_preview", "order_status"])
+        XCTAssertEqual(Catalog.named("order_new")?.readOnly, false)
+        XCTAssertEqual((Catalog.named("order_new")?.parameters ?? []).map { "\($0.name):\($0.kind.rawValue)" },
+                       ["number:string"])
         XCTAssertEqual(Catalog.named("order_prepare")?.readOnly, false)
         XCTAssertEqual(Catalog.named("order_preview")?.readOnly, false)
         XCTAssertEqual(Catalog.named("order_status")?.readOnly, true)
