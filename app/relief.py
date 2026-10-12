@@ -534,7 +534,6 @@ def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
         del e              # the smoothed full-sheet plane: the march reads `small` only
         cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor)
         ao = sky_occlusion(small, work_res)
-        del small
         # Both masks are this call's own arrays: cast_shadow_mask and sky_occlusion
         # each return a fresh one, and _resize_to hands back that array or a fresh
         # zoom of it. So the clip writes in place and saves a full-sheet copy each.
@@ -591,11 +590,13 @@ def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     # Banded: three steps in a row on one pixel, each arithmetic or a clip on that
     # pixel's own salt weight and mottle value. No pixel reads another, so running
     # the three per band is the same as running each over the whole sheet in turn.
+    # (`sw[rows]` gets no name: docs/relief-passes.md, "Memory".)
     for rows in steps:
-        ib, sb = img[rows], sw[rows]
-        ib *= (1.0 - sb[..., None])
-        ib += salt * sb[..., None]
-        ib *= (1.0 + (mottle[rows] - 1.0)[..., None] * np.clip(sb * 3.0, 0, 1)[..., None])
+        ib = img[rows]
+        ib *= (1.0 - sw[rows][..., None])
+        ib += salt * sw[rows][..., None]
+        ib *= (1.0 + (mottle[rows] - 1.0)[..., None]
+               * np.clip(sw[rows] * 3.0, 0, 1)[..., None])
     return img
 
 # ---- banded per-pixel work ---------------------------------------------------------

@@ -105,7 +105,10 @@ hands back. So return the argument, or a new array that nothing else holds. Do n
 return an array that a cache or a module keeps, and do not keep the argument to read
 after the pass returns. At `color` and `finish` the chain copies a read-only array or a
 view into another array before it writes, and that render loses the saving. At `grade`
-it writes what comes back, as it always has.
+it writes what comes back, as it always has: it does not copy first, so NumPy refuses
+a read-only array with a `ValueError`, and a view is written through to the array it
+looks into. `test_a_read_only_array_from_a_grade_pass_is_refused` in
+`tests/test_relief_passes.py` holds the refusal.
 
 ## What the frame gives you
 
@@ -183,6 +186,12 @@ The chain keeps these rules, and a new pass must keep them too:
   the plane where it is used.
 - **Delete a full-sheet plane at its last reader**, and say in a comment what the
   `del` saves.
+- **Keep only a release that the memory test can hold.** A `del` a few lines before
+  its function returns, a plane much smaller than the sheet, or a copy that lives for
+  one statement under a higher peak moves no number in `tests/test_render_memory.py`.
+  Nothing would notice if it were lost, and it saves nothing that can be measured.
+  Three were taken out again on 2026-10-11 for that reason: `del small` in
+  `relief._shadow_terms`, and `del alpha` and a `copy=False` in `render._draw_contours`.
 - **The frame's own planes are not freed early.** `elev`, `norm`, `tex`, `val`, `cast`
   and `ao` are 30 bytes for each output pixel from the fan-out to the end, because the
   registry cannot know which pass reads which. The core frees only the slope and aspect
@@ -192,10 +201,28 @@ The chain keeps these rules, and a new pass must keep them too:
 
 tracemalloc counts live arrays. The process footprint is higher: on macOS the allocator
 keeps freed blocks counted against the process, and the libraries allocate outside
-Python. `tests/test_render_memory.py` (slow tier) holds the live number on a 9×12 in
+Python. `tests/test_render_memory.py` (slow tier) holds the live numbers on a 9×12 in
 final, for the default look, land cover with contours, the golden grade and terrain
-depth. A pass that needs one more full-sheet plane raises a bound there in the same
-commit, and says why.
+depth.
+
+The peak of the whole render is not enough to hold the rules above. It is the fan-out
+and the light, and everything freed after that sits under it. So the test cuts the
+render into segments, at the four stages of the registry (a probe pass registered for
+the length of one measurement) and at the entry and exit of a few functions, and it
+holds two numbers for each segment: the peak above the level at the segment's first
+mark, and the level at its last mark. The peak holds a banded block. The level holds a
+`del`. Each number is bounded at its measured value plus 2 bytes a pixel, and one lost
+scalar plane is 5, so every release in the chain fails the test when it is reverted.
+A number that falls 2 bytes below the table fails too, because a stale table hides
+the next lost plane.
+
+A pass that needs one more full-sheet plane changes the table in the same commit, and
+says why. A new NumPy, SciPy or Python may allocate differently and need a new
+measurement too. This prints the table to paste:
+
+```
+.venv/bin/python -m tests.test_render_memory
+```
 
 ## When a change moves pixels on the existing chain
 

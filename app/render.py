@@ -1784,9 +1784,8 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     del d_px
     is_index = (levels % 5 == 0)
     del levels
-    # copy=False: the coverage is float32 already, and astype copied it
     alpha = np.where(is_index, a_index * CONTOUR_INDEX_OPACITY,
-                     a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32, copy=False)
+                     a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32)
     del a_minor, a_index, is_index
     ink = np.array(CONTOUR_INK, np.float32) / 255.0
     img = rgb_u8.astype(np.float32)        # our own float sheet; rgb_u8 is never written
@@ -1794,8 +1793,7 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     # Banded (relief._bands): img * (1 - alpha) + ink * alpha is arithmetic on one
     # pixel and its own coverage value. It runs in the sheet's buffer, where the
     # whole-sheet form built three more RGB planes (36 bytes a pixel).
-    # (`alpha[rows]` gets no name: a band view left bound after the loop would keep
-    # the whole coverage plane alive past the `del`.)
+    # (`alpha[rows]` gets no name: docs/relief-passes.md, "Memory".)
     # Banded only when the sheet has the coverage's own rows and columns (the rule is
     # at relief._rows). _paint_terrain always hands over a sheet and the elevation it
     # was painted from. A direct caller's sheet of another shape (one flat colour
@@ -1808,7 +1806,6 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
             ib += ink[None, None, :] * alpha[rows]
     else:
         img = img * (1 - alpha) + ink[None, None, :] * alpha
-    del alpha
     np.clip(img, 0, 1, out=img)
     img *= 255
     return img.astype(np.uint8)

@@ -489,6 +489,7 @@ import pytest
 
 DIRECT_W = 97
 DIRECT_H = {"taller than a band": 300, "shorter than a band": 40}
+assert DIRECT_H["shorter than a band"] < relief.BAND_ROWS < DIRECT_H["taller than a band"]
 LAYOUTS = ("a full plane", "float64", "read-only", "a view", "F-ordered")
 BROADCASTS = ("a (1, W) row", "an (H, 1) column", "a (1, 1) constant", "a 0-d array",
               "a NumPy scalar", "a Python float", "a nested list")

@@ -284,3 +284,23 @@ def test_a_stack_of_sheets_from_a_pass_is_composited_whole(terrain, clean_regist
     out = _render(terrain, **kw)
     assert out.shape == (2,) + plain.shape
     assert np.array_equal(out[0], plain) and np.array_equal(out[1], plain)
+
+
+def test_a_read_only_array_from_a_grade_pass_is_refused(terrain, clean_registry):
+    """The contract of the last stage (docs/relief-passes.md, "The stages"): the grain
+    is multiplied into the array a "grade" pass hands back, as it was before the memory
+    trim. The chain does not copy that array first, as it does at "color" and "finish",
+    so one it cannot write is refused by NumPy, loudly, and is left as it was. A pass
+    returns its argument, or a new array that nothing else holds."""
+    held = {}
+
+    def hand_back_read_only(arr, frame):
+        held["a"] = arr.copy()
+        held["a"].flags.writeable = False
+        held["kept"] = held["a"].copy()
+        return held["a"]
+
+    register_relief_pass("grade", "frozen", hand_back_read_only)
+    with pytest.raises(ValueError, match="read-only"):
+        _render(terrain, shadow=0.6)
+    assert np.array_equal(held["a"], held["kept"])
