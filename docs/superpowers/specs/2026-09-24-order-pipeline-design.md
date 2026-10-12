@@ -316,6 +316,11 @@ Each sub-project gets its own plan and ships on its own.
 Customer self-service, a web order form, payment, Alaska and Hawaii, the 17" roll,
 full bleed, a queue of orders, making the iCloud link from a script.
 
+Amended 2026-10-12: a web order form and payment are now in
+`2026-10-12-tecopa-client-intake-and-payment-design.md`. A client starts an order with
+a form and an upload, `order new` makes the order folder from the upload, and the
+client pays from the preview email. The engine still sends no email and charges no one.
+
 ## Open, for Dom
 
 - Prices for 8×10 and 16×20. A second look at $80 for 12×18 once sheet and ink cost

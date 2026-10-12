@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from app import panels as panel_geo
-from app import previewpdf, sizes
+from app import orderemail, previewpdf, sizes
 from app.geo import RegionGeo
 from app.ingest import load_tracks, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
@@ -510,6 +510,8 @@ def write_preview_report(order, state, names) -> str:
             lines.append(f"  Warning: {sentence(e['warning'])}.")
         for k in e["ends_behind"]:
             lines.append(f"  Warning: a route end is behind gap {k}.")
+    if "email" in state:
+        lines.append(orderemail.report_line(state["email"]))
     lines.append(f"Time: {state['seconds']:g} s")
     text = "\n".join(lines) + "\n"
     path = os.path.join(order.work_dir, "preview", "report.txt")
@@ -532,14 +534,19 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     drawn, the id of its `plate`. `plates` holds each plate once, with its `epsg` and
     the keys of the `sizes` drawn on it. `plate` and
     `epsg` are the first plate and its projection. `names` holds the name and the
-    price of every size as the PDF was given them, from config/sizes.toml."""
+    price of every size as the PDF was given them, from config/sizes.toml: the
+    next-year price for a returning client. `email` says if out/preview/email.txt was
+    written (app/orderemail.py) and, if not, what it lacks."""
     from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env, curated_regions
     refuse_inside_repo(orders_root())
     order = load(order_dir)
     if len(order.title) > TITLE_MAX_CHARS:      # the painter's limit, before any plate
         raise OrderError(f"the title in order.toml has {len(order.title)} characters, "
                          f"and a map holds at most {TITLE_MAX_CHARS}")
-    names = sizes.load()         # before the plate: a wrong file must not cost a build
+    # before the plate: a wrong file must not cost a build. A returning client's PDF has
+    # the next-year prices, as the email has.
+    rows = sizes.table()
+    names = sizes.load(returning=order.returning)
     payloads = order.payloads()
     tracks_ll = lonlat_extent(payloads)["bbox"]
     if tracks_ll is None:
@@ -601,8 +608,10 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
             f"{e['key']}: {e['why']}" for e in offered))
     pdf = os.path.join(order.dir, "out", "preview", f"{slugify(order.title)}-preview.pdf")
     (write_pdf or previewpdf.write)(pdf, entries, names, order.title)
+    email = orderemail.write(order, entries, rows, os.path.dirname(pdf))
     state = {"epsg": plates[0]["epsg"], "plate": plates[0], "plates": plates, "sizes": entries,
-             "names": names, "pdf": pdf, "seconds": round(time.monotonic() - started, 1)}
+             "names": names, "pdf": pdf, "email": email,
+             "seconds": round(time.monotonic() - started, 1)}
     _dump(os.path.join(work, "preview.json"), state)
     write_preview_report(order, state, names)
     return state

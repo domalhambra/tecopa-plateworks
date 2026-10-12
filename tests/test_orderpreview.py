@@ -841,7 +841,7 @@ def test_the_report_gives_a_set_its_gap_and_its_warnings(tmp_path, tools):
         "Preview: /x/out/preview/t-preview.pdf",
         "Plate: preview_x (built), 30 m grid",
         "Sizes:",
-        '- Three panels, landscape, 70 x 17 in: offered, price "Price on request", '
+        '- Three panels, landscape, 70 x 17 in: offered, price "$189", '
         "tracks fill 60%. In order.toml:",
         '    size = "three"',
         '    orientation = "landscape"',

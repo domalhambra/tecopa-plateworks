@@ -143,12 +143,41 @@ Tests: `tests/test_region_prep.py` (the pure planner, so it runs in `.venv` and 
 Read `superpowers/specs/2026-09-24-order-pipeline-design.md` first. For a set or the
 size preview, read
 `superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md` too.
-`scripts/order.py` has two commands, `preview` and `prepare`. Prepare does the plate
-step only. `order finish` is not built, so a set order ends at the engine's zip of
+For an order from the intake form, the preview email or a price, read
+`superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md`.
+`scripts/order.py` has three commands, `new`, `preview` and `prepare`. Prepare does the
+plate step only. `order finish` is not built, so a set order ends at the engine's zip of
 panel files.
 
 1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
-   inside the repo: it is public. Put the customer's GPX, KML or KMZ files in `in/`.
+   inside the repo: it is public. For an order from the intake, run
+   `.venv/bin/python scripts/order.py new TP-26-001`, or `tecopa order new TP-26-001`.
+   For an order by email, make the folder by hand and put the customer's GPX, KML or
+   KMZ files in `in/`. `order new` does these steps:
+   - It finds the job folder `TP-26-001 <name>` in `~/Dropbox/Apps/Plateworks Lab/Tecopa/`,
+     the folder that Dropbox syncs to the Mac. `TECOPA_INTAKE_DIR` names another place.
+     It reads Dropbox and never writes, moves or deletes there.
+   - It copies each file of `<job>/01_received/` into `in/` of the order folder
+     `TP-26-001-<name>`, and writes `order.toml` with `title`, `order_number`,
+     `returning` and, when the intake has them, `client` and `email`, from
+     `<job>/order.md`. It writes no size.
+   - It prints what it copied: tracks, photos, and files of a type it does not know.
+     It names each file it did not copy, and why.
+   - Run it again when more files arrive. It copies only the new files, replaces no
+     file in `in/`, and leaves `order.toml` alone. It finds the order folder by its
+     number, also after a rename.
+   - The files come from a stranger. Each name is cleaned (a letter, a digit, a space
+     or `. _ - ( )`, and `_` for any other character). A link or a folder is never
+     followed. A file over 200 MB is not copied. No file is opened: the engine reads
+     the tracks later, as for any order. Each value of `<job>/order.md` is cleaned before it
+     becomes the folder's name or a line of `order.toml`.
+   - It stops before it copies anything when a file is not on the disk: Dropbox lists
+     an online-only file with its size and no data. In Finder, right-click
+     `01_received` and choose Make available offline, then run it again. A copy that is
+     shorter than the size Dropbox lists is removed, and the run stops.
+   - It stops when the `returning` of `<job>/order.md` is not yes or no, or its `order_id` is
+     not the number asked for. It warns, and writes the title as it is, when the
+     title is empty or longer than a map holds.
 2. Write `order.toml`: `title` (required), `size` and `orientation` (`portrait`, the
    default, or `landscape`). `size` is `"11x17"` (the default), `"17x22"`, `"two"` or
    `"three"`. A single sheet has a short side of at most 17 in, the PRO-1100's width.
@@ -157,6 +186,10 @@ panel files.
    4, the inches of wall between two panels. A gap of 0 is a cut set: every part of
    the map is printed. A gap of 2 or 4 is a window set: the map continues behind each
    gap strip, and the gap strip is not printed. A single sheet does not read `gap`.
+   `order new` writes four more keys, and the reader checks each one: `order_number`
+   (like `"TP-26-001"`), `returning` (`true` for a next-year order: the next-year
+   prices and links), `client` (the name, at most 80 characters) and `email`. The
+   reader ignores any other key, so a misspelled key is lost without a word.
 3. To let the client choose a size, run the preview before Prepare:
    `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
    and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
@@ -180,6 +213,14 @@ panel files.
      `<folder>/out/preview/<title>-preview.pdf`, where `<title>` is the title as a
      slug. Page 1 shows every offered size on one wall at one scale. Then each size
      has a page with its name, its hung size and its price.
+   - It writes `<folder>/out/preview/email.txt`, the email to the client: a line for
+     each offered size and a last line for the digital poster, each with its price,
+     its shipping and its Payment Link ending in `?client_reference_id=TP-26-001`, then
+     the refund promise and, when a set is offered, the gap. A returning client gets
+     the next-year prices and links, in the email and in the PDF. With no
+     `order_number`, or with a link missing in `config/sizes.toml` for an offered size
+     or the digital poster, it writes no email, removes an old one, and the report's
+     `Email:` line says what is missing.
    - It writes `<folder>/work/preview/preview.json` (each size, its frame, its
      projection, and why a size is not offered), `<folder>/work/preview/report.txt`
      and `<folder>/work/preview/build.log`, and prints the report.
@@ -189,8 +230,11 @@ panel files.
    size that the terrain data cannot hold at 2x, or that the engine cannot draw, is
    "not offered" with the engine's own reason, and the other sizes are still drawn.
    "Warning: a route end is behind gap 1" means that a window set hides the start or
-   the end of a track: move the frame, use a gap of 0, or choose another size. Send
-   the PDF to the client. It has no buy link: the client answers with a choice.
+   the end of a track: move the frame, use a gap of 0, or choose another size. Paste
+   `<folder>/out/preview/email.txt` into a new email in HEY, attach the PDF, read it,
+   and send it. Nothing sends it for you. The client pays with the link of a size:
+   read the size from Stripe's email or from the order log's row. An order made by
+   hand, with no `order_number`, gets the PDF alone, and the client answers by email.
 5. Paste the lines of the chosen size into `order.toml`. Prepare does not read the
    preview's files. It frames the chosen size again with the same rule, so with the
    lines as pasted the frame of the print is the frame of the preview. For a cut set
@@ -233,13 +277,18 @@ The preview's sizes:
   each size in the list and no other size. A listed set that the fit rule refuses is
   offered with a warning in the report. The list never overrides the terrain: a size
   that is past the 2x limit stays not offered.
-- **The prices file.** `config/sizes.toml` holds the name and the price of each size.
-  Dom owns it. A row has `key`, `name` and `price`, and no other field. A name and a
-  price are text in quotes: `price = "$69"`, never `price = 69`. A name has at most
-  40 characters and a price at most 24. The file is UTF-8. A row with no price prints
-  "Price on request". The preview reads the file before any query or build, and a
-  wrong file stops it. `tests/test_sizes.py` holds the two single-sheet prices to the
-  prices that `tests/test_marketing_page.py` holds the live pages to.
+- **The prices file.** `config/sizes.toml` holds each size's name, first-poster
+  `price`, `next_price`, `shipping`, and its two Stripe Payment Links, `link` and
+  `next_link`, and a row `digital` for the digital poster, which ships nothing and is
+  never in the PDF. Dom owns it. A row has these fields and no other, and only `key`
+  and `name` are required. A name, a price and shipping are text in quotes:
+  `price = "$69"`, never `price = 69`. A name has at most 40 characters and a price at
+  most 24. A link is `https://buy.stripe.com/` and the link's id, with no query: the
+  email adds the order number. The file is UTF-8. A row with no price prints "Price on
+  request". The preview reads the file before any query or build, and a wrong file
+  stops it. `tests/test_sizes.py` holds each price that the live pages show to the
+  prices that `tests/test_marketing_page.py` holds the pages to, and names the prices
+  the pages do not show yet (the sets and shipping).
 - **A stopped run.** The command prints `preview stopped:` and the reason, and exits 1.
   It writes no new PDF and no new report. The PDF of the last good run stays. The
   causes include: a title of more than 200 characters, a wrong prices file, no track
@@ -324,10 +373,12 @@ Traps already paid for:
   query in the prep stack. It is not fixed.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
-(stub subprocesses, no network), `tests/test_dem_coverage.py`. For the preview:
+(stub subprocesses, no network), `tests/test_dem_coverage.py`. For `order new`:
+`tests/test_ordernew.py` (hostile names and a hostile order.md, a sparse file for the size limit
+and for a file not on the disk). For the preview:
 `tests/test_orderpreview.py` (stub subprocesses, no network), `tests/test_previewpdf.py`,
-`tests/test_sizes.py`, and `tests/test_orderpreview_render.py` (slow: the real painter
-on a synthetic plate).
+`tests/test_sizes.py`, `tests/test_orderemail.py`, and `tests/test_orderpreview_render.py`
+(slow: the real painter on a synthetic plate).
 
 ## Add a relief technique
 
@@ -606,7 +657,8 @@ code, and a marker if it was cancelled. The log has no size limit. No command de
 them: remove old ones by hand when the folder grows. The record of an `order prepare`
 or `order preview` run holds the order folder's name, and its log holds the report.
 `order preview` is a tracked run, as `order prepare` is: it reads the network and takes
-minutes. `order status` reads what Prepare wrote, not the preview's files.
+minutes. `order new` runs in the call and returns its report: it copies files and
+reads no network. `order status` reads what Prepare wrote, not the preview's files.
 
 The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need
 `TECOPA_DEBUG=1` on the engine. The launcher sets it. For a development engine, set it
