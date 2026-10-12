@@ -20,9 +20,12 @@ from app.order import SIZE_KEYS, OrderError
 NO_PRICE = "Price on request"
 DIGITAL = "digital"
 ROW_KEYS = SIZE_KEYS + (DIGITAL,)
-ROW_FIELDS = ("key", "name", "price", "next_price", "shipping", "link", "next_link")
+ROW_FIELDS = ("key", "name", "price", "next_price", "shipping", "link", "next_link",
+              "member_link", "member_next_link")
 TEXT_FIELDS = ("name", "price", "next_price", "shipping")
-LINK_FIELDS = ("link", "next_link")
+LINK_FIELDS = ("link", "next_link", "member_link", "member_next_link")
+# A member's links: the same size and price with no shipping (Dom, 2026-10-12).
+MEMBER_FIELDS = ("member_link", "member_next_link")
 # What the preview's pages hold (app/previewpdf.py): on the wall page a caption wraps
 # at 3.2 in, and a longer name makes every size smaller. The shipped names are 10 to
 # 14 characters, and "$1,250 framed" is 13.
@@ -71,7 +74,7 @@ def _link(row, key, field) -> str:
 
 
 def table(path=None) -> dict:
-    """{key: {name, price, next_price, shipping, link, next_link}} for each row of the
+    """{key: {name, price, next_price, shipping, and the links}} for each row of the
     file: the four sheet sizes in menu order, then `digital` when it has a row. A field
     that is not in the file is "". Every sheet size must have a row."""
     path = path or default_path()
@@ -103,6 +106,8 @@ def table(path=None) -> dict:
                              f"A row may have {', '.join(ROW_FIELDS)}")
         if key == DIGITAL and "shipping" in row:
             raise OrderError(f'{_FILE}: size "{key}" ships nothing, so it has no shipping field')
+        if key == DIGITAL and any(f in row for f in MEMBER_FIELDS):
+            raise OrderError(f'{_FILE}: size "{key}" ships nothing, so it has no member links')
         out = {field: _text(row, key, field) for field in TEXT_FIELDS}
         if not out["name"]:
             raise OrderError(f"{_FILE}: {key!r} needs a name")

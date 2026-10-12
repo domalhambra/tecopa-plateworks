@@ -22,7 +22,7 @@ Today the client sends an email with attachments to `lab@plateworks.org`, and pa
 | 6 | A set has a public price and a Payment Link: two panels $149, three panels $189. Next-year prices: $119 and $159. |
 | 7 | Shipping: $8 for 11 × 17, $12 for 17 × 22, $16 for a set. The digital poster ships nothing. |
 | 8 | Tracks and photos are deleted 90 days after delivery. A client can ask Dom to hold them for a next-year order. |
-| 9 | Member codes are off on the Tecopa links. |
+| 9 | Member codes are off on the Tecopa links. A member gets the shipping back through member links instead (changed 2026-10-12, below). |
 | 10 | The three rules of the Lab intake hold here. Nothing sends an email by itself. Nothing charges anyone by itself. Dom reads each request before anything goes out. |
 
 ## 3. The order, step by step
@@ -52,6 +52,7 @@ A second Tally form, "Build your poster". Its questions:
 
 - Name. Email. Poster title. "Anything I should know".
 - "Have you ordered a Tecopa poster before?" Yes selects the next-year prices.
+- "Are you a member at plateworks.org?" and, on Yes, "Membership email, if different". Added 2026-10-12 (decision 9).
 
 The form does not ask for a size. The size preview settles it. On submit, Tally sends the client to `/upload` with the submission ID, as the Lab form does.
 
@@ -76,7 +77,7 @@ Rules:
 
 ### 4.3 `order.md`
 
-Front matter: the order number, the date, the client's name and email, the title, the first-poster flag, the upload link. Then the client's notes and these drafted emails. All have one subject, so that HEY keeps one thread for each order:
+Front matter: the order number, the date, the client's name and email, the title, the first-poster flag, `member: claimed` or `member: no`, the upload link. Then the client's notes and these drafted emails. All have one subject, so that HEY keeps one thread for each order:
 
 - The upload reminder, for a client who closed the upload page.
 - Payment received.
@@ -139,6 +140,12 @@ Each link ends with `?client_reference_id=<order number>`. Stripe returns that v
 
 An order with `returning = true` gets the next-year links and prices.
 
+An order with `member = true` gets the member links of each print size: the same price with no shipping, and no code to enter. The digital poster's link is the same for everyone.
+
+### Members (Dom, 2026-10-12)
+
+Dom decided that a member gets the Tecopa shipping back. A Stripe coupon takes money off products, never shipping, and a shared code travels, so the form asks instead. A Yes writes `member: claimed` to `order.md` and the Tecopa tab, with a flag naming the email to check. `order new` writes `member = true` and its report says to check Ghost; Dom checks before the preview email goes out, and sets `member = false` when the client is not one. The intake never reads Ghost. Each print size gains two links with $0 shipping, `tecopa-<size>-member` and `tecopa-<size>-next-member`: eight links, at the same prices. A member link paid on an order not marked member fills the row and goes on Needs attention (intake D31). When real shipping costs are known, a checkout made for each order can replace the links.
+
 ### 5.3 The prices file
 
 `config/sizes.toml` holds the names and the first-poster prices of the four print sizes today, and no price for a set. It gains:
@@ -168,7 +175,7 @@ The `products` list of `payment-links.json` holds items outside the Art Print gr
 | Digital poster | `tecopa-digital` | $39 | `tecopa-digital-next` | $25 | none |
 
 - US addresses only, as every link in the list. Tax is automatic, as for every link.
-- No code box (decision 9).
+- No code box (decision 9). Each print size also has two member links, `-member` and `-next-member`, at the same prices with no shipping rate (decision 9, changed 2026-10-12).
 - No limit on the number of payments. A map is not a limited run.
 - The checkout text of each link states decision 3. The text of `tecopa-digital` says "the poster you approved" and "the email address you sent your track from" today. Both phrases change: the client now pays before the proof and no longer sends tracks by email.
 - Dom runs the links script with `--apply`, on his typed approval, as for every change to the links.
@@ -274,5 +281,6 @@ Written by the build of section 5, 2026-10-12. The sections above are the design
 | A title or a `returning` that is wrong in `order.md` | An empty or long title is written as it is, with a warning: the preview stops on it with its own reason, and Dom edits `order.toml`. A `returning` that is not yes or no, or an `order_id` that is not the number asked for, stops the run before any copy: the first decides the price. | `app/ordernew.py` |
 | A file the run refuses | A name that cleans to nothing, a link, a folder, a file over 200 MB (200,000,000 bytes) and a file whose cleaned name is in `in/` already with another size are not copied, and the report names each one. The other files are copied. A file not on the disk stops the whole run, before any copy. | `app/ordernew.py` |
 | A file not on the disk | Each file is checked before any copy: the macOS dataless flag, or a size with no block on the disk, stops the run. Each copy's byte count must equal the size Dropbox reports, or the copy is removed and the run stops. | `app/ordernew.py`, `not_downloaded`, `_copy` |
+| A member (decision 9, changed) | `config/sizes.toml` gains `member_link` and `member_next_link` on the print sizes, both optional, and the digital row refuses them. `order new` reads `member: claimed` (or `yes`) from `order.md` and writes `member = true`; `no` or no line writes nothing, and any other answer writes nothing with a warning. With `member = true` and a member link missing for an offered size, the preview writes no email and names the link. The preview's report says to check Ghost. | `app/sizes.py`, `app/ordernew.py`, `app/orderemail.py` |
 | `tecopa order new` | It runs the script in the call, as `plate install` does, and returns the report. It is not a tracked run: it copies files and reads no network. | `tools/tecopa/Sources/TecopaKit/Orders.swift` |
 | The set prices on the live pages | The pages do not show the set prices, next year's set prices or shipping yet (section 7 changes them last). `tests/test_sizes.py` holds each price that a page shows to the page, and names the others in `NOT_ON_THE_PAGES_YET`. | `tests/test_sizes.py` |

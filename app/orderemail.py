@@ -5,7 +5,10 @@ One line for each size the preview offers and a last line for the digital poster
 with its price, its shipping and its Payment Link. Each link ends with
 ?client_reference_id=<order number>: Stripe returns that value with the sale, and that
 is how a payment names its order. No email address is ever in a link. A returning
-client (order.toml `returning = true`) gets the next-year prices and links.
+client (order.toml `returning = true`) gets the next-year prices and links. A member
+(`member = true`) gets the member links of each print size: the same price with no
+shipping, so there is no code to enter. The digital poster ships nothing and has one
+link for everyone.
 
 Spec: docs/superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md,
 sections 5.2 and 5.3, and decisions 3 and 7. Nothing here sends an email: the file is a
@@ -21,8 +24,12 @@ FILE = "email.txt"
 SUBJECT = "Your Tecopa Plateworks poster, order {number}"
 
 
-def _fields(returning: bool) -> tuple:
-    return ("next_price", "next_link") if returning else ("price", "link")
+def _fields(order, key) -> tuple:
+    """(price field, link field) of one row for this order."""
+    price = "next_price" if order.returning else "price"
+    if order.member and key != DIGITAL:
+        return price, "member_next_link" if order.returning else "member_link"
+    return price, "next_link" if order.returning else "link"
 
 
 def _needed(entries) -> list:
@@ -32,14 +39,15 @@ def _needed(entries) -> list:
 
 def missing(order, entries, rows) -> list:
     """What config/sizes.toml lacks for this order's email, as "<name> (<field>)"."""
-    price_field, link_field = _fields(order.returning)
     out = []
     for key in _needed(entries):
         row = rows.get(key)
         if row is None:
             out.append("the digital poster (no row)" if key == DIGITAL else f"{key} (no row)")
             continue
-        fields = [price_field] + ([] if key == DIGITAL else ["shipping"]) + [link_field]
+        price_field, link_field = _fields(order, key)
+        shipping = [] if key == DIGITAL or order.member else ["shipping"]
+        fields = [price_field] + shipping + [link_field]
         out += [f"{row['name']} ({f})" for f in fields if not row[f]]
     return out
 
@@ -54,7 +62,6 @@ def link(row_link: str, number: str) -> str:
 
 def email_text(order, entries, rows) -> str:
     """The email. The caller checks `missing` first: every row it needs is there."""
-    price_field, link_field = _fields(order.returning)
     number = order.order_number
     first_name = order.client.split()[0] if order.client.split() else ""
     lines = [f"To: {order.email}".rstrip(), "Subject: " + SUBJECT.format(number=number), "",
@@ -65,12 +72,18 @@ def email_text(order, entries, rows) -> str:
     if order.returning:
         lines += ["", "Good to see your tracks again. Since this isn't your first poster, these "
                       "are the next-year prices."]
+    if order.member:
+        lines += ["", "As a member at plateworks.org, your shipping is on me: the print links "
+                      "below have none."]
     lines += ["", "When you've picked one, pay with its link:", ""]
     for key in _needed(entries):
         row = rows[key]
+        price_field, link_field = _fields(order, key)
         paid = link(row[link_field], number)
         if key == DIGITAL:
             lines.append(f"- {row['name']}, {row[price_field]}, nothing to ship: {paid}")
+        elif order.member:
+            lines.append(f"- {row['name']}, {row[price_field]}, shipping included: {paid}")
         else:
             lines.append(f"- {row['name']}, {row[price_field]} plus {row['shipping']} shipping: {paid}")
     if any(e["offered"] and e.get("panels", 1) > 1 for e in entries):
@@ -117,8 +130,11 @@ def write(order, entries, rows, out_dir) -> dict:
     return result
 
 
-def report_line(result) -> str:
+def report_line(result, member=False) -> str:
     if result["path"]:
+        if member:
+            return (f"Email: {result['path']}, with the member links (no shipping). Check "
+                    f"Ghost for the client's email before it goes out.")
         return f"Email: {result['path']}"
     if result["why"]:
         return f"Email: not written. {result['why']}"

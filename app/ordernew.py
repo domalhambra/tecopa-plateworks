@@ -5,7 +5,7 @@
                                                          01_received/   the client's upload
         -> ~/Tecopa Orders/TP-26-001-smith/in/          a copy of each file
                                            order.toml   title, order_number, returning,
-                                                        client, email
+                                                        client, email, member
 
 Spec: docs/superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md,
 section 5.1. TECOPA_INTAKE_DIR moves the Dropbox folder, TECOPA_ORDERS_DIR the orders.
@@ -47,7 +47,7 @@ UF_COMPRESSED = 0x20                  # macOS st_flags: APFS keeps the data comp
                                       # the file's metadata, and st_blocks can be 0
 PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".gif",
               ".dng")
-FRONT_MATTER_KEYS = ("order_id", "created", "client", "email", "title", "returning",
+FRONT_MATTER_KEYS = ("order_id", "created", "client", "email", "title", "returning", "member",
                      "upload_link", "tally_submission")
 _CHUNK = 1 << 20
 
@@ -291,6 +291,18 @@ def _order_toml(number, fields, today) -> tuple:
         warnings.append("the email in order.md is not an address, and order.toml has none: "
                         "the preview email's To line will be empty.")
         email = ""
+    # The form's member answer: `claimed` until Dom checks Ghost. An order.md from before
+    # the question has no member line, and a client who isn't one pays the shipping.
+    said_member = _clean_text(fields.get("member", "")).lower()
+    member = said_member in ("claimed", "yes")
+    if member:
+        warnings.append("the form says this client is a member, so order.toml says member = "
+                        "true and the preview email uses the member links, with no shipping. "
+                        "Check Ghost for their email (order.md names it) before it goes out; "
+                        "if they aren't one, set member = false.")
+    elif said_member not in ("", "no"):
+        warnings.append(f"order.md says member: {said_member[:40]!r}, which is not claimed or "
+                        f"no: order.toml leaves member out, so the links carry shipping.")
     lines = [f"# Written by `order new {number}` from order.md on {today}. order new never",
              "# changes this file again. When the client has paid, add the lines of the size",
              "# from the preview's report: size, orientation, and gap for a set.",
@@ -301,10 +313,12 @@ def _order_toml(number, fields, today) -> tuple:
         lines.append(f"client = {toml_string(client)}")
     if email:
         lines.append(f"email = {toml_string(email)}")
+    if member:
+        lines.append("member = true")
     text = "\n".join(lines) + "\n"
     # the file must say exactly this and nothing more
     expected = {"title": title, "order_number": number, "returning": returning == "yes"}
-    expected.update({k: v for k, v in (("client", client), ("email", email)) if v})
+    expected.update({k: v for k, v in (("client", client), ("email", email), ("member", member)) if v})
     if tomllib.loads(text) != expected:
         raise OrderError("order.toml would not read back as written. Nothing was copied.")
     return text, warnings, title, returning == "yes"
