@@ -325,6 +325,9 @@ the rasterizer paints one panel at a time.
 ## 14. Not in this design
 
 - How a client sends tracks and pays, buy links, the Ghost pages, and set prices on the site.
+  Decision 12's later design is `2026-10-12-tecopa-client-intake-and-payment-design.md`
+  (2026-10-12): the set prices are $149 and $189, and the preview also writes the email
+  with a Payment Link for each offered size.
 - Bleed for a set.
 - Panels of other sizes, and panels stacked top to bottom.
 - A hosted service.
