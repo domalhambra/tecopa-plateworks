@@ -568,7 +568,12 @@ def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     # Banded: arithmetic on one pixel and its own haze weight. (`aer[rows]` is not
     # given a name: a band view left bound after the loop would keep the whole plane
     # alive past the `del`.)
-    for rows in _bands(img.shape[0]):
+    # What reaches here: `norm`, `tex` and `elev` are the core's planes of one window,
+    # and `img` is the sheet on it unless a registered pass handed back another shape.
+    # `steps` is the bands when all four agree, and one whole-array step when they do
+    # not (see _rows).
+    steps = list(_rows(img, np.shape(elev), norm, tex))
+    for rows in steps:
         ib = img[rows]
         ib *= (1.0 - aer[rows])
         ib += haze * aer[rows]
@@ -586,7 +591,7 @@ def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     # Banded: three steps in a row on one pixel, each arithmetic or a clip on that
     # pixel's own salt weight and mottle value. No pixel reads another, so running
     # the three per band is the same as running each over the whole sheet in turn.
-    for rows in _bands(img.shape[0]):
+    for rows in steps:
         ib, sb = img[rows], sw[rows]
         ib *= (1.0 - sb[..., None])
         ib += salt * sb[..., None]
@@ -615,6 +620,37 @@ def _bands(h):
     for r0 in range(0, h, step):
         yield slice(r0, min(h, r0 + step))
 
+def _fits(window, *planes):
+    """True when each of `planes` is a plain array of exactly the shape `window`. A
+    subclass (a masked array) is not one: it keeps its own arithmetic, whole."""
+    window = tuple(window)
+    return all(type(p) is np.ndarray and p.shape == window for p in planes)
+
+def _rows(sheet, window, *planes):
+    """The steps of a per-pixel block that composites into `sheet` in place: the bands
+    of `window` (rows, columns), or ONE step that takes every array whole.
+
+    THE RULE, for every banded block in the engine: the banded path is used only for
+    planes that already have the window's shape. Anything else takes the original
+    whole-array expression. A band indexes a plane by row, so a plane without the
+    window's rows (a (1, W) row, a constant, a stack of sheets from a pass) would be
+    cut at the wrong place: one row painted and the rest left, or an error on any
+    window taller than a band and none below it.
+
+    Here `sheet` must be a plain array of the window's rows and columns and one
+    channel axis, and each of `planes` a plain array of exactly `window`. Otherwise
+    the one step is `...`, and `a[...]` is all of `a`: the block is then the
+    expression it was before it was banded, written into the same buffer, and NumPy
+    broadcasts an operand or refuses it exactly as it did then. A block that built a
+    NEW array before it was banded (the ramp, the land-cover blend, the contour blend)
+    cannot use this, because `...` would still write in place: it tests `_fits` and
+    keeps the allocating expression beside the loop."""
+    window = tuple(window)
+    if (len(window) == 2 and type(sheet) is np.ndarray and sheet.ndim == 3
+            and sheet.shape[:2] == window and _fits(window, *planes)):
+        return _bands(window[0])
+    return (Ellipsis,)
+
 def _in_place_ok(a, b):
     """True when `a *= b` gives exactly the array `a * b` would, and nobody else is
     reading `a`'s buffer: `a` is writable, it is a whole buffer and not a view into
@@ -641,16 +677,22 @@ def _tonal_finish(img, consume=False):
     fresh buffer and the rest composite into that -- so a direct caller's array is
     safe. `consume=True` says the caller gives the buffer up: the curve then runs in
     `img` itself, and the sheet-sized copy (12 bytes a pixel, made at what was the
-    engine's memory peak) is never built. A read-only array is copied all the same.
+    engine's memory peak) is never built. A read-only array is copied all the same,
+    and so is an integer one, which cannot hold the curve.
 
     Both stages run a band at a time (see _bands), so the curve's two temporaries
     and the luminance plane are band-sized instead of sheet-sized."""
-    # True when `img` is a buffer this call may write
-    owned = bool(consume) and img.flags.writeable
+    # True when `img` is a buffer this call may write, and one that can hold the
+    # result: the curve is float, and an integer sheet clipped in place is refused
+    owned = (bool(consume) and img.flags.writeable
+             and np.result_type(img, 0.0) == img.dtype)
     if RELIEF_CONTRAST > 0:
         x = np.clip(img, 0.0, 1.0, out=img if owned else None)   # our own buffer from here
         # Banded: every line below is arithmetic on one pixel's own channel value.
-        for rows in _bands(x.shape[0]):
+        # No second plane is indexed, so the only shape that matters is the sheet's
+        # own: rows, columns, channels. A stack of sheets, or an array with no channel
+        # axis, takes one whole-array step (see _rows).
+        for rows in _rows(x, x.shape[:-1]):
             xb = x[rows]                                  # a view: the writes land in x
             ramp = xb * -2.0                              # -(2x)
             ramp += 3.0                                   # (3 - 2x)
@@ -668,7 +710,7 @@ def _tonal_finish(img, consume=False):
         wts = np.array([0.299, 0.587, 0.114], np.float32)
         # Banded: the luminance is a sum over one pixel's three channels, and the
         # rest is arithmetic on that pixel.
-        for rows in _bands(img.shape[0]):
+        for rows in _rows(img, img.shape[:-1]):
             ib = img[rows]
             lum = (ib * wts).sum(axis=2, keepdims=True)
             ib -= lum
@@ -686,9 +728,15 @@ def hypsometric(elev, elev_min, elev_max, norm=None):
     xs = np.array([s[0] for s in stops])
     rgb = np.zeros(elev.shape + (3,), dtype="float32")
     paper = np.array(PAPER, dtype="float32")
+    # Banded only when `norm` is a plane of the window's own shape (the rule is at
+    # _rows). A caller's `norm` may be anything that broadcasts to the window: one
+    # value, a profile line, a (1, W) row, an (H, 1) column, a nested list. All of
+    # those, and one elevation or a line of them, take the whole-array expression,
+    # and the assignment broadcasts as it always did.
+    banded = len(elev.shape) >= 2 and _fits(elev.shape, norm)
     for ch in range(3):
         ys = np.array([s[1][ch] for s in stops], dtype="float32")
-        if np.ndim(norm) < 2:             # one elevation or a profile line: no rows
+        if not banded:
             rgb[..., ch] = np.interp(norm, xs, ys) * (1.0 - PAPER_LIFT) + paper[ch] * PAPER_LIFT
         else:
             # Banded: np.interp looks each value up on its own, and the paper lift is
@@ -699,6 +747,17 @@ def hypsometric(elev, elev_min, elev_max, norm=None):
                                       + paper[ch] * PAPER_LIFT)
     rgb /= 255.0
     return rgb
+
+def _land_cover_blend(base, tint, weight, norm):
+    """`base` with the land-cover hue mixed in: the one expression of the blend. It is
+    given the whole planes, or one band of each, and builds a new array either way."""
+    base_lum = base.mean(axis=2, keepdims=True)
+    tint_lum = tint.mean(axis=2, keepdims=True) + 1e-6
+    matched = np.clip(tint * (base_lum / tint_lum), 0, 1)        # hue only; keep light
+    fade = np.clip((ALPINE_FADE_END - norm) /
+                   (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
+    w3 = (weight * BIOME_MIX * fade)[..., None]
+    return base * (1 - w3) + matched * w3
 
 def base_colour(elev, elev_min, elev_max, norm=None, biome=None):
     """The sheet's UNLIT colour: the hypsometric ramp with the biome tint mixed in.
@@ -712,7 +771,11 @@ def base_colour(elev, elev_min, elev_max, norm=None, biome=None):
     called once, here. The two planes are 16 bytes a pixel and nothing reads them
     after this blend, so a caller that hands over the function instead of the planes
     (render._paint_terrain does) lets them be freed when this returns, where a pair
-    held in the caller's frame lived to the end of the render."""
+    held in the caller's frame lived to the end of the render.
+
+    The tint, the weight and `norm` may also be anything that broadcasts against the
+    window (a flat (1, 1, 3) tint, one weight for the whole sheet, a (1, W) row):
+    the blend is then the whole-array expression, as it was before it was banded."""
     if norm is None:
         norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
     if callable(biome):
@@ -721,25 +784,30 @@ def base_colour(elev, elev_min, elev_max, norm=None, biome=None):
     if biome is not None:
         tint, weight = biome
         # Banded: the two means run over one pixel's three channels, and every other
-        # step is arithmetic or a clip on that pixel. The blend itself is the
-        # whole-array expression, evaluated on a band, so its dtype is whatever that
+        # step is arithmetic or a clip on that pixel. The blend is ONE expression
+        # (_land_cover_blend), evaluated on a band, so its dtype is whatever that
         # expression gives (float32 from the engine; float64 if a direct caller hands
         # over float64 planes) and the result is stored without a cast.
-        out = None
-        for rows in _bands(base.shape[0]):
-            b, t = base[rows], tint[rows]
-            base_lum = b.mean(axis=2, keepdims=True)
-            tint_lum = t.mean(axis=2, keepdims=True) + 1e-6
-            matched = np.clip(t * (base_lum / tint_lum), 0, 1)   # hue only; keep light
-            fade = np.clip((ALPINE_FADE_END - norm[rows]) /
-                           (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
-            w3 = (weight[rows] * BIOME_MIX * fade)[..., None]
-            blend = b * (1 - w3) + matched * w3
-            if out is None:           # `base` is hypsometric's fresh buffer: reuse it
-                out = base if blend.dtype == base.dtype else np.empty(base.shape, blend.dtype)
-            out[rows] = blend
-        if out is not None:
+        #
+        # Banded only when the tint, the weight and `norm` are planes of the window's
+        # own shape (the rule is at _rows). The engine's always are. A direct caller's
+        # may be a constant, a row, a column or a scalar, and a Python-float weight
+        # has no dtype to give the product: those take the same expression on the
+        # whole arrays, so they broadcast, promote or are refused as they always
+        # were. So does a window with no pixel in it, which has no band to take the
+        # dtype of the blend from.
+        hw = base.shape[:-1]
+        if (len(hw) == 2 and base.size and _fits(base.shape, tint)
+                and _fits(hw, weight, norm)):
+            out = None
+            for rows in _bands(base.shape[0]):
+                blend = _land_cover_blend(base[rows], tint[rows], weight[rows], norm[rows])
+                if out is None:       # `base` is hypsometric's fresh buffer: reuse it
+                    out = base if blend.dtype == base.dtype else np.empty(base.shape, blend.dtype)
+                out[rows] = blend
             base = out
+        else:
+            base = _land_cover_blend(base, tint, weight, norm)
     return base
 
 def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
@@ -908,7 +976,11 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         # Banded: the weight is one pixel's own cast-shadow value, and the tint is
         # arithmetic on that pixel. The whole-sheet form built the weight plane and
         # two RGB temporaries, and kept the weight to the end of the render.
-        for rows in _bands(img.shape[0]):
+        # What reaches here: `cast` is _shadow_terms' own plane of the window, and
+        # `img` is the sheet on it unless a "color" or "light" pass handed back
+        # another shape (a stack of sheets). Then this is one whole-array step, and
+        # the product broadcasts or is refused as it was (see _rows).
+        for rows in _rows(img, elev.shape, cast):
             w = (CAST_TINT_MAX * s * cast[rows])[..., None]
             img[rows] *= (1.0 - w + cool * w)
     # Journey Light golden grade: warm the sunlit faces, cool the shadowed ground. Strict
@@ -940,7 +1012,10 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         # bytes a pixel as whole-sheet temporaries, are band-sized now.
         # (No name for `ww[rows]` or `cw[rows]`: a band view left bound after the
         # loop would keep its whole plane alive past the `del`.)
-        for rows in _bands(img.shape[0]):
+        # What reaches here: `ww` and `cw` are built above from the window's own
+        # hillshade and shadow planes, so only `img` can have another shape, as at
+        # the cool skylight. Then this is one whole-array step (see _rows).
+        for rows in _rows(img, elev.shape):
             ib = img[rows]
             ib *= (1.0 - ww[rows] + warm * ww[rows])
             ib *= (1.0 - cw[rows] + cool2 * cw[rows])

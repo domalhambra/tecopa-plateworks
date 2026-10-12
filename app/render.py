@@ -10,7 +10,7 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
-                        _fill_nan, _resize_to, _bands)
+                        _fill_nan, _resize_to, _bands, _fits)
 from app import provenance, serialize
 from app import panels as panel_geo
 
@@ -1796,10 +1796,18 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     # whole-sheet form built three more RGB planes (36 bytes a pixel).
     # (`alpha[rows]` gets no name: a band view left bound after the loop would keep
     # the whole coverage plane alive past the `del`.)
-    for rows in _bands(img.shape[0]):
-        ib = img[rows]
-        ib *= (1 - alpha[rows])
-        ib += ink[None, None, :] * alpha[rows]
+    # Banded only when the sheet has the coverage's own rows and columns (the rule is
+    # at relief._rows). _paint_terrain always hands over a sheet and the elevation it
+    # was painted from. A direct caller's sheet of another shape (one flat colour
+    # under a field of lines) takes the whole-array expression, which builds a new
+    # array and broadcasts as it always did.
+    if _fits(alpha.shape[:2] + (3,), img):
+        for rows in _bands(img.shape[0]):
+            ib = img[rows]
+            ib *= (1 - alpha[rows])
+            ib += ink[None, None, :] * alpha[rows]
+    else:
+        img = img * (1 - alpha) + ink[None, None, :] * alpha
     del alpha
     np.clip(img, 0, 1, out=img)
     img *= 255

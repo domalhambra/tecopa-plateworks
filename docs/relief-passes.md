@@ -166,6 +166,18 @@ The chain keeps these rules, and a new pass must keep them too:
   `test_the_band_size_does_not_move_a_pixel` in `tests/test_relief.py` holds the rule:
   one band and many bands must give the same bytes. Make sure it reaches a new banded
   block.
+- **Band a block only for planes that already have the window's shape.** A band
+  indexes a plane by row, so a plane without the window's rows (a `(1, W)` row, a
+  constant, a scalar, a stack of sheets from a pass) is cut at the wrong place: one row
+  is painted, or the call fails on a window taller than a band and works on a shorter
+  one. Anything that is not a plain array of the window's shape takes the original
+  whole-array expression, where NumPy broadcasts it or refuses it as it always did. A
+  block that composites in place loops over `relief._rows(sheet, window, *planes)`,
+  which gives the bands or one whole-array step. A block that built a new array before
+  it was banded (the ramp, the land-cover blend, the contour blend) tests
+  `relief._fits` and keeps the allocating expression beside the loop.
+  `test_a_direct_call_gives_the_whole_array_result` in `tests/test_relief.py` holds
+  this for the public functions, on a window above the band size and on one below it.
 - **Do not give a band of a scalar plane a name** (`wb = weight[rows]`). The name
   outlives the loop, and the view keeps the whole plane alive after its `del`. Index
   the plane where it is used.

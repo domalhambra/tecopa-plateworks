@@ -266,3 +266,21 @@ def test_the_core_never_writes_an_array_it_cannot_own(terrain, clean_registry, s
     register_relief_pass(stage, "frozen", hand_back_a_view)
     assert np.array_equal(want, _render(terrain, shadow=0.6))
     assert np.array_equal(held["whole"], held["kept"]), "a view's parent was written"
+
+
+def test_a_stack_of_sheets_from_a_pass_is_composited_whole(terrain, clean_registry,
+                                                           monkeypatch):
+    """The banded blocks cut the sheet by its first axis. A "color" pass that hands
+    back a stack of two sheets has a first axis that is not the window's rows, so
+    every block must fall to its whole-array step, where the stack broadcasts against
+    the window's planes as it did before the blocks were banded. With the saturation
+    step off (its channel sum is along axis 2, which is not the channel axis of a
+    stack) the chain is arithmetic that broadcasts, so each sheet of the stack is the
+    plain sheet."""
+    monkeypatch.setattr(relief, "RELIEF_SATURATION", 1.0)
+    kw = dict(depth=1.0, shadow=0.8, sun_azimuth=140.0, sun_altitude=22.0, golden=0.7)
+    plain = _render(terrain, **kw)
+    register_relief_pass("color", "stack", lambda arr, frame: np.stack([arr, arr]))
+    out = _render(terrain, **kw)
+    assert out.shape == (2,) + plain.shape
+    assert np.array_equal(out[0], plain) and np.array_equal(out[1], plain)

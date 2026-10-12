@@ -477,3 +477,209 @@ def test_shadow_terms_read_the_window_and_never_write_it():
         assert np.array_equal(elev, kept)
         assert cast.dtype == ao.dtype == np.float32
         assert not np.shares_memory(cast, elev) and not np.shares_memory(ao, elev)
+
+# ---- direct calls: a plane that is not the window's shape ----------------------------
+# hypsometric, base_colour and shaded_relief(biome=...) are public, and a script or a
+# test hands them its own arrays. A banded block indexes a plane by row, so it is taken
+# only for a plane that already has the window's shape. A row, a column, a constant, a
+# scalar or a list takes the whole-array expression, where NumPy broadcasts it as it
+# always did. Each form is tried on a window taller than a band and on a shorter one:
+# an input must not work at one height and fail, or paint one row, at the other.
+import pytest
+
+DIRECT_W = 97
+DIRECT_H = {"taller than a band": 300, "shorter than a band": 40}
+LAYOUTS = ("a full plane", "float64", "read-only", "a view", "F-ordered")
+BROADCASTS = ("a (1, W) row", "an (H, 1) column", "a (1, 1) constant", "a 0-d array",
+              "a NumPy scalar", "a Python float", "a nested list")
+
+def _forms(plane, scalar, weak):
+    """name -> (what a caller hands over, the same values as a full plane).
+
+    `weak` is the dtype a Python float takes where this argument is used. A Python
+    scalar has no dtype of its own (NEP 50): a weight meets a float32 plane and stays
+    float32, and a `norm` goes through np.clip, which answers in float64."""
+    def spread(a, dtype=None):
+        return np.ascontiguousarray(np.broadcast_to(np.asarray(a, dtype=dtype), plane.shape))
+    frozen = plane.copy()
+    frozen.flags.writeable = False
+    doubled = np.repeat(plane, 2, axis=1)            # [:, ::2] of it is a strided view
+    return {
+        "a full plane": (plane, plane),
+        "float64": (plane.astype("float64"), plane.astype("float64")),
+        "read-only": (frozen, plane),
+        "a view": (doubled[:, ::2], plane),
+        "F-ordered": (np.asfortranarray(plane), plane),
+        "a (1, W) row": (plane[:1], spread(plane[:1])),
+        "an (H, 1) column": (plane[:, :1], spread(plane[:, :1])),
+        "a (1, 1) constant": (plane[:1, :1], spread(plane[:1, :1])),
+        "a 0-d array": (np.array(scalar, plane.dtype), spread(scalar, plane.dtype)),
+        "a NumPy scalar": (plane.dtype.type(scalar), spread(scalar, plane.dtype)),
+        "a Python float": (float(scalar), spread(scalar, weak)),
+        "a nested list": (plane.tolist(), spread(plane.tolist())),
+    }
+
+def _ramp(elev, norm=None):
+    return relief.hypsometric(elev, 1000, 2000, norm=norm)
+
+def _colour(elev, tint, weight, norm=None):
+    return relief.base_colour(elev, 1000, 2000, norm=norm, biome=(tint, weight))
+
+def _sheet(elev, tint, weight):
+    return shaded_relief(elev, **_everything_on(biome=(tint, weight)))
+
+# (function, the argument that takes a caller's form, the forms tried)
+DIRECT = {
+    "the ramp": (_ramp, {"elev": LAYOUTS, "norm": LAYOUTS + BROADCASTS}),
+    "the colour": (_colour, {"elev": LAYOUTS, "norm": LAYOUTS + BROADCASTS,
+                             "tint": LAYOUTS + BROADCASTS, "weight": LAYOUTS + BROADCASTS}),
+    "the sheet": (_sheet, {"tint": ("read-only", "a (1, W) row", "a (1, 1) constant"),
+                           "weight": ("a (1, W) row", "an (H, 1) column",
+                                      "a (1, 1) constant", "a NumPy scalar",
+                                      "a Python float")}),
+}
+# What the whole-array expression itself refuses, at any height: a tint with no channel
+# axis has no mean over one, and a list is not an array to subtract from or to scale.
+REFUSED = {("the colour", "tint"): ("a 0-d array", "a NumPy scalar", "a Python float",
+                                    "a nested list"),
+           ("the colour", "norm"): ("a nested list",),
+           ("the colour", "weight"): ("a nested list",)}
+DIRECT_CASES = [(fn, arg, form) for fn, (_f, args) in DIRECT.items()
+                for arg, forms in args.items() for form in forms]
+
+def _direct_planes(h):
+    """The full planes of a window `h` rows tall, and each one in every form."""
+    elev = synthetic_terrain(h, DIRECT_W)
+    norm = np.clip((elev - 1000) / (2000 - 1000 + 1e-9), 0, 1)
+    tint, weight = _land_cover(elev.shape)
+    full = dict(elev=elev, norm=norm, tint=tint, weight=weight)
+    forms = dict(elev=_forms(elev, 1500.0, "float32"),
+                 norm=_forms(norm, 0.4, "float64"),
+                 # 0.5: a power of two, so the Python product 0.5 * BIOME_MIX rounds
+                 # to the float32 the plane's own product gives
+                 weight=_forms(weight, 0.5, "float32"),
+                 tint=_forms(tint, 0.4, "float32"))
+    return full, forms
+
+def _direct_args(fn, arg, form, h):
+    """(the call with one argument in `form`, the same call with full planes)."""
+    full, forms = _direct_planes(h)
+    names = fn.__code__.co_varnames[:fn.__code__.co_argcount]
+    base = {k: full[k] for k in names if not (k == "norm" and arg != "norm")}
+    given, spread = forms[arg][form]
+    return {**base, arg: given}, {**base, arg: spread}
+
+@pytest.mark.parametrize("height", list(DIRECT_H))
+@pytest.mark.parametrize("fn, arg, form", [c for c in DIRECT_CASES
+                                           if c[2] not in REFUSED.get(c[:2], ())])
+def test_a_direct_call_gives_the_whole_array_result(fn, arg, form, height, monkeypatch):
+    call = DIRECT[fn][0]
+    given, full = _direct_args(call, arg, form, DIRECT_H[height])
+    # the reference: full planes, in ONE band, which is the whole-array computation
+    with monkeypatch.context() as m:
+        m.setattr(relief, "BAND_ROWS", 10 ** 9)
+        want = call(**full)
+    kept = {k: (v.copy(), v.flags.writeable) for k, v in given.items()
+            if isinstance(v, np.ndarray)}
+    got = call(**given)
+    assert got.shape == want.shape and got.dtype == want.dtype
+    assert np.array_equal(got, want)
+    for k, (before, writeable) in kept.items():
+        assert np.array_equal(given[k], before), f"{k} was written"
+        assert given[k].flags.writeable == writeable
+
+@pytest.mark.parametrize("fn, arg, form", [c for c in DIRECT_CASES
+                                           if c[2] in REFUSED.get(c[:2], ())])
+def test_a_direct_call_is_refused_the_same_at_any_height(fn, arg, form):
+    call = DIRECT[fn][0]
+    errors = []
+    for h in DIRECT_H.values():
+        given, _full = _direct_args(call, arg, form, h)
+        with pytest.raises((TypeError, AttributeError, ValueError)) as refusal:
+            call(**given)
+        errors.append(refusal.type)
+    assert errors[0] is errors[1]
+
+def test_every_broadcast_at_once_is_the_whole_array_result(monkeypatch):
+    # a flat tint, one weight for the whole sheet and a profile of elevation: the three
+    # planes of the land-cover blend, none of them the window's shape
+    for h in DIRECT_H.values():
+        full, forms = _direct_planes(h)
+        given = {k: forms[k][f][0] for k, f in (("tint", "a (1, 1) constant"),
+                 ("weight", "a Python float"), ("norm", "a (1, W) row"))}
+        spread = {k: forms[k][f][1] for k, f in (("tint", "a (1, 1) constant"),
+                  ("weight", "a Python float"), ("norm", "a (1, W) row"))}
+        # the norm row is float32; np.clip keeps it so, and the reference plane is too
+        with monkeypatch.context() as m:
+            m.setattr(relief, "BAND_ROWS", 10 ** 9)
+            want = _colour(full["elev"], **spread)
+        got = _colour(full["elev"], **given)
+        assert got.shape == want.shape and got.dtype == want.dtype
+        assert np.array_equal(got, want)
+
+def test_an_empty_window_has_the_dtype_of_the_whole_array_form():
+    # No row means no band, and the blend's dtype used to come from the first band:
+    # an empty float64 blend came back float32. It is the expression's own dtype.
+    elev = np.zeros((0, 5), "float32")
+    tint, weight = np.zeros((0, 5, 3), "float32"), np.zeros((0, 5), "float32")
+    assert relief.hypsometric(elev, 1000, 2000).dtype == np.float32
+    for t, want in ((tint, np.float32), (tint.astype("float64"), np.float64)):
+        got = relief.base_colour(elev, 1000, 2000, biome=(t, weight))
+        assert got.shape == (0, 5, 3) and got.dtype == want
+
+def test_bands_are_for_planes_of_the_window_and_one_whole_step_for_the_rest():
+    sheet = np.zeros((30, 20, 3), "float32")
+    plane = np.zeros((30, 20), "float32")
+    banded = list(relief._rows(sheet, (30, 20), plane))
+    assert banded == list(relief._bands(30)) and banded[0] != Ellipsis
+    whole = [Ellipsis]
+    assert list(relief._rows(sheet, (30, 20), plane[:1])) == whole        # a (1, W) row
+    assert list(relief._rows(sheet, (30, 20), plane[:, :1])) == whole     # a column
+    assert list(relief._rows(sheet, (30, 20), plane.tolist())) == whole   # not an array
+    assert list(relief._rows(sheet, (30, 20), np.ma.masked_less(plane, 1))) == whole
+    assert list(relief._rows(np.stack([sheet, sheet]), (30, 20), plane)) == whole
+    assert list(relief._rows(sheet[:1], (30, 20))) == whole               # a short sheet
+    assert list(relief._rows(plane, (30,))) == whole                      # no channel axis
+    assert relief._fits((30, 20), plane, plane.copy())
+    assert not relief._fits((30, 20), plane, plane[:1])
+
+def test_one_whole_array_step_gives_the_banded_sheet(monkeypatch):
+    # The other half of the rule: a block whose planes do not fit runs as ONE step on
+    # the whole arrays. That step must be the expression the bands evaluate, so
+    # forcing it for every block changes no byte of a sheet whose planes do fit.
+    elev = _terrain_with_a_pan()[:, :140]
+    elev = np.concatenate([elev, elev[:60]])                 # 316 rows: two bands
+    kw = _everything_on(biome=_land_cover(elev.shape))
+    banded = shaded_relief(elev, **kw)
+    monkeypatch.setattr(relief, "_rows", lambda *a: (Ellipsis,))
+    monkeypatch.setattr(relief, "_fits", lambda *a: False)
+    assert np.array_equal(banded, shaded_relief(elev, **kw))
+
+def test_contours_over_a_flat_colour_blend_as_the_whole_array_form():
+    # render._draw_contours bands its blend by the sheet's rows. A direct caller's
+    # sheet of one flat colour has one row, and the lines have the elevation's: the
+    # blend must broadcast the colour, as the whole-array expression did, at a height
+    # above a band and at one below it.
+    from app import render
+    for h in DIRECT_H.values():
+        yy, xx = np.mgrid[0:h, 0:120].astype("float32")
+        elev = 1000.0 + 3.0 * xx + 40.0 * np.sin(yy / 20.0)
+        colour = np.array([[[180, 172, 150]]], np.uint8)
+        kept = colour.copy()
+        want = render._draw_contours(np.ascontiguousarray(np.broadcast_to(colour, (h, 120, 3))),
+                                     elev, dpi=96, ground_m_per_in=200.0)
+        got = render._draw_contours(colour, elev, dpi=96, ground_m_per_in=200.0)
+        assert (want != colour).any(), "no contour ink to blend"
+        assert got.shape == want.shape and got.dtype == want.dtype
+        assert np.array_equal(got, want) and np.array_equal(colour, kept)
+
+def test_tonal_finish_does_not_consume_a_sheet_that_cannot_hold_the_curve():
+    # consume=True runs the curve in the caller's buffer. An integer sheet (a "finish"
+    # pass may hand one back) cannot hold a float curve: it is copied, as every sheet
+    # was before the trim, and is neither refused nor written.
+    src = np.random.default_rng(3).integers(0, 2, (300, 41, 3)).astype("int32")
+    kept = src.copy()
+    want = relief._tonal_finish(src)
+    got = relief._tonal_finish(src, consume=True)
+    assert got.dtype == want.dtype and np.array_equal(got, want)
+    assert np.array_equal(src, kept)
