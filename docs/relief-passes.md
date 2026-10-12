@@ -180,7 +180,10 @@ The chain keeps these rules, and a new pass must keep them too:
 
 tracemalloc counts live arrays. The process footprint is higher: on macOS the allocator
 keeps freed blocks counted against the process, and the libraries allocate outside
-Python.
+Python. `tests/test_render_memory.py` (slow tier) holds the live number on a 9×12 in
+final, for the default look, land cover with contours, the golden grade and terrain
+depth. A pass that needs one more full-sheet plane raises a bound there in the same
+commit, and says why.
 
 ## When a change moves pixels on the existing chain
 
