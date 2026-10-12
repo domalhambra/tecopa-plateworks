@@ -2,6 +2,7 @@
 # Biome tint (v1.2): hue from NLCD land cover, lightness from elevation + shade.
 # Guards the blend physics (luminance preserved, alpine fade), the windowed-read
 # registration path, and the graceful fallback when a region has no landcover.
+import dataclasses
 import json
 import os
 
@@ -120,3 +121,31 @@ def test_biome_layers_registration_and_edges(tmp_path):
 def test_biome_layers_none_when_absent(tmp_path):
     d, cfg, b = _write_region(str(tmp_path), "none", with_landcover=False)
     assert render._biome_layers(d, cfg, tuple(b), (10, 10), (120, 120), 96) is None
+
+
+def test_the_land_cover_is_read_once_when_on_and_never_when_off(tmp_path, monkeypatch):
+    # _paint_terrain hands the land cover to the relief as a function, so the two
+    # planes are freed inside the colour blend (the memory trim). The function must
+    # run once for a sheet with the tint on, never for a sheet with it off, and never
+    # for a terrain_override, whose colour is the caller's.
+    d, cfg, b = _write_region(str(tmp_path), "lc", with_landcover=True, lc_class=42)
+    spec = dataclasses.replace(_spec(b), print_w_in=3, print_h_in=3)
+    calls = []
+    real = render._biome_layers
+
+    def counted(*a, **k):
+        calls.append(a[4])                           # the window's shape
+        return real(*a, **k)
+
+    monkeypatch.setattr(render, "_biome_layers", counted)
+    hydro = {"lakes": [], "rivers": []}
+    off, _, _ = render._paint_terrain(spec, 96, d, cfg, hydro=hydro)
+    assert calls == []
+    spec.biome = True
+    on, _, _ = render._paint_terrain(spec, 96, d, cfg, hydro=hydro)
+    elev, _res, shape = render.terrain_window(spec, 96, d, cfg)
+    assert calls == [shape], "one read, on the padded window the relief is painted on"
+    assert not np.array_equal(np.asarray(off), np.asarray(on))
+    own = np.full(shape + (3,), 90, np.uint8)
+    render._paint_terrain(spec, 96, d, cfg, hydro=hydro, terrain_override=own)
+    assert len(calls) == 1, "an override sheet read the land cover it never uses"

@@ -199,3 +199,70 @@ def test_render_extras_registry_carries_the_looks_knobs():
                         native_resolution_m=10.0, tracks=[], hotspots=[],
                         soft_light=0.4, haze_strength=0.2)
     assert render._relief_extras(s) == {"soft_light": 0.4, "haze": 0.2}
+
+
+# ---- what the memory trim owes a pass ------------------------------------------------
+# The core frees what it has finished with and writes its sheets in place. Neither may
+# hand a pass a wrong value, and neither may write an array the core does not own.
+
+@pytest.mark.parametrize("journey", [False, True])
+def test_a_late_pass_still_gets_the_slope_aspect_field(terrain, clean_registry, journey):
+    """The core frees the cached (slope, aspect) after its last light: 8 bytes a pixel
+    that nothing in the core reads again. A "finish" or "grade" pass that asks must get
+    the SAME field, computed again, never None and never a stale one."""
+    seen = {}
+
+    def ask(stage):
+        def fn(arr, frame):
+            seen[stage + " cached"] = frame._terrain is not None
+            seen[stage] = tuple(a.copy() for a in frame.terrain())
+            return arr
+        return fn
+
+    for stage in ("light", "finish", "grade"):
+        register_relief_pass(stage, f"ask-{stage}", ask(stage))
+    kw = dict(shadow=0.6)
+    if journey:                       # the golden grade is the last reader, then
+        kw.update(sun_azimuth=140.0, sun_altitude=22.0, golden=0.7)
+    _render(terrain, **kw)
+    want = relief.slope_aspect(terrain, 30.0, 1.0)
+    assert seen["light cached"], "the light stage reads the field the core built"
+    assert not seen["finish cached"], "the core must free the field before the finish"
+    assert seen["grade cached"], "a field a pass asked for is cached again"
+    for stage in ("light", "finish", "grade"):
+        slope, aspect = seen[stage]
+        assert np.array_equal(slope, want[0]) and np.array_equal(aspect, want[1]), stage
+
+
+def test_a_late_ask_for_the_terrain_does_not_move_a_pixel(terrain, clean_registry):
+    before = _render(terrain, shadow=0.6, depth=0.5)
+    register_relief_pass("grade", "ask", lambda a, f: (f.terrain(), a)[1])
+    assert np.array_equal(before, _render(terrain, shadow=0.6, depth=0.5))
+
+
+@pytest.mark.parametrize("stage", ["color", "finish"])
+def test_the_core_never_writes_an_array_it_cannot_own(terrain, clean_registry, stage):
+    """The colour plane becomes the lit sheet in its own buffer, and the tonal curve
+    runs in the finish plane. Both are skipped for an array the core must not write: a
+    read-only one, or a view into another array. The picture is the same either way."""
+    want = _render(terrain, shadow=0.6)
+    held = {}
+
+    def hand_back_read_only(arr, frame):
+        held["a"] = arr.copy()
+        held["a"].flags.writeable = False
+        held["kept"] = held["a"].copy()
+        return held["a"]
+
+    register_relief_pass(stage, "frozen", hand_back_read_only)
+    assert np.array_equal(want, _render(terrain, shadow=0.6))
+    assert np.array_equal(held["a"], held["kept"]), "a read-only array was written"
+
+    def hand_back_a_view(arr, frame):     # a view into a plane the pass still holds
+        held["whole"] = np.concatenate([arr, arr], axis=0)
+        held["kept"] = held["whole"].copy()
+        return held["whole"][:arr.shape[0]]
+
+    register_relief_pass(stage, "frozen", hand_back_a_view)
+    assert np.array_equal(want, _render(terrain, shadow=0.6))
+    assert np.array_equal(held["whole"], held["kept"]), "a view's parent was written"

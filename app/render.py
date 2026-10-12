@@ -1,6 +1,6 @@
 # app/render.py
 from __future__ import annotations
-import hashlib, json, math as _m, os, threading
+import functools, hashlib, json, math as _m, os, threading
 from dataclasses import dataclass, replace
 import numpy as np
 import rasterio
@@ -10,7 +10,7 @@ from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
-                        _fill_nan, _resize_to)
+                        _fill_nan, _resize_to, _bands)
 from app import provenance, serialize
 from app import panels as panel_geo
 
@@ -329,7 +329,11 @@ def _biome_layers(region_dir, cfg, crop, pads, shape, dpi):
     safe = wb + 1e-6
     for ch in range(3):
         tint[..., ch] = gaussian_filter(tint[..., ch] * weight, sigma) / safe
-    return tint / 255.0, np.clip(wb, 0, 1)
+    # `tint` and `wb` are this call's own planes and `safe` is already built from
+    # `wb`, so both results are finished in place: the dividing and clipping copies
+    # were 16 bytes a pixel on top of everything above.
+    tint /= 255.0
+    return tint, np.clip(wb, 0, 1, out=wb)
 
 def _probe_dem(region_dir, cfg, rect):
     """Sample the DEM over `rect` (CRS metres) on a fixed probe grid so the values do
@@ -1745,6 +1749,7 @@ def _contour_distance(elev, interval):
     f = np.abs(t - np.round(t))
     gy, gx = np.gradient(t)
     g = np.hypot(gx, gy)
+    del gy, gx                  # 8 bytes a pixel, dead before the next two planes
     with np.errstate(divide="ignore", invalid="ignore"):
         d_px = np.where(g > 1e-6, f / g, np.inf)
     return d_px, np.round(t).astype(np.int64)
@@ -1770,16 +1775,35 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     # the minor and index passes differ ONLY in line width, so the distance field
     # (two gradients + a hypot over the whole window) is computed once for both
     d_px, levels = _contour_distance(elev, iv)
+    # Each plane below is dropped at its last reader, so the blend at the end holds
+    # the sheet and one coverage plane, not the six planes that built them (the
+    # level index alone is int64, 8 bytes a pixel).
+    del elev
     a_minor = np.clip(1.0 - d_px / max(_pt_to_px(CONTOUR_MINOR_PT, dpi), 0.5), 0.0, 1.0)
     a_index = np.clip(1.0 - d_px / max(_pt_to_px(CONTOUR_INDEX_PT, dpi), 0.5), 0.0, 1.0)
     del d_px
     is_index = (levels % 5 == 0)
+    del levels
+    # copy=False: the coverage is float32 already, and astype copied it
     alpha = np.where(is_index, a_index * CONTOUR_INDEX_OPACITY,
-                     a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32)
+                     a_minor * CONTOUR_MINOR_OPACITY)[..., None].astype(np.float32, copy=False)
+    del a_minor, a_index, is_index
     ink = np.array(CONTOUR_INK, np.float32) / 255.0
-    img = rgb_u8.astype(np.float32) / 255.0
-    img = img * (1 - alpha) + ink[None, None, :] * alpha
-    return (np.clip(img, 0, 1) * 255).astype(np.uint8)
+    img = rgb_u8.astype(np.float32)        # our own float sheet; rgb_u8 is never written
+    img /= 255.0
+    # Banded (relief._bands): img * (1 - alpha) + ink * alpha is arithmetic on one
+    # pixel and its own coverage value. It runs in the sheet's buffer, where the
+    # whole-sheet form built three more RGB planes (36 bytes a pixel).
+    # (`alpha[rows]` gets no name: a band view left bound after the loop would keep
+    # the whole coverage plane alive past the `del`.)
+    for rows in _bands(img.shape[0]):
+        ib = img[rows]
+        ib *= (1 - alpha[rows])
+        ib += ink[None, None, :] * alpha[rows]
+    del alpha
+    np.clip(img, 0, 1, out=img)
+    img *= 255
+    return img.astype(np.uint8)
 
 def _draw_compass(img, spec, out_w, out_h, dpi, trim=None):
     """An eight-point split-shaded compass rose above the cartouche, bottom-left,
@@ -2768,8 +2792,13 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     # optional biome tint (Dom, v1.2): hue from the region's baked NLCD land cover,
     # lightness from elevation + shade; None (asset absent or toggle off) falls back
     # to the pure elevation tint.
-    biome = (_biome_layers(region_dir, cfg, spec.crop, (pad_x, pad_top, pad_bot),
-                           elev.shape, dpi)
+    # Handed over as a function, not as the two planes: relief.base_colour calls it
+    # once, blends, and returns, and the planes (16 bytes a pixel) are freed there.
+    # Read here, they stayed alive in this frame until the whole terrain was painted.
+    # A terrain_override never calls it: its colour is the caller's.
+    # (partial binds the window's shape now, and holds no reference to `elev`.)
+    biome = (functools.partial(_biome_layers, region_dir, cfg, spec.crop,
+                               (pad_x, pad_top, pad_bot), elev.shape, dpi)
              if spec.biome else None)
     # Journey Light (v1.9): in journey mode the resolved sun drives the cast shadows +
     # golden grade INSIDE shaded_relief (i.e. flat, BEFORE the oblique warp below), so the

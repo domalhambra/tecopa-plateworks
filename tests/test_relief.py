@@ -247,3 +247,162 @@ def test_margin_ring_fill_declines_when_the_finite_block_has_a_hole():
     a[5:15, 5:15] = 1500.0
     a[7, 7] = np.nan                      # an interior hole
     assert relief._margin_ring_fill(a, np.isnan(a)) is None
+
+# ---- the memory trim: bands, in-place steps and the deferred land cover -------------
+# None of these may move a pixel. The trim changes WHERE a result is stored and how
+# large a temporary is, never an operation or its order.
+
+def _everything_on(**extra):
+    kw = dict(res_m=30.0, elev_min=1000, elev_max=2000, azimuth=315, altitude=45,
+              z_factor=1.0, seed=7, depth=1.0, shadow=0.8,
+              sun_azimuth=200.0, sun_altitude=30.0, golden=0.9)
+    kw.update(extra)
+    return kw
+
+def _land_cover(shape):
+    """A tint and a weight that vary over the sheet, so the blend has work to do."""
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]].astype("float32")
+    tint = np.stack([0.35 + 0.2 * np.sin(xx / 17.0), 0.45 + 0.2 * np.cos(yy / 23.0),
+                     0.30 + 0.1 * np.sin((xx + yy) / 31.0)], axis=-1).astype("float32")
+    weight = np.clip(0.5 + 0.5 * np.sin(xx / 40.0) * np.cos(yy / 35.0), 0, 1).astype("float32")
+    return tint, weight
+
+def _terrain_with_a_pan():
+    """The synthetic hills beside a low, dead-flat basin: the one ground the salt pan
+    and its seeded mottle are drawn on, so the depth pass has every step to do."""
+    elev = synthetic_terrain()
+    elev[:, :110] = 1010.0
+    return elev
+
+def test_the_band_size_does_not_move_a_pixel(monkeypatch):
+    # The per-pixel blocks run a band of rows at a time so their temporaries are
+    # band-sized. That is only legal when no pixel reads another, and this is the
+    # check: ONE band is the whole-array computation, and many short bands (with a
+    # shorter last one, 256 = 36 * 7 + 4) must give the same bytes. A block that
+    # reads a neighbour, a whole-array statistic or its own RNG draw fails here.
+    elev = _terrain_with_a_pan()
+    kw = _everything_on(biome=_land_cover(elev.shape))
+    monkeypatch.setattr(relief, "BAND_ROWS", 10 ** 9)
+    whole = shaded_relief(elev, **kw)
+    # the pan is really drawn: without its salt lift this test would not reach the mottle
+    flat = shaded_relief(elev, **{**kw, "depth": 0.0})
+    assert whole[:, 10:100].mean() > flat[:, 10:100].mean() + 5
+    for rows in (1, 7, 256):
+        monkeypatch.setattr(relief, "BAND_ROWS", rows)
+        assert np.array_equal(whole, shaded_relief(elev, **kw)), f"{rows}-row bands"
+
+def test_bands_cover_every_row_once_in_order(monkeypatch):
+    monkeypatch.setattr(relief, "BAND_ROWS", 7)
+    got = [r for s in relief._bands(30) for r in range(s.start, s.stop)]
+    assert got == list(range(30))
+    assert list(relief._bands(0)) == []
+
+def test_tonal_finish_writes_its_argument_only_when_told():
+    rng = np.random.default_rng(3)
+    src = rng.uniform(-0.2, 1.2, (300, 41, 3)).astype("float32")   # past both ends
+    kept = src.copy()
+    out = relief._tonal_finish(src)
+    assert np.array_equal(src, kept), "the default must leave a caller's array alone"
+    assert not np.shares_memory(out, src)
+    # consume=True: the same floats, built in the caller's buffer
+    given = src.copy()
+    took = relief._tonal_finish(given, consume=True)
+    assert np.shares_memory(took, given), "consume=True must not build a second sheet"
+    assert np.array_equal(took, out)
+    # a read-only array cannot be consumed: it is copied, not written and not refused
+    frozen = src.copy()
+    frozen.flags.writeable = False
+    assert np.array_equal(relief._tonal_finish(frozen, consume=True), out)
+    assert np.array_equal(frozen, kept)
+
+def test_the_lit_sheet_is_the_same_built_in_place_or_fresh(monkeypatch):
+    # `base *= light` reuses the colour plane's buffer. It must be the product
+    # `base * light` and nothing else, so forcing the allocating form changes no byte.
+    elev = synthetic_terrain()
+    kw = _everything_on(biome=_land_cover(elev.shape))
+    in_place = shaded_relief(elev, **kw)
+    monkeypatch.setattr(relief, "_in_place_ok", lambda a, b: False)
+    assert np.array_equal(in_place, shaded_relief(elev, **kw))
+
+def test_in_place_is_refused_where_it_would_change_the_product():
+    base = np.ones((4, 5, 3), "float32")
+    light = np.full((4, 5, 1), 0.5, "float32")
+    assert relief._in_place_ok(base, light)
+    # a float64 light: the product is float64, and a float32 store would round it
+    assert not relief._in_place_ok(base, light.astype("float64"))
+    frozen = base.copy()
+    frozen.flags.writeable = False
+    assert not relief._in_place_ok(frozen, light)            # somebody else's array
+    assert not relief._in_place_ok(base[:, :, ::-1], light)  # a view into one
+    assert not relief._in_place_ok(np.ones((1, 1, 3), "float32"), light)   # would grow
+
+def test_a_deferred_land_cover_is_read_once_and_blends_the_same():
+    # render._paint_terrain hands the land cover over as a function, so the two
+    # planes live only inside the blend. The function is called exactly once, and
+    # the sheet is the one the planes themselves give.
+    elev = synthetic_terrain()
+    planes = _land_cover(elev.shape)
+    calls = []
+
+    def deferred():
+        calls.append(1)
+        return planes
+
+    eager = shaded_relief(elev, **_everything_on(biome=planes))
+    assert np.array_equal(eager, shaded_relief(elev, **_everything_on(biome=deferred)))
+    assert calls == [1]
+    # no land cover is None, from the caller or from the function (a plate with no
+    # landcover.tif: render._biome_layers returns None)
+    plain = shaded_relief(elev, **_everything_on())
+    assert not np.array_equal(plain, eager)
+    assert np.array_equal(plain, shaded_relief(elev, **_everything_on(biome=None)))
+    assert np.array_equal(plain, shaded_relief(elev, **_everything_on(biome=lambda: None)))
+    # the planes are read, never written
+    kept = _land_cover(elev.shape)
+    assert np.array_equal(planes[0], kept[0]) and np.array_equal(planes[1], kept[1])
+
+def test_base_colour_refuses_false_as_it_always_did():
+    # `biome` is a pair, a function or None. False was never "off" and still is not.
+    import pytest
+    with pytest.raises(TypeError):
+        relief.base_colour(synthetic_terrain(40, 50), 1000, 2000, biome=False)
+
+def test_the_land_cover_blend_keeps_the_dtype_of_its_inputs():
+    # The engine's planes are float32 and the blend stays float32, in the ramp's own
+    # buffer. A direct caller with float64 planes got a float64 colour plane from the
+    # whole-array expression, and the banded blend must give that same plane: stored
+    # into float32 it would be rounded.
+    elev = synthetic_terrain(300, 60)
+    tint, weight = _land_cover(elev.shape)
+    assert relief.base_colour(elev, 1000, 2000, biome=(tint, weight)).dtype == np.float32
+    got = relief.base_colour(elev, 1000, 2000, biome=(tint.astype("float64"), weight))
+    norm = np.clip((elev - 1000) / (2000 - 1000 + 1e-9), 0, 1)
+    base = relief.hypsometric(elev, 1000, 2000, norm=norm)
+    t64 = tint.astype("float64")
+    matched = np.clip(t64 * (base.mean(axis=2, keepdims=True)
+                             / (t64.mean(axis=2, keepdims=True) + 1e-6)), 0, 1)
+    fade = np.clip((relief.ALPINE_FADE_END - norm) /
+                   (relief.ALPINE_FADE_END - relief.ALPINE_FADE_START), 0, 1)
+    w3 = (weight * relief.BIOME_MIX * fade)[..., None]
+    want = base * (1 - w3) + matched * w3
+    assert got.dtype == want.dtype == np.float64
+    assert np.array_equal(got, want)
+
+def test_the_ramp_colours_a_line_and_a_point_like_the_sheet():
+    # hypsometric bands a 2-D window; a profile line or one elevation takes the
+    # whole-array expression, and must agree with the same values inside a sheet.
+    elev = synthetic_terrain(300, 60)
+    sheet = relief.hypsometric(elev, 1000, 2000)
+    assert np.array_equal(relief.hypsometric(elev[5], 1000, 2000), sheet[5])
+    assert np.array_equal(relief.hypsometric(elev[5, 9], 1000, 2000), sheet[5, 9])
+
+def test_shadow_terms_read_the_window_and_never_write_it():
+    # _shadow_terms no longer copies a float32 window before reading it, so it must
+    # leave it untouched on both of its paths: the coarse working grid and the native one.
+    elev = synthetic_terrain()
+    kept = elev.copy()
+    for shadow_res_m in (None, 90.0):
+        cast, ao = _shadow_terms(elev, 30.0, shadow_res_m=shadow_res_m)
+        assert np.array_equal(elev, kept)
+        assert cast.dtype == ao.dtype == np.float32
+        assert not np.shares_memory(cast, elev) and not np.shares_memory(ao, elev)

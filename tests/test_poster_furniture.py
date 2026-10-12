@@ -103,6 +103,27 @@ def test_contours_draw_on_slope_not_on_flat():
     assert np.array_equal(out_flat, base), "flat ground flooded with contour ink"
 
 
+def test_contours_blend_the_same_at_any_band_size_and_leave_the_sheet_alone(monkeypatch):
+    # The contour blend runs in bands of rows in its own float buffer (the memory
+    # trim). One band is the whole-array blend; short bands must give the same bytes,
+    # and the sheet handed in is read, never written.
+    from app import relief
+    h, w = 300, 120
+    yy, xx = np.mgrid[0:h, 0:w].astype("float32")
+    elev = 1000.0 + 3.0 * xx + 40.0 * np.sin(yy / 20.0)
+    rng = np.random.default_rng(5)
+    sheet = rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
+    kept = sheet.copy()
+    monkeypatch.setattr(relief, "BAND_ROWS", 10 ** 9)
+    whole = render._draw_contours(sheet, elev, dpi=96, ground_m_per_in=200.0)
+    assert (whole != sheet).any(), "no contour ink to blend"
+    for rows in (1, 7, 256):
+        monkeypatch.setattr(relief, "BAND_ROWS", rows)
+        assert np.array_equal(whole, render._draw_contours(sheet, elev, dpi=96,
+                                                           ground_m_per_in=200.0))
+    assert np.array_equal(sheet, kept)
+
+
 def test_contours_off_by_default_in_spec():
     from app.spec import CompositionSpec
     s = _spec()

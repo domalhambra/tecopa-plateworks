@@ -163,7 +163,9 @@ GOLDEN_LIT_GAMMA = 1.4             # concentrate the warmth on the well-lit face
 #   "finish" (RGB 0..1)        after texture + atmosphere, before the tonal curve
 #   "grade"  (RGB 0..1)        after the tonal curve, before the paper grain
 #
-# A pass is `fn(array, frame) -> array` and MAY write its argument in place. It runs
+# A pass is `fn(array, frame) -> array` and MAY write its argument in place. What it
+# returns belongs to the chain, which composites into it in place (docs/relief-passes.md,
+# "Memory"), so a pass returns its argument or a fresh array nothing else holds. It runs
 # only when its `enabled(frame)` predicate is true, and its knob rides `frame.extras`
 # (see `render.relief_extra`), so nothing here needs a new parameter. The registry is
 # EMPTY by default and an empty stage is a strict no-op -- the forever-contract's
@@ -210,6 +212,14 @@ class ReliefFrame:
         if self._terrain is None:
             self._terrain = slope_aspect(self.elev, self.res_m, self.z_factor)
         return self._terrain
+
+    def release_terrain(self):
+        """Free the cached (slope, aspect): two full-sheet planes, 8 bytes a pixel.
+        The core calls this after its last light. A pass that asks later is not
+        refused and never sees a stale field: `terrain()` computes it again from the
+        same elevation with the same expression, so the floats are the same ones. It
+        pays for one more gradient, and the field is then cached again."""
+        self._terrain = None
 
     def light_from(self, azimuth, altitude):
         """A hillshade of this frame's terrain from any bearing, on the shared
@@ -479,20 +489,31 @@ def _shadow_terms(elev, res_m, azimuth=315, altitude=45, z_factor=1.0,
     A ground-unit pre-smooth makes the native and decimated grids converge on the
     same smoothed field before any ray is cast."""
     work_res = float(max(res_m, shadow_res_m or 0.0))
-    e = elev.astype("float32")
+    # `e` is only ever read below (every consumer builds its own output), so a window
+    # that is already float32 is used as it stands: a copy here was one more
+    # full-sheet plane (4 bytes a pixel) held while the other passes run.
+    e = elev.astype("float32", copy=False)
     sig_px = SHADOW_PRESMOOTH_FRAC * work_res / res_m
     if sig_px >= 0.3:
         e = gaussian_filter(e, sig_px)
     if work_res / res_m > 1.1:                        # work grid meaningfully coarser
         small = zoom(e, res_m / work_res, order=1)
+        del e              # the smoothed full-sheet plane: the march reads `small` only
         cast = cast_shadow_mask(small, work_res, azimuth, altitude, z_factor)
         ao = sky_occlusion(small, work_res)
-        cast = np.clip(_resize_to(cast, elev.shape), 0.0, 1.0)
-        ao = np.clip(_resize_to(ao, elev.shape), 0.0, 1.0)
+        del small
+        # Both masks are this call's own arrays: cast_shadow_mask and sky_occlusion
+        # each return a fresh one, and _resize_to hands back that array or a fresh
+        # zoom of it. So the clip writes in place and saves a full-sheet copy each.
+        cast = _resize_to(cast, elev.shape)
+        np.clip(cast, 0.0, 1.0, out=cast)
+        ao = _resize_to(ao, elev.shape)
+        np.clip(ao, 0.0, 1.0, out=ao)
     else:
         cast = cast_shadow_mask(e, res_m, azimuth, altitude, z_factor)
         ao = sky_occlusion(e, res_m)
-    return cast.astype("float32"), ao.astype("float32")
+    # already float32 on every path above, so no copy is made (astype copied both)
+    return cast.astype("float32", copy=False), ao.astype("float32", copy=False)
 
 def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     """Aerial perspective + salt-pan, both scaled by `depth`. Low ground recedes into
@@ -504,24 +525,73 @@ def _depth_atmosphere(img, elev, norm, tex, res_m, seed, depth):
     operation in the same order as the allocating form it replaced -- only the
     destination changed -- so the pixels are bit-identical while the pass no longer
     builds five full-sheet RGB temporaries (invariant 1 / the forever-contract)."""
+    # The scalar planes (the haze weight, the salt weight, the mottle) are still built
+    # for the whole sheet: one is a power and one is an RNG draw, and neither is banded
+    # (see _bands). Only the RGB compositing runs a band at a time, which is where the
+    # sheet-sized RGB temporaries were (12 bytes a pixel each, up to three at once).
     # aerial perspective: haze rises the lower the ground sits
     aer = (AERIAL_MAX * depth * np.clip(1.0 - norm, 0, 1) ** 1.5)[..., None]
     haze = np.array(HAZE, np.float32)[None, None, :] / 255.0
-    img *= (1.0 - aer)
-    img += haze * aer
+    # Banded: arithmetic on one pixel and its own haze weight. (`aer[rows]` is not
+    # given a name: a band view left bound after the loop would keep the whole plane
+    # alive past the `del`.)
+    for rows in _bands(img.shape[0]):
+        ib = img[rows]
+        ib *= (1.0 - aer[rows])
+        ib += haze * aer[rows]
+    del aer                                           # its last reader was that loop
     # salt pan: low AND flat (near-zero local relief from the texture high-pass)
     low = np.clip((SALT_LOW_NORM - norm) / SALT_LOW_NORM, 0, 1)
     flat = np.clip(1.0 - np.abs(tex - 0.5) * 4.0, 0, 1)
     sw = (SALT_MAX * depth * low * flat)
+    del low, flat
     salt = np.array(SALT, np.float32)[None, None, :] / 255.0
-    img *= (1.0 - sw[..., None])
-    img += salt * sw[..., None]
-    # a fine, dpi-stable mottle so the pan has grain -- only where it actually is salt
+    # a fine, dpi-stable mottle so the pan has grain -- only where it actually is salt.
+    # Drawn ONCE for the whole sheet, before the loop: the RNG's output depends on the
+    # shape it is asked for, so a band must slice it, never draw its own.
     mottle = grain(elev.shape, max(1.0, MOTTLE_CELL_M / res_m), MOTTLE_STRENGTH, seed + 1)
-    img *= (1.0 + (mottle - 1.0)[..., None] * np.clip(sw * 3.0, 0, 1)[..., None])
+    # Banded: three steps in a row on one pixel, each arithmetic or a clip on that
+    # pixel's own salt weight and mottle value. No pixel reads another, so running
+    # the three per band is the same as running each over the whole sheet in turn.
+    for rows in _bands(img.shape[0]):
+        ib, sb = img[rows], sw[rows]
+        ib *= (1.0 - sb[..., None])
+        ib += salt * sb[..., None]
+        ib *= (1.0 + (mottle[rows] - 1.0)[..., None] * np.clip(sb * 3.0, 0, 1)[..., None])
     return img
 
-def _tonal_finish(img):
+# ---- banded per-pixel work ---------------------------------------------------------
+# A full-sheet expression such as `x * x * (3 - 2 * x)` builds a full-sheet temporary
+# for each operator: 12 bytes a pixel for an RGB plane, and a 59 x 22 in final has
+# 146 million padded pixels. Where every step of a block is PER PIXEL, the block runs
+# on a band of rows at a time instead, and its temporaries are the size of a band.
+#
+# A block may be banded only when each output pixel depends on that pixel's inputs and
+# on nothing else: arithmetic, a clip, a reduction along the channel axis, np.interp.
+# Then a band computes exactly the floats the whole array computed for those rows. A
+# blur or a gradient reads neighbours; a std, a percentile, a min or a max reads the
+# whole array; an RNG draw depends on the shape it is asked for. None of those may be
+# banded, and none is. tests/test_relief.py holds this: one band and many bands must
+# give identical bytes.
+BAND_ROWS = 256                 # rows in a band; any value >= 1 gives the same bytes
+
+def _bands(h):
+    """Row slices that cover 0..h in order, BAND_ROWS at a time (the last is shorter).
+    `a[rows]` is a view, so an in-place write to it lands in `a`."""
+    step = max(1, int(BAND_ROWS))
+    for r0 in range(0, h, step):
+        yield slice(r0, min(h, r0 + step))
+
+def _in_place_ok(a, b):
+    """True when `a *= b` gives exactly the array `a * b` would, and nobody else is
+    reading `a`'s buffer: `a` is writable, it is a whole buffer and not a view into
+    another array, the product has `a`'s own dtype (a float64 operand would be
+    rounded back to float32 on the store), and it has `a`'s own shape."""
+    return (a.flags.writeable and a.flags.owndata
+            and np.result_type(a, b) == a.dtype
+            and np.broadcast_shapes(a.shape, b.shape) == a.shape)
+
+def _tonal_finish(img, consume=False):
     """The cartographer's finishing move: a gentle contrast S-curve + a mid-tone
     saturation lift, applied to the composed relief. This is what pulls a flat,
     muddy sheet into one with punch -- deeper shadows, cleaner highlights, and
@@ -530,33 +600,47 @@ def _tonal_finish(img):
     1). Endpoints are fixed (0->0, 1->1), so nothing clips to black or blows out.
 
     This was the single heaviest allocator in the engine -- the naive form built ~10
-    full-sheet RGB temporaries (a 300 dpi 18x24 sheet is ~260 MB each). The rewrite
-    keeps every IEEE operation and its order (a*b and b*a, a+b and b+a are exact in
-    IEEE), so it is bit-identical; only the destinations changed. `img` itself is
-    never written -- the first stage clips into a fresh buffer and the rest composite
-    into that -- so a direct caller's array is safe."""
-    owned = False                    # True once `img` is a buffer this call created
+    full-sheet RGB temporaries (a 300 dpi 18x24 sheet is ~585 MB each on its padded
+    window). The rewrite keeps every IEEE operation and its order (a*b and b*a, a+b
+    and b+a are exact in IEEE), so it is bit-identical; only the destinations changed.
+
+    `consume=False` (the default) never writes `img` -- the first stage clips into a
+    fresh buffer and the rest composite into that -- so a direct caller's array is
+    safe. `consume=True` says the caller gives the buffer up: the curve then runs in
+    `img` itself, and the sheet-sized copy (12 bytes a pixel, made at what was the
+    engine's memory peak) is never built. A read-only array is copied all the same.
+
+    Both stages run a band at a time (see _bands), so the curve's two temporaries
+    and the luminance plane are band-sized instead of sheet-sized."""
+    # True when `img` is a buffer this call may write
+    owned = bool(consume) and img.flags.writeable
     if RELIEF_CONTRAST > 0:
-        x = np.clip(img, 0.0, 1.0)                        # our own buffer from here
-        ramp = x * -2.0                                   # -(2x)
-        ramp += 3.0                                       # (3 - 2x)
-        curve = x * x                                     # multiplication is NOT
-        curve *= ramp                                     # associative: keep (x*x)*(3-2x)
-        del ramp
-        curve *= RELIEF_CONTRAST
-        x *= (1.0 - RELIEF_CONTRAST)
-        x += curve
-        del curve
+        x = np.clip(img, 0.0, 1.0, out=img if owned else None)   # our own buffer from here
+        # Banded: every line below is arithmetic on one pixel's own channel value.
+        for rows in _bands(x.shape[0]):
+            xb = x[rows]                                  # a view: the writes land in x
+            ramp = xb * -2.0                              # -(2x)
+            ramp += 3.0                                   # (3 - 2x)
+            curve = xb * xb                               # multiplication is NOT
+            curve *= ramp                                 # associative: keep (x*x)*(3-2x)
+            curve *= RELIEF_CONTRAST
+            xb *= (1.0 - RELIEF_CONTRAST)
+            xb += curve
         img, owned = x, True
     if RELIEF_SATURATION != 1.0:
         # luminance-preserving chroma scale (Rec. 601 weights); keeps the value the
         # contrast curve just set, only spreads the colour away from grey.
-        lum = (img * np.array([0.299, 0.587, 0.114], np.float32)).sum(axis=2, keepdims=True)
         if not owned:                                     # never mutate a caller's array
             img, owned = img.copy(), True
-        img -= lum
-        img *= RELIEF_SATURATION
-        img += lum
+        wts = np.array([0.299, 0.587, 0.114], np.float32)
+        # Banded: the luminance is a sum over one pixel's three channels, and the
+        # rest is arithmetic on that pixel.
+        for rows in _bands(img.shape[0]):
+            ib = img[rows]
+            lum = (ib * wts).sum(axis=2, keepdims=True)
+            ib -= lum
+            ib *= RELIEF_SATURATION
+            ib += lum
     return np.clip(img, 0.0, 1.0, out=img if owned else None)
 
 def hypsometric(elev, elev_min, elev_max, norm=None):
@@ -571,7 +655,15 @@ def hypsometric(elev, elev_min, elev_max, norm=None):
     paper = np.array(PAPER, dtype="float32")
     for ch in range(3):
         ys = np.array([s[1][ch] for s in stops], dtype="float32")
-        rgb[..., ch] = np.interp(norm, xs, ys) * (1.0 - PAPER_LIFT) + paper[ch] * PAPER_LIFT
+        if np.ndim(norm) < 2:             # one elevation or a profile line: no rows
+            rgb[..., ch] = np.interp(norm, xs, ys) * (1.0 - PAPER_LIFT) + paper[ch] * PAPER_LIFT
+        else:
+            # Banded: np.interp looks each value up on its own, and the paper lift is
+            # arithmetic on it. np.interp answers in float64, so the whole-sheet form
+            # held a double-width plane or two (8 to 16 bytes a pixel) for each channel.
+            for rows in _bands(norm.shape[0]):
+                rgb[rows, ..., ch] = (np.interp(norm[rows], xs, ys) * (1.0 - PAPER_LIFT)
+                                      + paper[ch] * PAPER_LIFT)
     rgb /= 255.0
     return rgb
 
@@ -582,19 +674,39 @@ def base_colour(elev, elev_min, elev_max, norm=None, biome=None):
     supplies its own light (scripts/hero_plate.py drapes this over a Cycles render)
     needs exactly this plane, and a second copy of the mix would drift from the first.
 
-    biome: optional (tint01, weight01) from render._biome_layers, aligned to `elev`."""
+    biome: optional (tint01, weight01) from render._biome_layers, aligned to `elev`
+    -- or a function of no arguments that returns that pair, or None. The function is
+    called once, here. The two planes are 16 bytes a pixel and nothing reads them
+    after this blend, so a caller that hands over the function instead of the planes
+    (render._paint_terrain does) lets them be freed when this returns, where a pair
+    held in the caller's frame lived to the end of the render."""
     if norm is None:
         norm = np.clip((elev - elev_min) / (elev_max - elev_min + 1e-9), 0, 1)
+    if callable(biome):
+        biome = biome()
     base = hypsometric(elev, elev_min, elev_max, norm=norm)
     if biome is not None:
         tint, weight = biome
-        base_lum = base.mean(axis=2, keepdims=True)
-        tint_lum = tint.mean(axis=2, keepdims=True) + 1e-6
-        matched = np.clip(tint * (base_lum / tint_lum), 0, 1)    # hue only; keep light
-        fade = np.clip((ALPINE_FADE_END - norm) /
-                       (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
-        w3 = (weight * BIOME_MIX * fade)[..., None]
-        base = base * (1 - w3) + matched * w3
+        # Banded: the two means run over one pixel's three channels, and every other
+        # step is arithmetic or a clip on that pixel. The blend itself is the
+        # whole-array expression, evaluated on a band, so its dtype is whatever that
+        # expression gives (float32 from the engine; float64 if a direct caller hands
+        # over float64 planes) and the result is stored without a cast.
+        out = None
+        for rows in _bands(base.shape[0]):
+            b, t = base[rows], tint[rows]
+            base_lum = b.mean(axis=2, keepdims=True)
+            tint_lum = t.mean(axis=2, keepdims=True) + 1e-6
+            matched = np.clip(t * (base_lum / tint_lum), 0, 1)   # hue only; keep light
+            fade = np.clip((ALPINE_FADE_END - norm[rows]) /
+                           (ALPINE_FADE_END - ALPINE_FADE_START), 0, 1)
+            w3 = (weight[rows] * BIOME_MIX * fade)[..., None]
+            blend = b * (1 - w3) + matched * w3
+            if out is None:           # `base` is hypsometric's fresh buffer: reuse it
+                out = base if blend.dtype == base.dtype else np.empty(base.shape, blend.dtype)
+            out[rows] = blend
+        if out is not None:
+            base = out
     return base
 
 def texture_pass(elev, radius_px=TEXTURE_RADIUS_PX):
@@ -738,16 +850,33 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     light = _run_stage("light", light, frame)
     light = light[..., None]
 
-    # From here `img` is the full-sheet RGB plane -- ~260 MB at a 300 dpi 18x24 final,
+    # From here `img` is the full-sheet RGB plane -- ~585 MB at a 300 dpi 18x24 final,
     # so every stage composites INTO it rather than allocating a fresh copy. The
     # operations and their order are unchanged (see _tonal_finish), so the sheet is
     # bit-identical; only the peak memory and the memory traffic drop.
-    img = base * light
-    del base
+    #
+    # The colour plane becomes the sheet: `base` is dead once the light is on it, so
+    # the product goes into base's own buffer and no second RGB plane (12 bytes a
+    # pixel) is built. A "color" pass may have handed back an array this function
+    # cannot write, or a float64 light may widen the product; then the allocating
+    # form runs, as before (see _in_place_ok).
+    if _in_place_ok(base, light):
+        base *= light
+        img = base
+    else:
+        img = base * light
+    # The light plane (4 bytes a pixel) has no reader after the product: the frame
+    # does not carry it, and `frame.light_from` shades afresh. `hs` is the name the
+    # fan-out gave the same buffer, so both names go.
+    del base, light, hs
     if s > 0:                                         # cool skylight in the shadows
-        w = (CAST_TINT_MAX * s * cast)[..., None]
         cool = np.array(CAST_TINT, np.float32)[None, None, :]
-        img *= (1.0 - w + cool * w)
+        # Banded: the weight is one pixel's own cast-shadow value, and the tint is
+        # arithmetic on that pixel. The whole-sheet form built the weight plane and
+        # two RGB temporaries, and kept the weight to the end of the render.
+        for rows in _bands(img.shape[0]):
+            w = (CAST_TINT_MAX * s * cast[rows])[..., None]
+            img[rows] *= (1.0 - w + cool * w)
     # Journey Light golden grade: warm the sunlit faces, cool the shadowed ground. Strict
     # no-op unless a journey sun + golden strength are set (archival stays byte-identical).
     if golden > 0 and sun_azimuth is not None:
@@ -757,17 +886,36 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         # identical gradient the pre-fan-out local `terrain` handed over.
         hs_sun = np.clip(hillshade(elev, res_m, float(sun_azimuth), float(sun_altitude),
                                    z_factor, terrain=frame.terrain()), 0.0, 1.0)
+        frame.release_terrain()         # that was the core's last light (see below)
         lit = hs_sun ** GOLDEN_LIT_GAMMA
         shade = 1.0 - hs_sun
+        del hs_sun
         if s > 0:                       # a cast-shadowed face isn't really sunlit
             lit = lit * (1.0 - cast)
             shade = np.maximum(shade, np.maximum(cast, ao))
         ww = (GOLDEN_WARM_MAX * g * lit)[..., None]
+        del lit
         cw = (GOLDEN_COOL_MAX * g * shade)[..., None]
+        del shade
         warm = np.array(GOLDEN_WARM, np.float32)[None, None, :]
         cool2 = np.array(GOLDEN_COOL, np.float32)[None, None, :]
-        img *= (1.0 - ww + warm * ww)
-        img *= (1.0 - cw + cool2 * cw)
+        # Banded: each grade is arithmetic on one pixel and its own warm or cool
+        # weight, and the cool one follows the warm one on that pixel as it did on
+        # the whole sheet. The weights (a power, a maximum of planes) are built whole
+        # above and dropped at their last reader; only the two RGB multipliers, 24
+        # bytes a pixel as whole-sheet temporaries, are band-sized now.
+        # (No name for `ww[rows]` or `cw[rows]`: a band view left bound after the
+        # loop would keep its whole plane alive past the `del`.)
+        for rows in _bands(img.shape[0]):
+            ib = img[rows]
+            ib *= (1.0 - ww[rows] + warm * ww[rows])
+            ib *= (1.0 - cw[rows] + cool2 * cw[rows])
+        del ww, cw
+    # Nothing below reads the slope/aspect field: the archival lights were built in
+    # the fan-out and the journey sun just above. Its 8 bytes a pixel go before the
+    # tonal finish; a "finish" or "grade" pass that asks gets the same field,
+    # computed again (see ReliefFrame.release_terrain).
+    frame.release_terrain()
     # blend texture as a soft dodge/burn around mid-gray
     dodge = tex - 0.5
     dodge *= TEXTURE_STRENGTH
@@ -777,7 +925,10 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
     if depth > 0:
         img = _depth_atmosphere(img, elev, norm, tex, res_m, seed, float(np.clip(depth, 0, 1.5)))
     img = _run_stage("finish", img, frame)
-    img = _tonal_finish(img)                                      # levels + curves + vibrance
+    # consume: `img` has no other reader here -- it is this function's own sheet, or
+    # the array a "finish" pass handed back for the chain to carry on with. A view
+    # into some other array is not ours to give up, so that one is copied, as before.
+    img = _tonal_finish(img, consume=img.flags.owndata)           # levels + curves + vibrance
     img = _run_stage("grade", img, frame)
     img *= grain(elev.shape, grain_cell_px, grain_strength, seed)[..., None]
     np.clip(img, 0, 1, out=img)

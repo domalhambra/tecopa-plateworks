@@ -94,8 +94,18 @@ technique — the later it runs, the less of the existing chain it can disturb.
 | `grade` | composed RGB, 0..1 | after the tonal curve, before the paper grain |
 
 A pass **may write its argument in place** — the whole engine composites in place now,
-and a pass that allocated a fresh sheet would hand that saving back (a 300 dpi 18×24
-RGB plane is ~260 MB).
+and a pass that allocated a fresh sheet would hand that saving back. A 300 dpi 18×24
+sheet is 48.8 million pixels on its padded window, so one RGB plane is 585 MB and one
+scalar plane is 195 MB.
+
+**The array a pass returns belongs to the chain.** The chain writes into it: the colour
+plane becomes the lit sheet in its own buffer, the tonal curve runs in the plane the
+`finish` stage hands back, and the grain is multiplied into the plane the `grade` stage
+hands back. So return the argument, or a new array that nothing else holds. Do not
+return an array that a cache or a module keeps, and do not keep the argument to read
+after the pass returns. At `color` and `finish` the chain copies a read-only array or a
+view into another array before it writes, and that render loses the saving. At `grade`
+it writes what comes back, as it always has.
 
 ## What the frame gives you
 
@@ -104,7 +114,10 @@ paid for*. Reach for these before computing your own:
 
 - `frame.elev` — NaN-repaired float32 elevation on the padded render window
 - `frame.norm` — 0..1 elevation over the plate's range
-- `frame.terrain()` — `(slope, aspect)`, computed once and shared
+- `frame.terrain()` — `(slope, aspect)`, computed once and shared by the core's lights
+  and by every `color` and `light` pass. The core frees it after its last light (see
+  Memory), so a `finish` or `grade` pass that calls it pays for one more gradient pass.
+  The values are the same ones
 - `frame.light_from(az, alt)` — a hillshade on that shared field, any bearing
 - `frame.tex`, `frame.val` — the texture high-pass and valley-depth fields
 - `frame.cast`, `frame.ao` — the ray-marched cast shadow and sky occlusion
@@ -118,6 +131,56 @@ sky-occlusion pass reaches 3200 ground metres. `_blur` computes anything wider t
 `BLUR_PYRAMID_SIGMA_PX` on a decimated pyramid whose grid lands on a *fixed ground
 resolution*, so it stays DPI-stable (invariant 1) while costing a fraction of the
 exact filter.
+
+## Memory
+
+A final holds its whole padded window in memory, so every full-sheet array counts. A
+scalar float32 plane is 4 bytes a pixel and an RGB plane is 12. The padded window is
+1.25 times the output, so that is 5 and 15 bytes for each output pixel. On the largest
+sheet a set renders (59×22 in at 300 dpi, 116.8 megapixels) one RGB plane is 1.76 GB.
+
+Measured on 2026-10-11 with tracemalloc on a 17×22 in final of `rifle_aspen`, with
+land cover, contours and place names on, in bytes of live arrays for each output pixel:
+
+| Sheet | Before the trim | After | Where the peak is now |
+|---|---|---|---|
+| The spec defaults | 135.5 | 75.3, 76.5 and 77.3 (1, 2 and 4 relief workers) | the four heavy passes and the light they build |
+| Journey Light with the golden grade | 160.6 | 80.4 | the journey sun's hillshade |
+| Terrain depth on (`elko_bonneville`) | 135.5 | 75.3 | the four heavy passes and the light they build |
+| High relief 0.5 | 142.7 | 79.3 | the four heavy passes and the light they build |
+| `soft_light` 0.35 and `haze_strength` 0.15 | 135.5 | 95.3 | the soft-light pass |
+
+The old peak was the tonal curve, and only about 25 of its bytes were in use there. The
+soft-light pass was not changed: its own planes are now the peak of a sheet that uses
+it.
+
+The chain keeps these rules, and a new pass must keep them too:
+
+- **Composite an RGB plane in bands of rows**: `for rows in relief._bands(img.shape[0])`.
+  The temporaries of the expression are then the size of a band (256 rows), not of the
+  sheet. A block may be banded only when each output pixel depends on that pixel's own
+  inputs and on nothing else: arithmetic, a clip, a sum along the channel axis,
+  `np.interp`. A blur and a gradient read neighbours. A std, a percentile, a min and a
+  max read the whole array. An RNG draw depends on the shape it is asked for. Compute
+  those for the whole sheet first, and slice the result in the loop.
+  `test_the_band_size_does_not_move_a_pixel` in `tests/test_relief.py` holds the rule:
+  one band and many bands must give the same bytes. Make sure it reaches a new banded
+  block.
+- **Do not give a band of a scalar plane a name** (`wb = weight[rows]`). The name
+  outlives the loop, and the view keeps the whole plane alive after its `del`. Index
+  the plane where it is used.
+- **Delete a full-sheet plane at its last reader**, and say in a comment what the
+  `del` saves.
+- **The frame's own planes are not freed early.** `elev`, `norm`, `tex`, `val`, `cast`
+  and `ao` are 30 bytes for each output pixel from the fan-out to the end, because the
+  registry cannot know which pass reads which. The core frees only the slope and aspect
+  field (10 bytes), and `frame.terrain()` builds it again for a pass that asks.
+- **The land cover is handed over as a function.** `relief.base_colour` calls it once
+  and its two planes (20 bytes) are freed when the blend returns.
+
+tracemalloc counts live arrays. The process footprint is higher: on macOS the allocator
+keeps freed blocks counted against the process, and the libraries allocate outside
+Python.
 
 ## When a change moves pixels on the existing chain
 
