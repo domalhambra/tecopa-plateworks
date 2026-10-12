@@ -261,13 +261,15 @@ def test_a_long_line_wraps_inside_its_width():
 
 def test_one_long_word_wraps_in_linear_time():
     # an unbroken 5,000-character string took over five minutes: each cut measured
-    # every shorter prefix of all that was left
+    # every shorter prefix of all that was left. The bound is 10 s, not 1: the linear
+    # wrap is 0.25 s on the Mac and was 1.2 s on the Linux CI runner, which failed a
+    # bound of 1 s on the first push. The old wrap is still 30 times over it.
     font = pdf._font(pdf.MUTED_PT)
     for track in (0.0, 2.0):
         word = "Wi" * 2500
         started = time.process_time()                      # this process only: a busy machine does not fail it
         cut = pdf.wrap(word, font, pdf._px(3.0), track)
-        assert time.process_time() - started < 1.0
+        assert time.process_time() - started < 10.0
         assert "".join(cut) == word and len(cut) > 20
         assert all(pdf._width(c, font, track) <= pdf._px(3.0) for c in cut)
         assert all(pdf._width(c + "W", font, track) > pdf._px(3.0) for c in cut[:-1])
@@ -629,7 +631,13 @@ def test_the_label_of_a_size_page_is_its_place_in_the_menu(tmp_path, monkeypatch
 
 def test_names_and_prices_at_their_limits_still_make_a_wall(tmp_path):
     # app/sizes.py holds a name to 40 characters and a price to 24: the worst wall
-    # keeps its smallest sheet at least 0.75 in across on the page
+    # keeps its smallest sheet at least 0.75 in across on the page.
+    #
+    # That number is Georgia's, the face of the Mac that makes the preview. No font is
+    # in the repo, so the Linux CI draws with DejaVu Serif, which is wider: one name
+    # of 40 characters takes a third line, and the smallest sheet is 0.49 in (146 px).
+    # Every wall is still made. So the floor follows the face: 0.75 in with Georgia,
+    # and 0.45 in with any other face, measured with DejaVu Serif.
     from app import sizes
     names = {"11x17": {"name": "The small sheet, for a hallway or a desk", "price": "$1,250 framed, $950 bare"},
              "17x22": {"name": "The large sheet for a living room wall..", "price": "$1,250 framed, $950 bare"},
@@ -638,8 +646,10 @@ def test_names_and_prices_at_their_limits_still_make_a_wall(tmp_path):
     names["three"]["name"] = names["three"]["name"][:40]
     assert {len(r["name"]) for r in names.values()} == {sizes.NAME_MAX_CHARS}
     assert {len(r["price"]) for r in names.values()} == {sizes.PRICE_MAX_CHARS}
+    face = pdf._font(pdf.MUTED_PT).getname()[0]
+    floor_in = 0.75 if face == "Georgia" else 0.45
     for wall in WALLS:
         offered = _wall(tmp_path, WALLS[wall])
         lay = pdf.wall_layout(offered, names, pdf.content_box("Lassen walk", pdf.WALL_LABEL, True, 1, 5))
-        assert min(it["thumb"][2] for it in lay["items"]) >= pdf._px(0.75), wall
+        assert min(it["thumb"][2] for it in lay["items"]) >= pdf._px(floor_in), (wall, face)
         _margins_are_clean(pdf.wall_page(offered, names, "Lassen walk", 1, 5))
