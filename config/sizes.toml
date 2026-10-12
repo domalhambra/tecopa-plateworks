@@ -1,30 +1,63 @@
-# config/sizes.toml
-# The sizes a preview can offer, in menu order. Dom owns the names and the prices.
-# A row with no price prints "Price on request".
-# The two single-sheet prices are the decision of 2026-10-10 (docs/decisions.md), and
-# they are the prices on the live pages: tests/test_sizes.py holds the two together.
+# The sizes a preview can offer, in menu order, and the digital poster. Dom owns the
+# names, the prices, the shipping and the Payment Links.
+# - price is the first poster's price, next_price the price next year (an order whose
+#   order.toml has returning = true). A row with no price prints "Price on request".
+# - shipping is what the Payment Link charges for shipping. The digital poster ships
+#   nothing and has no shipping field.
+# - link and next_link are the Stripe Payment Links of the first poster and of next
+#   year: https://buy.stripe.com/ and the link's id, nothing more. The preview email
+#   adds ?client_reference_id=<order number>. A link is a public address, so it can be
+#   in this public repo. With a link missing for a size the preview offers, the
+#   preview writes no email and its report names the missing link.
+# The prices are the decisions of 2026-10-10 and 2026-10-12 (docs/decisions.md), and
+# the client intake spec, 2026-10-12, decisions 6 and 7. tests/test_sizes.py holds each
+# price that the live pages show to the pages, and names the ones they do not show yet.
 #
 # The preview reads this file before it builds anything, and a wrong file stops it:
 # - Save the file as UTF-8 (it holds the sign "×").
-# - A row has three fields and no other: key, name, price.
-# - A name and a price are text in quotes: price = "$69", never price = 69.
-# - A name has at most 40 characters and a price at most 24 characters: a longer
-#   caption makes every size smaller on the wall page.
+# - A row has these fields and no other: key, name, price, next_price, shipping, link, next_link.
+#   Only key and name are required.
+# - A name, a price and shipping are text in quotes: price = "$69", never price = 69.
+# - A name has at most 40 characters, and a price or shipping at most 24 characters: a
+#   longer caption makes every size smaller on the wall page.
+# - The digital row (key = "digital") is not a sheet size: the PDF never shows it.
 
 [[size]]
 key = "11x17"
 name = "11 × 17 in"
 price = "$69"
+next_price = "$59"
+shipping = "$8"
+# link: sku tecopa-11x17, not made yet. next_link: sku tecopa-11x17-next, not made yet.
 
 [[size]]
 key = "17x22"
 name = "17 × 22 in"
 price = "$99"
+next_price = "$69"
+shipping = "$12"
+# link: sku tecopa-17x22, not made yet. next_link: sku tecopa-17x22-next, not made yet.
 
 [[size]]
 key = "two"
 name = "Two panels"
+price = "$149"
+next_price = "$119"
+shipping = "$16"
+# link: sku tecopa-two, not made yet. next_link: sku tecopa-two-next, not made yet.
 
 [[size]]
 key = "three"
 name = "Three panels"
+price = "$189"
+next_price = "$159"
+shipping = "$16"
+# link: sku tecopa-three, not made yet. next_link: sku tecopa-three-next, not made yet.
+
+[[size]]
+key = "digital"
+name = "Digital poster"
+price = "$39"
+next_price = "$25"
+link = "https://buy.stripe.com/fZu5kE4De0RE2Ned51afS0J"          # sku tecopa-digital
+# next_link: sku tecopa-digital-next, not made yet.
