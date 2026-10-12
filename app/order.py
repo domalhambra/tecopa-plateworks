@@ -1,9 +1,11 @@
 # app/order.py
 """One customer order on disk (order pipeline spec, section 1).
 
-    ~/Tecopa Orders/<order>/in/         the customer's files; nothing writes here
+    ~/Tecopa Orders/<order>/in/         the customer's files; only `order new` writes
+                                        here, and it adds a file and replaces none
                             order.toml  Dom's decisions: title, size, orientation;
-                                        a set's gap; the preview's sizes
+                                        a set's gap; the preview's sizes. From the
+                                        intake: order_number, returning, client, email
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
@@ -32,6 +34,13 @@ SET_SIZES = {"two": 2, "three": 3}     # a set of 17 x 22 in panels (spec, 2026-
 DEFAULT_GAP = 2.0                      # inches between two panels on the wall
 SIZE_KEYS = ("11x17", "17x22", "two", "three")     # what a preview can offer
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$")
+# The intake's order number, TP-YY-NNN (client intake spec, 2026-10-12). It ends a
+# Payment Link, so nothing but these characters may be in it.
+ORDER_NUMBER = re.compile(r"TP-\d{2}-\d{3,5}")
+# An address for the To line of the preview email: one @, no space, no character that
+# a mail header or a URL reads as a separator.
+EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+CLIENT_MAX_CHARS = 80
 
 
 class OrderError(ValueError):
@@ -107,6 +116,43 @@ def parse_sizes(value) -> tuple:
     return tuple(value)
 
 
+def parse_order_number(value) -> str:
+    """The intake's order number, or "" for an order made before the intake."""
+    if value is None:
+        return ""
+    if not isinstance(value, str) or not ORDER_NUMBER.fullmatch(value):
+        raise OrderError(f"order_number must be like TP-26-001, not {value!r}")
+    return value
+
+
+def parse_returning(value) -> bool:
+    """True for a next-year order: the next-year prices and Payment Links."""
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise OrderError(f"returning must be true or false, not {value!r}")
+    return value
+
+
+def parse_client(value) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise OrderError(f"client must be text in quotes, not {value!r}")
+    value = " ".join(value.split())
+    if len(value) > CLIENT_MAX_CHARS:
+        raise OrderError(f"client has {len(value)} characters, and the most is {CLIENT_MAX_CHARS}")
+    return value
+
+
+def parse_email(value) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str) or len(value) > 254 or not EMAIL.fullmatch(value):
+        raise OrderError(f"email {value!r} is not an email address")
+    return value
+
+
 @dataclass(frozen=True)
 class Order:
     dir: str
@@ -118,6 +164,10 @@ class Order:
     panels: int = 1          # 2 or 3: a set of 17 x 22 in panels
     gap: float = 0.0         # inches between two panels; 0.0 for a single sheet
     sizes: tuple = ()        # the preview's override list
+    order_number: str = ""   # TP-26-001, from the intake; "" for an older order
+    returning: bool = False  # a next-year order: the next-year prices and links
+    client: str = ""         # the client's name, for the preview email
+    email: str = ""          # the client's address, for the To line of that email
 
     @property
     def id(self) -> str:
@@ -199,7 +249,10 @@ def load(folder) -> Order:
     return Order(dir=folder, title=title,
                  subtitle=str(cfg.get("subtitle", "")).strip(),
                  size=size, orientation=orientation, notes=str(cfg.get("notes", "")),
-                 panels=panels, gap=gap, sizes=parse_sizes(cfg.get("sizes")))
+                 panels=panels, gap=gap, sizes=parse_sizes(cfg.get("sizes")),
+                 order_number=parse_order_number(cfg.get("order_number")),
+                 returning=parse_returning(cfg.get("returning")),
+                 client=parse_client(cfg.get("client")), email=parse_email(cfg.get("email")))
 
 
 def read_state(order: Order) -> dict:
