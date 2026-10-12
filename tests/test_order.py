@@ -290,6 +290,7 @@ def test_the_keys_of_the_intake_are_read(tmp_path):
     ('order_number = "26-001"', "order_number must be like TP-26-001, not '26-001'"),
     ('order_number = "TP-26-001?x=1"', "order_number must be like TP-26-001"),
     ('order_number = "tp-26-001"', "order_number must be like TP-26-001"),
+    ('order_number = "TP-\u0662\u0666-001"', "order_number must be like TP-26-001"),   # Arabic-Indic digits
     ("order_number = 1", "order_number must be like TP-26-001, not 1"),
     ('returning = "yes"', "returning must be true or false, not 'yes'"),
     ("returning = 1", "returning must be true or false, not 1"),

@@ -36,7 +36,7 @@ SIZE_KEYS = ("11x17", "17x22", "two", "three")     # what a preview can offer
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*[x×]\s*(\d+(?:\.\d+)?)\s*$")
 # The intake's order number, TP-YY-NNN (client intake spec, 2026-10-12). It ends a
 # Payment Link, so nothing but these characters may be in it.
-ORDER_NUMBER = re.compile(r"TP-\d{2}-\d{3,5}")
+ORDER_NUMBER = re.compile(r"TP-[0-9]{2}-[0-9]{3,5}")
 # An address for the To line of the preview email: one @, no space, no character that
 # a mail header or a URL reads as a separator.
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
