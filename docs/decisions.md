@@ -299,6 +299,16 @@ Findings from the 2026-09-23 sample kit on `tecopa_ca`, triaged 2026-09-27.
 | A script that reads the network starts detached as a tracked run, in its own session, with a record on disk. | A plate build takes minutes and an MCP call must return at once. The run must also outlive the tool. | `tools/tecopa/Sources/TecopaKit/Runs.swift` |
 | `spec.validate()` refuses a field of the wrong type by name, and a JSON `true` where a number belongs. | A crafted poster file reached the render path as a `TypeError`, which is a 500. Forty cases now give a 422. | `app/spec.py`, `_require_types`; `tests/test_spec.py` |
 
+## 2026-10-12 (the sRGB profile bytes)
+
+Found by the independent review of 2026-10-11. The defect is older than the panel sets.
+
+| Decision | Why | Source |
+|---|---|---|
+| The sRGB profile that the engine embeds has one fixed creation date in its header, 2026-10-12 00:00:00. The bytes of the profile are the same in every engine process. This holds for the PNG final, the wallpaper, the WebP twin and the animated PNG. | littlecms stamps the clock, to the second, into header bytes 24 to 35 of a profile it builds. The engine builds the profile once at import. Two engine processes gave the same spec two files with identical pixels and different hashes, so a reprint after a restart never matched the original file by hash. Invariant 3 promises identical bytes within a build. | `_srgb_profile` in `app/main.py`; `tests/test_srgb_profile.py` |
+| The date is a real date, not zeros. | Zeros are stable too, but Pillow 12.3 raises on `creation_date` for a zero date (year 0). A strict reader must get a date that it accepts. macOS names the profile "sRGB built-in" before and after the change. | `tests/test_srgb_profile.py`; `sips -g profile` on a final, 2026-10-12 |
+| The bytes of every output that carries the profile change once, at this build. A file made before the change stays readable, and its reprint has identical pixels. The reprint's hash does not match the old file's hash. It matches every later reprint from the same build. | A reprint reads the `trailprint` zTXt chunk and never the iCCP chunk. The old and the new profile differ only in the date, so the colour data is the same. No test stores the hash of a final, and `engine_version` records the build. | `provenance.extract` in `app/provenance.py`; `tests/fixtures/` holds manifests only |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |
