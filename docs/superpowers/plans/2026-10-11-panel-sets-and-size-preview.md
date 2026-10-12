@@ -4385,3 +4385,17 @@ coordinator writes each result here.
 
    Not covered by the review: the dry-lake commit `7d285de` and the merge of `main`,
    which came after it. The full suites ran again on the merged tip: see item 6.
+6. **The merged tip**, 2026-10-12, commit `3496565`: this branch with the review's
+   fixes (`ddabd93`, `0153595`), the dry-lake fix (`7d285de`) and `main` at `161f9ad`
+   merged in. One conflict, in `docs/decisions.md`, where each side added a dated
+   section: both are kept. In a clean worktree of that commit:
+   - `.venv/bin/python -m pytest -n auto -q`: `2481 passed, 16 skipped` in 238 s, no
+     failure.
+   - `swift test --package-path tools/tecopa`: `Executed 418 tests, with 0 failures`.
+   - `node --check` on each module of `app/static/`: no error.
+
+   Not run again on the merged tip: the smoke test of item 1 and the real previews of
+   item 3. The tool's source is the same as at `8f3a6d6`.
+
+Open after this record, and Dom's: the margin of the largest set in item 2, the three
+checks on paper, the prices of the two sets in `config/sizes.toml`, and the merge.
