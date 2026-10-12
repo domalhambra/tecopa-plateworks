@@ -226,6 +226,12 @@ def test_a_dataless_flag_is_not_on_the_disk(monkeypatch):
     assert not onew.not_downloaded(St())
     St.st_size, St.st_blocks = 0, 0                 # an empty file is on the disk
     assert not onew.not_downloaded(St())
+    St.st_size, St.st_blocks, St.st_flags = 10, 0, 0     # a size and no block: in the cloud
+    assert onew.not_downloaded(St())
+    St.st_flags = onew.UF_COMPRESSED                     # APFS compression: on the disk
+    assert not onew.not_downloaded(St())
+    St.st_flags = onew.UF_COMPRESSED | onew.SF_DATALESS
+    assert onew.not_downloaded(St())
 
 
 def test_a_copy_shorter_than_the_source_is_removed_and_stops_the_run(places, monkeypatch):

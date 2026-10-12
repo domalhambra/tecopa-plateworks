@@ -43,6 +43,8 @@ MAX_ORDER_MD_BYTES = 64 * 1024
 NAME_MAX_CHARS = 120                  # a file name in in/, with its extension
 SLUG_MAX_CHARS = 40                   # the client's part of the order folder's name
 SF_DATALESS = 0x40000000              # macOS st_flags: the file's data is in the cloud
+UF_COMPRESSED = 0x20                  # macOS st_flags: APFS keeps the data compressed in
+                                      # the file's metadata, and st_blocks can be 0
 PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".gif",
               ".dng")
 FRONT_MATTER_KEYS = ("order_id", "created", "client", "email", "title", "returning",
@@ -129,8 +131,11 @@ def over_limit(st) -> bool:
 def not_downloaded(st) -> bool:
     """True when Dropbox lists the file and its data is not on the disk: macOS marks it
     dataless, or it has a size and no block on the disk."""
-    if getattr(st, "st_flags", 0) & SF_DATALESS:
+    flags = getattr(st, "st_flags", 0)
+    if flags & SF_DATALESS:
         return True
+    if flags & UF_COMPRESSED:            # on the disk, compressed; the copy's count checks it
+        return False
     return st.st_size > 0 and getattr(st, "st_blocks", 1) == 0
 
 
