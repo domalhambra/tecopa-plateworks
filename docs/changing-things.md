@@ -140,18 +140,65 @@ Tests: `tests/test_region_prep.py` (the pure planner, so it runs in `.venv` and 
 
 ## Run an order
 
-Read `superpowers/specs/2026-09-24-order-pipeline-design.md` first. Sub-project 1 ships
-Prepare's plate step only.
+Read `superpowers/specs/2026-09-24-order-pipeline-design.md` first. For a set or the
+size preview, read
+`superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md` too.
+`scripts/order.py` has two commands, `preview` and `prepare`. Prepare does the plate
+step only. `order finish` is not built, so a set order ends at the engine's zip of
+panel files.
 
 1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
    inside the repo: it is public. Put the customer's GPX, KML or KMZ files in `in/`.
-2. Write `order.toml`: `title` (required), `size`, `"11x17"` (the default) or `"17x22"`
-   (short side at most 17 in, the PRO-1100's width), `orientation` (`portrait` or `landscape`).
-3. Run `.venv/bin/python scripts/order.py prepare "<folder>"`. It needs `.venv-prep`.
+2. Write `order.toml`: `title` (required), `size` and `orientation` (`portrait`, the
+   default, or `landscape`). `size` is `"11x17"` (the default), `"17x22"`, `"two"` or
+   `"three"`. A single sheet has a short side of at most 17 in, the PRO-1100's width.
+   `"two"` and `"three"` are a set of 17 × 22 in panels: `landscape` hangs them 22 in
+   across, and `portrait` 17 in across. A set also takes `gap`: 0, 2 (the default) or
+   4, the inches of wall between two panels. A gap of 0 is a cut set: every part of
+   the map is printed. A gap of 2 or 4 is a window set: the map continues behind each
+   gap strip, and the gap strip is not printed. A single sheet does not read `gap`.
+3. To let the client choose a size, run the preview before Prepare:
+   `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
+   and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
+   in one of them stops it. It needs `.venv-prep`, unless a curated plate holds every
+   size. It can run again safely. `tecopa order preview "<folder>"` runs the same
+   script as a tracked run. The preview does these steps:
+   - It frames each of the four sizes in both orientations, as Prepare frames them,
+     and keeps the orientation with less wasted ground. A set is framed at a gap of 2 in.
+   - It offers the two single sheets. It offers a set when the tracks span at least
+     30 % of the sheet's width (`SET_MIN_FILL` in `app/orderpreview.py`) and every
+     panel holds some part of a track. The frame is centred on the tracks, so in
+     practice three panels need tracks across about 37 % of the width.
+   - It builds one coarse plate for each projection in use, under
+     `<folder>/work/preview/plate/`. A curated plate is used when it holds the frames.
+   - It draws each offered size at screen size with the word PREVIEW, and writes
+     `<folder>/out/preview/<title>-preview.pdf`, where `<title>` is the title as a
+     slug. Page 1 shows every offered size on one wall at one scale. Then each size
+     has a page with its name, its hung size and its price.
+   - It writes `<folder>/work/preview/preview.json` (each size, its frame, its
+     projection, and why a size is not offered), `<folder>/work/preview/report.txt`
+     and `<folder>/work/preview/build.log`, and prints the report.
+4. Read the preview's report and the PDF. An offered size has its price and the lines
+   for `order.toml`, one key on each line. A set that is not offered has the reason,
+   for example "not offered, the tracks span 24% of the sheet's width, under 30%". A
+   size that the terrain data cannot hold at 2x, or that the engine cannot draw, is
+   "not offered" with the engine's own reason, and the other sizes are still drawn.
+   "Warning: a route end is behind gap 1" means that a window set hides the start or
+   the end of a track: move the frame, use a gap of 0, or choose another size. Send
+   the PDF to the client. It has no buy link: the client answers with a choice.
+5. Paste the lines of the chosen size into `order.toml`. Prepare does not read the
+   preview's files. It frames the chosen size again with the same rule, so with the
+   lines as pasted the frame of the print is the frame of the preview. For a cut set
+   or a 4 in gap, change `gap` by hand: the sheet's shape changes with the gap, so
+   the frame changes a little.
+6. Run `.venv/bin/python scripts/order.py prepare "<folder>"`. It needs `.venv-prep`.
    `TECOPA_PREP_PYTHON` overrides which prep interpreter it calls.
    `tecopa order prepare "<folder>"` runs the same script as a tracked run, and
    `tecopa order status "<folder>"` reads `work/state.json` and the report.
-4. Read the report. "Upsampling" above 1.00x means the terrain data is coarser than the
+7. Read the report. For a set, the "Print" line gives the panel count, the hung size
+   and the gap, and the plate's grid follows the hung width. A warning that a route
+   end is behind a gap means the same as in the preview: move the frame, or use
+   `gap = 0`. "Upsampling" above 1.00x means the terrain data is coarser than the
    print can show, up to the 2x limit. A widened frame means the data could not hold
    the nestled look at this size; the warning names it, but naming the exact smaller
    sheet waits for the paper table (sub-project 2). "No elevation" is the measured
@@ -161,12 +208,45 @@ Prepare's plate step only.
    fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
    frame: do not print; delete the plate under work/plate/ and run Prepare again.
 
-Running Prepare again with the same tracks, size and orientation builds nothing. A
+Running Prepare again with the same tracks, size and orientation builds nothing. For a
+set, the panel count and the gap count too. A
 changed input, or a new manual frame in `state.json`'s `manual` key, rebuilds the plate.
 `in/` is never written. The plate lives in `work/plate/<id>/`. The HyRiver request
 cache is `~/Tecopa Orders/_cache/`. It holds NHD, NLCD and dynamic-service requests,
 and it grows large: 880 MB after a handful of orders. Delete it any time. The static
 10, 30 and 60 m tiles are read by GDAL and are not cached.
+
+The preview and Prepare share the request cache and no other file. In the order
+folder, the preview writes only under `<folder>/work/preview/` and
+`<folder>/out/preview/`. It does not read or write the order's own plate, `state.json`
+or `work/build.log`, so a preview after Prepare leaves the order's plate current.
+
+The preview's sizes:
+
+- **The override list.** A `sizes` line in `order.toml`, for example
+  `sizes = ["11x17", "17x22", "three"]`, replaces the fit rule. The preview offers
+  each size in the list and no other size. A listed set that the fit rule refuses is
+  offered with a warning in the report. The list never overrides the terrain: a size
+  that is past the 2x limit stays not offered.
+- **The prices file.** `config/sizes.toml` holds the name and the price of each size.
+  Dom owns it. A row has `key`, `name` and `price`, and no other field. A name and a
+  price are text in quotes: `price = "$69"`, never `price = 69`. A name has at most
+  40 characters and a price at most 24. The file is UTF-8. A row with no price prints
+  "Price on request". The preview reads the file before any query or build, and a
+  wrong file stops it. `tests/test_sizes.py` holds the two single-sheet prices to the
+  prices that `tests/test_marketing_page.py` holds the live pages to.
+- **A stopped run.** The command prints `preview stopped:` and the reason, and exits 1.
+  It writes no new PDF and no new report. The PDF of the last good run stays. The
+  causes include: a title of more than 200 characters, a wrong prices file, no track
+  points, tracks outside the lower 48 states, no `.venv-prep`, a query of the 3DEP
+  index that fails, a plate build that fails, no size that can be offered or drawn,
+  and an output folder that cannot be written.
+- **Two preview plates can be normal.** A plate has one projection (invariant 4), and
+  each size is framed in the projection that Prepare gives it. An order has two plates
+  when a set is wide enough for Albers and a single sheet is not, or when a curated
+  plate holds a single sheet and is too coarse for a set. A plate that is built after
+  the first plate is `preview_<order>_<epsg>`, and its log is `build_<epsg>.log` in
+  the same folder. The report then names each plate, its projection and its sizes.
 
 Traps already paid for:
 
@@ -202,9 +282,26 @@ Traps already paid for:
   `~/Tecopa Orders/_cache/` instead of the repo root, so that write lands there too;
   every script path and `--out-root` it passes is already absolute, so this is safe.
   The dynamic-service DEM fetch itself already follows `HYRIVER_CACHE_NAME`.
+- A query of the 3DEP index that fails is not a refused size. The first build of the
+  preview read it as one, so a network fault removed a size from the client's PDF and
+  nothing said so. `read_coverage` now raises `CoverageError`, and the preview stops.
+  Run it again: the USGS services fail from time to time. "Too coarse for this print
+  size" still refuses only that size.
+- The preview must frame a size as Prepare frames it: `curated_fit` first, then
+  `order_epsg` at the sheet's aspect. The first build used one projection for all
+  sizes, and a map in the Sierra was 12.6 degrees off its print. `OrderGround` in
+  `app/orderpreview.py` holds the rule. A test pastes the report's lines into
+  `order.toml` and checks that Prepare writes the same projection and frame.
+- A gap in `order.toml` is checked as one of three exact values. A gap of 2.0000000001
+  and a gap of 400 digits are each an `OrderError`, and a gap of -0.0 is 0.
+- The preview is not the proof. Its plate is coarse, so a place name can be in another
+  position on the final map. The PDF says so on each page.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
-(stub subprocesses, no network), `tests/test_dem_coverage.py`.
+(stub subprocesses, no network), `tests/test_dem_coverage.py`. For the preview:
+`tests/test_orderpreview.py` (stub subprocesses, no network), `tests/test_previewpdf.py`,
+`tests/test_sizes.py`, and `tests/test_orderpreview_render.py` (slow: the real painter
+on a synthetic plate).
 
 ## Add a relief technique
 
@@ -236,6 +333,71 @@ they disagree.
    `tests/test_wallpaper_api.py` read the rest.
 5. A knob that reaches the terrain must miss `render.base_cache_key`. A furniture knob
    must hit it. `tests/test_base_cache.py` and `tests/test_ink_cache.py` judge that.
+
+## Change a panel set
+
+Read `superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md`
+first. A set is two or three panels of 17 × 22 in that hang side by side as one map.
+It is one `CompositionSpec` with `panels` (2 or 3) and `panel_gap_in` (0, 2 or 4). The
+sheet in the spec is the hung size, gaps included. `rasterize` paints that sheet once,
+gap strips included, and the cut drops the gap strips.
+
+1. Panel geometry: edit `app/panels.py` and no other file. It is the only place that
+   works out where a panel, a gap strip or a seam is. It imports nothing from `app`.
+   The cut, the wall tone of a proof, the label keep-out, the furniture and the
+   studio's restore all ask it.
+2. The rules of a set: `validate` in `app/spec.py`. A set has four sheets for each gap:
+   two or three panels, 22 in across or 17 in across. `validate` refuses any other
+   sheet, a gap that is not exactly 0, 2 or 4, a bleed, and a wallpaper.
+3. Furniture: `_paint_overlays` in `app/render.py`. The title block, the compass, the
+   scale bar and the elevation strip are drawn once, in panel 1. Each panel gets its
+   own keyline, a panel mark such as `2 / 3` in its lower right corner, and the
+   watermark. `_furniture_scale` sizes the furniture of a set as one panel.
+4. Seams: `_label_keepout` in `app/render.py`. Each seam acts as a sheet edge. The
+   keep-out holds each gap strip and a band `GEO_EDGE_IN` wide on both sides of it,
+   and each panel mark. A place name is not cut by a seam and is not drawn behind a
+   gap strip. In smart placement, the leader line and the anchor dot of a name stay
+   out of a seam band. A photo box and a marker label stay in the panel that holds
+   their anchor. A marker label goes left of its marker when it does not fit on the right.
+5. The routes: `app/main.py`. `/api/proof` takes `panels` and `panel_gap`, and paints
+   each gap strip in the wall tone. A final and a reprint go through `_encode_delivery`:
+   one file for each panel, in a zip. `_refuse_set` answers 422 for a set on
+   `/api/timelapse/submit` (the film) and `/api/wallpapers/submit` (the wallpaper
+   bundle), and for a reprint of a film file that claims a set.
+6. The zip: `<stem>_panels.zip` holds PNG panels and `<stem>_panels_pdf.zip` holds PDF
+   panels. A member is `<stem>_2of3.png`. The PNG zip is the same bytes each time:
+   stored members, 1980 dates, one file mode. The PDF zip is not, because Pillow's PDF
+   writer is not.
+7. After a change that makes the final of a set larger, run the memory gate again:
+   `.venv/bin/python scripts/measure_final.py`. It needs the real `rifle_aspen` DEM.
+
+Traps already paid for:
+
+- Only a PNG panel carries the manifest, with a `panel` key for its number. So only a
+  PNG panel can reprint or continue the set. A PDF panel is for the print shop.
+- One name for both zips let a PDF final replace the PNG final of the same session,
+  because the name is also the blob key. Keep the two names.
+- Something tied to the ground cannot move. A marker or a route end behind a gap strip
+  of a window set is not printed. The proof covers it with the wall tone, and Prepare
+  and the preview warn for a route end. Move the frame, or use a gap of 0.
+- The centre of a two-panel sheet is the gap, so the watermark is drawn on each panel.
+- The furniture scale must come from one panel. From the sheet's area, a 74 × 17 in
+  set drew its title block at 183 %.
+- A long title can leave panel 1: the title block has no width limit. The proof shows it.
+- `panels` and `panel_gap_in` are masked in the terrain key and the ink key, because
+  the terrain and the route are painted across the whole sheet. A gap on a single
+  sheet does nothing, so a test of the mask must change the gap of a real set.
+- The peak memory of a final does not follow its pixel count. The gate measured 14.07
+  and 15.29 GB for 116.8 megapixels in a script, and a 71 megapixel final in the
+  engine's own process measured 15.0 GB. The engine's own peak for the largest set is
+  not measured yet: see the plan `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`.
+
+Tests: `tests/test_panels.py` and `tests/test_panel_furniture.py` are fast.
+`tests/test_panel_render.py` is slow: it paints sets at 40 dpi. `tests/test_panel_api.py`
+is fast except two tests, `test_a_final_of_a_set_is_a_zip_job` and
+`test_any_panel_reprints_the_whole_set`: each renders a 71 megapixel final.
+`tests/test_poster_furniture.py` holds the furniture scale by number, and
+`tests/test_static_registry.py` holds the studio's set rules as text.
 
 ## Change the manifest or add a file-consuming verb
 
@@ -276,6 +438,25 @@ There is no JS runner.
    works for uploads. Click coordinates in a headless browser do not.
 
 `app.js` routes, `viewer.js` owns proof zoom and pan, `statusbar.js` prints the truth line.
+
+A set has two controls on the Page panel: "Two panels" and "Three panels" in the size
+menu, and a gap control (None, 2 in, 4 in). `applyPrintSize` in `compose.js` makes the
+hung sheet from them. Four rules hold for a set, and `tests/test_static_registry.py`
+holds each: three as text, and the Auto rule by a run of the function under node.
+
+- With Auto orientation, a set takes the sheet whose shape is nearer the journey's
+  (`setAutoIsLandscape` in `store.js`). Both sheets of a set are wider than tall, so
+  the single-sheet rule cannot choose.
+- A change of the set shape frames the journey afresh, as Reset frame does: one sheet
+  to a set, a set to one sheet, two panels to three, a new gap. Orientation and the
+  two single sizes re-fit the frame in place.
+- A set hides the bleed control and sends no bleed. The proof call sends `panels` and
+  `panel_gap` only for a set.
+- A set stops the share kit, the film and the wall-art mockup with a message, before
+  anything is submitted. A new place that submits a job must decide what a set does.
+
+The final of a set downloads as one zip, and the library card of a panel file names
+the set and the panel, for example "3 panels, 70×17 in" and "Panel 2 of 3".
 
 `debug.js` reports the studio's state and errors to the engine for the `tecopa` tool.
 Three rules hold for it, and `tests/test_static_registry.py` checks each as text. It
@@ -351,8 +532,9 @@ Only when the repo moves or the Swift code under `tools/tecopa/` changes.
    `~/.local/bin/tecopa`. It bakes this repo's path into the binary.
 3. `tools/tecopa/smoke_test.sh` is the end-to-end check. Port 8848 must be free. The
    first quit from a new calling app raises a macOS Automation prompt. It renders two
-   finals of the fixture track and compares their bytes, so it needs the real
-   `lassen_ca` DEM and about one minute.
+   finals of the fixture track and compares their bytes. Its panel-set block then
+   renders two finals of a two-panel set, 71 megapixels each, and compares the two
+   zips. So it needs the real `lassen_ca` DEM and about ten minutes.
 4. `tecopa doctor` checks the repo, both venvs, the launcher, the port and the log. Its
    `repo` row reads `app/main.py`, so it fails when macOS refuses the Documents folder.
    Run it first when the engine does not start.
@@ -381,7 +563,9 @@ A tracked run keeps its files under
 `~/Library/Application Support/TecopaPlateworks/runs/`: the record, the log, the exit
 code, and a marker if it was cancelled. The log has no size limit. No command deletes
 them: remove old ones by hand when the folder grows. The record of an `order prepare`
-run holds the order folder's name, and its log holds the report.
+or `order preview` run holds the order folder's name, and its log holds the report.
+`order preview` is a tracked run, as `order prepare` is: it reads the network and takes
+minutes. `order status` reads what Prepare wrote, not the preview's files.
 
 The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need
 `TECOPA_DEBUG=1` on the engine. The launcher sets it. For a development engine, set it
@@ -407,6 +591,11 @@ The render commands are `render proof`, `render final`, `render wallpaper`,
   path and a leading `~`.
 - A render result carries the engine's own warnings: journeys outside the plate,
   dropped points, skipped duplicates, and how far each wallpaper frame grew.
+- A set of panels is written as one zip, with a file for each panel. Send the set's
+  own fields, for example `--set panels=2 --set panel_gap=2 --set print_w=36 --set print_h=22`,
+  and give `--out` a `.zip` name: the tool writes the reply's bytes unchanged and
+  does not choose a name. `render fetch` does the same. `reprint` of one PNG panel
+  file gives the whole set, as a zip.
 
 Design: `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`.
 

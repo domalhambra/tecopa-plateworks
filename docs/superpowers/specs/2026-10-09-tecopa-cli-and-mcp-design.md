@@ -137,11 +137,18 @@ every read without a permission prompt.
 | | `plate build`, `plate labels`, `plate playa`, `plate pack`, `plate install` | Runs the matching script in the correct venv | Yes |
 | | `plate check` | Runs `python -m app.plates verify` on a poster PNG | No |
 | | `order prepare` | Runs `scripts/order.py prepare` | Yes |
+| | `order preview` | Runs `scripts/order.py preview` | Yes |
 | | `order status` | Reads the order's `work/state.json` | No |
 | | `runs`, `runs show`, `runs cancel` | Lists, reads and stops long script runs | Control |
 | 4 Studio | `studio state`, `studio errors` | Reads what the studio last reported | No |
 
 `tecopa mcp` starts the MCP server on stdio. It is the only command with no tool.
+
+> Amended 2026-10-11: `order preview` is new, a tracked run as `order prepare` is, and
+> the catalog has 34 entries. The final of a set of panels is one zip. `render final`,
+> `render fetch` and `reprint` write that zip to `--out` unchanged. The tool has no
+> format logic, so this took tests and one sentence in each of three summaries. See
+> `2026-10-11-print-sizes-panel-sets-and-size-preview-design.md`, §8.
 
 ### Render input
 

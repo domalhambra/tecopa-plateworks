@@ -51,6 +51,8 @@ Five read-only passes over the code found facts that the spec did not have. Each
 | 18 | `panels` and `panel_gap_in` are masked in the terrain key and the ink key. | Neither reaches `_paint_terrain` or the route ink. Labels are drawn outside the cached unit. |
 | 19 | The memory gate renders 59 × 22 in on `rifle_aspen`. | It is the largest set (116.8 megapixels), and that plate is 95 km wide at 10 m. |
 
+Decision 15 was reversed in part while building (commits `630b9e8` and `9f8fb9a`): each size is framed in the projection that Prepare gives it, and the preview builds one plate for each projection in use. The rest of decision 15 stands: Prepare does not read `preview.json`, and the report gives the lines for `order.toml`. See "The build, task by task" at the end.
+
 ## File structure
 
 | File | Responsibility |
@@ -4138,3 +4140,126 @@ lower it before the branch is merged.
   cuts the same title at the sheet edge. The proof shows it.
 - **A marker behind a gap of a window set is not printed.** The proof covers it with the
   wall tone, as the spec says. An order has no markers yet.
+
+### The build, task by task
+
+Each entry gives the commits of a task and what differed from this plan's text. The
+commit messages hold the detail and the numbers.
+
+- **Task 1, the memory gate.** `a360ee1`, `f4aa7ea`. As planned. The two results are
+  above.
+- **Task 2, the spec fields and panel geometry.** `6dfc5e3`, `ad90cd9`. The check of
+  the gap became membership in three exact values. The review found that a gap of
+  2.0000000001 passed the plan's tolerance and stayed on the spec, and that a gap of
+  401 digits raised an `OverflowError` outside the manifest door. The frozen-manifest
+  test globs `manifest*_v1.json`: the plan's pattern missed `manifest_v1.json`. The
+  mask test for the gap changes the gap of a real set, because a gap on a single sheet
+  does nothing.
+- **Task 3, seams.** `af16b46`, `cf7195d`, `a74b06f`. Two rules are not in the plan.
+  In smart placement, the leader line and the anchor dot of a name stay out of a seam
+  band, and a name whose feature is in a seam band is not drawn: a leader put 113
+  pixels in a gap strip. On a set, a marker label goes left of its marker when it does
+  not fit on the right: a marker 60 px left of a seam showed 0 of its 69 disc pixels.
+- **Task 4, furniture on a set.** `8ec11f1`, `05cbe97`. The behaviour is as planned.
+  The render tests use an empty title, because a set and an unbroken sheet no longer
+  size a title block alike. Two reviews found tests that restated the code, so the
+  scale tests now hold literal numbers and a test reads the text of each panel mark.
+- **Task 5, the furniture retune.** `b8e3b04`, `05cbe97`. As planned. On an 11 × 17 the
+  credit line is 6.45 pt. The task opened the 2026-10-11 section of `docs/decisions.md`.
+- **Task 6, the proof and the zip.** `bdec713`, `8b69e13`. As planned. No pinned count
+  of proof fields changed. A test holds the zip to stored members with one file mode.
+  The review measured the memory of the engine's own process: see above.
+- **Task 7, reprint, inspect, continue and the refusals.** `d8ee1ec`, `f761fb6`,
+  `0f1af71`, `7ee3a17`. Three differences. The PDF zip has its own name,
+  `<stem>_panels_pdf.zip`: one name let a PDF final replace the PNG final of the same
+  session (decision 7 holds the new text). `/api/reprint/inspect` gives each field a
+  type and a fallback and never answers 500: the plan read the three new keys raw, and
+  NaN in one key made the reply a 500. A reprint of a crafted film file that claims a
+  set is refused. One fix is older than this branch: a hotspot coordinate of 400
+  digits in a crafted file made `/api/continue` answer 500, and it is now dropped.
+- **Task 8, the studio.** `7338196`, `4ceaa0a`, `8f3a6d6`. Not in the plan's text: the
+  library card makes each value of the inspect reply a number or escapes it. A set
+  hides the bleed control and sends no bleed. The save-file note has its own sentences
+  for a set. A change of the set shape frames the journey afresh, as Reset frame does.
+  A set stops the share kit, the film and the wall-art mockup before anything is
+  submitted. With Auto orientation, a set takes the sheet whose shape is nearer the
+  journey's. The studio was driven in a browser on `lassen_ca`. Not driven: a final of
+  a set, and a set of three or a landscape set with a proof, which that plate cannot hold.
+- **Task 9, orders.** `e4a0d3a`, `dce6d5e`. As planned. The review found that a gap of
+  400 digits in `order.toml` raised `OverflowError` past the command's own error
+  handling, and that a gap of -0.0 loaded as a second kind of zero. Both are fixed.
+- **Task 10, the preview: candidates and the fit rule.** `a62e966`, `630b9e8`,
+  `9f8fb9a`. This task reversed decision 15. With one projection for the whole
+  preview, a 70 × 17 in candidate that no size chose moved a route of about 90 km
+  into Albers, while Prepare keeps it in UTM. The map was 12.6 degrees off its print
+  in the Sierra, and the fit rule judged the wrong box. Each candidate is now framed
+  as Prepare frames it: `curated_fit` first, then `order_epsg` at the sheet's aspect.
+  The offered sizes are grouped by plate, and `preview.json` gained `plates`, and
+  `epsg`, `curated` and `plate` on each size. `preview_epsg` is removed. One test
+  differs from the plan: a frame widened 2x leaves a route on the middle panel of
+  three only, so the panel rule refuses it, and the 30 % boundary is tested on the
+  two-panel set.
+- **Task 11, the preview: the coarse plate and the maps.** `f197069`, `3103459`,
+  `8133e43`. Differences. A query of the 3DEP index that fails is `CoverageError` and
+  stops the preview: the first build read it as a refused size. The preview keeps its
+  own `work/preview/build.log`: the first build replaced the order's `work/build.log`.
+  A size that the painter refuses is listed as not offered with its reason, and the
+  others are drawn. A title of more than 200 characters is an `OrderError` before any
+  query. The 2x rule is asked only of a size that can still be offered, because each
+  question is a query of the 3DEP index. The report gives the lines for `order.toml`
+  one key on each line, and a test pastes them and has Prepare frame them.
+  `cache_env()` and the new arguments of `_build` let the preview share Prepare's
+  cache and build step. Prepare now warns when a route end is behind a gap.
+- **Task 12, the PDF, the prices and the command.** `46c0a89`, `892c2cb`, `2256410`.
+  The page follows the workspace's print standard and not the plan's constants: white
+  paper, the canon inks, 0.5 in margins, the standard's type sizes and rules. Each
+  page is laid out as boxes first and drawn second, so tests hold the layout and the
+  drawn pixels. The wall tries each packing of rows and keeps the one with the largest
+  prints. `config/sizes.toml` is read strictly and before any build. A page is 300 dpi,
+  not 150. The document's title is the order's, the label of a size page is its place
+  ("Size 2 of 4"), and a long title is cut at a word in the footer. The report states
+  the price of each offered size, and `preview.json` holds `names`. Step 9, the three
+  real track sets, is open: see "Open before a merge".
+- **Task 13, the `tecopa` tool.** `cc5188f`. As planned: `order_preview` is a tracked
+  run and the catalog has 34 entries. The tool needed no format logic. Three summaries
+  now say that a set is a zip, because the caller chooses the name of `out`. The smoke
+  test has a panel-set block that renders two finals of 71 megapixels and compares
+  the two zips, so it needs about ten minutes and not one.
+- **Task 14, the documents.** The commit "docs: panel sets, the furniture retune and
+  the size preview, with the build record". The plan's draft text was written before
+  the build, so each document says what the code does now. Where the draft differs:
+  `preview` is the second command of `scripts/order.py`, not a fourth. The decision
+  rows record the reversal of decision 15 and leave decision 15 out. "Run an order"
+  has the override list, the prices file, a stopped run and the case of two preview
+  plates. "Change a panel set" names which tests are slow: only two tests of
+  `tests/test_panel_api.py` render 71 megapixels, and `tests/test_panel_render.py`
+  paints at 40 dpi. Step 5, the full suites, is the coordinator's.
+
+### Open: three checks that need paper
+
+Each needs Dom, a printer and a ruler. No agent can close them. They stay open after
+this build.
+
+| Check | Make it with | Dom looks at |
+|---|---|---|
+| The 11 × 17 furniture | A final of any journey at 11 × 17 | The credit line and the scale bar labels can be read at arm's length. If not, raise `FURNITURE_SCALE_MIN` in `app/render.py`. It is 0.80, a first value. |
+| The 17 × 22 furniture | The same journey at 17 × 22 | The title block and the compass look the right size. They are now 7.5 % larger than on a 17 × 22 from before this build. |
+| One real set | Two panels at a 2 in gap, hung 2 in apart | A ruler laid along a road or a ridge line continues true across the gap. The keyline and the mark of each panel are inside the paper. |
+
+### Open before a merge
+
+A merge and a push need Dom's yes. These are open when this record is written. The
+coordinator writes each result here.
+
+1. **The smoke test.** `tools/tecopa/smoke_test.sh`, with its panel-set block. Result:
+   not recorded yet.
+2. **The engine's own memory peak for the largest set.** One three-panel final of
+   59 × 22 in on `rifle_aspen` through the engine, with the peak memory of the engine
+   process. It is not measured yet. If it is over 16 GB, find what holds the memory
+   and lower it before the merge. See "Memory in the engine's own process" above.
+3. **The three real-network previews** (task 12, step 9): `home-compact`, `north-south`
+   and `east-west`. For each: the seconds, the offered sizes, and anything wrong on a
+   page. The target is under 300 s. Result: not recorded yet.
+4. **The full suites** (task 14, step 5): the docs test, the full Python suite against
+   the base, and `swift test --package-path tools/tecopa`. Result: not recorded yet.
+5. **The whole-branch review.** Not done yet.

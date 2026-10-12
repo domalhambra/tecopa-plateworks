@@ -61,6 +61,12 @@ Customer data stays outside the repo. The repo is public.
 
 ## 2. The three steps
 
+> Amended 2026-10-11: `scripts/order.py` has a second command, `preview`. It runs before
+> Prepare when the client has not chosen a size, and it writes a PDF of the client's
+> own map at every size that suits it. `size` also takes `"two"` and `"three"`, a set
+> of 17 × 22 in panels, with a `gap` key. Finish is still not built. See
+> `2026-10-11-print-sizes-panel-sets-and-size-preview-design.md`.
+
 1. **Prepare** — `scripts/order.py prepare <folder>`. Runs in `.venv`. Reads the
    tracks and photos. Reuses or builds a plate (section 3). Frames the tracks and
    picks the sheet (section 4). Finds photo spots and lays out photos (section 5).

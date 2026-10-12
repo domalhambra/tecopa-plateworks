@@ -1,7 +1,7 @@
 # Print Sizes, Panel Sets and the Size Preview — Design
 
 **Date:** 2026-10-11
-**Status:** Approved by Dom (brainstorming session and written review, 2026-10-11). Amended the same day while the plan was written: see "Amended while planning" at the end. The plan is `../plans/2026-10-11-panel-sets-and-size-preview.md`. Nothing is built.
+**Status:** Approved by Dom (brainstorming session and written review, 2026-10-11). Amended the same day while the plan was written, and again while it was built: see "Amended while planning" and "Amended while building" at the end. Built on 2026-10-11 on the branch `build/panel-sets-and-size-preview`, and not merged. The plan and the build record are `../plans/2026-10-11-panel-sets-and-size-preview.md`. Built: the set in the engine, the furniture retune, the studio, the set in `order.toml` and Prepare, the size preview, and `tecopa order preview`. Not built: `order finish` for a set (§6). Open: three checks that wait for paper, and the checks before a merge. The plan lists both.
 **Extends:** `2026-09-24-order-pipeline-design.md` (the order folder, Prepare, Finish, the customer package)
 **Amends:** `2026-09-24-order-pipeline-design.md` §2 (a new step before Prepare), §4 (the sizes) and §7 (the package for a set). No invariant in `CLAUDE.md` changes.
 
@@ -396,3 +396,55 @@ this document said:
   size too wide for the plate's grid takes the built-plate path, so one preview can
   show a curated plate and a built plate. A preview with every candidate on a curated
   plate needs no prep venv, as Prepare.
+- **The fit rule in practice** (§5, step 2). A nestled frame is centred on the tracks. So
+  the rule "every panel holds some part of a track" asks more than `SET_MIN_FILL` of a
+  set of three: the tracks must reach from panel 1 to panel 3. At a gap of 2 in that
+  is at least 26 of 70 in with the panels 22 in across (37 %), and 21 of 55 in with
+  the panels 17 in across (38 %). For a set of two, the 30 % is the limit.
+- **A query of the 3DEP index that fails stops the preview** (§5, step 2, and §10). It
+  is `CoverageError`. It is not a refused size: a failed query says nothing about the
+  terrain. The first build read it as "this size is refused", and a network fault
+  removed a size from the PDF.
+- **The preview's own files** (§5, "The folder"). `work/preview/` also holds
+  `report.txt`, one PNG for each drawn size, and the preview's own `build.log`. A
+  plate that is built after the first plate has the projection in its name and in the
+  name of its log. The preview does not read or write `work/plate/`, `work/state.json`
+  or `work/build.log`, so a preview after Prepare leaves the order's plate current.
+- **The gap is one of three exact values** (§1 and §6). `validate` and `order.toml`
+  each test membership. A tolerance let a gap of 2.0000000001 stay on the spec, and a
+  gap of 401 digits raised an error outside the manifest door.
+- **The zip of a set** (§2). The PDF zip got its own name, `_panels_pdf.zip`, in the
+  build: the name is also the key of the stored file, and one name let a PDF final
+  replace the PNG final of the same session. The members of a zip are stored, with
+  1980 dates and one file mode.
+- **`/api/reprint/inspect`** (§9). It gives each field of its reply a type and a
+  fallback, and never answers 500. It still builds no spec. The panel count comes from
+  the spec, as in a reprint, and the file's own `panel` key is reported only when it
+  agrees with that count. A reprint numbers its panels itself.
+- **Seams** (§3). A marker label goes left of its marker when it does not fit on the
+  right. In smart placement, the leader line and the anchor dot of a place name stay
+  out of a seam band, and a name whose feature is in a seam band is not drawn. A
+  marker or a route end behind a gap strip of a window set is not printed: the proof
+  covers it with the wall tone. The report and Prepare's warning name the gap by its
+  number, "a route end is behind gap 1". They do not name the place, as the example
+  in §3 did. The watermark is drawn on each panel.
+- **The studio** (§7). With Auto orientation, a set takes the sheet whose shape is
+  nearer the journey's, the rule of the preview: both sheets of a set are wider than
+  tall. A change of the set shape frames the journey afresh, as Reset frame does. A
+  set hides the bleed control. A set stops the share kit, the film and the wall-art
+  mockup with a message before anything is submitted. The library card of a panel
+  file has a "Panel" row and the button "Reprint the set".
+- **The furniture numbers** (§4). The base is 17 × 22 and the floor is 0.80. A reprint
+  of an older 18 × 24 file draws its furniture 7.5 % larger. On an 11 × 17 the credit
+  line is 6.45 pt, and a test holds it at 6 pt or more. The two test prints are open.
+- **The memory gate** (§11). It passed twice, at 14.07 and 15.29 GB, so approach A
+  stands with a thin margin. A final of 71 megapixels in the engine's own process,
+  after a proof, measured 15.0 GB. So the peak does not follow the pixel count, and
+  the engine's own peak for the largest set is an open measurement in the plan.
+- **The tests as built** (§11). The seam test paints a set on a synthetic plate, not on
+  the demo regions. The preview's tests use stub subprocesses and no network: the full
+  command on the three real track sets is a hand run, and its times are in the plan
+  when the coordinator records them. The 5 minute target of §5 is not confirmed in
+  this document. The byte comparison of a set final through `tecopa` and by hand is in
+  `tools/tecopa/smoke_test.sh`. That block renders two finals of 71 megapixels, so the
+  smoke test needs about ten minutes.
