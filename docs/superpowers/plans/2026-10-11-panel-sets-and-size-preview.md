@@ -4329,7 +4329,7 @@ coordinator writes each result here.
    the largest set it holds with a thin margin and no reserve. `MallocLargeCache=0` in
    the engine's environment removes the second cause and halves the footprint, but
    the variable is not documented by Apple and it made a render 10 to 15 % slower. It
-   is not set. To set it is Dom's decision, because it changes the launcher.
+   is not set. Dom accepted the margin as it is on 2026-10-12.
 3. **The three real-network previews** (task 12, step 9), 2026-10-11, in
    `~/Tecopa Orders/_preview-check/`. One of three made a PDF.
 
@@ -4397,5 +4397,9 @@ coordinator writes each result here.
    Not run again on the merged tip: the smoke test of item 1 and the real previews of
    item 3. The tool's source is the same as at `8f3a6d6`.
 
-Open after this record, and Dom's: the margin of the largest set in item 2, the three
-checks on paper, the prices of the two sets in `config/sizes.toml`, and the merge.
+**Dom's two decisions, 2026-10-12.** The margin of the largest set in item 2 is
+accepted as it is: `MallocLargeCache` is not set and the launcher is not changed. The
+branch is merged to `main` and pushed.
+
+Open after the merge, and Dom's: the three checks on paper, and the prices of the two
+sets in `config/sizes.toml`.

@@ -424,8 +424,8 @@ Traps already paid for:
   15.29 GB for the largest sheet, and its peak memory footprint was 22.8 GB. After the
   trim of the relief the footprint of that sheet is 14.5 to 16.5 GB (10^9 bytes),
   against a limit of 16: under it in units of 2^30 bytes, and at it in units of 10^9.
-  A two-panel set is 10.8 GB and a 17 × 22 in sheet is 5.4 GB. The numbers and the
-  open decision are in the plan `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`,
+  A two-panel set is 10.8 GB and a 17 × 22 in sheet is 5.4 GB. The numbers and Dom's
+  decision to accept them are in the plan `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`,
   "Open before a merge", item 2.
 - The label and the photo box of a marker behind a gap are still printed, at the edge
   of the nearest panel, and the marker is not. Two tests hold this. An order has no
