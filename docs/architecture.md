@@ -38,7 +38,8 @@ regions/<id>/  (region.json, dem.tif, hydro.json, │  labels.json, landcover.ti
 
 app/main.py: the endpoints, three ThreadJobQueue instances (render, region build, proof refine)
 app/static/: the single-window studio, 23 ES modules, no build step
-scripts/order.py: preview (app/orderpreview.py, app/previewpdf.py) and prepare (app/orderprep.py), on an order folder outside the repo
+scripts/order.py: new (app/ordernew.py, from the intake's Dropbox job folder), preview (app/orderpreview.py,
+                  app/previewpdf.py, app/orderemail.py) and prepare (app/orderprep.py), on an order folder outside the repo
 scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ Ghost, by the blog's pages script
 ```
 
@@ -62,13 +63,15 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `app/timelapse.py` | The film: frames, pacing, APNG, the WebP and MP4 share twins. | `tests/test_timelapse.py`, `tests/test_mockups_api.py` |
 | `app/mockups.py` | In-app mockup renders behind `/api/mockups/submit`. | `tests/test_mockups_api.py` (through the endpoint) |
 | `app/regions.py` | `discover` over `regions/`, `Region.meta()`, `Region.readiness()`. Auto-detect from track points is `_best_region` in `app/main.py`. | `tests/test_regions.py`, `tests/test_readyz.py` |
-| `app/order.py` | One order folder: `order.toml` (the title, the size, the orientation, the `gap` of a set, the `sizes` list of the preview), the track files in `in/`, `work/state.json` and its `manual` key. `orders_root`, `cache_path`. | `tests/test_order.py` |
+| `app/order.py` | One order folder: `order.toml` (the title, the size, the orientation, the `gap` of a set, the `sizes` list of the preview, and the intake's `order_number`, `returning`, `client` and `email`), the track files in `in/`, `work/state.json` and its `manual` key. `orders_root`, `cache_path`. | `tests/test_order.py` |
 | `app/orderplate.py` | Pure plate planning for an order: nestled framing, projection, `choose_grid` from 3DEP coverage, widening, curated reuse. `track_shares`, and `CoverageError` for a query of the 3DEP index that fails. | `tests/test_orderplate.py` |
 | `app/orderprep.py` | Prepare: reuse or build the order's plate through `.venv-prep` subprocesses, measure a built plate's holes (`check_holes`), write state and the report. For a window set, the warning that a route end is behind a gap. `cache_env` and `_build`, which the preview shares. | `tests/test_orderprep.py` |
 | `app/orderpreview.py` | The size preview of an order: the two orientations of each size, each framed as Prepare frames it (`OrderGround`), the fit rule (`SET_MIN_FILL`), one coarse preview plate for each projection, the screen-size maps, the preview's JSON record and report. In the order folder it writes only in the two preview folders. | `tests/test_orderpreview.py` (stub subprocesses, no network), `tests/test_orderpreview_render.py` |
 | `app/previewpdf.py` | The preview PDF: a wall page with every offered size at one scale, then a page for each offered size. Written with Pillow at 300 dpi. Each page is laid out as boxes first and drawn second. | `tests/test_previewpdf.py` |
-| `app/sizes.py` | The name and the price of each size, read strictly from `config/sizes.toml`. Dom owns that file. | `tests/test_sizes.py` |
-| `scripts/order.py` | The command line of an order. It has two commands: `preview` (`app/orderpreview.py`) and `prepare` (`app/orderprep.py`). A command that stops prints one line that starts with its own name, and exits 1. | `tests/test_orderpreview.py`, `tests/test_orderprep.py` |
+| `app/sizes.py` | The name, the first-poster and next-year prices, the shipping and the Payment Links of each size and of the digital poster, read strictly from `config/sizes.toml`. Dom owns that file. | `tests/test_sizes.py` |
+| `app/ordernew.py` | `order new`: copy the intake's job folder from Dropbox into a new order folder and write its `order.toml`. It never writes to Dropbox, cleans every name, refuses a file over 200 MB, and stops on a file that is not on the disk. | `tests/test_ordernew.py` |
+| `app/orderemail.py` | The preview email, `<folder>/out/preview/email.txt`: a Payment Link for each offered size and the digital poster, each ending with the order number. No email when a link is missing. Nothing sends it. | `tests/test_orderemail.py` |
+| `scripts/order.py` | The command line of an order. It has three commands: `new` (`app/ordernew.py`), `preview` (`app/orderpreview.py`) and `prepare` (`app/orderprep.py`). A command that stops prints one line that starts with its own name, and exits 1. | `tests/test_orderpreview.py`, `tests/test_orderprep.py` |
 | `app/regionbuild.py` | GPX-first planning (bbox, UTM zone, US coverage) and the `region_prep.py` subprocess behind `/api/regions/build`. | `tests/test_regionbuild.py`, `tests/test_region_endpoints.py` |
 | `app/plates.py` | `.venv/bin/python -m app.plates install` places a `.trailplate.zip`. `verify` checks a poster PNG against the installed plate. | `tests/test_plates.py` |
 | `app/store.py` | Session persistence: `MemoryStore` by default, `SqliteStore` with `TECOPA_STORE=sqlite`. | `tests/test_server_foundation.py` |
@@ -100,7 +103,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
-| `tools/tecopa/` | The `tecopa` tool: one Swift binary that is a command line and an MCP server. `tools/tecopa/Sources/TecopaKit/Catalog.swift` lists every operation once, and the CLI and `tecopa mcp` both call it. `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` holds the script table that decides a script's venv. `tools/tecopa/Sources/TecopaKit/Render.swift` and `tools/tecopa/Sources/TecopaKit/Reprint.swift` hold the render, reprint and continue commands: they send the caller's values to the engine unchanged and never overwrite a file. `tools/tecopa/Sources/TecopaKit/Studio.swift` reads the studio reports. `tools/tecopa/Sources/TecopaKit/Runs.swift` starts a long script detached and keeps its record, and `tools/tecopa/Sources/TecopaKit/Plates.swift` and `tools/tecopa/Sources/TecopaKit/Orders.swift` hold the plate and order commands. `Orders.swift` holds three: `order prepare` and `order preview` as tracked runs, and `order status`. The catalog has 34 entries. The tool has no format logic: the zip of a set is written to `--out` unchanged. | `swift test --package-path tools/tecopa`, Mac only. `tools/tecopa/smoke_test.sh` is the manual end-to-end check. |
+| `tools/tecopa/` | The `tecopa` tool: one Swift binary that is a command line and an MCP server. `tools/tecopa/Sources/TecopaKit/Catalog.swift` lists every operation once, and the CLI and `tecopa mcp` both call it. `tools/tecopa/Sources/TecopaKit/ScriptRunner.swift` holds the script table that decides a script's venv. `tools/tecopa/Sources/TecopaKit/Render.swift` and `tools/tecopa/Sources/TecopaKit/Reprint.swift` hold the render, reprint and continue commands: they send the caller's values to the engine unchanged and never overwrite a file. `tools/tecopa/Sources/TecopaKit/Studio.swift` reads the studio reports. `tools/tecopa/Sources/TecopaKit/Runs.swift` starts a long script detached and keeps its record, and `tools/tecopa/Sources/TecopaKit/Plates.swift` and `tools/tecopa/Sources/TecopaKit/Orders.swift` hold the plate and order commands. `Orders.swift` holds four: `order new`, which runs in the call, `order prepare` and `order preview` as tracked runs, and `order status`. The catalog has 35 entries. The tool has no format logic: the zip of a set is written to `--out` unchanged. | `swift test --package-path tools/tecopa`, Mac only. `tools/tecopa/smoke_test.sh` is the manual end-to-end check. |
 | `marketing/build_deploy.py` | `terrain_guard` alone: refuses any region whose images were rendered from synthetic or unrecorded terrain. `scripts/export_relief.py` runs it per region. The name is kept from the retired Netlify builder (tag `landing-final-2026-09-26`). | `tests/test_terrain_provenance.py`, `tests/test_export_relief.py` |
 | `tests/conftest.py` | Synthetic DEM hydration, per-worker stores, the central `slow` classification. | none. It is the harness itself. |
 | `tests/fixtures/` | `sample.gpx` and the seven `manifest_*_v1.json` read-tolerance inputs. | none |
@@ -140,6 +143,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `TECOPA_ENGINE_VERSION` | `app/provenance.py` | Overrides the git commit as `engine_version` in packaged builds. |
 | `TECOPA_PREP_PYTHON`, `TECOPA_PREP_SCRIPT`, `TECOPA_LABELS_SCRIPT` | `app/main.py` | The interpreter and scripts the in-app region build spawns. |
 | `TECOPA_ORDERS_DIR` | `app/order.py` | The root of the order folders and of the request cache that Prepare and the preview share. Default `~/Tecopa Orders`. It must be outside this repo. |
+| `TECOPA_INTAKE_DIR` | `app/ordernew.py` | The folder `order new` reads the intake's job folders from. Default `~/Dropbox/Apps/Plateworks Lab/Tecopa`. The orders root must not be inside it. |
 | `TECOPA_LOG_LEVEL`, `TECOPA_LOG_FORMAT` | `app/logconfig.py` | Logging. |
 | `TECOPA_DEBUG` | `app/debug.py`, `app/main.py` | `1` includes the debug routes. Any other value, and unset, leaves them out. The launcher sets it. `tests/conftest.py` removes it. |
 | `TECOPA_REPO` | `tools/tecopa/Sources/TecopaKit/RepoLocator.swift` | The repo path for the `tecopa` tool, after `--repo` and before the path baked at build time. |
@@ -150,8 +154,9 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 No environment variable changes the picture a given spec paints, except the
 font bindings, which is by design.
 
-One data file is configuration: `config/sizes.toml` holds the name and the price of
-each size that a preview can offer. `app/sizes.py` reads it, and a wrong file stops
+One data file is configuration: `config/sizes.toml` holds the name, the prices, the
+shipping and the Payment Links of each size that a preview can offer, and of the
+digital poster. `app/sizes.py` reads it, and a wrong file stops
 the preview before any build.
 
 ## Delivery
