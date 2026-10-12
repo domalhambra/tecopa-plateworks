@@ -4284,6 +4284,14 @@ coordinator writes each result here.
    | `north-south` (Whitney to Mono) | Stopped: `preview stopped: region build failed`. The USGS 3DEP dynamic service answered "Service is currently not available" through its retries, as on 2026-10-10. The plate was a 120 m grid, which comes from that service. Offered before the build: the two single sheets. | 409 s |
    | `east-west` (Reno to Salt Lake) | Stopped: `preview stopped: The 3DEP coverage check failed`, with "more footprints than one query returns". All four sizes were offered, then the coverage query for the one plate that holds them all was too large for the index service. | 260 s |
 
+   **Second and third runs of `north-south`.** A second try, three hours later, stopped
+   the same way: the dynamic service was still down. Commit `d9e9191` then made a coarse
+   preview plate come from the static 30 m tiles when it is at most 60 million cells.
+   The third run, with the dynamic service still down, made a 3-page PDF in 142.5 s:
+   the two single sheets in portrait, and both sets refused ("the tracks span 21% of
+   the sheet's width, under 30%", and 14% for three panels). The plate is 53.6 million
+   cells at a 30 m grid. The wall page was read: nothing overlaps and nothing is cut.
+
    Two limits are open: a coarse preview plate (a grid over about 60 m) depends on the
    dynamic service, and a preview plate for a route of many hundred km is too large for
    one coverage query. The wall page of `home-compact` was read: nothing overlaps and
