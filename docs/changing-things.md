@@ -368,10 +368,14 @@ It is one `CompositionSpec` with `panels` (2 or 3) and `panel_gap_in` (0, 2 or 4
 sheet in the spec is the hung size, gaps included. `rasterize` paints that sheet once,
 gap strips included, and the cut drops the gap strips.
 
-1. Panel geometry: edit `app/panels.py` and no other file. It is the only place that
-   works out where a panel, a gap strip or a seam is. It imports nothing from `app`.
-   The cut, the wall tone of a proof, the label keep-out, the furniture and the
-   studio's restore all ask it.
+1. Panel geometry: edit `app/panels.py` first. The engine asks only it where a panel,
+   a gap strip or a seam is: the cut, the wall tone of a proof, the label keep-out and
+   the furniture. It imports nothing from `app`. Four places hold their own copy of
+   the same arithmetic, because they run before a spec exists or in the browser.
+   Change them with it: `print_in` in `app/order.py`; `candidates`,
+   `panels_with_track` and `gaps_hiding_ends` in `app/orderpreview.py`; the sheet
+   size in `app/static/compose.js` and `app/static/store.js`; the gap strips in
+   `app/static/canvas.js`. The copies agree today for each count, gap and orientation.
 2. The rules of a set: `validate` in `app/spec.py`. A set has four sheets for each gap:
    two or three panels, 22 in across or 17 in across. `validate` refuses any other
    sheet, a gap that is not exactly 0, 2 or 4, a bleed, and a wallpaper.
@@ -395,7 +399,10 @@ gap strips included, and the cut drops the gap strips.
    stored members, 1980 dates, one file mode. The PDF zip is not, because Pillow's PDF
    writer is not.
 7. After a change that makes the final of a set larger, run the memory gate again:
-   `.venv/bin/python scripts/measure_final.py`. It needs the real `rifle_aspen` DEM.
+   `/usr/bin/time -l .venv/bin/python scripts/measure_final.py`. It needs the real
+   `rifle_aspen` DEM. Judge the line "peak memory footprint", which is in bytes. Do
+   not judge the script's own `pass`: it reads resident memory, and that is too low
+   on macOS. Run it three times, because the number moves from run to run.
 
 Traps already paid for:
 
@@ -413,16 +420,22 @@ Traps already paid for:
 - `panels` and `panel_gap_in` are masked in the terrain key and the ink key, because
   the terrain and the route are painted across the whole sheet. A gap on a single
   sheet does nothing, so a test of the mask must change the gap of a real set.
-- The peak memory of a final does not follow its pixel count. The gate measured 14.07
-  and 15.29 GB for 116.8 megapixels in a script, and a 71 megapixel final in the
-  engine's own process measured 15.0 GB. The engine's own peak for the largest set is
-  not measured yet: see the plan `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`.
+- Resident memory is the wrong measure on macOS. The first gate read 14.07 and
+  15.29 GB for the largest sheet, and its peak memory footprint was 22.8 GB. After the
+  trim of the relief the footprint of that sheet is 14.5 to 16.5 GB (10^9 bytes),
+  against a limit of 16: under it in units of 2^30 bytes, and at it in units of 10^9.
+  A two-panel set is 10.8 GB and a 17 × 22 in sheet is 5.4 GB. The numbers and the
+  open decision are in the plan `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`,
+  "Open before a merge", item 2.
+- The label and the photo box of a marker behind a gap are still printed, at the edge
+  of the nearest panel, and the marker is not. Two tests hold this. An order has no
+  markers yet.
 
 Tests: `tests/test_panels.py` and `tests/test_panel_furniture.py` are fast.
 `tests/test_panel_render.py` is slow: it paints sets at 40 dpi. `tests/test_panel_api.py`
 is fast except one test,
 `test_a_real_final_of_a_set_is_a_zip_job_and_any_panel_reprints_it`: it renders a
-71 megapixel final twice, one after the other, and needs about 16 GB. Keep it the
+71 megapixel final twice, one after the other, and needs about 11 GB. Keep it the
 only such test in the suite: two of them can run side by side on two workers.
 `tests/test_poster_furniture.py` holds the furniture scale by number, and
 `tests/test_static_registry.py` holds the studio's set rules as text.

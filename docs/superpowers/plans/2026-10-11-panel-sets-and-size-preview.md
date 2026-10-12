@@ -4135,11 +4135,23 @@ lower it before the branch is merged.
 - **PNG finals differ by a few bytes between two engine processes.** The colour profile
   is made when the engine starts, and its header holds the clock. It is older than this
   build and true for a single sheet. Pixels are the same. A separate task is proposed.
+  Closed 2026-10-12 on `main`, in a session of its own: commit `9938fc0` gives the
+  profile the same bytes in every engine process. This branch took it in by a merge
+  of `main`.
+- **The dashed edge of a dry lake could loop without end.** A 17 × 22 in proof with
+  dry lakes on stopped the engine at 96 and 200 dpi. It is older than this build. A
+  session of its own fixed it on this branch, 2026-10-12: commit `7d285de`.
 - **A long title can leave panel 1.** The title block has no width limit: an 80-character
   title at furniture scale 1.0 is 22 in wide on a 17 in panel. A single 17 x 22 already
   cuts the same title at the sheet edge. The proof shows it.
 - **A marker behind a gap of a window set is not printed.** The proof covers it with the
-  wall tone, as the spec says. An order has no markers yet.
+  wall tone, as the spec says. Its label and its photo box are still printed, at the
+  edge of the nearest panel, and two tests hold that. An order has no markers yet.
+- **Three small behaviours from the whole-branch review, left as they are.** A preview
+  builds its plate again on each run, so a late stop costs the build and its queries
+  again. In the studio with auto-proof off, a change from a set to one sheet and then
+  a wall-art mockup renders the final of the set and then gets the engine's refusal.
+  A title with no Latin letter or digit gives the file `region-preview.pdf`.
 
 ### The build, task by task
 
@@ -4234,6 +4246,13 @@ commit messages hold the detail and the numbers.
   plates. "Change a panel set" names which tests are slow: only two tests of
   `tests/test_panel_api.py` render 71 megapixels, and `tests/test_panel_render.py`
   paints at 40 dpi. Step 5, the full suites, is the coordinator's.
+- **After task 14: the memory trim and the preview's static tiles.** `4a28e58` made
+  the two 71 megapixel tests one test, so two cannot run side by side. `bfd194b`,
+  `a79bdc9`, `89599bb`, `e059647` and `82e2603` are the memory trim and its review
+  fixes: see "Open before a merge", item 2. No plan task asked for the trim; the
+  failed gate did. `d9e9191` builds a coarse preview plate from the static 30 m tiles
+  when it is at most 60 million cells, because the 3DEP dynamic service was down for
+  two days: see item 3.
 
 ### Open: three checks that need paper
 
@@ -4275,6 +4294,42 @@ coordinator writes each result here.
    same for a single sheet, and the relief passes run one at a time change it by 4 %.
    The merge is held. A read-only profile of the render is the next step, to choose
    between a trim of the engine's memory with the same output bytes and approach B.
+
+   **After the trim, 2026-10-12, at commit `82e2603`.** The profile found two causes:
+   whole-sheet arrays that stayed alive after their last reader, and memory that the
+   macOS allocator keeps after a large array is freed. Commits `bfd194b`, `a79bdc9`
+   and `89599bb` trim the first cause: the relief of a final composites in bands, each
+   plane is freed at its last reader, and a sheet of more than 60 million padded
+   pixels runs two relief passes at a time. `e059647` and `82e2603` are the fixes from
+   the review of the trim. The output bytes are the same: 81 real renders and 28 film
+   frames were compared with the parent commit. Render time did not change.
+
+   Peak memory footprint from `/usr/bin/time -l`, `scripts/measure_final.py` on
+   `rifle_aspen`. A GB here is 10^9 bytes, as in the table above.
+
+   | Sheet | Before | After | After, with `MallocLargeCache=0` |
+   |---|---|---|---|
+   | 17 × 22 in | 7.17 GB | 5.44 GB | 2.92 GB |
+   | 36 × 22 in | 16.2 GB | 10.83 GB | 5.43 GB |
+   | 59 × 22 in | 22.8 GB | 14.5 to 16.5 GB | 8.9 to 9.9 GB |
+
+   The largest set does not give one number. On 2026-10-11 it was 14.48 to 14.55 GB
+   in five runs and 16.48 GB in one. On 2026-10-12, on a quiet Mac, it was 16.35 GB in
+   six runs of six at `82e2603`, and 16.49 GB in three runs of three at the commit
+   before the two review fixes, so the fixes did not raise it. Two runs made while a
+   test suite used the processors took 106 s and peaked at 11.9 GB. The code is the
+   same in each case: the spread is the allocator's, and it follows how the two relief
+   passes overlap.
+
+   **The verdict depends on the unit, so both are stated.** The gate's script counts
+   in units of 2^30 bytes, and a Mac sold as 16 GB has 16 of those. In that unit the
+   largest set peaks at 13.5 to 15.4, under 16 with a margin of 0.6 to 2.5. In 10^9
+   bytes the worst run is 16.49, over 16 by 3 %. A single sheet and a two-panel set
+   are far under in both. The gate holds for every size but the largest set, and for
+   the largest set it holds with a thin margin and no reserve. `MallocLargeCache=0` in
+   the engine's environment removes the second cause and halves the footprint, but
+   the variable is not documented by Apple and it made a render 10 to 15 % slower. It
+   is not set. To set it is Dom's decision, because it changes the launcher.
 3. **The three real-network previews** (task 12, step 9), 2026-10-11, in
    `~/Tecopa Orders/_preview-check/`. One of three made a PDF.
 
@@ -4296,6 +4351,37 @@ coordinator writes each result here.
    dynamic service, and a preview plate for a route of many hundred km is too large for
    one coverage query. The wall page of `home-compact` was read: nothing overlaps and
    nothing is cut.
-4. **The full suites** (task 14, step 5): the docs test, the full Python suite against
-   the base, and `swift test --package-path tools/tecopa`. Result: not recorded yet.
-5. **The whole-branch review.** Not done yet.
+4. **The full suites** (task 14, step 5), 2026-10-12, at commit `82e2603`, in a clean
+   worktree of that commit with the six real DEMs linked in:
+   - `.venv/bin/python -m pytest -n auto -q`: `2473 passed, 16 skipped` in 315 s, no
+     failure. The base, `main` at `cc97826`: `1452 passed, 16 skipped`, no failure.
+     Both failure sets are empty. `tests/test_docs.py` is part of this run.
+   - `swift test --package-path tools/tecopa`: `Executed 418 tests, with 0 failures`.
+5. **The whole-branch review**, 2026-10-12, of `cc97826..82e2603`, by one independent
+   reviewer. Verdict: ready after the listed fixes. No critical finding and no wrong
+   engine output. It checked, among other things: a single sheet has the same bytes
+   as on `main` once the two retune constants are set back; the trimmed relief gives
+   the bytes of `main` in five modes and mutates no input; 26 hostile values of the
+   two new fields each stop at the manifest door; 24 hostile `order.toml` cases each
+   give `OrderError` or a correct load; each route delivers a set or refuses it.
+
+   The findings and what was done:
+   - The record of the memory gate stopped at "THE GATE FAILS", and three documents
+     disagreed. Fixed: item 2 above, two rows of `docs/decisions.md`, the trap in
+     `docs/changing-things.md` and the spec's bullet now say the same thing.
+   - `scripts/measure_final.py` judges resident memory. Fixed in words: the script
+     and "Change a panel set", step 7, say to run it under `/usr/bin/time -l` and to
+     judge the footprint. The script's own `pass` is not changed.
+   - `scripts/hero_plate.py` painted a panel file as one wide sheet. Fixed:
+     `read_poster` refuses a set, with a test.
+   - Panel arithmetic has copies in `app/order.py`, `app/orderpreview.py` and three
+     studio modules, and the how-to said there were none. Fixed in the how-to: step 1
+     names them. The reviewer compared each copy with `app/panels.py` for each count,
+     gap and orientation, and they agree.
+   - Small document errors. Fixed, but for one: `docs/README.md` and the spec's status
+     line say "not merged to `main`", and the merge commit changes them.
+   - The label of a marker behind a gap, and three small behaviours: recorded under
+     "Found, and not part of this build".
+
+   Not covered by the review: the dry-lake commit `7d285de` and the merge of `main`,
+   which came after it. The full suites ran again on the merged tip: see item 6.

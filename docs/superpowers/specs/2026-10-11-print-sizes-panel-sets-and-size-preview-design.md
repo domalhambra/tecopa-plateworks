@@ -437,10 +437,14 @@ this document said:
 - **The furniture numbers** (§4). The base is 17 × 22 and the floor is 0.80. A reprint
   of an older 18 × 24 file draws its furniture 7.5 % larger. On an 11 × 17 the credit
   line is 6.45 pt, and a test holds it at 6 pt or more. The two test prints are open.
-- **The memory gate** (§11). It passed twice, at 14.07 and 15.29 GB, so approach A
-  stands with a thin margin. A final of 71 megapixels in the engine's own process,
-  after a proof, measured 15.0 GB. So the peak does not follow the pixel count, and
-  the engine's own peak for the largest set is an open measurement in the plan.
+- **The memory gate** (§11). The first result, 14.07 and 15.29 GB, was resident
+  memory, which reads too low on macOS. The peak memory footprint of the largest
+  sheet was 22.8 GB, so the gate failed. The build then trimmed the relief's memory
+  with the same output bytes, and did not move to approach B. After the trim the
+  largest sheet is 14.5 to 16.5 GB (10^9 bytes): under the limit in the unit the
+  gate's script counts in (2^30 bytes), with a thin margin, and 3 % over it in the
+  worst run in units of 10^9. A two-panel set is 10.8 GB and a 17 × 22 in sheet is
+  5.4 GB. Approach A stands. The plan holds the numbers, "Open before a merge", item 2.
 - **The tests as built** (§11). The seam test paints a set on a synthetic plate, not on
   the demo regions. The preview's tests use stub subprocesses and no network: the full
   command on the three real track sets is a hand run, and its times are in the plan

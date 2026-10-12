@@ -3,7 +3,12 @@
 
 A set is painted as one sheet and then cut, so its largest sheet (59 x 22 in at
 300 dpi, 116.8 megapixels) must fit in memory. This renders that sheet on a real
-plate and prints one JSON line. Exit 0 when the peak is under the limit."""
+plate and prints one JSON line. Exit 0 when the peak is under the limit.
+
+The line's `peak_gb` is the peak RESIDENT memory, in units of 2**30 bytes. On macOS
+it reads too low when the system compresses memory: on 2026-10-11 it said 14.07 for
+a render whose footprint was 22.8 GB. So run this under `/usr/bin/time -l` and judge
+the line "peak memory footprint" (bytes), not this script's own `pass`."""
 import argparse
 import json
 import os

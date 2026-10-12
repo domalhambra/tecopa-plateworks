@@ -23,6 +23,7 @@ RELIEF_WORKERS = _ENV_WORKERS or min(4, os.cpu_count() or 1)
 # renders), peak memory footprint of each run, and render time:
 #     four workers   15.43, 15.43 and 17.36 GB                     37 s
 #     two workers    14.48 to 14.55 GB in five runs, 16.48 in one  41 s
+#                    (2026-10-12: 16.35 GB in six runs of six, 44 s)
 #     one worker     14.05 and 14.65 GB                            44 s
 # The limit for that sheet is 16 GB. So the rule SAVES 0.9 to 2.8 GB there and COSTS
 # about 4 s, a tenth of the render. It does not hold every run under the limit: the
