@@ -28,9 +28,10 @@ def test_the_repo_file_has_the_prices_shipping_and_links_of_the_design():
         "two": ("$149", "$119", "$16"), "three": ("$189", "$159", "$16"),
         "digital": ("$39", "$25", "")}
     assert rows["digital"]["name"] == "Digital poster"
-    # the one Payment Link that exists on 2026-10-12; the others are not made yet
+    # the ten Payment Links made 2026-10-12, one per size and year
     assert rows["digital"]["link"] == "https://buy.stripe.com/fZu5kE4De0RE2Ned51afS0J"
-    assert [k for k, r in rows.items() if r["link"] or r["next_link"]] == ["digital"]
+    links = [r[f] for r in rows.values() for f in ("link", "next_link")]
+    assert len(set(links)) == 10 and all(l.startswith("https://buy.stripe.com/") for l in links)
 
 
 def _write(tmp_path, body):

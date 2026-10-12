@@ -144,13 +144,16 @@ def test_an_order_with_no_order_number_gets_no_email(tmp_path):
 
 # ---- in the preview ----
 
-def _sizes_file(tmp_path, monkeypatch, links=True):
+def _sizes_file(tmp_path, monkeypatch, links=None):
+    """The repo's sizes.toml with its own links swapped for made-up ones, on the rows
+    named in `links` (every row when None)."""
     body = open(sizes.default_path(), encoding="utf-8").read()
-    if links:
-        body = re.sub(r'(?m)^(key = "([a-z0-9]+)")$',
-                      r'\1\nlink = "https://buy.stripe.com/first_\2"\nnext_link = "https://buy.stripe.com/next_\2"',
-                      body)
-        body = re.sub(r'(?m)^link = "https://buy\.stripe\.com/fZu5.*$', "", body)
+    body = re.sub(r'(?m)^(next_)?link = .*\n', "", body)
+    body = re.sub(r'(?m)^(key = "([a-z0-9]+)")$',
+                  lambda m: m[0] if links is not None and m[2] not in links else
+                  f'{m[0]}\nlink = "https://buy.stripe.com/first_{m[2]}"\n'
+                  f'next_link = "https://buy.stripe.com/next_{m[2]}"',
+                  body)
     path = tmp_path / "sizes.toml"
     path.write_text(body, encoding="utf-8")
     monkeypatch.setattr(sizes, "default_path", lambda: str(path))
@@ -197,8 +200,9 @@ def _render(entries, tracks, plate_dir, title, out_dir):
             e["image"], e["dpi"] = os.path.join(out_dir, e["key"] + ".png"), opv.preview_dpi(e)
 
 
-def test_the_preview_with_the_links_not_made_yet_says_which_are_missing(tmp_path, tools):
-    # the repo's file on 2026-10-12: only the digital poster's first-poster link exists
+def test_the_preview_with_a_link_missing_says_which_and_writes_no_email(tmp_path, tools, monkeypatch):
+    # the repo's file before the links were made: only the digital poster had one
+    _sizes_file(tmp_path, monkeypatch, links=["digital"])
     d = _intake_order(tmp_path)
     state = _preview(d, tools)
     assert not (d / "out" / "preview" / "email.txt").exists()

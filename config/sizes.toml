@@ -28,7 +28,8 @@ name = "11 × 17 in"
 price = "$69"
 next_price = "$59"
 shipping = "$8"
-# link: sku tecopa-11x17, not made yet. next_link: sku tecopa-11x17-next, not made yet.
+link = "https://buy.stripe.com/aFafZiglW43Q9bC1mjafS0K"          # sku tecopa-11x17
+next_link = "https://buy.stripe.com/4gMeVe0mY2ZMbjKd51afS0L"     # sku tecopa-11x17-next
 
 [[size]]
 key = "17x22"
@@ -36,7 +37,8 @@ name = "17 × 22 in"
 price = "$99"
 next_price = "$69"
 shipping = "$12"
-# link: sku tecopa-17x22, not made yet. next_link: sku tecopa-17x22-next, not made yet.
+link = "https://buy.stripe.com/5kQcN61r2eIubjK7KHafS0M"          # sku tecopa-17x22
+next_link = "https://buy.stripe.com/4gMeVe0mY0REbjK7KHafS0N"     # sku tecopa-17x22-next
 
 [[size]]
 key = "two"
@@ -44,7 +46,8 @@ name = "Two panels"
 price = "$149"
 next_price = "$119"
 shipping = "$16"
-# link: sku tecopa-two, not made yet. next_link: sku tecopa-two-next, not made yet.
+link = "https://buy.stripe.com/fZu9AU9Xy7g2gE4d51afS0O"          # sku tecopa-two
+next_link = "https://buy.stripe.com/dRm5kE4De57UafG5CzafS0P"     # sku tecopa-two-next
 
 [[size]]
 key = "three"
@@ -52,7 +55,8 @@ name = "Three panels"
 price = "$189"
 next_price = "$159"
 shipping = "$16"
-# link: sku tecopa-three, not made yet. next_link: sku tecopa-three-next, not made yet.
+link = "https://buy.stripe.com/dRmfZic5GgQC0F61mjafS0Q"          # sku tecopa-three
+next_link = "https://buy.stripe.com/8x200k2v62ZM73ughdafS0R"     # sku tecopa-three-next
 
 [[size]]
 key = "digital"
@@ -60,4 +64,4 @@ name = "Digital poster"
 price = "$39"
 next_price = "$25"
 link = "https://buy.stripe.com/fZu5kE4De0RE2Ned51afS0J"          # sku tecopa-digital
-# next_link: sku tecopa-digital-next, not made yet.
+next_link = "https://buy.stripe.com/cNi8wQ9Xy1VIcnO8OLafS0S"     # sku tecopa-digital-next
