@@ -9,13 +9,17 @@
 #   adds ?client_reference_id=<order number>. A link is a public address, so it can be
 #   in this public repo. With a link missing for a size the preview offers, the
 #   preview writes no email and its report names the missing link.
+# - member_link and member_next_link are a member's links of a print size: the same
+#   price with no shipping (an order whose order.toml has member = true). The digital
+#   poster has none: it ships nothing, so its links are the same for everyone.
 # The prices are the decisions of 2026-10-10 and 2026-10-12 (docs/decisions.md), and
 # the client intake spec, 2026-10-12, decisions 6 and 7. tests/test_sizes.py holds each
 # price that the live pages show to the pages, and names the ones they do not show yet.
 #
 # The preview reads this file before it builds anything, and a wrong file stops it:
 # - Save the file as UTF-8 (it holds the sign "×").
-# - A row has these fields and no other: key, name, price, next_price, shipping, link, next_link.
+# - A row has these fields and no other: key, name, price, next_price, shipping, link, next_link,
+#   member_link, member_next_link.
 #   Only key and name are required.
 # - A name, a price and shipping are text in quotes: price = "$69", never price = 69.
 # - A name has at most 40 characters, and a price or shipping at most 24 characters: a
@@ -30,6 +34,8 @@ next_price = "$59"
 shipping = "$8"
 link = "https://buy.stripe.com/aFafZiglW43Q9bC1mjafS0K"          # sku tecopa-11x17
 next_link = "https://buy.stripe.com/4gMeVe0mY2ZMbjKd51afS0L"     # sku tecopa-11x17-next
+member_link = "https://buy.stripe.com/3cI3cwb1CgQC0F65CzafS0T"   # sku tecopa-11x17-member
+member_next_link = "https://buy.stripe.com/28E8wQd9KcAmgE45CzafS0U"   # sku tecopa-11x17-next-member
 
 [[size]]
 key = "17x22"
@@ -39,6 +45,8 @@ next_price = "$69"
 shipping = "$12"
 link = "https://buy.stripe.com/5kQcN61r2eIubjK7KHafS0M"          # sku tecopa-17x22
 next_link = "https://buy.stripe.com/4gMeVe0mY0REbjK7KHafS0N"     # sku tecopa-17x22-next
+member_link = "https://buy.stripe.com/fZu28s8TugQCafG8OLafS0V"   # sku tecopa-17x22-member
+member_next_link = "https://buy.stripe.com/5kQcN64DeeIuevW3urafS0W"   # sku tecopa-17x22-next-member
 
 [[size]]
 key = "two"
@@ -48,6 +56,8 @@ next_price = "$119"
 shipping = "$16"
 link = "https://buy.stripe.com/fZu9AU9Xy7g2gE4d51afS0O"          # sku tecopa-two
 next_link = "https://buy.stripe.com/dRm5kE4De57UafG5CzafS0P"     # sku tecopa-two-next
+member_link = "https://buy.stripe.com/28EbJ20mYgQC0F69SPafS0X"   # sku tecopa-two-member
+member_next_link = "https://buy.stripe.com/9B6bJ2glW43QevW0ifafS0Y"   # sku tecopa-two-next-member
 
 [[size]]
 key = "three"
@@ -57,6 +67,8 @@ next_price = "$159"
 shipping = "$16"
 link = "https://buy.stripe.com/dRmfZic5GgQC0F61mjafS0Q"          # sku tecopa-three
 next_link = "https://buy.stripe.com/8x200k2v62ZM73ughdafS0R"     # sku tecopa-three-next
+member_link = "https://buy.stripe.com/cNi00kedO57U2Ned51afS0Z"   # sku tecopa-three-member
+member_next_link = "https://buy.stripe.com/6oUaEY1r2asecnO3urafS10"   # sku tecopa-three-next-member
 
 [[size]]
 key = "digital"

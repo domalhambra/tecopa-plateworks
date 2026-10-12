@@ -32,6 +32,10 @@ def test_the_repo_file_has_the_prices_shipping_and_links_of_the_design():
     assert rows["digital"]["link"] == "https://buy.stripe.com/fZu5kE4De0RE2Ned51afS0J"
     links = [r[f] for r in rows.values() for f in ("link", "next_link")]
     assert len(set(links)) == 10 and all(l.startswith("https://buy.stripe.com/") for l in links)
+    # and the eight member links made 2026-10-12: each print size, both years, no shipping
+    member = [r[f] for k, r in rows.items() if k != "digital" for f in sizes.MEMBER_FIELDS]
+    assert len(set(member)) == 8 and not set(member) & set(links)
+    assert rows["11x17"]["member_link"] == "https://buy.stripe.com/3cI3cwb1CgQC0F65CzafS0T"
 
 
 def _write(tmp_path, body):
@@ -107,18 +111,19 @@ def test_an_unknown_field_of_a_row_is_named(tmp_path):
     # `prise = "$69"` was dropped, and the client's page said "Price on request"
     with pytest.raises(OrderError, match=r'config/sizes\.toml: size "11x17" has an unknown field '
                                          r'prise\. A row may have key, name, price, next_price, '
-                                         r'shipping, link, next_link$'):
+                                         r'shipping, link, next_link, member_link, member_next_link$'):
         sizes.load(_write(tmp_path, _row("11x17", 'prise = "$69"')))
     with pytest.raises(OrderError, match=r'size "three" has unknown fields cost, note\. '
                                          r'A row may have key, name, price, next_price, shipping, '
-                                         r'link, next_link$'):
+                                         r'link, next_link, member_link, member_next_link$'):
         sizes.load(_write(tmp_path, _row("three", 'note = "x"\ncost = "$1"')))
 
 
 def test_an_unknown_key_of_the_file_is_named(tmp_path):
     with pytest.raises(OrderError, match=r'config/sizes\.toml has an unknown key currency\. The file '
                                          r'holds \[\[size\]\] rows, and a row may have key, name, '
-                                         r'price, next_price, shipping, link, next_link$'):
+                                         r'price, next_price, shipping, link, next_link, member_link, '
+                                         r'member_next_link$'):
         sizes.load(_write(tmp_path, 'currency = "USD"\n' + ROWS))
     with pytest.raises(OrderError, match=r"has an unknown key sizes\. "):      # [[sizes]] for [[size]]
         sizes.load(_write(tmp_path, ROWS.replace("[[size]]", "[[sizes]]")))
@@ -163,7 +168,8 @@ def test_the_header_of_the_repo_file_states_the_limits():
         header = "".join(line for line in f if line.startswith("#"))
     assert f"at most {sizes.NAME_MAX_CHARS} characters" in header
     assert f"at most {sizes.PRICE_MAX_CHARS} characters" in header
-    assert "key, name, price, next_price, shipping, link, next_link" in header and "UTF-8" in header
+    assert "key, name, price, next_price, shipping, link, next_link,\n#   member_link, member_next_link" \
+        in "".join(open(sizes.default_path(), encoding="utf-8")) and "UTF-8" in header
     assert "https://buy.stripe.com/" in header and "digital" in header
 
 
@@ -219,17 +225,21 @@ def test_the_new_fields_are_optional(tmp_path):
     rows = sizes.table(_write(tmp_path, ROWS))
     assert list(rows) == list(SIZE_KEYS)                    # the digital row is optional too
     assert rows["two"] == {"name": "two", "price": "", "next_price": "", "shipping": "",
-                           "link": "", "next_link": ""}
+                           "link": "", "next_link": "", "member_link": "", "member_next_link": ""}
     assert sizes.load(_write(tmp_path, ROWS), returning=True)["two"]["price"] == sizes.NO_PRICE
 
 
 def test_a_full_row_and_the_digital_row_are_read(tmp_path):
     body = _row("two", f'price = "$149"\nnext_price = "$119"\nshipping = "$16"\nlink = "{LINK}"\n'
-                       f'next_link = "https://buy.stripe.com/test_00g5kE"')
+                       f'next_link = "https://buy.stripe.com/test_00g5kE"\n'
+                       f'member_link = "https://buy.stripe.com/test_m1"\n'
+                       f'member_next_link = "https://buy.stripe.com/test_m2"')
     body += f'[[size]]\nkey = "digital"\nname = "Digital poster"\nprice = "$39"\nlink = "{LINK}"\n'
     rows = sizes.table(_write(tmp_path, body))
     assert rows["two"] == {"name": "two", "price": "$149", "next_price": "$119", "shipping": "$16",
-                           "link": LINK, "next_link": "https://buy.stripe.com/test_00g5kE"}
+                           "link": LINK, "next_link": "https://buy.stripe.com/test_00g5kE",
+                           "member_link": "https://buy.stripe.com/test_m1",
+                           "member_next_link": "https://buy.stripe.com/test_m2"}
     assert rows["digital"]["price"] == "$39" and list(rows)[-1] == "digital"
     # the PDF never frames the digital poster: load() gives the four sheet sizes only
     assert list(sizes.load(_write(tmp_path, body))) == list(SIZE_KEYS)
@@ -249,6 +259,8 @@ def test_a_full_row_and_the_digital_row_are_read(tmp_path):
     ('link = "https://buy.stripe.com/a/b"', r"link must be a Payment Link"),
     ('next_link = "https://example.com/abc"', r'size "two": next_link must be a Payment Link'),
     ('next_link = " https://buy.stripe.com/abc"', r"next_link must be a Payment Link"),
+    ('member_link = "https://buy.stripe.com/abc?prefilled_promo_code=X"', r'size "two": member_link must be a Payment Link'),
+    ("member_next_link = 3", r'size "two": member_next_link must be a Payment Link'),
     (f'link = "https://buy.stripe.com/{"a" * 80}"', r"link must be a Payment Link"),
 ])
 def test_a_wrong_new_field_is_named(tmp_path, line, words):
@@ -261,5 +273,9 @@ def test_the_digital_poster_ships_nothing(tmp_path):
     with pytest.raises(OrderError, match=r'config/sizes\.toml: size "digital" ships nothing, so it has '
                                          r'no shipping field$'):
         sizes.load(_write(tmp_path, body))
+    for field in ("member_link", "member_next_link"):
+        body = ROWS + f'[[size]]\nkey = "digital"\nname = "D"\n{field} = "https://buy.stripe.com/abc"\n'
+        with pytest.raises(OrderError, match=r'size "digital" ships nothing, so it has no member links$'):
+            sizes.load(_write(tmp_path, body))
     with pytest.raises(OrderError, match=r"'digital' is there twice"):
         sizes.load(_write(tmp_path, ROWS + '[[size]]\nkey = "digital"\nname = "D"\n' * 2))

@@ -5,7 +5,8 @@
                                         here, and it adds a file and replaces none
                             order.toml  Dom's decisions: title, size, orientation;
                                         a set's gap; the preview's sizes. From the
-                                        intake: order_number, returning, client, email
+                                        intake: order_number, returning, client, email,
+                                        member
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
@@ -134,6 +135,15 @@ def parse_returning(value) -> bool:
     return value
 
 
+def parse_member(value) -> bool:
+    """True for a member at plateworks.org: the member links, with no shipping."""
+    if value is None:
+        return False
+    if not isinstance(value, bool):
+        raise OrderError(f"member must be true or false, not {value!r}")
+    return value
+
+
 def parse_client(value) -> str:
     if value is None:
         return ""
@@ -168,6 +178,7 @@ class Order:
     returning: bool = False  # a next-year order: the next-year prices and links
     client: str = ""         # the client's name, for the preview email
     email: str = ""          # the client's address, for the To line of that email
+    member: bool = False     # a member at plateworks.org: the member links, no shipping
 
     @property
     def id(self) -> str:
@@ -252,7 +263,8 @@ def load(folder) -> Order:
                  panels=panels, gap=gap, sizes=parse_sizes(cfg.get("sizes")),
                  order_number=parse_order_number(cfg.get("order_number")),
                  returning=parse_returning(cfg.get("returning")),
-                 client=parse_client(cfg.get("client")), email=parse_email(cfg.get("email")))
+                 client=parse_client(cfg.get("client")), email=parse_email(cfg.get("email")),
+                 member=parse_member(cfg.get("member")))
 
 
 def read_state(order: Order) -> dict:

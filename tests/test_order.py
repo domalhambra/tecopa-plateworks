@@ -273,14 +273,14 @@ def test_an_order_built_by_position_is_a_single_sheet():
 
 def test_an_order_before_the_intake_has_no_number_and_is_a_first_poster(tmp_path):
     o = od.load(_order(tmp_path, 'title = "T"\n'))
-    assert (o.order_number, o.returning, o.client, o.email) == ("", False, "", "")
+    assert (o.order_number, o.returning, o.client, o.email, o.member) == ("", False, "", "", False)
 
 
 def test_the_keys_of_the_intake_are_read(tmp_path):
     o = od.load(_order(tmp_path, 'title = "T"\norder_number = "TP-26-001"\nreturning = true\n'
-                                 'client = "Sam  Smith"\nemail = "sam@example.com"\n'))
-    assert (o.order_number, o.returning, o.client, o.email) == (
-        "TP-26-001", True, "Sam Smith", "sam@example.com")
+                                 'client = "Sam  Smith"\nemail = "sam@example.com"\nmember = true\n'))
+    assert (o.order_number, o.returning, o.client, o.email, o.member) == (
+        "TP-26-001", True, "Sam Smith", "sam@example.com", True)
     # the keys of the intake leave the plate alone: the hash is that of the tracks and the sheet
     plain = od.load(_order(tmp_path / "b", 'title = "T"\n'))
     assert o.inputs_hash() == plain.inputs_hash()
@@ -294,6 +294,7 @@ def test_the_keys_of_the_intake_are_read(tmp_path):
     ("order_number = 1", "order_number must be like TP-26-001, not 1"),
     ('returning = "yes"', "returning must be true or false, not 'yes'"),
     ("returning = 1", "returning must be true or false, not 1"),
+    ('member = "claimed"', "member must be true or false, not 'claimed'"),
     ("client = 7", "client must be text in quotes"),
     (f'client = "{"n" * 81}"', "client has 81 characters, and the most is 80"),
     ('email = "sam"', "email 'sam' is not an email address"),

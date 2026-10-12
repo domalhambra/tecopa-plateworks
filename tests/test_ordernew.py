@@ -265,6 +265,35 @@ def test_a_read_that_fails_stops_the_run(places, monkeypatch):
     assert os.listdir(orders / "TP-26-001-smith" / "in") == []
 
 
+def test_a_member_gets_member_true_and_a_ghost_check(places):
+    intake, orders = places
+    _job(intake, md=ORDER_MD.replace("returning: no\n", "returning: no\nmember: claimed\n"))
+    report = onew.new("TP-26-001")
+    dest = orders / "TP-26-001-smith"
+    assert tomllib.loads((dest / "order.toml").read_text())["member"] is True
+    assert od.load(dest).member is True
+    assert ("Warning: the form says this client is a member, so order.toml says member = true "
+            "and the preview email uses the member links") in report
+    assert "Check Ghost for their email" in report
+
+
+@pytest.mark.parametrize("line", ["member: no\n", ""])
+def test_a_client_who_is_not_a_member_pays_the_shipping(places, line):
+    intake, orders = places
+    _job(intake, md=ORDER_MD.replace("returning: no\n", "returning: no\n" + line))
+    report = onew.new("TP-26-001")
+    assert "member" not in tomllib.loads((orders / "TP-26-001-smith" / "order.toml").read_text())
+    assert "member" not in report
+
+
+def test_a_member_answer_the_intake_never_writes_is_left_out_with_a_warning(places):
+    intake, orders = places
+    _job(intake, md=_md(member="perhaps\x1b[2J"))
+    report = onew.new("TP-26-001")
+    assert od.load(orders / "TP-26-001-smith").member is False
+    assert "Warning: order.md says member: 'perhaps [2j', which is not claimed or no" in report
+
+
 # ---- order.md is read as text, and none of its values is trusted ----
 
 def _md(**fields):

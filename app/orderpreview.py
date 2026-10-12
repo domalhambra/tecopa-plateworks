@@ -511,7 +511,7 @@ def write_preview_report(order, state, names) -> str:
         for k in e["ends_behind"]:
             lines.append(f"  Warning: a route end is behind gap {k}.")
     if "email" in state:
-        lines.append(orderemail.report_line(state["email"]))
+        lines.append(orderemail.report_line(state["email"], member=order.member))
     lines.append(f"Time: {state['seconds']:g} s")
     text = "\n".join(lines) + "\n"
     path = os.path.join(order.work_dir, "preview", "report.txt")

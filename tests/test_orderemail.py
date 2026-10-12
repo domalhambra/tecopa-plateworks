@@ -23,6 +23,9 @@ def _rows(**drop):
     for key, row in rows.items():
         row["link"] = f"https://buy.stripe.com/first_{key}"
         row["next_link"] = f"https://buy.stripe.com/next_{key}"
+        if key != "digital":
+            row["member_link"] = f"https://buy.stripe.com/member_{key}"
+            row["member_next_link"] = f"https://buy.stripe.com/member_next_{key}"
     for key, field in drop.items():
         rows[key][field] = ""
     return rows
@@ -80,6 +83,36 @@ def test_a_returning_client_gets_the_next_year_links_and_prices(tmp_path):
     assert "- Three panels, $159 plus $16 shipping: " in text
     assert "- Digital poster, $25, nothing to ship: " in text
     assert "first_" not in text and "$99" not in text and "$189" not in text
+
+
+def test_a_member_gets_the_member_links_with_no_shipping_and_no_code(tmp_path):
+    text = oe.email_text(_order(tmp_path, member=True), _entries("11x17", "two"), _rows())
+    assert URL.findall(text) == [f"https://buy.stripe.com/member_11x17?client_reference_id={NUMBER}",
+                                 f"https://buy.stripe.com/member_two?client_reference_id={NUMBER}",
+                                 f"https://buy.stripe.com/first_digital?client_reference_id={NUMBER}"]
+    assert "- 11 × 17 in, $69, shipping included: " in text
+    assert "- Two panels, $149, shipping included: " in text
+    assert "- Digital poster, $39, nothing to ship: " in text
+    assert ("As a member at plateworks.org, your shipping is on me: the print links below have "
+            "none.") in text
+    assert "$8" not in text and "$16" not in text and "code" not in text
+    # a returning member: next year's prices, with no shipping
+    text = oe.email_text(_order(tmp_path, member=True, returning=True), _entries("17x22"), _rows())
+    assert URL.findall(text)[:1] == [f"https://buy.stripe.com/member_next_17x22?client_reference_id={NUMBER}"]
+    assert "- 17 × 22 in, $69, shipping included: " in text
+    assert "next_digital?" in text
+
+
+def test_a_member_order_needs_the_member_links_and_says_to_check_ghost(tmp_path):
+    out = tmp_path / "out"
+    order = _order(tmp_path, member=True)
+    result = oe.write(order, _entries("11x17", "two"), _rows(two="member_link", **{"11x17": "shipping"}),
+                      str(out))
+    assert result["missing"] == ["Two panels (member_link)"]    # a member's link has no shipping
+    result = oe.write(order, _entries("11x17"), _rows(), str(out))
+    assert oe.report_line(result, member=True) == (
+        f"Email: {out / 'email.txt'}, with the member links (no shipping). Check Ghost for "
+        f"the client's email before it goes out.")
 
 
 def test_the_refund_and_the_changes_are_said(tmp_path):
@@ -148,7 +181,7 @@ def _sizes_file(tmp_path, monkeypatch, links=None):
     """The repo's sizes.toml with its own links swapped for made-up ones, on the rows
     named in `links` (every row when None)."""
     body = open(sizes.default_path(), encoding="utf-8").read()
-    body = re.sub(r'(?m)^(next_)?link = .*\n', "", body)
+    body = re.sub(r'(?m)^(member_)?(next_)?link = .*\n', "", body)
     body = re.sub(r'(?m)^(key = "([a-z0-9]+)")$',
                   lambda m: m[0] if links is not None and m[2] not in links else
                   f'{m[0]}\nlink = "https://buy.stripe.com/first_{m[2]}"\n'
