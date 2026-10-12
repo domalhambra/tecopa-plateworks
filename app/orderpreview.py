@@ -34,10 +34,10 @@ from app.geo import RegionGeo
 from app.ingest import load_tracks, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
                        parse_order_size, refuse_inside_repo)
-from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, CoverageError, PlateError,
-                            choose_grid, conus_covered, curated_fit, nestled_frame,
-                            order_epsg, plate_bounds, project_bbox, to_lonlat_bbox,
-                            track_shares)
+from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, STATIC_LAYERS_M, STATIC_SPAN,
+                            CoverageError, PlateError, choose_grid, conus_covered,
+                            curated_fit, nestled_frame, order_epsg, plate_bounds,
+                            project_bbox, to_lonlat_bbox, track_shares)
 from app.regionbuild import slugify
 from app.spec import TITLE_MAX_CHARS, CompositionSpec, SpecError
 
@@ -370,13 +370,75 @@ def _curated_plate(tools, region) -> dict:
             "grid_m": float(region["native_resolution_m"])}
 
 
+# A preview map is small, so its need is coarse: 120 m for each pixel on a route of
+# 120 km. choose_grid serves a need from the static tiles only inside a layer's span
+# (10 to 20 m, 30 to 60 m), and sends a coarser need to the 3DEP dynamic service. On
+# 2026-10-11 that service answered "Service is currently not available" through every
+# retry, on two tries three hours apart, and the static tiles are the reliable source
+# (choose_grid's docstring). So a preview plate with a need above the 30 m span is
+# built at 30 m from the static tiles when its grid has at most
+# PREVIEW_STATIC_MAX_CELLS cells. Only a larger plate needs the dynamic service: the
+# plate of a 1,100 km route has 3,500 million cells at 30 m.
+# The limit is a first value. The preview plate of the north-south acceptance route
+# (120 km) has 54 million cells at 30 m, and the 30 m plate of that order, 51 million
+# cells, built in 286 s (docs/decisions.md, 2026-09-24). At 60 million cells
+# region_prep plans a dem.tif of 240 MB in two slices with a peak of 1.2 GB, and
+# still bakes the land cover at 30 m (its LANDCOVER_BUDGET_MPX is 60).
+PREVIEW_STATIC_LAYER_M = 30
+PREVIEW_STATIC_MAX_CELLS = 60e6
+# region_prep.GRID_INSET_M. That module is not imported here (invariant 13), and a
+# test holds the two values together.
+GRID_INSET_M = 500.0
+
+
+def static_cells(bbox_lonlat, epsg, cell_m=PREVIEW_STATIC_LAYER_M) -> int:
+    """The cells of the grid that the build makes for a plate's lon/lat box at
+    `cell_m`, by the arithmetic of region_prep.projected_grid: the box is projected
+    again, and the grid is that box less GRID_INSET_M on each side. The box in degrees
+    is larger than the plate it was made from, so this is more than the plate's own
+    area: 5 to 10 % more in UTM, and more than twice the area in Albers."""
+    minx, miny, maxx, maxy = project_bbox(bbox_lonlat, epsg)
+    across = max(0.0, maxx - minx - 2 * GRID_INSET_M) // cell_m
+    down = max(0.0, maxy - miny - 2 * GRID_INSET_M) // cell_m
+    return int(across) * int(down)
+
+
+def preview_grid(need, coverage, cells) -> tuple:
+    """(grid, why): the grid of a preview plate that is built, as choose_grid gives
+    one, and the reason when the need alone did not decide it. `cells` is
+    static_cells of the plate.
+
+    A need at or under the top of the 30 m span (STATIC_SPAN * 30 m) keeps the grid
+    that choose_grid gives it. A coarser need on a plate of at most
+    PREVIEW_STATIC_MAX_CELLS is handed to choose_grid again as that top, 60 m. With
+    the 30 m layer in cover, choose_grid answers the static 30 m grid, and the plate
+    takes it. With the layer not in cover, choose_grid answers a 55 m grid from the
+    dynamic service, so the plate keeps the grid of its own need: the coverage rule
+    stays choose_grid's. A plate above the limit keeps the grid of its own need."""
+    grid = choose_grid(need, coverage)
+    top = STATIC_SPAN * PREVIEW_STATIC_LAYER_M
+    if need <= top:
+        return grid, ""
+    if cells > PREVIEW_STATIC_MAX_CELLS:
+        return grid, (f"at {PREVIEW_STATIC_LAYER_M} m the plate has {cells / 1e6:.0f} million "
+                      f"cells, and the limit is {PREVIEW_STATIC_MAX_CELLS / 1e6:.0f} million")
+    static = choose_grid(top, coverage)
+    if not static["grid_m"] == static["layer_m"] == PREVIEW_STATIC_LAYER_M:
+        return grid, f"the static {PREVIEW_STATIC_LAYER_M} m tiles do not cover the plate"
+    return static, f"a {grid['grid_m']:g} m grid would come from the dynamic service"
+
+
 def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log, suffix="",
                    regions=None) -> dict:
     """The plate for sizes that no curated plate holds as prints: a curated plate when
     one holds their frames in this projection at the preview's pixels, else one coarse
     plate built under work/preview/plate/. `suffix` names the plate and the build
     log of a later plate: preview_<order>_5070 and build_5070.log. `regions` is
-    orderprep.curated_regions, read again when it is not given."""
+    orderprep.curated_regions, read again when it is not given.
+
+    A plate that is built takes its grid from preview_grid: a coarse need is built at
+    30 m from the static tiles when the plate is small enough. One line of the log
+    names the grid, its source and the reason."""
     from app.orderprep import (COARSE_LAYERS_M, COARSE_NEED_M, _build, curated_regions,
                                read_coverage)
     bounds = plate_bounds(union)
@@ -388,14 +450,19 @@ def _preview_plate(order, tools, union, epsg, need, env, cache_dir, log, suffix=
                 and r["native_resolution_m"] <= need * MAX_UPSAMPLE):
             log(f"Reusing curated plate {r['id']} for the preview.")
             return _curated_plate(tools, r)
-    cov = read_coverage(tools, to_lonlat_bbox(bounds, epsg, pad_m=PLATE_PAD_M), env,
+    box = to_lonlat_bbox(bounds, epsg, pad_m=PLATE_PAD_M)     # the box _build gives the build
+    cov = read_coverage(tools, box, env,
                         layers=COARSE_LAYERS_M if need >= COARSE_NEED_M else None)
-    grid = choose_grid(need, cov)
+    grid, why = preview_grid(need, cov, static_cells(box, epsg))
     if grid["widen"]:
         raise PlateError("The terrain data here is too coarse even for a preview.")
+    rid = "preview_" + order.id[len("order_"):] + suffix
+    source = ("the static 3DEP tiles" if grid["grid_m"] in STATIC_LAYERS_M
+              else "the 3DEP dynamic service")
+    log(f"Preview plate {rid}: {grid['grid_m']:g} m grid from {source}"
+        + (f" ({why})." if why else "."))
     plate, _ = _build(order, tools, union, epsg, grid, env, log, cwd=cache_dir,
-                      root=os.path.join(order.work_dir, "preview", "plate"),
-                      rid="preview_" + order.id[len("order_"):] + suffix,
+                      root=os.path.join(order.work_dir, "preview", "plate"), rid=rid,
                       build_log=os.path.join(order.work_dir, "preview", f"build{suffix}.log"))
     return plate
 

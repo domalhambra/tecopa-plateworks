@@ -171,6 +171,11 @@ panel files.
      practice three panels need tracks across about 37 % of the width.
    - It builds one coarse plate for each projection in use, under
      `<folder>/work/preview/plate/`. A curated plate is used when it holds the frames.
+     A plate whose maps need more than 60 m of ground for each pixel is built at 30 m
+     from the static 3DEP tiles when its grid has at most 60 million cells: a route of
+     up to about 125 km on its longer side. This build can take 5 minutes. A larger
+     plate is built at its coarse grid from the dynamic service. The log line
+     `Preview plate` gives the grid, its source and the reason.
    - It draws each offered size at screen size with the word PREVIEW, and writes
      `<folder>/out/preview/<title>-preview.pdf`, where `<title>` is the title as a
      slug. Page 1 shows every offered size on one wall at one scale. Then each size
@@ -296,6 +301,27 @@ Traps already paid for:
   and a gap of 400 digits are each an `OrderError`, and a gap of -0.0 is 0.
 - The preview is not the proof. Its plate is coarse, so a place name can be in another
   position on the final map. The PDF says so on each page.
+- A preview map is small, so its plate needs a coarse grid: 125 m for each pixel on a
+  route of 120 km. `choose_grid` sends a need above 60 m to the dynamic service. On
+  2026-10-11 that service answered "Service is currently not available" through all
+  its retries, on two tries three hours apart, and the preview of the north-south
+  route stopped each time. The static tiles did not fail. A preview plate with a need
+  above 60 m is now built at 30 m from the static tiles when its grid has at most
+  `PREVIEW_STATIC_MAX_CELLS` cells (60 million, a first value; `preview_grid` in
+  `app/orderpreview.py`). The cell count is that of the grid the build makes, which is
+  larger than the plate: 5 to 10 % in UTM and more than twice in Albers. The
+  north-south plate has 53.6 million cells. For that grid `region_prep.py` plans a DEM
+  file of about 214 MB, two slices, a peak of about 1.0 GB and land cover at 30 m, and
+  the 30 m plate of the same route built in 286 s on 2026-09-24. The 120 m grid was a
+  DEM file of 13 MB. A plate above the limit still needs the dynamic service: a route
+  of more than about 125 km on its longer side, and every Albers plate. When that
+  service is down, such a preview stops. Run it again later. A plate that the 30 m
+  layer does not cover keeps its coarse grid too. Prepare is not changed.
+- A preview plate for a route of many hundred km can also stop before the build, in
+  the query of the 3DEP index: "more footprints than one query returns". The index
+  gives a limited count of footprints for one query, and `_index_features` in
+  `region_prep.py` stops when the answer is not complete. This is a limit of the index
+  query in the prep stack. It is not fixed.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
 (stub subprocesses, no network), `tests/test_dem_coverage.py`. For the preview:

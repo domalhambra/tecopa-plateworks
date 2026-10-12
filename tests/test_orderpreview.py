@@ -1190,3 +1190,135 @@ def test_the_lines_of_the_report_paste_into_order_toml(tmp_path, tools):
         assert list(order.print_in()) == e["print_in"]
         assert (order.orientation, order.panels, order.gap) == (
             e["orientation"], e["panels"], e["gap"])
+
+
+# ---- a coarse preview plate comes from the static 30 m tiles when it is small enough ----
+
+# 9 km east and 17 km north: a single sheet's map needs 17 m of ground for each pixel
+MID = (-116.3, 35.8, -116.2, 35.95)
+# the 30 m layer stops short of the plate, and the 10 m layer holds it
+NO_30_M = {"1": 0.0, "3": 0.0, "10": 1.0, "30": 0.9, "60": 0.0}
+
+
+def _logged_preview(d, tools):
+    lines = []
+    state = opv.preview(str(d), tools, log=lines.append, render=_fake_render([]),
+                        write_pdf=lambda path, entries, names, title: None)
+    return state, lines
+
+
+def _grid_of(state):
+    """(the grid the build was asked for, the plate's grid, its layer) of the first plate."""
+    plate = state["plate"]
+    built = json.loads(open(os.path.join(plate["root"], plate["id"], "region.json")).read())
+    return built["native_resolution_m"], plate["grid_m"], plate["layer_m"]
+
+
+def _need_and_cells(state):
+    """(metres for each pixel of the finest map, the cells of the plate at 30 m)."""
+    offered = [e for e in state["sizes"] if e["offered"]]
+    box = opl.to_lonlat_bbox(opl.plate_bounds(opv.union_frame(offered)), state["epsg"],
+                             pad_m=opl.PLATE_PAD_M)
+    return opv.preview_need_m(offered), opv.static_cells(box, state["epsg"])
+
+
+@pytest.mark.parametrize("bbox,epsg", [(SIERRA, 32611), (PLAINS, 32614), (PLAINS, 5070)])
+def test_the_cell_estimate_is_the_grid_that_the_build_makes(bbox, epsg):
+    # the plate's box goes to the build in degrees and is projected again there, so the
+    # grid is larger than the plate: in Albers, more than twice as large
+    import region_prep
+    plate = opl.plate_bounds(nestled_frame(project_bbox(bbox, epsg), 17 / 22))
+    box = opl.to_lonlat_bbox(plate, epsg, pad_m=opl.PLATE_PAD_M)
+    w, h, _ = region_prep.projected_grid(box, f"EPSG:{epsg}", opv.PREVIEW_STATIC_LAYER_M)
+    assert opv.GRID_INSET_M == region_prep.GRID_INSET_M
+    assert opv.static_cells(box, epsg) == pytest.approx(w * h, rel=1e-3)
+    assert w * h > (plate[2] - plate[0]) * (plate[3] - plate[1]) / 30.0 ** 2
+
+
+def test_a_coarse_preview_plate_is_built_from_the_static_30_m_tiles(tmp_path, tools, monkeypatch):
+    # 100 km north to south: a map of 1,600 px needs 104 m for each pixel, and
+    # choose_grid sends a need above 60 m to the dynamic service
+    d = _make_order(tmp_path, bbox=SIERRA, size="11x17")
+    state, lines = _logged_preview(d, tools)
+    need, cells = _need_and_cells(state)
+    assert need > opl.STATIC_SPAN * 30 and 30e6 < cells < opv.PREVIEW_STATIC_MAX_CELLS
+    assert _grid_of(state) == (30.0, 30.0, 30)
+    assert ("Preview plate preview_2026_10_001_smith: 30 m grid from the static 3DEP tiles "
+            "(a 100 m grid would come from the dynamic service).") in lines
+    assert "Building plate preview_2026_10_001_smith: 30 m grid from the 30 m 3DEP layer." in lines
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert "Plate: preview_2026_10_001_smith (built), 30 m grid\n" in report
+    # the same order with a lower limit keeps the coarse grid
+    monkeypatch.setattr(opv, "PREVIEW_STATIC_MAX_CELLS", 20e6)
+    state, lines = _logged_preview(d, tools)
+    assert _grid_of(state) == (100.0, 100.0, 10)
+    assert (f"Preview plate preview_2026_10_001_smith: 100 m grid from the 3DEP dynamic service "
+            f"(at 30 m the plate has {cells / 1e6:.0f} million cells, and the limit is "
+            f"20 million).") in lines
+    # the limit is the last size that the tiles serve
+    monkeypatch.setattr(opv, "PREVIEW_STATIC_MAX_CELLS", cells - 1)
+    assert _grid_of(_logged_preview(d, tools)[0]) == (100.0, 100.0, 10)
+    monkeypatch.setattr(opv, "PREVIEW_STATIC_MAX_CELLS", cells)
+    assert _grid_of(_logged_preview(d, tools)[0]) == (30.0, 30.0, 30)
+
+
+@pytest.mark.parametrize("bbox,span,grid,source", [
+    (WIDE, (30.0, 60.0), (30.0, 30.0, 30), "the static 3DEP tiles"),
+    (MID, (10.0, 20.0), (10.0, 10.0, 10), "the static 3DEP tiles"),
+    (SMALL, (0.0, 10.0), (4.75, 4.75, 1), "the 3DEP dynamic service")])
+def test_a_need_inside_a_static_span_or_finer_keeps_its_grid(tmp_path, tools, bbox, span,
+                                                             grid, source):
+    d = _make_order(tmp_path, bbox=bbox, size="11x17")
+    state, lines = _logged_preview(d, tools)
+    need, cells = _need_and_cells(state)
+    assert span[0] <= need <= span[1] and cells < opv.PREVIEW_STATIC_MAX_CELLS
+    assert _grid_of(state) == grid == _grid_of_choose_grid(need, state)
+    assert f"Preview plate preview_2026_10_001_smith: {grid[0]:g} m grid from {source}." in lines
+
+
+def _grid_of_choose_grid(need, state):
+    """The grid that choose_grid alone gives the need, with the coverage of the stubs."""
+    cov = json.loads(os.environ["STUB_COVERAGE"])
+    if need >= op.COARSE_NEED_M:
+        cov = {k: v for k, v in cov.items() if int(k) in op.COARSE_LAYERS_M}
+    g = opl.choose_grid(need, cov)
+    return g["grid_m"], g["grid_m"], g["layer_m"]
+
+
+def test_a_plate_that_the_30_m_tiles_do_not_cover_keeps_the_coarse_grid(tmp_path, tools,
+                                                                        monkeypatch):
+    # choose_grid gives a need of 60 m a 55 m grid here, from the dynamic service: that
+    # is not the static grid, so the preview keeps the grid of its own need
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_30_M))
+    assert opl.choose_grid(60.0, {10: 1.0, 30: 0.9})["grid_m"] == 55.0
+    d = _make_order(tmp_path, bbox=SIERRA, size="11x17")
+    state, lines = _logged_preview(d, tools)
+    need, cells = _need_and_cells(state)
+    assert need > 60 and cells < opv.PREVIEW_STATIC_MAX_CELLS
+    assert _grid_of(state) == (100.0, 100.0, 10) == _grid_of_choose_grid(need, state)
+    assert ("Preview plate preview_2026_10_001_smith: 100 m grid from the 3DEP dynamic service "
+            "(the static 30 m tiles do not cover the plate).") in lines
+
+
+def test_prepare_keeps_its_grid_when_the_preview_takes_the_static_tiles(tmp_path, tools,
+                                                                       monkeypatch):
+    # the rule is the preview's own: with no limit at all, a print that needs 100 m for
+    # each pixel still gets the 100 m grid
+    monkeypatch.setattr(opv, "PREVIEW_STATIC_MAX_CELLS", float("inf"))
+    d = _make_order(tmp_path, bbox=EAST_WEST, size="11x17")
+    state, _ = _logged_preview(d, tools)
+    assert _need_and_cells(state)[0] > 60 and _grid_of(state) == (30.0, 30.0, 30)
+    plate = op.prepare(str(d), tools, log=lambda s: None)["plate"]
+    assert (plate["grid_m"], plate["layer_m"]) == (100.0, 10)
+
+
+def test_a_curated_plate_is_reused_before_the_static_tiles_are_asked(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=SIERRA, size="11x17")
+    hold, need = _preview_needs(d, tools)
+    assert need > 60
+    _curated_plate(tmp_path, (hold[0] - 1, hold[1] - 1, hold[2] + 1, hold[3] + 1),
+                   grid_m=need * opl.MAX_UPSAMPLE * 0.999)
+    state, lines = _logged_preview(d, tools)
+    assert (state["plate"]["kind"], state["plate"]["id"]) == ("curated", "big")
+    assert state["plate"]["grid_m"] > 200
+    assert not [l for l in lines if l.startswith("Preview plate")]
