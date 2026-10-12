@@ -13,20 +13,53 @@ from scipy.ndimage import gaussian_filter, distance_transform_edt, rotate, zoom
 # can run at the same time. Threads rather than processes: scipy.ndimage and numpy
 # release the GIL for their inner loops, so threads get real parallelism without
 # copying a 60 MP window per worker. 1 = serial, and the serial path is the same call
-# order this file had before the fan-out existed.
-RELIEF_WORKERS = int(os.environ.get("TECOPA_RELIEF_WORKERS") or 0) or min(4, os.cpu_count() or 1)
+# order this file had before the fan-out existed. TECOPA_RELIEF_WORKERS sets it.
+_ENV_WORKERS = int(os.environ.get("TECOPA_RELIEF_WORKERS") or 0)
+RELIEF_WORKERS = _ENV_WORKERS or min(4, os.cpu_count() or 1)
+# A large sheet runs at most two passes at once. Each running pass holds its own
+# full-sheet temporaries, so the fan-out is the memory peak of a final, and four at
+# once on a large window cost more memory than the time they save is worth. Measured
+# 2026-10-11 on a 59 x 22 in final (116.8 megapixels, the largest sheet a set
+# renders), peak memory footprint of each run, and render time:
+#     four workers   15.43, 15.43 and 17.36 GB                     37 s
+#     two workers    14.48 to 14.55 GB in five runs, 16.48 in one  41 s
+#     one worker     14.05 and 14.65 GB                            44 s
+# The limit for that sheet is 16 GB. So the rule SAVES 0.9 to 2.8 GB there and COSTS
+# about 4 s, a tenth of the render. It does not hold every run under the limit: the
+# footprint counts freed blocks that the macOS allocator keeps against the process,
+# and it moves from run to run. With that cache off (MallocLargeCache=0, a
+# measurement only) the figures are 10.09 GB with four and 8.86 to 9.89 GB with two.
+# A 17 x 22 in final (33.7 megapixels, 42.2 on its padded window) keeps four workers:
+# two cost it 0.7 s of 12.4 and save nothing (5.44 GB both ways).
+#
+# The threshold is the PADDED window, the array the passes work on: 60 million pixels
+# is a sheet of about 48 megapixels. TECOPA_RELIEF_WORKERS overrides the rule both
+# ways: the number it gives is used at every size. The worker count never changes a
+# pixel (see _fan_out), so the proof still predicts the print.
+LARGE_WINDOW_PX = 60_000_000
+RELIEF_WORKERS_LARGE = 2
+RELIEF_WORKERS_PINNED = _ENV_WORKERS > 0     # True: the environment chose the width
 
-def _fan_out(tasks):
+def _workers_for(window_px):
+    """How many passes may run at once on a window of `window_px` pixels."""
+    if RELIEF_WORKERS_PINNED or window_px <= LARGE_WINDOW_PX:
+        return RELIEF_WORKERS
+    return min(RELIEF_WORKERS, RELIEF_WORKERS_LARGE)
+
+def _fan_out(tasks, workers=None):
     """Run zero-argument `tasks` concurrently, returning results in SUBMISSION order.
 
     Order is the whole contract: each task combines its own pass with the same
     expressions in the same order as the serial chain, and the caller then merges the
     returned list positionally, so the composed sheet is bit-identical no matter which
-    task finishes first (invariant 3). A task that raises propagates on `.result()`,
-    exactly as the inline call it replaced would have."""
-    if RELIEF_WORKERS <= 1 or len(tasks) <= 1:
+    task finishes first (invariant 3) -- and no matter how many run at once, which is
+    why `workers` (default RELIEF_WORKERS) may follow the size of the sheet. A task
+    that raises propagates on `.result()`, exactly as the inline call it replaced
+    would have."""
+    workers = RELIEF_WORKERS if workers is None else workers
+    if workers <= 1 or len(tasks) <= 1:
         return [t() for t in tasks]
-    with ThreadPoolExecutor(max_workers=min(RELIEF_WORKERS, len(tasks))) as ex:
+    with ThreadPoolExecutor(max_workers=min(workers, len(tasks))) as ex:
         return [f.result() for f in [ex.submit(t) for t in tasks]]
 
 # ---- tuning surface: edit these by eye against the reference maps ----
@@ -823,7 +856,8 @@ def shaded_relief(elev, res_m, elev_min, elev_max,
         return _shadow_terms(elev, res_m, cast_az, cast_alt, z_factor, shadow_res_m)
 
     hs, tex, val, shadow_terms = _fan_out(
-        [_light_task, _texture_task, _valley_task, _shadow_task])
+        [_light_task, _texture_task, _valley_task, _shadow_task],
+        workers=_workers_for(elev.size))     # two at once on a large sheet
 
     # `hs` is ours (** built it), so the tonal remap runs in place. Addition and
     # multiplication are commutative in IEEE, so this is bit-identical to

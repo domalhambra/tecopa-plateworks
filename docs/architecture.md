@@ -118,7 +118,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 - **Any PNG panel is the whole set.** Each PNG panel carries the spec of the set and a `panel` key with its number. `/api/reprint` of one panel returns the zip of all panels, and `/api/continue` of one panel restores the set. A PDF panel carries no manifest. `docs/MANIFEST.md` has the fields.
 - **A set is a print.** `validate` refuses a set as a wallpaper, and a set with a bleed. `/api/timelapse/submit` and `/api/wallpapers/submit` answer 422 for a set.
 - **Share copies carry nothing.** `embed_spec=false` writes no text chunk at all. PDF finals never carry a manifest.
-- **Relief runs concurrently.** Four passes fan out on threads and merge in submission order. `TECOPA_RELIEF_WORKERS=1` restores the serial order.
+- **Relief runs concurrently.** Four passes fan out on threads and merge in submission order. A window above 60 million pixels, which is every set, runs two at a time: the passes at once are the memory peak of a final. `TECOPA_RELIEF_WORKERS` sets the width at every size, and `1` restores the serial order. No width changes a pixel.
 - **Type is bound per role by the operator.** `TECOPA_FONT_TITLE`, `_POINT`, `_AREA`, `_WATER`, and `TECOPA_FONT` for body and fallback. The default chain is Georgia, then DejaVu. Bindings ride in no manifest, so the same file renders differently on a host with different bindings.
 - **Region builds are subprocesses.** `POST /api/regions/build` spawns `region_prep.py` in `.venv-prep` on `BUILD_QUEUE` (one slot). Without that venv `/api/regions/plan` reports `prep_ready: false`.
 - **Auto-docs are off.** `app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)`, so the studio never fetches from jsDelivr.
@@ -135,7 +135,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `TECOPA_STORE`, `TECOPA_DB` | `app/store.py`, `app/session.py` | `sqlite` persists sessions to `TECOPA_DB`. Unset means in-memory. |
 | `TECOPA_TTL_SECONDS`, `TECOPA_RENDER_CONCURRENCY` | `app/main.py` | Job retention and the render queue's width. |
 | `TECOPA_BASE_CACHE_MB`, `TECOPA_INK_CACHE_MB` | `app/basecache.py`, `app/main.py` | Cache budgets. |
-| `TECOPA_RELIEF_WORKERS` | `app/relief.py` | Fan-out width. `1` is the serial order. |
+| `TECOPA_RELIEF_WORKERS` | `app/relief.py` | Fan-out width at every sheet size. `1` is the serial order. Unset means four, and two on a window above 60 million pixels. |
 | `TECOPA_FONT`, `TECOPA_FONT_TITLE`, `TECOPA_FONT_POINT`, `TECOPA_FONT_AREA`, `TECOPA_FONT_WATER`, `TECOPA_FONT_<ROLE>_CASE` | `app/render.py`, `scripts/render_mockups.py` | Per-role faces. `TECOPA_FONT_AREA_CASE=mixed` for a small-caps face. Tested by `tests/test_type_roles.py`. |
 | `TECOPA_ENGINE_VERSION` | `app/provenance.py` | Overrides the git commit as `engine_version` in packaged builds. |
 | `TECOPA_PREP_PYTHON`, `TECOPA_PREP_SCRIPT`, `TECOPA_LABELS_SCRIPT` | `app/main.py` | The interpreter and scripts the in-app region build spawns. |

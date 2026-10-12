@@ -220,9 +220,80 @@ def test_concurrent_relief_passes_do_not_move_a_pixel(monkeypatch):
               sun_azimuth=200.0, sun_altitude=30.0, golden=0.9)
     monkeypatch.setattr(relief, "RELIEF_WORKERS", 1)
     serial = shaded_relief(elev, **kw)
+    # two is the width of a large sheet (relief._workers_for), four of any other
+    for workers in (2, 4):
+        monkeypatch.setattr(relief, "RELIEF_WORKERS", workers)
+        assert np.array_equal(serial, shaded_relief(elev, **kw)), f"{workers} workers"
+
+def _padded_px(w_in, h_in, dpi=300):
+    """The pixels of the window the relief works on: the sheet plus its margin."""
+    from app import render
+    w, h = round(w_in * dpi), round(h_in * dpi)
+    return (w + 2 * round(w * render.MARGIN_FRAC)) * (h + 2 * round(h * render.MARGIN_FRAC))
+
+def test_a_large_sheet_runs_two_relief_passes_at_once(monkeypatch):
+    # After the memory trim the four passes at once are the peak of a final, so a
+    # large window runs two. The menu's single sheet keeps four; every set is large.
     monkeypatch.setattr(relief, "RELIEF_WORKERS", 4)
-    parallel = shaded_relief(elev, **kw)
-    assert np.array_equal(serial, parallel)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS_PINNED", False)
+    assert relief._workers_for(_padded_px(11, 17)) == 4
+    assert relief._workers_for(_padded_px(17, 22)) == 4          # 33.7 megapixels
+    assert relief._workers_for(_padded_px(18, 24)) == 4          # 38.9, the old sheet
+    assert relief._workers_for(_padded_px(25, 22.3)) == 2        # 50.2 megapixels
+    for set_sheet in ((36, 22), (46, 17), (55, 22), (59, 22), (70, 17)):
+        assert relief._workers_for(_padded_px(*set_sheet)) == 2, set_sheet
+    # the rule only ever lowers the count: a host with one core stays serial
+    monkeypatch.setattr(relief, "RELIEF_WORKERS", 1)
+    assert relief._workers_for(_padded_px(59, 22)) == 1
+    # TECOPA_RELIEF_WORKERS overrides the rule both ways: its number, at every size
+    monkeypatch.setattr(relief, "RELIEF_WORKERS_PINNED", True)
+    for pinned in (1, 2, 4, 6):
+        monkeypatch.setattr(relief, "RELIEF_WORKERS", pinned)
+        assert relief._workers_for(_padded_px(59, 22)) == pinned
+        assert relief._workers_for(_padded_px(17, 22)) == pinned
+
+def test_the_fan_out_follows_the_window_and_the_sheet_does_not_change(monkeypatch):
+    # shaded_relief asks for a width by the size of ITS window, and the width is a
+    # scheduling choice only: the same terrain as a small window (four at once) and
+    # as a large one (two) gives the same bytes.
+    widths = []
+    real = relief.ThreadPoolExecutor
+
+    def recording(max_workers=None, **kw):
+        widths.append(max_workers)
+        return real(max_workers=max_workers, **kw)
+
+    monkeypatch.setattr(relief, "ThreadPoolExecutor", recording)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS", 4)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS_PINNED", False)
+    elev = synthetic_terrain()
+    kw = _everything_on()
+    small = shaded_relief(elev, **kw)
+    monkeypatch.setattr(relief, "LARGE_WINDOW_PX", elev.size - 1)   # now it is large
+    large = shaded_relief(elev, **kw)
+    monkeypatch.setattr(relief, "RELIEF_WORKERS_PINNED", True)
+    pinned = shaded_relief(elev, **kw)
+    assert widths == [4, 2, 4]
+    assert np.array_equal(small, large) and np.array_equal(small, pinned)
+
+def test_the_environment_sets_the_worker_count_at_every_size():
+    # The variable is read at import, so each value gets its own interpreter.
+    import os, subprocess, sys
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = ("from app import relief; print(relief._workers_for(10 ** 9), "
+            "relief._workers_for(10), relief.RELIEF_WORKERS_PINNED)")
+
+    def ask(value):
+        env = {k: v for k, v in os.environ.items() if k != "TECOPA_RELIEF_WORKERS"}
+        if value is not None:
+            env["TECOPA_RELIEF_WORKERS"] = value
+        return subprocess.run([sys.executable, "-c", code], cwd=root, env=env, check=True,
+                              capture_output=True, text=True).stdout.split()
+
+    assert ask("4") == ["4", "4", "True"]        # four, on the largest sheet too
+    assert ask("1") == ["1", "1", "True"]        # the serial order
+    large, small, pinned = ask(None)
+    assert pinned == "False" and int(large) <= 2 and int(small) >= int(large)
 
 def test_margin_ring_fill_matches_the_edt_on_a_clean_off_dem_margin():
     # The shape every near-full-plate crop makes: _read_window pads 6% past the crop
