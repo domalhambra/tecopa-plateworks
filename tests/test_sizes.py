@@ -32,6 +32,10 @@ def test_the_repo_file_has_the_prices_shipping_and_links_of_the_design():
     assert rows["digital"]["link"] == "https://buy.stripe.com/fZu5kE4De0RE2Ned51afS0J"
     links = [r[f] for r in rows.values() for f in ("link", "next_link")]
     assert len(set(links)) == 10 and all(l.startswith("https://buy.stripe.com/") for l in links)
+    # and the eight member links made 2026-10-12: each print size, both years, no shipping
+    member = [r[f] for k, r in rows.items() if k != "digital" for f in sizes.MEMBER_FIELDS]
+    assert len(set(member)) == 8 and not set(member) & set(links)
+    assert rows["11x17"]["member_link"] == "https://buy.stripe.com/3cI3cwb1CgQC0F65CzafS0T"
 
 
 def _write(tmp_path, body):
