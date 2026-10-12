@@ -190,22 +190,6 @@ def _wait(c, jid, seconds=600):
     raise AssertionError("the job did not end")
 
 
-def test_a_final_of_a_set_is_a_zip_job():
-    c = _client()
-    j, r = _proof(c)
-    assert r.status_code == 200, r.text
-    jid = c.post("/api/final/submit", data={"session_id": j["session"]}).json()["job"]
-    s = _wait(c, jid)
-    assert s["state"] == "done", s
-    out = c.get(s["result"])
-    assert out.headers["content-type"] == "application/zip"
-    assert "_panels.zip" in out.headers["content-disposition"]
-    z = zipfile.ZipFile(io.BytesIO(out.content))
-    assert len(z.namelist()) == 2
-    for name in z.namelist():
-        assert Image.open(io.BytesIO(z.read(name))).size == (5100, 6600)
-
-
 def test_a_set_is_refused_by_the_film_and_wallpaper_routes():
     c = _client()
     j, r = _proof(c)
@@ -240,13 +224,24 @@ def test_inspect_of_a_single_sheet_says_one_panel():
     assert body["panels"] == 1 and body["panel_gap_in"] == 0.0 and body["panel"] is None
 
 
-def test_any_panel_reprints_the_whole_set():
+def test_a_real_final_of_a_set_is_a_zip_job_and_any_panel_reprints_it():
+    """The one test that paints a real set at 300 dpi: 71 megapixels, twice, one
+    after the other. A second such test could run beside it on another worker, and
+    each needs about 16 GB, so the job route and the reprint share this one test.
+    The fast tests above hold the same routes on a flat painter."""
     c = _client()
     j, r = _proof(c)
     assert r.status_code == 200, r.text
-    first = c.post("/api/final", data={"session_id": j["session"]})
+    jid = c.post("/api/final/submit", data={"session_id": j["session"]}).json()["job"]
+    s = _wait(c, jid)
+    assert s["state"] == "done", s
+    first = c.get(s["result"])
     assert first.headers["content-type"] == "application/zip"
+    assert "_panels.zip" in first.headers["content-disposition"]
     z1 = zipfile.ZipFile(io.BytesIO(first.content))
+    assert len(z1.namelist()) == 2
+    for name in z1.namelist():
+        assert Image.open(io.BytesIO(z1.read(name))).size == (5100, 6600)
     panel_two = z1.read(z1.namelist()[1])
     again = c.post("/api/reprint", files={"file": ("two.png", panel_two, "image/png")})
     assert again.status_code == 200, again.text

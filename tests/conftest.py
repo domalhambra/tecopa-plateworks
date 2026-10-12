@@ -270,8 +270,7 @@ _SLOW_TESTS = {
         "test_rasterize_biome_falls_back_without_landcover",
     },
     "test_panel_api": {
-        "test_a_final_of_a_set_is_a_zip_job",
-        "test_any_panel_reprints_the_whole_set",
+        "test_a_real_final_of_a_set_is_a_zip_job_and_any_panel_reprints_it",
     },
 }
 

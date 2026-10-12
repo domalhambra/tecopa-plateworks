@@ -394,8 +394,10 @@ Traps already paid for:
 
 Tests: `tests/test_panels.py` and `tests/test_panel_furniture.py` are fast.
 `tests/test_panel_render.py` is slow: it paints sets at 40 dpi. `tests/test_panel_api.py`
-is fast except two tests, `test_a_final_of_a_set_is_a_zip_job` and
-`test_any_panel_reprints_the_whole_set`: each renders a 71 megapixel final.
+is fast except one test,
+`test_a_real_final_of_a_set_is_a_zip_job_and_any_panel_reprints_it`: it renders a
+71 megapixel final twice, one after the other, and needs about 16 GB. Keep it the
+only such test in the suite: two of them can run side by side on two workers.
 `tests/test_poster_furniture.py` holds the furniture scale by number, and
 `tests/test_static_registry.py` holds the studio's set rules as text.
 

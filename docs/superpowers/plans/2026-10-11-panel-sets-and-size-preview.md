@@ -4251,15 +4251,43 @@ this build.
 A merge and a push need Dom's yes. These are open when this record is written. The
 coordinator writes each result here.
 
-1. **The smoke test.** `tools/tecopa/smoke_test.sh`, with its panel-set block. Result:
-   not recorded yet.
-2. **The engine's own memory peak for the largest set.** One three-panel final of
-   59 × 22 in on `rifle_aspen` through the engine, with the peak memory of the engine
-   process. It is not measured yet. If it is over 16 GB, find what holds the memory
-   and lower it before the merge. See "Memory in the engine's own process" above.
-3. **The three real-network previews** (task 12, step 9): `home-compact`, `north-south`
-   and `east-west`. For each: the seconds, the offered sizes, and anything wrong on a
-   page. The target is under 300 s. Result: not recorded yet.
+1. **The smoke test.** `tools/tecopa/smoke_test.sh`, with its panel-set block. Result,
+   2026-10-11, at commit `8f3a6d6`: `PASS: phases 1 to 4, and panel sets`. The tool's
+   zip of a two-panel set and a zip made by hand are the same bytes, and the tool
+   refused to write over the zip. The binary at `~/.local/bin/tecopa` is `8f3a6d6`.
+2. **The engine's own memory peak for the largest set. THE GATE FAILS.** One
+   three-panel final of 59 × 22 in (gap 4) on `rifle_aspen`, through the engine with
+   `tecopa render final`, 2026-10-11: it rendered in 37 s and wrote three panel files
+   (105 MB). The engine's resident memory, sampled once a second, peaked at 15.74 GB.
+   That number is too low: on macOS resident memory drops when the system compresses
+   memory, and task 1 made the same error. The true measure is the peak memory
+   footprint from `/usr/bin/time -l`, taken on a quiet Mac with
+   `scripts/measure_final.py` on `rifle_aspen`:
+
+   | Sheet | Megapixels | Peak footprint | With one relief worker |
+   |---|---|---|---|
+   | 17 × 22 in | 33.7 | 7.2 GB | not measured |
+   | 36 × 22 in | 71.3 | 16.2 GB | 15.5 GB |
+   | 59 × 22 in | 116.8 | 22.8 GB | 22.0 GB |
+
+   The limit of the gate is 16 GB. The largest set is 43 % over it, and a two-panel
+   set is at it. The cost is about 200 bytes for each pixel of the final, it is the
+   same for a single sheet, and the relief passes run one at a time change it by 4 %.
+   The merge is held. A read-only profile of the render is the next step, to choose
+   between a trim of the engine's memory with the same output bytes and approach B.
+3. **The three real-network previews** (task 12, step 9), 2026-10-11, in
+   `~/Tecopa Orders/_preview-check/`. One of three made a PDF.
+
+   | Order | Result | Time |
+   |---|---|---|
+   | `home-compact` (Emigrant Pass) | A 4-page PDF. Plate built at a 3 m grid. Offered: 11 × 17, 17 × 22, two panels (46 × 17). Three panels refused: "panels 1 and 3 hold no track". The command's own peak memory was 2.2 GB. | 110 s |
+   | `north-south` (Whitney to Mono) | Stopped: `preview stopped: region build failed`. The USGS 3DEP dynamic service answered "Service is currently not available" through its retries, as on 2026-10-10. The plate was a 120 m grid, which comes from that service. Offered before the build: the two single sheets. | 409 s |
+   | `east-west` (Reno to Salt Lake) | Stopped: `preview stopped: The 3DEP coverage check failed`, with "more footprints than one query returns". All four sizes were offered, then the coverage query for the one plate that holds them all was too large for the index service. | 260 s |
+
+   Two limits are open: a coarse preview plate (a grid over about 60 m) depends on the
+   dynamic service, and a preview plate for a route of many hundred km is too large for
+   one coverage query. The wall page of `home-compact` was read: nothing overlaps and
+   nothing is cut.
 4. **The full suites** (task 14, step 5): the docs test, the full Python suite against
    the base, and `swift test --package-path tools/tecopa`. Result: not recorded yet.
 5. **The whole-branch review.** Not done yet.
