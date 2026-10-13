@@ -193,7 +193,9 @@ def test_the_customers_doubts_are_answered():
 # true while the pages stay as described, so each is pinned against the published
 # HTML. Change what a page loads and the privacy page goes red until its copy and
 # its "Last updated" date follow.
-NAMED_HOSTS = {"fonts.bunny.net", "cdn.jsdelivr.net", "storage.ghost.io"}
+# js.stripe.com: Ghost loads Stripe's script on every page of the site, for
+# memberships (named on the privacy page since 2026-10-12).
+NAMED_HOSTS = {"fonts.bunny.net", "cdn.jsdelivr.net", "js.stripe.com", "storage.ghost.io"}
 
 
 def test_the_pages_link_to_the_privacy_page():
