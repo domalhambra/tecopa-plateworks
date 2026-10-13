@@ -187,21 +187,21 @@ def test_the_single_sheet_prices_are_the_prices_of_the_live_pages():
 
 # Each price of config/sizes.toml that the live pages show, and where. The landing
 # page has the tables "Your first poster" and "Next year"; the order page has the
-# first-poster prices. On 2026-10-12 the pages show no set price, no next-year set
-# price and no shipping: the client intake spec (2026-10-12, section 7) adds them,
-# and tests/test_marketing_page.py gets a claim for each. Until then those prices
-# are in NOT_ON_THE_PAGES_YET, and this test holds that list to exactly them, so a
-# price added to the file is either on a page or named here.
+# first-poster prices. Since the pages of the client intake spec (2026-10-12,
+# section 7) went live, they show every price and each print's shipping, so
+# NOT_ON_THE_PAGES_YET is empty. A price added to the file is either on a page or
+# named there.
 ON_THE_PAGES = {
     ("11x17", "price"): ("landing", "order"), ("17x22", "price"): ("landing", "order"),
+    ("two", "price"): ("landing", "order"), ("three", "price"): ("landing", "order"),
     ("digital", "price"): ("landing", "order"),
     ("11x17", "next_price"): ("landing",), ("17x22", "next_price"): ("landing",),
+    ("two", "next_price"): ("landing",), ("three", "next_price"): ("landing",),
     ("digital", "next_price"): ("landing",),
+    ("11x17", "shipping"): ("landing", "order"), ("17x22", "shipping"): ("landing", "order"),
+    ("two", "shipping"): ("landing", "order"), ("three", "shipping"): ("landing", "order"),
 }
-NOT_ON_THE_PAGES_YET = {
-    ("two", "price"), ("three", "price"), ("two", "next_price"), ("three", "next_price"),
-    ("11x17", "shipping"), ("17x22", "shipping"), ("two", "shipping"), ("three", "shipping"),
-}
+NOT_ON_THE_PAGES_YET = set()
 
 
 def test_each_price_of_the_file_is_a_price_of_the_live_pages_or_named_as_not_yet():
