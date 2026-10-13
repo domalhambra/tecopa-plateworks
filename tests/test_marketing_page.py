@@ -58,14 +58,18 @@ RETIRED = ["orphan drill", "Reprint forever", "reprint forever",
 
 # claims retired with the Ghost move (decisions 2026-09-24): the plate
 # commission, the region-request form, and a payment by Stripe or PayPal
-# (Tecopa orders are paid by an LZ Books invoice, 2026-09-26)
+# (the marketing pages say "pay by card"; only the privacy page names Stripe)
 RETIRED_2026_09 = ["$299", "commission", "Tell me where you've been", "region-request",
                    "Stripe", "PayPal"]
+
+# claims retired with the client intake (spec 2026-10-12, section 7): the order by
+# email with attachments, and the invoice after the proof
+RETIRED_2026_10_12 = ["Email me your tracks", "Start the email", "invoice", "LZ Books"]
 
 
 def test_no_retired_claims():
     for path, page in (("/tecopa/", landing()), ("/tecopa-build/", order())):
-        for phrase in RETIRED + RETIRED_2026_09:
+        for phrase in RETIRED + RETIRED_2026_09 + RETIRED_2026_10_12:
             assert phrase not in page, f"retired claim back on {path}: {phrase!r}"
 
 
@@ -90,9 +94,14 @@ def test_no_ghost_plates_on_the_page():
 
 # spec §2.1: the first poster and next year's, at both sizes and digital
 # (the two-size menu, Dom 2026-10-10: 11x17 and 17x22 from 17 in rolls)
-LANDING_PRICES = ["$69", "$99", "$39", "$59", "$25"]
-ORDER_PRICES = ["$69", "$99", "$39"]
-SIZES = ["11×17", "17×22"]
+# and, since the client intake (spec 2026-10-12, decisions 6 and 7), the two sets
+# and the shipping of each print
+LANDING_PRICES = ["$69", "$99", "$149", "$189", "$39", "$59", "$119", "$159", "$25",
+                  "$8", "$12", "$16"]
+ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$12", "$16"]
+SIZES = ["11×17", "17×22", "two panels", "three panels"]
+# the Tecopa order form (Tally, "Build your poster"), which posts to the intake
+ORDER_FORM = "https://tally.so/r/q4xp89"
 # retired 2026-10-10: the PRO-1100 feeds at most 17 in, so 18x24 cannot print
 RETIRED_2026_10 = ["13×19", "18×24", "$79", "$89"]
 
@@ -107,9 +116,27 @@ def test_the_order_page_carries_the_first_poster_prices_and_the_address():
     page = order()
     for price in ORDER_PRICES:
         assert price in page, f"order page lost the price {price}"
+    # the address stays for questions; the order itself starts on the form
     assert f'href="mailto:{ORDER_EMAIL}' in page
     # the comment markers keep Cloudflare's email obfuscation off the address
     assert "<!--email_off-->" in page and "<!--/email_off-->" in page
+
+
+def test_the_order_page_opens_the_form():
+    page = order()
+    # Ghost adds ?ref=plateworks.org to a link that leaves the site
+    assert f'href="{ORDER_FORM}' in page
+    assert "Start your order" in page
+
+
+def test_both_pages_say_when_you_pay_and_how_to_get_it_back():
+    # spec 2026-10-12, decisions 1 and 3: pay after the size preview, and a full
+    # refund until the proof is approved
+    assert "after you've seen your map at each size" in landing()
+    for path, page in (("/tecopa/", landing()), ("/tecopa-build/", order())):
+        assert "you can ask for a full refund" in page, f"{path} lost the refund sentence"
+        # decision 9: a member says so on the form and gets the shipping back
+        assert "A member at plateworks.org?" in page, f"{path} lost the member line"
 
 
 def test_the_landing_page_opens_the_order_page():
@@ -200,8 +227,18 @@ def test_privacy_page_names_every_host_the_pages_load():
 
 def test_privacy_page_says_how_orders_are_paid():
     page = privacy()
-    assert "LZ Books" in page
-    assert "Stripe" not in page and "PayPal" not in page
+    assert "Stripe takes the payment on its own page" in page
+    assert "LZ Books" not in page and "PayPal" not in page
+
+
+def test_privacy_page_says_who_holds_what_and_for_how_long():
+    # spec 2026-10-12, section 7 and decision 8. The order record is in Notion
+    # since the intake's ORDER_LOG=notion (plateworks-lab-intake, D30).
+    page = privacy()
+    for service in ("Tally", "Dropbox", "Notion", "Stripe"):
+        assert service in page, f"privacy page no longer names {service}"
+    assert "90 days after your poster is delivered" in page
+    assert "hold them for next year" in page
 
 
 def test_both_pages_sell_the_two_sizes_and_no_retired_one():
