@@ -103,7 +103,7 @@ def test_a_member_gets_the_member_links_with_no_shipping_and_no_code(tmp_path):
     assert "next_digital?" in text
 
 
-def test_a_member_order_needs_the_member_links_and_says_to_check_ghost(tmp_path):
+def test_a_member_order_needs_the_member_links_and_says_to_check_stripe(tmp_path):
     out = tmp_path / "out"
     order = _order(tmp_path, member=True)
     result = oe.write(order, _entries("11x17", "two"), _rows(two="member_link", **{"11x17": "shipping"}),
@@ -111,8 +111,8 @@ def test_a_member_order_needs_the_member_links_and_says_to_check_ghost(tmp_path)
     assert result["missing"] == ["Two panels (member_link)"]    # a member's link has no shipping
     result = oe.write(order, _entries("11x17"), _rows(), str(out))
     assert oe.report_line(result, member=True) == (
-        f"Email: {out / 'email.txt'}, with the member links (no shipping). Check Ghost for "
-        f"the client's email before it goes out.")
+        f"Email: {out / 'email.txt'}, with the member links (no shipping). Check Stripe for an "
+        f"active Plateworks Member subscription on the client's email before it goes out.")
 
 
 def test_the_refund_and_the_changes_are_said(tmp_path):

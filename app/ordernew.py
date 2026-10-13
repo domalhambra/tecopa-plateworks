@@ -291,14 +291,15 @@ def _order_toml(number, fields, today) -> tuple:
         warnings.append("the email in order.md is not an address, and order.toml has none: "
                         "the preview email's To line will be empty.")
         email = ""
-    # The form's member answer: `claimed` until Dom checks Ghost. An order.md from before
+    # The form's member answer: `claimed` until Dom checks Stripe. An order.md from before
     # the question has no member line, and a client who isn't one pays the shipping.
     said_member = _clean_text(fields.get("member", "")).lower()
     member = said_member in ("claimed", "yes")
     if member:
         warnings.append("the form says this client is a member, so order.toml says member = "
                         "true and the preview email uses the member links, with no shipping. "
-                        "Check Ghost for their email (order.md names it) before it goes out; "
+                        "Check Stripe for an active Plateworks Member subscription on their "
+                        "email (order.md names it) before it goes out; "
                         "if they aren't one, set member = false.")
     elif said_member not in ("", "no"):
         warnings.append(f"order.md says member: {said_member[:40]!r}, which is not claimed or "

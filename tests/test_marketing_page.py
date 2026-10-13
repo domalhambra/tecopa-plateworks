@@ -4,8 +4,9 @@
 # when five were built. These tests make that class of drift a red build instead
 # of a live lie.
 #
-# Since 2026-09-26 the pages live on Ghost (spec
-# docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md §8), so the tests
+# The pages lived on Ghost from 2026-09-26 (spec
+# docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md §8) and on the
+# Netlify site (domalhambra/plateworks-site) since 2026-10-13, so the tests
 # fetch what is published. They carry the `live` marker and stay out of the default
 # run (tests/conftest.py). Run them after every publish of any of the three pages:
 #
@@ -189,13 +190,13 @@ def test_the_customers_doubts_are_answered():
     assert "the person who makes your poster" in page   # the one plain order-door line
 
 
-# The privacy page (spec §6) says what the Ghost pages load. Those claims are only
+# The privacy page (spec §6) says what the pages load. Those claims are only
 # true while the pages stay as described, so each is pinned against the published
 # HTML. Change what a page loads and the privacy page goes red until its copy and
 # its "Last updated" date follow.
-# js.stripe.com: Ghost loads Stripe's script on every page of the site, for
-# memberships (named on the privacy page since 2026-10-12).
-NAMED_HOSTS = {"fonts.bunny.net", "cdn.jsdelivr.net", "js.stripe.com", "storage.ghost.io"}
+# Since the move to Netlify on 2026-10-13 the one outside host is the video
+# poster's placeholder on /tecopa/; fonts, scripts and images come from the site.
+NAMED_HOSTS = {"img.spacergif.org"}
 
 
 def test_the_pages_link_to_the_privacy_page():
@@ -213,13 +214,16 @@ def test_privacy_page_carries_its_furniture():
 
 def test_privacy_page_names_every_host_the_pages_load():
     page = privacy()
-    # The site-wide Plausible script came off on 2026-09-26: Ghost's own
-    # analytics counts the visits, and the page must not claim otherwise.
-    assert "Ghost's built-in analytics" in page
-    assert "Plausible" not in page
+    # The Netlify site counts no visits and sets no cookies on these pages, and
+    # the page must not claim otherwise.
+    assert "Netlify hosts these pages" in page
+    assert "Nothing here counts visits" in page
+    assert "set no cookies" in page
+    assert "Ghost's built-in analytics" not in page and "Plausible" not in page
+    assert "storage.ghost.io" not in page
     for host in NAMED_HOSTS:
         assert host in page, f"privacy page no longer names {host}"
-    allowed = NAMED_HOSTS | {"www.plateworks.org"}
+    allowed = NAMED_HOSTS | {"www.plateworks.org", "plateworks.org"}
     for path in ("/tecopa/", "/tecopa-build/", "/tecopa-privacy-policy/"):
         loaded = set(re.findall(
             r'<(?:script|link|img|iframe|source|video)[^>]+?(?:src|href)="https?://([^/"]+)', fetch(path)))

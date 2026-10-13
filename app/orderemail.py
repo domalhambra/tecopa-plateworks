@@ -134,7 +134,8 @@ def report_line(result, member=False) -> str:
     if result["path"]:
         if member:
             return (f"Email: {result['path']}, with the member links (no shipping). Check "
-                    f"Ghost for the client's email before it goes out.")
+                    f"Stripe for an active Plateworks Member subscription on the client's "
+                    f"email before it goes out.")
         return f"Email: {result['path']}"
     if result["why"]:
         return f"Email: not written. {result['why']}"
