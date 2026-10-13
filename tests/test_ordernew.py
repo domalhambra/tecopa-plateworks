@@ -265,7 +265,7 @@ def test_a_read_that_fails_stops_the_run(places, monkeypatch):
     assert os.listdir(orders / "TP-26-001-smith" / "in") == []
 
 
-def test_a_member_gets_member_true_and_a_ghost_check(places):
+def test_a_member_gets_member_true_and_a_stripe_check(places):
     intake, orders = places
     _job(intake, md=ORDER_MD.replace("returning: no\n", "returning: no\nmember: claimed\n"))
     report = onew.new("TP-26-001")
@@ -274,7 +274,7 @@ def test_a_member_gets_member_true_and_a_ghost_check(places):
     assert od.load(dest).member is True
     assert ("Warning: the form says this client is a member, so order.toml says member = true "
             "and the preview email uses the member links") in report
-    assert "Check Ghost for their email" in report
+    assert "Check Stripe for an active Plateworks Member subscription on their email" in report
 
 
 @pytest.mark.parametrize("line", ["member: no\n", ""])
