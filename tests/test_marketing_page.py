@@ -244,6 +244,10 @@ def test_privacy_page_says_who_holds_what_and_for_how_long():
     page = privacy()
     for service in ("Netlify", "Dropbox", "Stripe"):
         assert service in page, f"privacy page no longer names {service}"
+    assert "Netlify, which hosts these pages, holds the form's answers" in page
+    assert "emails me a copy of the form" in page
+    for gone in ("Tally", "Notion"):
+        assert gone not in page, f"privacy page still names {gone}"
     assert "90 days after your poster is delivered" in page
     assert "hold them for next year" in page
 
