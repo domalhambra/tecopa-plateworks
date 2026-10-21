@@ -101,8 +101,9 @@ LANDING_PRICES = ["$69", "$99", "$149", "$189", "$39", "$59", "$119", "$159", "$
                   "$8", "$12", "$16"]
 ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$12", "$16"]
 SIZES = ["11×17", "17×22", "two panels", "three panels"]
-# the Tecopa order form (Tally, "Build your poster"), which posts to the intake
-ORDER_FORM = "https://tally.so/r/q4xp89"
+# the Tecopa order form, on plateworks.org since the intake's D43 (Netlify Forms,
+# which posts to the intake's /forms); Tally's q4xp89 before
+ORDER_FORM = "/tecopa/request/"
 # retired 2026-10-10: the PRO-1100 feeds at most 17 in, so 18x24 cannot print
 RETIRED_2026_10 = ["13×19", "18×24", "$79", "$89"]
 
@@ -125,7 +126,6 @@ def test_the_order_page_carries_the_first_poster_prices_and_the_address():
 
 def test_the_order_page_opens_the_form():
     page = order()
-    # Ghost adds ?ref=plateworks.org to a link that leaves the site
     assert f'href="{ORDER_FORM}' in page
     assert "Start your order" in page
 
@@ -238,11 +238,16 @@ def test_privacy_page_says_how_orders_are_paid():
 
 
 def test_privacy_page_says_who_holds_what_and_for_how_long():
-    # spec 2026-10-12, section 7 and decision 8. The order record is in Notion
-    # since the intake's ORDER_LOG=notion (plateworks-lab-intake, D30).
+    # spec 2026-10-12, section 7 and decision 8. The form and the order record
+    # are on Netlify since the intake's D37 (ORDER_LOG=blobs) and D43 (the form
+    # on plateworks.org through Netlify Forms).
     page = privacy()
-    for service in ("Tally", "Dropbox", "Notion", "Stripe"):
+    for service in ("Netlify", "Dropbox", "Stripe"):
         assert service in page, f"privacy page no longer names {service}"
+    assert "Netlify, which hosts these pages, holds the form's answers" in page
+    assert "emails me a copy of the form" in page
+    for gone in ("Tally", "Notion"):
+        assert gone not in page, f"privacy page still names {gone}"
     assert "90 days after your poster is delivered" in page
     assert "hold them for next year" in page
 
