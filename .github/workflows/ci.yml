@@ -65,3 +65,12 @@ jobs:
           else
             python -m pytest -n auto
           fi
+
+  docs-impact:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/docs_check.py --impact origin/${{ github.base_ref }}
