@@ -15,7 +15,7 @@ from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       CREDIT_MAX_CHARS, TITLE_MAX_CHARS, year_span)
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
-from app import basecache, debug
+from app import basecache, debug, icc
 from app import panels as panel_geo
 from app import ingest, regionbuild
 
@@ -124,21 +124,8 @@ FINAL_FORMATS = {"png": ("PNG", "image/png"), "pdf": ("PDF", "application/pdf")}
 # sRGB ICC profile for the final PNG so a print lab / color-managed viewer reads our
 # colors as intended instead of guessing (V1-10 print-correctness). Pillow bundles
 # littlecms; fall back to no profile rather than fail the render if it's absent.
-def _srgb_profile() -> bytes:
-    import struct
-    from PIL import ImageCms
-    profile = bytearray(ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-    # littlecms stamps the creation date and time, to the second, into header bytes
-    # 24 to 35. The profile is built once per process, so two engine processes gave
-    # the same final two different iCCP chunks and two hashes (invariant 3). One fixed
-    # date makes the bytes the same in every process. It is a real date, not zeros:
-    # Pillow raises on `creation_date` for year 0. The profile ID (bytes 84 to 99) is
-    # zero, so no MD5 goes stale.
-    profile[24:36] = struct.pack(">6H", 2026, 10, 12, 0, 0, 0)
-    return bytes(profile)
-
 try:
-    SRGB_PROFILE = _srgb_profile()
+    SRGB_PROFILE = icc.srgb_profile()
 except Exception:                                          # pragma: no cover
     SRGB_PROFILE = None
 
