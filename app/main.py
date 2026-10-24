@@ -2013,28 +2013,11 @@ def _proof_form_for(spec):
             form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
-@app.post("/api/continue")
-async def continue_poster(file: UploadFile = File(...),
-                          allow_plate_mismatch: bool = Form(False)):
-    """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
-    live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
-    extends the lineage chain, and returns the /api/upload response shape plus prefill
-    hints so the wizard lands with everything restored. The client then adds this year's
-    GPX (/api/upload), re-frames if needed, and renders -- one clean proof stamps the
-    new edition (invariant 1 holds: still one spec per accepted proof)."""
-    data = await _read_capped(file)
-    manifest = _manifest_or_422(data)
-    # same untrusted-manifest door as /api/reprint: parse, keep only size-bounded embedded
-    # photos (so last year's pinned photos ride forward from inside the file, with no
-    # uploads dir), bound the geometry, and validate -- one audited guard chain, so a new
-    # verb can't drift from reprint's hardening. Label + icon always survive.
-    try:
-        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
-    except SpecError as e:
-        raise HTTPException(422, str(e))
-    region = _manifest_region_or_422(spec, "continued", manifest,
-                                     allow_plate_mismatch=allow_plate_mismatch)
-
+def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra=None):
+    """Make a live session from `spec` on `region` and answer the /api/upload response shape
+    plus the prefill and proof_form that restore the wizard. /api/continue and the order
+    studio's Open both land here. `extra` is merged into the session data (the order's
+    folder rides there)."""
     # rebuild live Track objects from the spec (tracks ride the spec, exactly the
     # property reprint relies on). track_days is parallel to tracks; normalize its
     # length rather than trust a crafted mismatch. Track ids only need uniqueness --
@@ -2049,25 +2032,9 @@ async def continue_poster(file: UploadFile = File(...),
     spots = [dict(s) for s in spec.hotspots
              if isinstance(s, dict) and _finite_num(s.get("x")) and _finite_num(s.get("y"))]
 
-    # edition + lineage from the UNTRUSTED manifest: parse defensively (a crafted file
-    # can carry a non-int edition or a non-list lineage) -> clamp, drop garbage, never
-    # 500. The top-level `edition` is the parent's number; the child is one past it,
-    # capped at the ceiling (a millennium of yearly editions never reaches it).
-    try:
-        parent_edition = int(manifest.get("edition", 1))
-    except (TypeError, ValueError):
-        parent_edition = 1
-    parent_edition = min(max(parent_edition, 1), EDITION_MAX)
-    raw_lineage = manifest.get("lineage", [])
-    lineage = [e for e in raw_lineage if isinstance(e, dict)] if isinstance(raw_lineage, list) else []
-    lineage = (lineage + [{"sha256": hashlib.sha256(data).hexdigest(),
-                           "edition": parent_edition}])[-provenance.LINEAGE_MAX:]
-    edition = min(parent_edition + 1, EDITION_MAX)
-    raw_sources = manifest.get("sources", [])
-    sources = [s for s in raw_sources if isinstance(s, dict)] if isinstance(raw_sources, list) else []
-
     sid = session.create({"tracks": tracks, "hotspots": spots, "region_id": region.id,
-                          "sources": sources, "edition": edition, "lineage": lineage})
+                          "sources": list(sources), "edition": edition,
+                          "lineage": list(lineage), **(extra or {})})
 
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
     hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
@@ -2120,8 +2087,6 @@ async def continue_poster(file: UploadFile = File(...),
                   # smart label placement + chronological weave restore from the spec
                   "labelPlace": spec.label_place, "trackWeave": spec.track_weave},
     }
-    log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
-             sid, region.id, edition, len(tracks), len(spots))
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
@@ -2145,6 +2110,52 @@ async def continue_poster(file: UploadFile = File(...),
             # additive: the same restore as exact /api/proof form fields, for a client
             # that sends a proof without the studio's prefill -> form mapping
             "proof_form": _proof_form_for(spec)}
+
+@app.post("/api/continue")
+async def continue_poster(file: UploadFile = File(...),
+                          allow_plate_mismatch: bool = Form(False)):
+    """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
+    live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
+    extends the lineage chain, and returns the /api/upload response shape plus prefill
+    hints so the wizard lands with everything restored. The client then adds this year's
+    GPX (/api/upload), re-frames if needed, and renders -- one clean proof stamps the
+    new edition (invariant 1 holds: still one spec per accepted proof)."""
+    data = await _read_capped(file)
+    manifest = _manifest_or_422(data)
+    # same untrusted-manifest door as /api/reprint: parse, keep only size-bounded embedded
+    # photos (so last year's pinned photos ride forward from inside the file, with no
+    # uploads dir), bound the geometry, and validate -- one audited guard chain, so a new
+    # verb can't drift from reprint's hardening. Label + icon always survive.
+    try:
+        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
+    except SpecError as e:
+        raise HTTPException(422, str(e))
+    region = _manifest_region_or_422(spec, "continued", manifest,
+                                     allow_plate_mismatch=allow_plate_mismatch)
+
+    # edition + lineage from the UNTRUSTED manifest: parse defensively (a crafted file
+    # can carry a non-int edition or a non-list lineage) -> clamp, drop garbage, never
+    # 500. The top-level `edition` is the parent's number; the child is one past it,
+    # capped at the ceiling (a millennium of yearly editions never reaches it).
+    try:
+        parent_edition = int(manifest.get("edition", 1))
+    except (TypeError, ValueError):
+        parent_edition = 1
+    parent_edition = min(max(parent_edition, 1), EDITION_MAX)
+    raw_lineage = manifest.get("lineage", [])
+    lineage = [e for e in raw_lineage if isinstance(e, dict)] if isinstance(raw_lineage, list) else []
+    lineage = (lineage + [{"sha256": hashlib.sha256(data).hexdigest(),
+                           "edition": parent_edition}])[-provenance.LINEAGE_MAX:]
+    edition = min(parent_edition + 1, EDITION_MAX)
+    raw_sources = manifest.get("sources", [])
+    sources = [s for s in raw_sources if isinstance(s, dict)] if isinstance(raw_sources, list) else []
+
+    resp = _open_spec_session(spec, region, sources=sources, edition=edition,
+                             lineage=lineage)
+    sid = resp["session"]
+    log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
+             sid, region.id, edition, len(resp["tracks"]), len(resp["hotspots"]))
+    return resp
 
 # Debug routes for the `tecopa` tool, present only under TECOPA_DEBUG=1, which the
 # macOS launcher sets. Every route is read-only except POST /api/debug/studio, and
