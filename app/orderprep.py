@@ -251,13 +251,6 @@ def _render_proofs(order, state) -> dict:
                         orderspec.plate_dir(state))
 
 
-def _size_key(order) -> str | None:
-    if order.panels > 1:
-        return {2: "two", 3: "three"}.get(order.panels)
-    short, long_ = sorted(order.size)
-    return {(11.0, 17.0): "11x17", (17.0, 22.0): "17x22"}.get((short, long_))
-
-
 def _as_size(order, key):
     """The same order at another menu size, for its print dimensions."""
     if key in ("two", "three"):
@@ -291,7 +284,9 @@ def _prove(order, state, proofs, log) -> dict:
         proof = proofs(order, state)
     except (SpecError, OSError, OrderError, PyCMSError) as ex:
         proof = None
-        warnings.insert(0, PROOF_FAILED + str(ex))
+        # a hole in the print leads the list; the proof's failure follows it
+        at = 1 if warnings and warnings[0].startswith("HOLES IN THE PRINT") else 0
+        warnings.insert(at, PROOF_FAILED + str(ex))
         log(PROOF_FAILED + str(ex))
     return write_state(order, {"proof": proof, "warnings": warnings})
 

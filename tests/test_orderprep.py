@@ -105,6 +105,7 @@ def _no_real_proof(monkeypatch):
     monkeypatch.setattr(op, "_render_proofs", lambda order, state: dict(CANNED_PROOF))
 
 
+PROOF_FAILED = op.PROOF_FAILED
 CANNED_PROOF = {"files": [], "soft_proof": "RR Premium Matte Canon Pro-1100.icc, perceptual",
                 "soft_proof_why": None, "hash": "h0"}
 
@@ -821,7 +822,7 @@ def test_prepare_writes_the_proof_on_a_fresh_plate_and_a_current_one(tools, tmp_
     assert state["proof"] == fake.result == od.read_state(od.load(str(d)))["proof"]
 
 
-def test_a_proof_failure_keeps_the_plate_and_leads_the_warnings(tools, tmp_path):
+def test_a_proof_failure_keeps_the_plate_and_comes_first_unless_holes_lead(tools, tmp_path):
     from PIL.ImageCms import PyCMSError
     from app.spec import SpecError
     for n, err in enumerate((SpecError("off the DEM"), OSError("disk full"),
@@ -834,6 +835,28 @@ def test_a_proof_failure_keeps_the_plate_and_leads_the_warnings(tools, tmp_path)
     assert len(_builds(d)) == 1
     state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
     assert state["proof"] and not any("PROOF NOT RENDERED" in w for w in state["warnings"])
+
+
+def test_a_failed_proof_follows_a_holes_warning_on_both_paths(tools, tmp_path):
+    d = _make_order(tmp_path)
+    order = od.load(str(d))
+    holes = "HOLES IN THE PRINT: 3% of the frame has no elevation."
+    other = "Terrain is upsampled 1.50x (the limit is 2x)."
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())           # fresh
+    od.write_state(order, {"warnings": [holes, other]})
+    state = op.prepare(str(d), tools, log=lambda s: None,                   # current
+                       proofs=_Fake(error=OSError("disk full")))
+    assert state["warnings"] == [holes, PROOF_FAILED + "disk full", other]
+    # fresh path: a build whose hole check reports holes, then a failing proof
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(op, "check_holes", lambda *a, **k: [holes])
+        (d / "in" / "trip.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+        state = op.prepare(str(d), tools, log=lambda s: None,
+                           proofs=_Fake(error=OSError("disk full")))
+    finally:
+        monkey.undo()
+    assert state["warnings"][:2] == [holes, PROOF_FAILED + "disk full"]
 
 
 def test_an_unlisted_proof_error_is_not_swallowed(tools, tmp_path):
