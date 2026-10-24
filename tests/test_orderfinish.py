@@ -14,11 +14,19 @@ from app.serialize import spec_to_json
 DPI = 10
 
 
+def _proof_written(order):
+    """Record in state.json the client proof that Save to order writes of the saved spec,
+    without rendering it."""
+    spec = orderspec.order_spec(order, od.read_state(order))
+    od.write_state(order, {"proof": {"files": [], "hash": orderspec.spec_hash(spec)}})
+
+
 def _save_and_approve(order):
     """What the studio does, without the proof files: save the spec, record the approval."""
     state = od.read_state(order)
     spec = orderspec.order_spec(order, state)
     od.set_manual(order, "spec", spec_to_json(spec))
+    _proof_written(order)
     orderstudio.approve(order, spec)
     return spec
 
@@ -119,6 +127,7 @@ def _approve_spec(order, **change):
     import dataclasses
     spec = dataclasses.replace(orderspec.order_spec(order, od.read_state(order)), **change)
     od.set_manual(order, "spec", spec_to_json(spec))
+    _proof_written(order)
     orderstudio.approve(order, spec)
 
 
@@ -173,6 +182,7 @@ def test_a_17_inch_wide_sheet_is_not_turned(order):
                                crop=(cx - half_w, cy - half_h, cx + half_w, cy + half_h))
     od.write_state(order, {"print_in": [17.0, 11.0]})          # a landscape 11x17 order
     od.set_manual(order, "spec", spec_to_json(spec))
+    _proof_written(order)
     orderstudio.approve(order, spec)
     r = orderfinish.finish(order.dir, dpi=DPI)
     with Image.open(r["files"][0]) as im:

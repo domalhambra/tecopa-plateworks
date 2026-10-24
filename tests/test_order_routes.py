@@ -390,3 +390,52 @@ def test_main_keeps_the_credit_line_it_always_had():
     from app import credit, main
     assert main.credit_line is credit.credit_line
     assert main.CREDIT_DATASETS is credit.CREDIT_DATASETS
+
+
+@pytest.mark.parametrize("error", ["paper", "spec"])
+def test_a_paper_table_or_spec_error_in_the_proof_still_saves(client, order, monkeypatch,
+                                                              error):
+    from app import orderproof
+    from app.papers import PaperError
+    from app.spec import SpecError
+
+    def fail(*a, **kw):
+        raise (PaperError("config/papers.toml cannot be read") if error == "paper"
+               else SpecError("the crop is off the DEM"))
+    monkeypatch.setattr(orderproof, "write_proofs", fail)
+    opened = _open(client, order)
+    _proof(client, opened)
+    r = _post(client, "save", opened)
+    assert r.status_code == 200 and r.json()["proof_error"].endswith(
+        " The client proof files were removed; save again to write them.")
+    assert od.read_state(order)["manual"]["spec"]
+
+
+def test_save_records_the_client_proof_it_wrote(client, order):
+    opened = _open(client, order)
+    _proof(client, opened)
+    body = _post(client, "save", opened).json()
+    state = od.read_state(order)
+    assert state["proof"]["files"] == body["proof"]
+    assert state["proof"]["hash"] == orderspec.spec_hash(orderspec.order_spec(order, state))
+
+
+def test_approve_refuses_when_the_client_proof_was_not_written(client, order, monkeypatch):
+    from app import orderproof
+    opened = _open(client, order)
+    _proof(client, opened)
+    real = orderproof.write_proofs
+
+    def fail(*a, **kw):
+        raise od.OrderError("the disk is full")
+    monkeypatch.setattr(orderproof, "write_proofs", fail)
+    assert "proof_error" in _post(client, "save", opened).json()
+    assert od.read_state(order)["proof"] is None
+    r = _post(client, "approve", opened)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "The client proof was not written: save again before approving."
+    assert not od.read_state(order).get("approval")
+    # saving again writes the proof, and the approval goes through
+    monkeypatch.setattr(orderproof, "write_proofs", real)
+    assert "proof_error" not in _post(client, "save", opened).json()
+    assert _post(client, "approve", opened).status_code == 200

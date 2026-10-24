@@ -64,7 +64,7 @@ def main(argv=None, tools=None) -> int:
                    "preview": (preview, ("work", "preview", "report.txt"))}[args.cmd]
     try:
         run(folder, tools or default_tools(ROOT))
-    except (OrderError, PlateError, RuntimeError, SpecError) as ex:
+    except (OrderError, PlateError, RuntimeError, SpecError, PaperError) as ex:
         print(f"{args.cmd} stopped: {ex}", file=sys.stderr)
         return 1
     with open(os.path.join(folder, *report)) as f:

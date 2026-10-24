@@ -28,6 +28,7 @@ from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
                             reference_share, to_lonlat_bbox, track_fill,
                             widen_for_upsample)
+from app.papers import PaperError
 from app.regionbuild import run_build
 from app.regions import Region
 from app.spec import SpecError
@@ -280,11 +281,12 @@ def smaller_size(order, track_bounds_m, layer_m: float) -> str | None:
 
 def _prove(order, state, proofs, log) -> dict:
     """Write the proof files after the plate. A failure is a warning, never a stop: the
-    plate stays and `proof` is None. Only errors a proof can raise are caught."""
+    plate stays and `proof` is None. Only errors a proof can raise are caught, a typo in
+    config/papers.toml (PaperError) among them."""
     warnings = [w for w in state.get("warnings", []) if not w.startswith(PROOF_FAILED)]
     try:
         proof = proofs(order, state)
-    except (SpecError, OSError, OrderError, PyCMSError) as ex:
+    except (SpecError, OSError, OrderError, PyCMSError, PaperError) as ex:
         proof = None
         # a hole in the print leads the list; the proof's failure follows it
         at = 1 if warnings and warnings[0].startswith("HOLES IN THE PRINT") else 0

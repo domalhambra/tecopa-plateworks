@@ -859,6 +859,26 @@ def test_a_failed_proof_follows_a_holes_warning_on_both_paths(tools, tmp_path):
     assert state["warnings"][:2] == [holes, PROOF_FAILED + "disk full"]
 
 
+def test_a_typo_in_the_paper_table_is_a_proof_failure(tools, tmp_path):
+    from app.papers import PaperError
+    d = _make_order(tmp_path)
+    err = PaperError("config/papers.toml must have exactly one paper with enabled = true")
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake(error=err))
+    assert state["proof"] is None and state["plate"]["id"]
+    assert state["warnings"][0] == PROOF_FAILED + str(err)
+
+
+def test_the_cli_prepare_stops_on_a_paper_table_error(tmp_path, tools, capsys, monkeypatch):
+    from scripts import order as order_cli
+    from app.papers import PaperError
+
+    def fail(folder, tools):
+        raise PaperError("config/papers.toml cannot be read")
+    monkeypatch.setattr(order_cli, "prepare", fail)
+    assert order_cli.main(["prepare", str(_make_order(tmp_path))], tools=tools) == 1
+    assert capsys.readouterr().err == "prepare stopped: config/papers.toml cannot be read\n"
+
+
 def test_an_unlisted_proof_error_is_not_swallowed(tools, tmp_path):
     d = _make_order(tmp_path)
     with pytest.raises(RuntimeError):

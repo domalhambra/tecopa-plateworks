@@ -2,8 +2,9 @@
 """The studio's side of an order: the list of orders, Save to order, and Approve.
 
 Save to order writes the spec the studio proofed into the order (state.json, manual.spec)
-and writes the proof files again from it. Approve records the hash of that spec in
-state.json as the approval. Finish (app/orderfinish) prints only when approval_ok.
+and writes the proof files again from it (state.json's "proof" records them). Approve
+records the hash of that spec in state.json as the approval, and only once the client
+proof of that spec is written. Finish (app/orderfinish) prints only when approval_ok.
 
 The hash is always spec_hash(order_spec(order, state)): the spec after its rebind to the
 plate on disk now, computed the same way here and in Finish.
@@ -19,12 +20,15 @@ from PIL.ImageCms import PyCMSError
 from app import order as od
 from app import orderproof, orderspec
 from app.order import Order, OrderError
+from app.papers import PaperError
 from app.serialize import spec_to_json
+from app.spec import SpecError
 
 PROOF_REMOVED = "The client proof files were removed; save again to write them."
 NOT_SAVED = "Save to order first: the studio's proof differs from the saved one."
 NOT_PRINT = ("Save to order takes a print proof, not a wallpaper: proof the order as a "
              "print, then save.")
+PROOF_NOT_WRITTEN = "The client proof was not written: save again before approving."
 WRONG_SIZE = "This proof is not the order's size ({why}): open the order again, proof, then save."
 
 
@@ -104,23 +108,29 @@ def save_spec(order: Order, spec) -> dict:
     try:
         written = orderproof.write_proofs(order, orderspec.order_spec(order, state),
                                           orderspec.plate_dir(state))
-    except (OrderError, PyCMSError) as ex:
+    except (OrderError, PyCMSError, PaperError, SpecError) as ex:
         # an earlier save's client files must not stand beside this save: they are not
         # this print's proof
         _remove_client_proofs(order)
+        state = od.write_state(order, {"proof": None})      # approve refuses until a save writes it
         return {"state": state, "proof": [], "proof_error": f"{ex} {PROOF_REMOVED}"}
+    state = od.write_state(order, {"proof": written})
     return {"state": state, "proof": written["files"], "proof_error": ""}
 
 
 def approve(order: Order, spec) -> dict:
     """Record the approval of the saved spec. `spec` is the studio's proofed spec: it must
-    be the saved one, or the approval would name a print nobody looked at. Returns the
-    new state."""
+    be the saved one, or the approval would name a print nobody looked at. The client
+    proof files of that spec must be written (state.json's "proof", with its hash): the
+    client approves those files. Returns the new state."""
     state = od.read_state(order)
     if not (state.get("manual") or {}).get("spec"):
         raise OrderError(NOT_SAVED)
     saved = orderspec.spec_hash(orderspec.order_spec(order, state))
     if orderspec.spec_hash(spec) != saved:
         raise OrderError(NOT_SAVED)
+    proof = state.get("proof")
+    if not isinstance(proof, dict) or proof.get("hash") != saved:
+        raise OrderError(PROOF_NOT_WRITTEN)
     at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
     return od.write_state(order, {"approval": {"at": at, "hash": saved}})
