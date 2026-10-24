@@ -26,11 +26,12 @@ import dataclasses
 import hashlib
 import io
 import json
+import math
 import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
-from app.spec import CompositionSpec, SpecError
+from app.spec import CompositionSpec, SpecError, PHOTO_SOURCES
 
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword -- FROZEN v1 format keyword: it
                                    # predates the Tecopa Plateworks rename and every existing
@@ -342,6 +343,50 @@ def drop_unembedded_photos(spec: CompositionSpec) -> CompositionSpec:
     return spec
 
 
+def _finite_number(v) -> bool:
+    """A real, finite JSON number. A bool is not one (True would pass as 1)."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):                  # always finite; math.isfinite(10**400) raises
+        return True
+    return isinstance(v, float) and math.isfinite(v)
+
+
+def bound_photo_keys(spec: CompositionSpec) -> CompositionSpec:
+    """SECURITY: bound the keys that place a photo, for an UNTRUSTED manifest-derived
+    spec (order photos, B1). A hotspot's `box` is {"dx_in","dy_in"}, finite numbers whose
+    magnitude is at most the sheet's larger side in inches; `crop` is {"cx","cy"}, finite
+    and within 0..1; `source` is one of PHOTO_SOURCES. A malformed key is dropped from
+    its hotspot -- the hotspot, and its other keys, stay -- so a crafted file is a
+    cleaner render, never an exception. A well-formed key is rebuilt with only its named
+    members, so nothing rides along inside it. Mutates and returns the spec. Call it
+    AFTER validate: the sheet size it bounds against is then a checked pair of numbers."""
+    limit = max(spec.print_w_in, spec.print_h_in)
+    for hs in spec.hotspots:
+        if not isinstance(hs, dict):
+            continue
+        box = hs.get("box")
+        if "box" in hs:
+            if (isinstance(box, dict)
+                    and _finite_number(box.get("dx_in")) and _finite_number(box.get("dy_in"))
+                    and abs(box["dx_in"]) <= limit and abs(box["dy_in"]) <= limit):
+                hs["box"] = {"dx_in": box["dx_in"], "dy_in": box["dy_in"]}
+            else:
+                del hs["box"]
+        crop = hs.get("crop")
+        if "crop" in hs:
+            if (isinstance(crop, dict)
+                    and _finite_number(crop.get("cx")) and _finite_number(crop.get("cy"))
+                    and 0 <= crop["cx"] <= 1 and 0 <= crop["cy"] <= 1):
+                hs["crop"] = {"cx": crop["cx"], "cy": crop["cy"]}
+            else:
+                del hs["crop"]
+        if "source" in hs and not (isinstance(hs["source"], str)
+                                   and hs["source"] in PHOTO_SOURCES):
+            del hs["source"]
+    return spec
+
+
 def load_photo(value: str) -> Image.Image:
     """Open a hotspot photo for rendering, as an RGB image. An embedded (data URI) photo
     decodes from in-memory bytes with a pixel-count guard -- an untrusted manifest could
@@ -372,6 +417,8 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
       3. bound_geometry          -- refuse a geometry bomb (millions of points / thousands
                                     of tracks) BEFORE validate/rasterize allocate anything.
       4. validate(final_dpi)     -- aspect, the 120 MP output ceiling, the zoom cap.
+      5. bound_photo_keys        -- a photo's box / crop / source: finite, on the sheet,
+                                    in range, or dropped from its hotspot.
 
     Raises only SpecError (ManifestError for a bad manifest; ZoomTooTight / OutputTooLarge
     / plain SpecError for a bad geometry), so one `except SpecError` at the call site maps
@@ -391,6 +438,7 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
         drop_unembedded_photos(spec)
         bound_geometry(spec)
         spec.validate(spec.final_dpi())
+        bound_photo_keys(spec)
     except SpecError:
         raise
     except Exception as e:

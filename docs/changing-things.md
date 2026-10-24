@@ -547,6 +547,9 @@ they disagree.
    `tests/test_wallpaper_api.py` read the rest.
 5. A knob that reaches the terrain must miss `render.base_cache_key`. A furniture knob
    must hit it. `tests/test_base_cache.py` and `tests/test_ink_cache.py` judge that.
+   `photo_layout` and `photo_band_side` change the overlay only, so both sit in
+   `BASE_KEY_MASK_ALWAYS` and `INK_KEY_MASK_ALWAYS`. `tests/test_photo_spec.py` judges
+   them and the hotspot keys `box`, `crop` and `source`.
 
 ## Change a panel set
 
@@ -633,7 +636,9 @@ only such test in the suite: two of them can run side by side on two workers.
 `MANIFEST.md` is the format doc, internal since 2026-07-27. The CC0 dedication stands
 for the versions published before then and cannot be revoked, but the document is no
 longer a contract for outside implementers. `provenance.spec_from_manifest` is the one
-untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate. Every
+untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate,
+then bound the photo keys (`provenance.bound_photo_keys`: a hotspot's `box`, `crop` and
+`source`; a malformed key is dropped from its hotspot, never an error). Every
 new verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect`
 is the deliberate exception: it reads manifest fields only, and builds no spec.
 Nothing has checked those fields, so `main._inspect_fields` gives each one a type and a

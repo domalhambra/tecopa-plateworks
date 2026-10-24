@@ -63,7 +63,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `native_resolution_m` — the plate's ground resolution in meters/pixel; the zoom cap allows up to `MAX_UPSAMPLE` (2x) finer than this before it refuses
 - `tracks` — list of (N, 2) coordinate arrays in CRS meters
 - `track_days` — journey identity parallel to `tracks`, or `null` (each track its own journey)
-- `hotspots` — list of `{"x", "y", "weight"}` dicts, optionally `"label"`, `"icon"`, `"photo"` (embedded JPEG data URI — see Privacy)
+- `hotspots` — list of `{"x", "y", "weight"}` dicts, optionally `"label"`, `"icon"`, `"photo"` (embedded JPEG data URI — see Privacy). A hotspot with a photo may also carry `"box"` — `{"dx_in", "dy_in"}`, the box centre's offset from its spot, in inches; `"crop"` — `{"cx", "cy"}`, the centre-crop focus, 0-1 each; and `"source"` — how the spot was found: `"gps"`, `"time"` or `"manual"`. A reader keeps `box` only when both numbers are finite and no larger than the sheet's longer side in inches, `crop` only when both are finite and within 0-1, and `source` only when it is one of the three words. A key that fails is dropped from its hotspot; the hotspot stays
 - `seed` — deterministic-noise seed (integer)
 - `track_width_pt` — route stroke width, points
 - `track_max_darken` — route ink ceiling, 0-1 (grain shows through)
@@ -77,6 +77,8 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `track_halo` — paper-halo strength around the route, 0-0.9
 - `marker_ring` — POI ring width as a fraction of diameter, 0-0.25
 - `photo_frame_style` — `"mat" | "keyline" | "borderless" | "polaroid"`
+- `photo_layout` — where photo boxes sit: `"open"` (on open ground beside their spots, default) or `"band"` (a gallery across one end of the sheet). Always emitted; a reader fills `"open"` when it is absent
+- `photo_band_side` — the end of the sheet the band takes: `"top"` (default) or `"bottom"`. Always emitted; a reader fills `"top"` when it is absent
 - `furniture_scale` — multiplier on the automatic furniture scale, 0.6-1.6
 - `terrain_depth` — multiplier on the terrain-depth pass, 0-1.5
 - `shadow_strength` — cast-shadow / sky-occlusion strength, 0-1

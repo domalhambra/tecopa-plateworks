@@ -3164,7 +3164,7 @@ BASE_KEY_MASK_ALWAYS = (
     # route ink, point symbols, photo frames -- _paint_journey / _paint_overlays
     "track_rgb", "track_halo", "track_max_darken", "track_color_by", "track_weave",
     "marker_diameter_in", "marker_ring", "photo_frame_style", "photo_box_in",
-    "keyline", "hotspots",
+    "photo_layout", "photo_band_side", "keyline", "hotspots",
     # the place-name switches themselves: the label pass is outside the cached unit,
     # so toggling names on reuses the terrain it was already showing
     "labels", "label_place",
@@ -3209,6 +3209,7 @@ def base_cache_key(spec, dpi, region_dir, cfg):
 INK_KEY_MASK_ALWAYS = (
     # point symbols, photo frames, the sheet frame -- _paint_overlays, above the route
     "marker_ring", "photo_frame_style", "photo_box_in", "keyline", "hotspots",
+    "photo_layout", "photo_band_side",
     # the terminus pins DO read marker_diameter_in, but _draw_termini draws over the
     # inked sheet rather than into the layer, so it is outside the cached unit
     "marker_diameter_in",

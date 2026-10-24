@@ -86,6 +86,15 @@ def year_span(track_days) -> str:
     return years[0] if years[0] == years[-1] else f"{years[0]}–{years[-1]}"
 
 PHOTO_FRAME_STYLES = ("mat", "keyline", "borderless", "polaroid")
+# Order photos (sub-project 3): where a photo box sits. "open" lays boxes on open ground
+# beside their spots; "band" runs them in a gallery across one end of the sheet, `top`
+# (default) or `bottom` (Dom's choice per order, B2). Both change the OVERLAY only, so
+# both are masked out of the base and ink cache keys (render.*_KEY_MASK_ALWAYS).
+PHOTO_LAYOUTS = ("open", "band")
+PHOTO_BAND_SIDES = ("top", "bottom")
+# The optional hotspot keys that place a photo (B1); provenance.bound_photo_keys bounds
+# them at the manifest door.
+PHOTO_SOURCES = ("gps", "time", "manual")
 # Journey Light (v1.9): the poster lit by the journey's OWN sun. "archival" is the
 # region's curated NW light (byte-identical to pre-feature); "journey" swaps the real
 # solar azimuth/altitude (resolved from the GPX timestamps at proof time) into the cast
@@ -130,7 +139,10 @@ class CompositionSpec:
     print_h_in: float
     native_resolution_m: float
     tracks: list          # list of (N,2) arrays in CRS meters
-    hotspots: list        # list of {"x","y","weight", and optional "label"/"icon"/"photo"}
+    hotspots: list        # list of {"x","y","weight", and optional "label"/"icon"/"photo",
+                          # and on a photo: "box" {"dx_in","dy_in"} (box centre's offset
+                          # from its spot, inches), "crop" {"cx","cy"} (centre-crop
+                          # focus, 0-1), "source" ("gps"|"time"|"manual")}
     seed: int = 7
     # Journey identity, parallel to `tracks` (None -> each track is its own journey).
     # Devices split one outing into several segments at auto-pause/stop-resume; the
@@ -165,6 +177,8 @@ class CompositionSpec:
     track_halo: float = 0.7                  # paper-halo strength; 0 = no outline
     marker_ring: float = 0.09                # POI ring width, fraction of diameter; 0 = none
     photo_frame_style: str = "mat"           # mat | keyline | borderless | polaroid
+    photo_layout: str = "open"               # open | band (PHOTO_LAYOUTS)
+    photo_band_side: str = "top"             # top | bottom: the band's end of the sheet
     furniture_scale: float = 1.0             # client multiplier on the automatic
                                              # sheet-size furniture scale (compass +
                                              # cartouche); 1.0 = auto-appropriate
@@ -413,6 +427,10 @@ class CompositionSpec:
                 raise SpecError(f"{name} must be between {lo} and {hi}")
         if self.photo_frame_style not in PHOTO_FRAME_STYLES:
             raise SpecError(f"photo_frame_style must be one of {PHOTO_FRAME_STYLES}")
+        if self.photo_layout not in PHOTO_LAYOUTS:
+            raise SpecError(f"photo_layout must be one of {PHOTO_LAYOUTS}")
+        if self.photo_band_side not in PHOTO_BAND_SIDES:
+            raise SpecError(f"photo_band_side must be one of {PHOTO_BAND_SIDES}")
         # Journey Light + track coloring: membership-checked like the other enums (a
         # crafted manifest can carry anything). The angle/strength floats are already
         # range-checked by the STYLE_BOUNDS loop above.
