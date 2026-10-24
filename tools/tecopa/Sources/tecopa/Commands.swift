@@ -605,7 +605,7 @@ struct OrderCommand: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "finish",
             abstract: "Start Finish as a tracked run: refuse unless the order's studio spec is approved and "
-                + "unchanged, then render it at 300 ppi and write the print TIFFs.")
+                + "unchanged, then render it at 300 ppi and write the print TIFFs, PRINT.txt and the record PNG.")
         @OptionGroup var global: GlobalOptions
         @OptionGroup var order: Folder
         func run() async throws { try await execute("order_finish", global, order.arguments) }
