@@ -284,3 +284,9 @@
 .tl-stage { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .tl-stage img, .tl-stage video { display: block; max-width: min(720px, 100%); max-height: 70vh;
   border-radius: var(--radius-sm); border: 1px solid var(--hairline); }
+
+/* ---- the Order panel (order.js) ---- */
+.order-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.order-actions .ghost, .order-actions .primary { flex: 1; min-width: 0; white-space: nowrap; padding: 7px 10px; }
+.order-status { margin: 0; line-height: 1.4; }
+.order-status.is-error { color: var(--color-error); }

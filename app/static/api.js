@@ -54,6 +54,25 @@ export async function continuePoster(file) {
   return asJson(res);
 }
 
+// The order studio: list the customer orders, open one in the studio, save the proofed
+// spec to it, approve it. All four answer 409 with a sentence the panel shows as is.
+export async function listOrders() {
+  const res = await fetch('/api/orders');
+  return asJson(res);   // [{ folder, name, order_number, title, prepared, approved }]
+}
+export async function openOrder(folder) {
+  const res = await postForm('/api/order/open', { folder });
+  return asJson(res);   // the /api/continue shape plus order: { folder, title, approved }
+}
+export async function saveOrder(sessionId) {
+  const res = await postForm('/api/order/save', { session_id: sessionId });
+  return asJson(res);   // { saved, approved, proof: [paths], proof_error? }
+}
+export async function approveOrder(sessionId) {
+  const res = await postForm('/api/order/approve', { session_id: sessionId });
+  return asJson(res);   // { approved: true, at }
+}
+
 export async function setMarkers(sessionId, markers) {
   const res = await postForm('/api/markers', { session_id: sessionId, markers: JSON.stringify(markers) });
   return asJson(res);

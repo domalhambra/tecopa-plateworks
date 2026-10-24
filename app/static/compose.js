@@ -304,33 +304,42 @@ export async function continueFromPoster(file) {
   toast('Opening poster…', 'working');
   try {
     const j = await api.continuePoster(file);
-    state.session = j.session;
-    selectRegion(j.region);
-    state.regionName = j.name; $('regionName').textContent = j.name || '';
-    state.regionKind = 'Matched';   // a continued poster reopens an existing plate
-    state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
-    state.trackDays = j.track_days || [];
-    state.starterCrop = j.starter_crop; state.crop = null;
-    state.hasSpec = false; state.proofStale = true;
-    if (j.final_dpi) state.finalDpi = j.final_dpi;
-    state.edition = j.edition || 2;
-    state.yearSpan = j.year_span || '';
-    state.files = (j.files || []).slice();
-    applyPrefill(j.prefill);
-    renderFiles();
-    state.journeyLight = j.journey_light || null;
-    canvas.setOverview(j.overview, j.overview_size);
-    $('dropzone').hidden = true; $('continuePoster').hidden = true;
-    $('map').hidden = false; $('addFiles').hidden = false;
-    markers.render($('markerList'), (msg) => toast(msg, 'info'));
-    hooks.onLoaded && hooks.onLoaded('continue');
-    enterCompose();
-    proof.primeFirstProof();   // the restored recipe proofs itself; Preview shows last year's look
+    landOpened(j);
     const echo = [`Edition ${state.edition}`, j.name, j.year_span].filter(Boolean).join(' · ');
     showHint(`${echo} — ready to add this year. Drop this year's GPX, then reframe and render.`);
     toast(`${echo} — ${state.tracks.length} track(s) restored, ready to add this year.`, 'ok');
     announce(`Continuing poster as edition ${state.edition}`);
   } catch (e) { toast('Could not open that poster: ' + e.message, 'error'); }
+}
+
+// Land the /api/continue response shape in the studio: the session, the plate, the tracks,
+// the recipe, and the first proof of the restored recipe. A continued poster and an opened
+// order both come through here (order.js), so they land the same way. The caller says
+// what the operator sees next. A plate the client has not listed needs state.regions
+// refreshed first, so the region name and the zoom cap resolve.
+export function landOpened(j) {
+  state.session = j.session;
+  selectRegion(j.region);
+  state.regionName = j.name; $('regionName').textContent = j.name || '';
+  state.regionKind = 'Matched';   // a continued poster reopens an existing plate
+  state.ovSize = j.overview_size; state.tracks = j.tracks; state.hotspots = j.hotspots;
+  state.trackDays = j.track_days || [];
+  state.starterCrop = j.starter_crop; state.crop = null;
+  state.hasSpec = false; state.proofStale = true;
+  if (j.final_dpi) state.finalDpi = j.final_dpi;
+  state.edition = j.edition || 2;
+  state.yearSpan = j.year_span || '';
+  state.files = (j.files || []).slice();
+  applyPrefill(j.prefill);
+  renderFiles();
+  state.journeyLight = j.journey_light || null;
+  canvas.setOverview(j.overview, j.overview_size);
+  $('dropzone').hidden = true; $('continuePoster').hidden = true;
+  $('map').hidden = false; $('addFiles').hidden = false;
+  markers.render($('markerList'), (msg) => toast(msg, 'info'));
+  hooks.onLoaded && hooks.onLoaded('continue');
+  enterCompose();
+  proof.primeFirstProof();   // the restored recipe proofs itself; Preview shows last year's look
 }
 
 // Restore a continued poster's recipe into state, then reflect it everywhere at once.
