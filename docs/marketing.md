@@ -1,5 +1,7 @@
 # Tecopa Plateworks marketing plan — one story, told three times
 
+> **Amended 2026-10-23.** Ghost was retired on 2026-10-15; the landing page is a page
+> on www.plateworks.org in plateworks-site.
 > **Amended 2026-09-26.** The landing page is on Ghost (www.plateworks.org/tecopa/,
 > spec `superpowers/specs/2026-09-24-ghost-landing-page-design.md`). The plate commission
 > and the region-request form are retired (`decisions.md`, 2026-09-24), and orders are

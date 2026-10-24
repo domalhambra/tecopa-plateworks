@@ -26,7 +26,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | A font or type role | Bind fonts per role, then `00_Resources/typography-standards.md` |
 | Anything under `app/static/` | Work on the studio front end |
 | The farm, the relief images, the terrain guard | `marketing/DEPLOY.md`, then Add a region to the farm and publish its relief images |
-| The Tecopa pages on Ghost | `docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md`, then Edit landing or privacy copy |
+| The Tecopa pages on www.plateworks.org | `docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md`, then Edit landing or privacy copy |
 | A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
 | The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` |
 | The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
@@ -59,7 +59,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 - `.venv/bin/python -m pytest -n auto -m "not slow" -q` before any claim of done, the full suite before a push to `main`. Compare the failure set, not the totals.
 - `ready: True` does not mean real terrain: `tests/conftest.py` hydrates a synthetic DEM. After a pull touching `regions/`, run `.venv/bin/python scripts/verify_regions.py`.
 - No JS test runner. `node --check` each module, match every `$('id')` to the HTML, drive the browser.
-- Nothing here deploys. The landing, order and privacy pages are Ghost pages on www.plateworks.org since 2026-09-26, built by the blog folder's ghost-tecopa-pages script. FastAPI auto-docs are off (commit a3d4ba9).
+- Nothing here deploys. The landing, order and privacy pages are pages on www.plateworks.org since 2026-09-26, built by the blog folder's ghost-tecopa-pages script in the Ghost era and held in plateworks-site since the 2026-10-13 switch (Ghost retired 2026-10-15). FastAPI auto-docs are off (commit a3d4ba9).
 - TDD, and granular present-tense commits that say why. Cloud sessions squash-merge from `claude/**`; the Mac commits to `main` only when green.
 - `tests/test_docs.py` holds this file under 2,000 tokens.
 

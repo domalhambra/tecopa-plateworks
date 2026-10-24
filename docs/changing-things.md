@@ -559,9 +559,11 @@ that holds journey data: tracks, markers, filenames, the crop or the title.
 
 ## Add a region to the farm and publish its relief images
 
-The Tecopa pages are Ghost pages on www.plateworks.org since 2026-09-26. Their images
-are engine renders under `assets/` (gitignored), exported for the web and uploaded to
-Ghost by the blog folder's ghost-tecopa-pages script.
+The Tecopa pages are pages on www.plateworks.org since 2026-09-26, held in
+plateworks-site since the 2026-10-13 switch. Their images are engine renders under
+`assets/` (gitignored), exported for the web. Steps 3 and 4 below are the Ghost-era
+publish path (the blog folder's ghost-tecopa-pages script, retired with Ghost on
+2026-10-15): the renders now go into plateworks-site with the pages.
 
 1. `.venv/bin/python scripts/render_asset_farm.py --regions <ids>` on real DEMs. The
    farm stamps the terrain it opened into `assets/index.json`.
@@ -588,10 +590,11 @@ Read `superpowers/specs/2026-08-16-target-customer-profile-design.md` first. Cus
 copy answers to the Collector register, and `tests/test_marketing_page.py` enforces it:
 `BUILDER_REGISTER` bans the builder's vocabulary and three customer anchors are pinned.
 
-1. The copy lives in the blog folder's ghost-tecopa-pages script: `landing()`,
-   `order()` and `privacy()`. Edit it there, not in Ghost Admin: a re-run replaces the
-   page and backs up the old one.
-2. Run the script on local Ghost and read the page. Then run it with `--live`.
+1. The copy lived in the blog folder's ghost-tecopa-pages script: `landing()`,
+   `order()` and `privacy()`. Since the 2026-10-13 switch it lives in plateworks-site
+   (its src/content/pages folder): edit it there. The script steps below are the retired
+   Ghost-era path (Ghost retired 2026-10-15).
+2. Run the script on local Ghost and read the page. Then run it with `--live`. (Retired: see step 1.)
 3. Run the live tests: `.venv/bin/python -m pytest -m live tests/test_marketing_page.py`.
    They fetch the published pages. Keep every pinned phrase intact.
 4. A change to what a page loads turns `test_privacy_page_names_every_host_the_pages_load`

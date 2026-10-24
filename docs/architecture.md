@@ -40,7 +40,7 @@ app/main.py: the endpoints, three ThreadJobQueue instances (render, region build
 app/static/: the single-window studio, 23 ES modules, no build step
 scripts/order.py: new (app/ordernew.py, from the intake's Dropbox job folder), preview (app/orderpreview.py,
                   app/previewpdf.py, app/orderemail.py) and prepare (app/orderprep.py), on an order folder outside the repo
-scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ Ghost, by the blog's pages script
+scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ www.plateworks.org, by the site repo's pages
 ```
 
 ## Module map
@@ -99,7 +99,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `scripts/fetch_track_network.py` | Overpass fetch into the gitignored cache. Network access. | `tests/test_track_network.py` covers the pure half: the bbox transposition, the tiling arithmetic, the classifier, the retry loop. The fetch itself is hand-verified. |
 | `scripts/render_mockups.py`, `scripts/render_lightsweep.py` | The object mockups and the light-sweep turntable. | `tests/test_mockups.py` |
 | `scripts/render_model.py`, `scripts/render_coinspin.py` | The orbitable GLB plate and the coin spin. | `tests/test_coinspin.py` |
-| `scripts/export_relief.py` | The Ghost landing page's relief-viewer images: surface and height map for each coin and the hero poster, plus the wall and close-up stills. The coin uses the GLB's own crop and height field. Gated by `build_deploy.terrain_guard`. Writes `<region>/relief/`. | `tests/test_export_relief.py` |
+| `scripts/export_relief.py` | The landing page's relief-viewer images: surface and height map for each coin and the hero poster, plus the wall and close-up stills. The coin uses the GLB's own crop and height field. Gated by `build_deploy.terrain_guard`. Writes `<region>/relief/`. | `tests/test_export_relief.py` |
 | `scripts/hero_plate.py`, `scripts/hero_scene.py` | The Blender hero plate CLI and the script that runs inside Blender. | `tests/test_hero_plate.py` |
 | `scripts/render_poster.py`, `scripts/make_dummy_gpx.py` | By-eye poster render and the synthetic GPX generator behind `tests/fixtures/sample.gpx`. | not covered |
 | `scripts/macos/build_app.sh`, `TecopaPlateworksLauncher.swift`, `Info.plist.template`, `make_icon.py`, `smoke_test.sh` | The macOS launcher: build, the Swift launcher on port 8848, the plist with bundle id `guide.badwater.tecopa`, the icon, the manual smoke test. | not covered. `smoke_test.sh` is a manual check. |
@@ -166,8 +166,8 @@ the preview before any build.
 | The studio | `uvicorn app.main:app --reload` on port 8000 for development. The macOS launcher runs the engine from this repo's `.venv` on port 8848 and logs to `~/Library/Logs/TecopaPlateworks.log`. Build it with `scripts/macos/build_app.sh --install`. A `git pull` updates it with no rebuild. |
 | The `tecopa` tool | `tools/tecopa/build.sh --install` builds the release binary and copies it to `~/.local/bin/tecopa`, with this repo's path baked in. Register it in Claude Code at user scope as the MCP server `tecopa`. `tools/tecopa/register_desktop.sh` registers it in the Claude desktop app, with the app quit. Rebuild after the repo moves or the Swift code changes. |
 | Plates | Five committed under `regions/`: `lassen_ca`, `susanville_reno`, `elko_bonneville`, `rifle_aspen`, `tushar_beaver_ut`. Each `dem.tif` is gitignored and rebuilt with `region_prep.py`. Packing and publishing plates has never run. |
-| The landing page | Ghost pages on www.plateworks.org since 2026-09-26: `/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's ghost-tecopa-pages script. `tecopa.plateworks.org` is a Cloudflare 301 to `/tecopa/` with the path kept. The Netlify site `tecopa-plateworks` still holds the last deploy as the rollback: delete the Cloudflare rule to serve it again. |
-| The privacy page | `/tecopa-privacy-policy/`. Ghost's redirects file sends `/tecopa/privacy/` there. |
+| The landing page | Pages on www.plateworks.org since 2026-09-26: `/tecopa/`, `/tecopa-build/` and `/tecopa-privacy-policy/`, built by the blog folder's ghost-tecopa-pages script in the Ghost era and held in plateworks-site since 2026-10-13. `tecopa.plateworks.org` is a Cloudflare 301 to `/tecopa/` with the path kept. The Netlify site `tecopa-plateworks` still holds the last deploy as the rollback: delete the Cloudflare rule to serve it again. |
+| The privacy page | `/tecopa-privacy-policy/`. The site's redirects (carried over from Ghost's redirects file) send `/tecopa/privacy/` there. |
 | Python | 3.14 on the Mac and in CI, which installs the version in `.python-version`. Every pin in `requirements-lock.txt` has a 3.14 wheel for `ubuntu-latest` (checked 2026-09-23). |
 | Dependencies | `requirements-lock.txt` is what CI installs, then `pandas geopandas`, then `requirements-share.txt`. `requirements.txt` holds the unpinned core minimums and `requirements-dev.txt` the test dependencies; the lock is what a machine actually installs. `requirements-regionprep.txt` goes only into `.venv-prep`. |
 
