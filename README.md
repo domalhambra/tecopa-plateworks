@@ -53,15 +53,17 @@ studio has no JS runner: `node --check` each module, then drive the browser.
 ## Ship it
 
 Nothing here deploys. The engine runs locally and the launcher is a personal build. The
-Tecopa pages are Ghost pages on www.plateworks.org, and their images are engine renders:
+Tecopa pages are pages on www.plateworks.org (held in plateworks-site since 2026-10-13),
+and their images are engine renders:
 
 ```bash
 .venv/bin/python scripts/render_asset_farm.py --regions <ids>   # engine renders of real terrain
 .venv/bin/python scripts/export_relief.py <ids>                  # web images. The terrain guard refuses a synthetic region
 ```
 
-The blog folder's ghost-tecopa-pages script uploads them and builds the pages. The
-runbook is Add a region to the farm and publish its relief images, in
+In the Ghost era the blog folder's ghost-tecopa-pages script uploaded them and built
+the pages; Ghost was retired on 2026-10-15, and the pages are edited in plateworks-site
+now. The runbook is Add a region to the farm and publish its relief images, in
 `docs/changing-things.md`. Every claim on the pages has a test behind it
 (`tests/test_marketing_page.py`, run with `-m live`).
 
