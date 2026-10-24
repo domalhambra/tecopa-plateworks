@@ -301,3 +301,93 @@ def test_the_cli_finish_prints_the_note(approved, capsys, monkeypatch):
     assert order_cli.main(["finish", approved.dir]) == 0
     out = capsys.readouterr().out
     assert "Tecopa Plateworks print note" in out and "smith_home_ground-11x17.tif" in out
+
+
+# --- a photo Finish cannot read, and a failure partway through the writes ---------------
+
+def _spots(order, tmp_path, readable, gone):
+    spec = orderspec.order_spec(order, od.read_state(order))
+    cx, cy = (spec.crop[0] + spec.crop[2]) / 2, (spec.crop[1] + spec.crop[3]) / 2
+    spots = []
+    for k in range(readable):
+        path = tmp_path / f"photo{k}.jpg"
+        Image.new("RGB", (60, 40), (12, 200, 80)).save(path, "JPEG")
+        spots.append({"x": cx + 500 * k, "y": cy, "weight": 1, "photo": str(path)})
+    for k in range(gone):                   # swept from uploads/ after 24 h
+        spots.append({"x": cx, "y": cy + 500 * (k + 1), "weight": 1,
+                      "photo": str(tmp_path / f"swept{k}.jpg")})
+    return spots
+
+
+def test_finish_refuses_a_photo_it_can_no_longer_read(order, tmp_path, monkeypatch):
+    _approve_spec(order, hotspots=_spots(order, tmp_path, readable=1, gone=2))
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == ("2 photo(s) on the approved proof can no longer be read: open "
+                             "the order, attach them again, save and approve.")
+    assert not os.path.exists(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_prints_the_photos_it_can_read(order, tmp_path):
+    from app import provenance
+    _approve_spec(order, hotspots=_spots(order, tmp_path, readable=2, gone=0))
+    orderfinish.finish(order.dir, dpi=DPI)
+    manifest = provenance.extract(open(os.path.join(order.dir, "work", "record.png"),
+                                       "rb").read())
+    photos = [h.get("photo") for h in manifest["spec"]["hotspots"]]
+    assert len(photos) == 2 and all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in photos)
+
+
+def _snapshot(order) -> dict:
+    """Every file of a Finish, by path, with its bytes."""
+    out = {}
+    for folder in (os.path.join(order.dir, "out", "print"), order.work_dir):
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path) and (folder != order.work_dir or name == "record.png"):
+                out[path] = open(path, "rb").read()
+    return out
+
+
+def _leftover_temps(order) -> list:
+    return [n for folder in (os.path.join(order.dir, "out", "print"), order.work_dir)
+            for n in os.listdir(folder) if n.endswith(".tmp")]
+
+
+@pytest.mark.parametrize("fail_on", [("TIFF", 2), ("PNG", 1)])
+def test_a_write_that_fails_partway_keeps_the_last_run_whole(set_order, monkeypatch, fail_on):
+    orderfinish.finish(set_order.dir, dpi=DPI)
+    before = _snapshot(set_order)
+    # a new approval whose pixels differ, with the same file names
+    _approve_spec(set_order, title_text="Smith home ground, again")
+    real_save = Image.Image.save
+    seen = []
+
+    def save(self, fp, format=None, **kw):
+        seen.append(format)
+        if format == fail_on[0] and seen.count(format) == fail_on[1]:
+            raise OSError(28, "No space left on device")
+        return real_save(self, fp, format, **kw)
+    monkeypatch.setattr(Image.Image, "save", save)
+    with pytest.raises(od.OrderError, match="No space left on device"):
+        orderfinish.finish(set_order.dir, dpi=DPI)
+    assert _snapshot(set_order) == before
+    assert not _leftover_temps(set_order)
+
+
+def test_a_stale_print_file_that_cannot_be_removed_stops_finish(approved, monkeypatch):
+    orderfinish.finish(approved.dir, dpi=DPI)
+    stale = os.path.join(approved.dir, "out", "print", "old-title-11x17.tif")
+    with open(stale, "wb") as f:
+        f.write(b"old")
+    real_remove = os.remove
+
+    def remove(path, *a, **k):
+        if path == stale:
+            raise PermissionError(13, "Permission denied")
+        return real_remove(path, *a, **k)
+    monkeypatch.setattr(os, "remove", remove)
+    with pytest.raises(od.OrderError, match="old-title-11x17.tif.*Permission denied"):
+        orderfinish.finish(approved.dir, dpi=DPI)
+    assert not _leftover_temps(approved)

@@ -14,17 +14,27 @@ spec the proof showed (orderspec.order_spec), once, with no watermark, and write
 
 Each TIFF is the print at exactly its size (no border: plan decision P5), 8-bit RGB
 (P4), uncompressed, sRGB profile embedded, turned so the 17 in side goes across the roll
-(P6). It writes nothing until the render has succeeded, and it removes a print file of an
-earlier Finish that this Finish did not write, so the folder holds one print and no other. Each file it removes gets a
-`Removed: <name>` line in its log and at the end of PRINT.txt.
+(P6).
+
+Every check that needs no picture runs before the render: the approval, the spec's size,
+panels and gap against state.json (orderspec.matches_order), bleed, the roll, and every
+hotspot photo still readable. Then the files go in place in four steps, so a failed run
+keeps the files of the last run:
+
+  1. write every file (the TIFFs, record.png, PRINT.txt) under a temporary name;
+  2. rename the TIFFs and record.png to their names;
+  3. remove each print file of an earlier Finish that this Finish did not write, so the
+     folder holds one print and no other;
+  4. rename PRINT.txt.
+
+A failure in step 1 deletes the temporary files and leaves the last run untouched. Each
+file step 3 removes gets a `Removed: <name>` line in the log and at the end of PRINT.txt.
 
 This module never imports app.main (plan decision P8)."""
 from __future__ import annotations
 
 import json
 import os
-
-from PIL import Image
 
 from app import icc, orderspec, orderstudio, panels as panel_geo, papers, provenance
 from app import order as od
@@ -37,6 +47,11 @@ SIZE_MISMATCH = ("The saved studio spec is not this order's size: open the order
                  "save and approve again.")
 BLEED = ("The render is {have[0]} × {have[1]} px and the print is {want[0]} × {want[1]} px: "
          "a print with bleed cannot go to the roll as it is.")
+PHOTOS_GONE = ("{n} photo(s) on the approved proof can no longer be read: open the order, "
+               "attach them again, save and approve.")
+NOT_PLACED = "The print files cannot be put in place ({why}): run Finish again."
+NOT_REMOVED = ("The print file of an earlier Finish cannot be removed: {name} ({why}). "
+               "Remove it, then run Finish again.")
 
 PRINT_DIR = ("out", "print")
 NOTE_NAME = "PRINT.txt"
@@ -56,22 +71,41 @@ def _size_word(spec) -> str:
     return f"{_inches(short)}x{_inches(long_)}"
 
 
-def _save(img, path: str, fmt: str, **kw) -> None:
-    """Write under a temporary name and rename, so a failed write keeps the last file."""
+def _tmp_name(path: str) -> str:
+    return f"{path}.{os.getpid()}.tmp"
+
+
+def _why(ex: BaseException) -> str:
+    return (ex.strerror if isinstance(ex, OSError) and ex.strerror else str(ex)) or \
+        type(ex).__name__
+
+
+def _stage(path: str, write) -> str:
+    """Write a file under its temporary name with `write(tmp)`, and return that name.
+    On a failure the temporary file is deleted and an OSError becomes an OrderError."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}.tmp"
+    tmp = _tmp_name(path)
     try:
-        img.save(tmp, fmt, **kw)
-        os.replace(tmp, path)
+        write(tmp)
     except BaseException as ex:
+        _discard([tmp])
+        if isinstance(ex, OSError):
+            raise OrderError(f"The print file cannot be written to {path}: "
+                             f"{_why(ex)}") from ex
+        raise
+    return tmp
+
+
+def _discard(tmps) -> None:
+    for tmp in tmps:
         try:
             os.remove(tmp)
         except OSError:
             pass
-        if isinstance(ex, OSError):
-            raise OrderError(f"The print file cannot be written to {path}: "
-                             f"{ex.strerror or ex}") from ex
-        raise
+
+
+def _photo_count(spec) -> int:
+    return sum(1 for hs in spec.hotspots or [] if isinstance(hs, dict) and hs.get("photo"))
 
 
 def print_note(order, spec, paper, pieces, approval, removed=()) -> str:
@@ -136,7 +170,10 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
         raise OrderError(BLEED.format(have=spec.pixel_size(dpi), want=want))
     pw, ph = panel_geo.panel_size_in(spec)
     rotation = papers.feed_rotation(pw, ph, paper.roll_in)
+    photos = _photo_count(spec)
     spec = provenance.build_final_spec(spec, max(24, round(spec.photo_box_in * dpi)))
+    if _photo_count(spec) < photos:       # build_final_spec drops a photo it cannot read
+        raise OrderError(PHOTOS_GONE.format(n=photos - _photo_count(spec)))
     plate = orderspec.plate_dir(state)
     with open(os.path.join(plate, "region.json")) as f:
         cfg = json.load(f)
@@ -156,36 +193,67 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     count = len(parts)
     stem, size = orderspec.file_stem(order.title), _size_word(spec)
     print_dir = os.path.join(order.dir, *PRINT_DIR)
-
-    files, pieces = [], []
-    for k, part in enumerate(parts, 1):
-        if rotation:
-            part = part.rotate(rotation, expand=True)
-        name = f"{stem}-{size}-{k}of{count}.tif" if count > 1 else f"{stem}-{size}.tif"
-        path = os.path.join(print_dir, name)
-        _save(part, path, "TIFF", compression=None, dpi=(dpi, dpi), icc_profile=srgb)
-        files.append(path)
-        w_in, h_in = (ph, pw) if rotation else (pw, ph)
-        pieces.append({"name": name, "w_in": w_in, "h_in": h_in, "w_px": part.width,
-                       "h_px": part.height, "ppi": dpi, "rotation": rotation,
-                       "panel": (k, count) if count > 1 else None})
-        log(f"Wrote {path}")
-
-    _save(sheet, os.path.join(order.work_dir, RECORD_NAME), "PNG", dpi=(dpi, dpi),
-          icc_profile=srgb, pnginfo=provenance.manifest_pnginfo(manifest))
-
-    # a print file of an earlier Finish (another title or size) must not stand beside this one
-    removed = []
-    for name in sorted(os.listdir(print_dir)):
-        if name.lower().endswith(".tif") and os.path.join(print_dir, name) not in files:
-            os.remove(os.path.join(print_dir, name))
-            removed.append(name)
-            log(f"Removed: {name}")
-
     note_path = os.path.join(print_dir, NOTE_NAME)
-    note = print_note(order, spec, paper, pieces, approval, removed)
-    tmp = f"{note_path}.{os.getpid()}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(note)
-    os.replace(tmp, note_path)
+
+    # 1. every file under a temporary name; a failure leaves the last run untouched
+    files, pieces, staged = [], [], []        # staged: (temporary name, final name)
+    try:
+        for k, part in enumerate(parts, 1):
+            if rotation:
+                part = part.rotate(rotation, expand=True)
+            name = f"{stem}-{size}-{k}of{count}.tif" if count > 1 else f"{stem}-{size}.tif"
+            path = os.path.join(print_dir, name)
+            staged.append((_stage(path, lambda tmp, part=part: part.save(
+                tmp, "TIFF", compression=None, dpi=(dpi, dpi), icc_profile=srgb)), path))
+            files.append(path)
+            w_in, h_in = (ph, pw) if rotation else (pw, ph)
+            pieces.append({"name": name, "w_in": w_in, "h_in": h_in, "w_px": part.width,
+                           "h_px": part.height, "ppi": dpi, "rotation": rotation,
+                           "panel": (k, count) if count > 1 else None})
+        record = os.path.join(order.work_dir, RECORD_NAME)
+        staged.append((_stage(record, lambda tmp: sheet.save(
+            tmp, "PNG", dpi=(dpi, dpi), icc_profile=srgb,
+            pnginfo=provenance.manifest_pnginfo(manifest))), record))
+        # a print file of an earlier Finish (another title or size) must not stand
+        # beside this one
+        removed = [name for name in sorted(os.listdir(print_dir))
+                   if name.lower().endswith(".tif")
+                   and os.path.join(print_dir, name) not in files]
+        note = print_note(order, spec, paper, pieces, approval, removed)
+
+        def write_note(tmp):
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(note)
+        note_tmp = _stage(note_path, write_note)
+    except BaseException:
+        _discard(tmp for tmp, _ in staged)
+        raise
+
+    # 2. the TIFFs and record.png to their names
+    for i, (tmp, path) in enumerate(staged):
+        try:
+            os.replace(tmp, path)
+        except OSError as ex:
+            _discard([t for t, _ in staged[i:]] + [note_tmp])
+            raise OrderError(NOT_PLACED.format(why=_why(ex))) from ex
+        if path in files:
+            log(f"Wrote {path}")
+
+    # 3. the print files of an earlier Finish
+    for name in removed:
+        try:
+            os.remove(os.path.join(print_dir, name))
+        except FileNotFoundError:
+            pass
+        except OSError as ex:
+            _discard([note_tmp])
+            raise OrderError(NOT_REMOVED.format(name=name, why=_why(ex))) from ex
+        log(f"Removed: {name}")
+
+    # 4. the note that names them all
+    try:
+        os.replace(note_tmp, note_path)
+    except OSError as ex:
+        _discard([note_tmp])
+        raise OrderError(NOT_PLACED.format(why=_why(ex))) from ex
     return {"files": files, "print_note": note_path}
