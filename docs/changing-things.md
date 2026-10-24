@@ -259,8 +259,9 @@ approval, `finish`, the printer.
    fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
    frame: do not print; delete the plate under work/plate/ and run Prepare again.
 8. Read the proof lines of the report. Prepare writes the proof after the plate. The
-   report then has a `Proof:` line that names `out/proof/<title>-proof.jpg` and
-   `.pdf`, and a `Soft proof:` line. The soft proof is `work/softproof.png`: the proof
+   report then has a `Proof:` line that names `out/proof/<stem>-proof.jpg` and
+   `.pdf`, and a `Soft proof:` line. `<stem>` is the title as a slug, or `poster` when
+   the title has no letter or digit. The soft proof is `work/softproof.png`: the proof
    as the Red River paper would show it on an sRGB screen, through the paper's profile
    and intent. Open it and judge the paper's colour there.
    `Soft proof: skipped` and its reason mean the paper's profile is not installed in
@@ -268,10 +269,15 @@ approval, `finish`, the printer.
    profile and run Prepare again to get the soft proof. `PROOF NOT RENDERED:` with a
    reason is a warning, not a stop: the plate stays and no proof file is written. Fix
    the reason, then run Prepare again (it builds nothing) or use Save to order in the
-   studio. "The plate's projection changed: the studio's saved edits were set aside"
-   means Prepare rebuilt the plate in another projection and cannot reuse the studio
-   edits you saved before. The edits are kept in `state.json` as
-   `manual.spec_set_aside`. Open the order in the studio and make them again.
+   studio. Two warnings say that Prepare set the studio edits you saved aside:
+   - "The order changed (size, orientation or tracks) since the studio save" means
+     `order.toml` or `in/` changed after Save to order. The saved spec still holds the
+     old size, frame and tracks.
+   - "The plate's projection changed" means Prepare rebuilt the plate in another
+     projection.
+   Prepare keeps the edits in `state.json` as `manual.spec_set_aside`, removes the
+   approval, and proofs the order as it is now. Open the order in the studio and make
+   the edits again.
 9. Open the order in the studio. Start the studio, find the Order panel in the
    inspector (it shows only when the engine lists an order) and choose the order in the Customer
    order list. Press Open. The studio loads the order's plate and its spec: the spec
@@ -280,22 +286,28 @@ approval, `finish`, the printer.
     title or the labels, and render again. The Order panel says "Edited since the last
     proof" until you render again.
 11. Press Save to order. The studio writes the proofed spec into the order and writes
-    the client's proof again from it: `out/proof/<title>-proof.jpg` and
-    `out/proof/<title>-proof.pdf`. The PDF is one page marked PROOF, with the title,
+    the client's proof again from it: `out/proof/<stem>-proof.jpg` and
+    `out/proof/<stem>-proof.pdf`. The PDF is one page marked PROOF, with the title,
     the map and two lines for the client. Both files show the print as it will print,
     with the word PROOF across it. A set shows its gap strips in the wall tone. Saving
     a spec that is not the approved one removes the approval. If the proof files
     cannot be written, the save still holds and the panel says why; the client files of
     the earlier save are removed, so a stale proof cannot go out. Fix the reason and
-    save again.
-12. Send the proof. Paste the proof into a new email in HEY, attach the JPG and the
-    PDF, read the email, and send it. Nothing sends it for you. The order is not
+    save again. Save refuses a wallpaper proof, and a proof of another size, panel count
+    or gap than the order: change the size in `order.toml` and run Prepare, never in
+    the studio.
+12. Send the proof. Reply in the client's existing HEY thread (do not start a new
+    email), attach the JPG and the PDF, read the reply, and send it. Nothing sends it
+    for you. The order is not
     approved yet: nothing prints before the client approves.
 13. When the client approves, press Approve in the studio. Approve works on a proof
     that you saved in this studio session and have not changed since. If you closed the
     studio or the order, Open the order again, render a proof, press Save to order
     (the files come out the same if you changed nothing), then press Approve.
-    Approve records the time and the hash of the saved spec in `state.json`. If the
+    Approve records the time and the hash of the saved spec in `state.json`. "The
+    client proof was not written: save again before approving." means the last save
+    could not write the client files: fix the reason, press Save to order, then
+    Approve. If the
     client asks for a change, change the poster, press Save to order (this removes the
     approval), send the new proof, and approve after the client agrees.
 14. Run `.venv/bin/python scripts/order.py finish "<folder>"`, or
@@ -306,7 +318,15 @@ approval, `finish`, the printer.
     - "The order changed after approval: approve it again." The saved spec, the plate
       or `state.json` is not the approved one. Open the order, render a proof, save
       it, and press Approve again. Prepare also clears the approval when it builds a
-      plate.
+      plate. A pull that adds a spec field changes the hash of every spec, so every
+      approved order reads "changed after approval" after it. Approve each one again.
+    - "The saved studio spec is not this order's size: open the order, proof, save
+      and approve again." The size, panel count or gap in `state.json` is not the
+      saved spec's. Do what it says.
+    - "<n> photo(s) on the approved proof can no longer be read: open the order,
+      attach them again, save and approve." The studio keeps an attached photo for
+      24 hours. Attach each photo again in the studio, save, send the new proof, and
+      approve.
     - "Run Prepare first: work/state.json has no plate." Run Prepare.
     - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
       or the piece has no side that fits the roll. Fix the file; the message names the
@@ -316,14 +336,18 @@ approval, `finish`, the printer.
       then save and approve again.
     - "The print file cannot be written to ...". Make room on the disk or fix the
       folder's permissions, then run it again.
+    - "The print file of an earlier Finish cannot be removed: ...". Remove the file
+      that it names, then run it again.
     Finish prints the spec that the client approved, once, at 300 ppi, with no
-    watermark. It writes nothing until the render has succeeded, so a failed run keeps
-    the files of the last run.
+    watermark. It makes every check before the render. Then it writes every file under
+    a temporary name, renames them all, removes the print files of an earlier Finish,
+    and writes `PRINT.txt` last. A run that fails before the renames deletes its
+    temporary files, so it keeps the files of the last run.
 15. Read `out/print/PRINT.txt`. It names the paper, the profile, the intent and the
     preset, and lists each file with its size in inches, its size in pixels and how it
     is fed. Finish writes these files:
-    - `out/print/<title>-<size>.tif` for a single sheet, or
-      `out/print/<title>-<size>-<k>of<n>.tif` for each panel of a set. Each TIFF is
+    - `out/print/<stem>-<size>.tif` for a single sheet, or
+      `out/print/<stem>-<size>-<k>of<n>.tif` for each panel of a set. Each TIFF is
       the print at exactly its size, 8-bit RGB, uncompressed, with the sRGB profile
       embedded. It has no border. The gap strips of a set are never printed.
     - `out/print/PRINT.txt`.
@@ -333,7 +357,8 @@ approval, `finish`, the printer.
     turns 90° counter-clockwise. The `Feed:` line of each file in `PRINT.txt` says
     which.
 16. Print each TIFF at 100 %, centred, from Canon Professional Print & Layout. Choose the
-    preset that `PRINT.txt` names. Print the panels of a set in hang order, panel 1
+    preset that `PRINT.txt` names, and confirm that Print & Layout uses the intent that
+    `PRINT.txt` names. Print the panels of a set in hang order, panel 1
     first, and hang them left to right with the gap that `PRINT.txt` gives.
 
 Finish removes every other `.tif` in `out/print/`. A print file of an earlier Finish
