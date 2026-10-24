@@ -39,7 +39,8 @@ regions/<id>/  (region.json, dem.tif, hydro.json, │  labels.json, landcover.ti
 app/main.py: the endpoints, three ThreadJobQueue instances (render, region build, proof refine)
 app/static/: the single-window studio, 23 ES modules, no build step
 scripts/order.py: new (app/ordernew.py, from the intake's Dropbox job folder), preview (app/orderpreview.py,
-                  app/previewpdf.py, app/orderemail.py) and prepare (app/orderprep.py), on an order folder outside the repo
+                  app/previewpdf.py, app/orderemail.py), prepare (app/orderprep.py, with the proof of app/orderproof.py)
+                  and finish (app/orderfinish.py), on an order folder outside the repo
 scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/export_relief.py ──▶ www.plateworks.org, by the site repo's pages
 ```
 
@@ -71,7 +72,13 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `app/sizes.py` | The name, the first-poster and next-year prices, the shipping and the Payment Links of each size and of the digital poster, read strictly from `config/sizes.toml`. Dom owns that file. | `tests/test_sizes.py` |
 | `app/ordernew.py` | `order new`: copy the intake's job folder from Dropbox into a new order folder and write its `order.toml`. It never writes to Dropbox, cleans every name, refuses a file over 200 MB, and stops on a file that is not on the disk. | `tests/test_ordernew.py` |
 | `app/orderemail.py` | The preview email, `<folder>/out/preview/email.txt`: a Payment Link for each offered size and the digital poster, each ending with the order number. No email when a link is missing. Nothing sends it. | `tests/test_orderemail.py` |
-| `scripts/order.py` | The command line of an order. It has three commands: `new` (`app/ordernew.py`), `preview` (`app/orderpreview.py`) and `prepare` (`app/orderprep.py`). A command that stops prints one line that starts with its own name, and exits 1. | `tests/test_orderpreview.py`, `tests/test_orderprep.py` |
+| `config/papers.toml`, `app/papers.py` | The paper table: the roll width, the ICC profile, the rendering intent and the Print & Layout preset of each paper, with exactly one row enabled. `load_papers` reads it strictly. `feed_rotation` returns 0 or 90, the turn that puts a piece's 17 in side across the roll. Dom owns the file. | `tests/test_papers.py` |
+| `app/icc.py` | The sRGB profile bytes (one fixed creation date), the profile finder (`find_profile`) and the soft proof (`soft_proof`) through a paper's profile and intent. It never imports `app.main`. | `tests/test_srgb_profile.py`, `tests/test_softproof.py` |
+| `app/orderspec.py` | The one spec of an order, `order_spec`: the saved studio spec if any, else the default, rebound to the plate on disk. `plate_dir`, `spec_hash` and `file_stem`. The proof, the studio and Finish all paint this spec. | `tests/test_orderspec.py` |
+| `app/orderproof.py`, `app/proofpdf.py` | The proof of an order, written by Prepare and by Save to order: `work/proof.png`, `work/softproof.png`, and the client's `out/proof/<title>-proof.jpg` and `.pdf` (one page marked PROOF). | `tests/test_orderproof.py` |
+| `app/orderstudio.py` | The studio's side of an order: `list_orders`, `save_spec` (Save to order), `approve` and `approval_ok`. The approval is the hash of the saved spec. Behind the routes `/api/orders` and `/api/order/open`, `/save` and `/approve` in `app/main.py`; the front end is `app/static/order.js`. | `tests/test_order_routes.py` |
+| `app/orderfinish.py` | `order finish`: refuses an order that is not approved or changed after approval, then writes the print TIFFs (`out/print/`), `PRINT.txt` and `work/record.png`. It removes any other `.tif` in `out/print/`. | `tests/test_orderfinish.py` |
+| `scripts/order.py` | The command line of an order. It has four commands: `new` (`app/ordernew.py`), `preview` (`app/orderpreview.py`), `prepare` (`app/orderprep.py`) and `finish` (`app/orderfinish.py`). A command that stops prints one line that starts with its own name, and exits 1. | `tests/test_orderpreview.py`, `tests/test_orderprep.py` |
 | `app/regionbuild.py` | GPX-first planning (bbox, UTM zone, US coverage) and the `region_prep.py` subprocess behind `/api/regions/build`. | `tests/test_regionbuild.py`, `tests/test_region_endpoints.py` |
 | `app/plates.py` | `.venv/bin/python -m app.plates install` places a `.trailplate.zip`. `verify` checks a poster PNG against the installed plate. | `tests/test_plates.py` |
 | `app/store.py` | Session persistence: `MemoryStore` by default, `SqliteStore` with `TECOPA_STORE=sqlite`. | `tests/test_server_foundation.py` |

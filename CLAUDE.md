@@ -15,7 +15,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | The tests, a Mac-only failure | Run the tests |
 | A pull touching `regions/`, a 503 naming drift | Repair an orphaned DEM |
 | A plate, `region_prep.py`, labels, playa | `docs/superpowers/specs/2026-07-19-gpx-first-region-creation-design.md`, then Build a new plate |
-| An order, `scripts/order.py` | `docs/superpowers/specs/2026-09-24-order-pipeline-design.md`, then Run an order |
+| An order, `scripts/order.py`, `app/orderfinish.py`, `config/papers.toml` | `docs/superpowers/specs/2026-09-24-order-pipeline-design.md`, then Run an order |
 | `order new`, the preview email, a price or a Payment Link | `docs/superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md`, then Run an order |
 | A panel set, the furniture scale, the size preview | `docs/superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md`, then Change a panel set, or Run an order for the preview |
 | A relief technique | `docs/relief-passes.md` (its corrections blockquote governs), then Add a relief technique |

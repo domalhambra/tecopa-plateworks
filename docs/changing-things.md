@@ -145,9 +145,11 @@ size preview, read
 `superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md` too.
 For an order from the intake form, the preview email or a price, read
 `superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md`.
-`scripts/order.py` has three commands, `new`, `preview` and `prepare`. Prepare does the
-plate step only. `order finish` is not built, so a set order ends at the engine's zip of
-panel files.
+`scripts/order.py` has four commands: `new`, `preview`, `prepare` and `finish`. Prepare
+builds the plate and writes the client's proof. The studio's Order panel saves and
+approves the proof. Finish writes the print TIFFs and the note that tells you how to
+print them. The steps run in this order: `new`, `preview`, `prepare`, the proof, the
+approval, `finish`, the printer.
 
 1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
    inside the repo: it is public. For an order from the intake, run
@@ -249,13 +251,95 @@ panel files.
    end is behind a gap means the same as in the preview: move the frame, or use
    `gap = 0`. "Upsampling" above 1.00x means the terrain data is coarser than the
    print can show, up to the 2x limit. A widened frame means the data could not hold
-   the nestled look at this size; the warning names it, but naming the exact smaller
-   sheet waits for the paper table (sub-project 2). "No elevation" is the measured
+   the nestled look at this size; the warning names the largest menu size below it
+   that would hold the look. "No elevation" is the measured
    share of the plate and of the frame with no data. "Hole fill" means the dynamic
    service left holes and region_prep filled them from the static tiles. A warning
    that the plate has no elevation past what the 3DEP index expects means holes the
    fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
    frame: do not print; delete the plate under work/plate/ and run Prepare again.
+8. Read the proof lines of the report. Prepare writes the proof after the plate. The
+   report then has a `Proof:` line that names `out/proof/<title>-proof.jpg` and
+   `.pdf`, and a `Soft proof:` line. The soft proof is `work/softproof.png`: the proof
+   as the Red River paper would show it on an sRGB screen, through the paper's profile
+   and intent. Open it and judge the paper's colour there.
+   `Soft proof: skipped` and its reason mean the paper's profile is not installed in
+   `/Library/ColorSync/Profiles/` on this Mac. The proof is still written. Install the
+   profile and run Prepare again to get the soft proof. `PROOF NOT RENDERED:` with a
+   reason is a warning, not a stop: the plate stays and no proof file is written. Fix
+   the reason, then run Prepare again (it builds nothing) or use Save to order in the
+   studio. "The plate's projection changed: the studio's saved edits were set aside"
+   means Prepare rebuilt the plate in another projection and cannot reuse the studio
+   edits you saved before. The edits are kept in `state.json` as
+   `manual.spec_set_aside`. Open the order in the studio and make them again.
+9. Open the order in the studio. Start the studio, find the Order panel in the
+   inspector (it shows only when the engine lists an order) and choose the order in the Customer
+   order list. Press Open. The studio loads the order's plate and its spec: the spec
+   that Prepare proofed, or the one you saved last. Nothing is printed or approved yet.
+10. Render a proof in the studio. Change the poster as for any proof, for example the
+    title or the labels, and render again. The Order panel says "Edited since the last
+    proof" until you render again.
+11. Press Save to order. The studio writes the proofed spec into the order and writes
+    the client's proof again from it: `out/proof/<title>-proof.jpg` and
+    `out/proof/<title>-proof.pdf`. The PDF is one page marked PROOF, with the title,
+    the map and two lines for the client. Both files show the print as it will print,
+    with the word PROOF across it. A set shows its gap strips in the wall tone. Saving
+    a spec that is not the approved one removes the approval. If the proof files
+    cannot be written, the save still holds and the panel says why; the client files of
+    the earlier save are removed, so a stale proof cannot go out. Fix the reason and
+    save again.
+12. Send the proof. Paste the proof into a new email in HEY, attach the JPG and the
+    PDF, read the email, and send it. Nothing sends it for you. The order is not
+    approved yet: nothing prints before the client approves.
+13. When the client approves, press Approve in the studio. Approve works on a proof
+    that you saved in this studio session and have not changed since. If you closed the
+    studio or the order, Open the order again, render a proof, press Save to order
+    (the files come out the same if you changed nothing), then press Approve.
+    Approve records the time and the hash of the saved spec in `state.json`. If the
+    client asks for a change, change the poster, press Save to order (this removes the
+    approval), send the new proof, and approve after the client agrees.
+14. Run `.venv/bin/python scripts/order.py finish "<folder>"`, or
+    `tecopa order finish "<folder>"` as a tracked run. It runs in `.venv`, needs no
+    network, and takes minutes. The command stops when it has nothing to print. The
+    reason follows `finish stopped:`:
+    - "Approve the proof in the studio first." The order has no approval. Do step 13.
+    - "The order changed after approval: approve it again." The saved spec, the plate
+      or `state.json` is not the approved one. Open the order, render a proof, save
+      it, and press Approve again. Prepare also clears the approval when it builds a
+      plate.
+    - "Run Prepare first: work/state.json has no plate." Run Prepare.
+    - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
+      or the piece has no side that fits the roll. Fix the file; the message names the
+      row and the field.
+    - "The render is ... a print with bleed cannot go to the roll as it is." The spec
+      has a bleed, and an order prints without one. Remove the bleed from the spec,
+      then save and approve again.
+    - "The print file cannot be written to ...". Make room on the disk or fix the
+      folder's permissions, then run it again.
+    Finish prints the spec that the client approved, once, at 300 ppi, with no
+    watermark. It writes nothing until the render has succeeded, so a failed run keeps
+    the files of the last run.
+15. Read `out/print/PRINT.txt`. It names the paper, the profile, the intent and the
+    preset, and lists each file with its size in inches, its size in pixels and how it
+    is fed. Finish writes these files:
+    - `out/print/<title>-<size>.tif` for a single sheet, or
+      `out/print/<title>-<size>-<k>of<n>.tif` for each panel of a set. Each TIFF is
+      the print at exactly its size, 8-bit RGB, uncompressed, with the sRGB profile
+      embedded. It has no border. The gap strips of a set are never printed.
+    - `out/print/PRINT.txt`.
+    - `work/record.png`, the render with the reprint record, for Edition N+1.
+    Finish turns each piece so that its 17 in side goes across the roll. A piece 17 in
+    wide prints as it is. A piece 17 in tall (an 11 × 17 portrait, a 22 × 17 panel)
+    turns 90° counter-clockwise. The `Feed:` line of each file in `PRINT.txt` says
+    which.
+16. Print each TIFF at 100 %, centred, from Canon Professional Print & Layout. Choose the
+    preset that `PRINT.txt` names. Print the panels of a set in hang order, panel 1
+    first, and hang them left to right with the gap that `PRINT.txt` gives.
+
+Finish removes every other `.tif` in `out/print/`. A print file of an earlier Finish
+(another title, another size) must not stand beside the new print. Each removed file
+gets a `Removed: <name>` line in the output of Finish and at the end of `PRINT.txt`.
+Keep nothing by hand in `out/print/`.
 
 Running Prepare again with the same tracks, size and orientation builds nothing. For a
 set, the panel count and the gap count too. A
@@ -378,7 +462,35 @@ Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.
 and for a file not on the disk). For the preview:
 `tests/test_orderpreview.py` (stub subprocesses, no network), `tests/test_previewpdf.py`,
 `tests/test_sizes.py`, `tests/test_orderemail.py`, and `tests/test_orderpreview_render.py`
-(slow: the real painter on a synthetic plate).
+(slow: the real painter on a synthetic plate). For the proof, the paper table and Finish:
+`tests/test_papers.py`, `tests/test_orderspec.py`, `tests/test_orderproof.py`,
+`tests/test_softproof.py`, `tests/test_order_routes.py` (Open, Save, Approve),
+`tests/test_orderfinish.py`, and `tests/test_orderprep.py` for the proof lines of the report.
+
+### The test sheet
+
+The first print on the roll settles two things the code cannot: the rendering intent
+and whether a print needs a border. Run it once, before the first order for a client.
+
+1. Make an order folder of your own tracks, as for any order (step 1 and 2), with a
+   title like "Test sheet". Use `size = "17x22"`.
+2. Prepare it. Save to order in the studio, press Approve, and run Finish. These are
+   steps 6 to 14. The order is yours, so the "client" is you.
+3. Print the TIFF twice from Canon Professional Print & Layout on the Red River
+   Premium Matte 230 roll, at 100 %, centred, with the preset that `PRINT.txt` names.
+   Print the first copy with `intent = "perceptual"` in `config/papers.toml`. Change the
+   line to `intent = "relative"`, run Finish again (the note names the new intent), and
+   print the second copy. Use the intent that the note names in Print & Layout.
+4. Put the two prints side by side in the light you will hang them in. Choose the one
+   with the better shadows and the cleaner colour.
+5. Set `intent` in `config/papers.toml` to the winner. Add a row to `docs/decisions.md`
+   with the date, the intent that won, and why.
+6. Look at the edge of the print. If the keyline sits too close to the trim, or the
+   edge needs a white margin, the poster needs a border: record that in
+   `docs/decisions.md` (it settles plan decision P5) and plan the border as a separate
+   change. Until then Finish writes the print at exactly its size, with no border.
+
+The test sheet is an order, not a feature: no code makes it.
 
 ## Add a relief technique
 
