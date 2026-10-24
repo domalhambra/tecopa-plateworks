@@ -1,0 +1,23 @@
+# The papers the Lab prints on. Dom owns this file.
+# - roll_in is the width of the roll, in inches: the side of a piece that goes across
+#   it. A piece with no side that fits the roll is refused (app/papers.py).
+# - profile is the ICC profile file name, as installed in /Library/ColorSync/Profiles/.
+# - intent is the rendering intent of the print: "perceptual" or "relative". The test
+#   sheet decides it (plan decision P7), so it stays "perceptual" until then.
+# - preset is the name Dom gives the paper's settings in Print & Layout.
+# - Exactly one row has enabled = true: that is the paper every print uses.
+#
+# The table is read before anything prints, and it is read strictly:
+# - Save the file as UTF-8.
+# - A row has these fields and no other: key, name, roll_in, profile, intent, preset,
+#   enabled. All of them are required.
+# - roll_in is a number above 0, and enabled is true or false, with no quotes.
+
+[[paper]]
+key = "rr-pm230-roll17"
+name = "Red River Premium Matte 230"
+roll_in = 17
+profile = "RR Premium Matte Canon Pro-1100.icc"
+intent = "perceptual"        # until the test sheet decides (P7)
+preset = "Tecopa · RR Premium Matte 17 in roll"   # Dom names it in Print & Layout
+enabled = true
