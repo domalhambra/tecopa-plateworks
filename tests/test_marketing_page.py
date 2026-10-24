@@ -194,10 +194,11 @@ def test_the_customers_doubts_are_answered():
 # true while the pages stay as described, so each is pinned against the published
 # HTML. Change what a page loads and the privacy page goes red until its copy and
 # its "Last updated" date follow.
-# Since the move to Netlify on 2026-10-13 the outside hosts are Plausible's
-# script on every page (plateworks-site PR 5) and the video poster's placeholder
-# on /tecopa/; fonts, scripts and images otherwise come from the site.
-NAMED_HOSTS = {"img.spacergif.org", "plausible.io"}
+# Since 2026-10-24 the outside hosts are Umami's script from stats.plateworks.org
+# on every page (Plausible before it, from the move to Netlify on 2026-10-13)
+# and the video poster's placeholder on /tecopa/; fonts, scripts and images
+# otherwise come from the site.
+NAMED_HOSTS = {"img.spacergif.org", "stats.plateworks.org"}
 
 
 def test_the_pages_link_to_the_privacy_page():
@@ -215,10 +216,12 @@ def test_privacy_page_carries_its_furniture():
 
 def test_privacy_page_names_every_host_the_pages_load():
     page = privacy()
-    # Netlify hosts the pages and Plausible counts the page views, without
-    # cookies, and the page must say so. The Ghost-era claims are gone.
+    # Netlify hosts the pages and Umami counts the page views, without
+    # cookies, and the page must say so. The Ghost-era and Plausible-era
+    # claims are gone.
     assert "Netlify hosts these pages" in page
-    assert "Plausible" in page and "cookies" in page
+    assert "Umami" in page and "cookies" in page
+    assert "Plausible" not in page
     assert "Ghost's built-in analytics" not in page
     assert "storage.ghost.io" not in page
     for host in NAMED_HOSTS:
