@@ -15,7 +15,7 @@ final class MCPServerTests: XCTestCase {
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
         "reprint", "continue", "runs_cancel",
         "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install",
-        "order_new", "order_prepare", "order_preview"]
+        "order_new", "order_prepare", "order_preview", "order_finish"]
 
     private var binary: URL {
         // the test bundle sits beside the products of the same build
@@ -120,7 +120,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 35)
+        XCTAssertEqual(tools.count, 36)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {
@@ -191,7 +191,7 @@ final class MCPServerTests: XCTestCase {
             XCTFail("order_new has no properties")
         }
         // an order is named by its folder, and by nothing more
-        for name in ["order_prepare", "order_preview", "order_status"] {
+        for name in ["order_prepare", "order_preview", "order_finish", "order_status"] {
             let tool = tools.first { $0["name"]?.stringValue == name }
             XCTAssertEqual(tool?["inputSchema"]?["properties"]?["folder"]?["type"]?.stringValue, "string", name)
             guard case .object(let properties)? = tool?["inputSchema"]?["properties"] else {

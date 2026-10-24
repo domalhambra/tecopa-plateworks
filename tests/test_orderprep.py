@@ -98,6 +98,18 @@ print(json.dumps(wide if e - w > %r else narrow))
 """ % WIDE_DEG
 
 
+@pytest.fixture(autouse=True)
+def _no_real_proof(monkeypatch):
+    """The stub plate is not renderable: a test that does not pass its own `proofs`
+    gets a canned proof, never a render."""
+    monkeypatch.setattr(op, "_render_proofs", lambda order, state: dict(CANNED_PROOF))
+
+
+PROOF_FAILED = op.PROOF_FAILED
+CANNED_PROOF = {"files": [], "soft_proof": "RR Premium Matte Canon Pro-1100.icc, perceptual",
+                "soft_proof_why": None, "hash": "h0"}
+
+
 def _gpx(w, s, e, n):
     pts = "".join(f'<trkpt lat="{lat}" lon="{lon}"/>' for lon, lat in ((w, s), (e, n)))
     return ('<?xml version="1.0"?><gpx version="1.1" creator="t" '
@@ -786,3 +798,218 @@ def test_prepare_warns_when_a_route_end_is_behind_a_gap(tmp_path, tools):
     (d / "order.toml").write_text('title = "Smith home ground"\nsize = "two"\ngap = 0\n')
     state = op.prepare(str(d), tools, log=lambda s: None)
     assert not any("behind gap" in w for w in state["warnings"])     # a cut set hides nothing
+
+
+# --- Task 5: Prepare writes the proof ---------------------------------------------------
+
+class _Fake:
+    def __init__(self, result=None, error=None):
+        self.calls, self.result, self.error = [], result or dict(CANNED_PROOF), error
+
+    def __call__(self, order, state):
+        self.calls.append(state["plate"]["id"])
+        if self.error:
+            raise self.error
+        return self.result
+
+
+def test_prepare_writes_the_proof_on_a_fresh_plate_and_a_current_one(tools, tmp_path):
+    d = _make_order(tmp_path)
+    fake = _Fake({**CANNED_PROOF, "hash": "abc"})
+    op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
+    assert len(fake.calls) == 2 and len(_builds(d)) == 1
+    assert state["proof"] == fake.result == od.read_state(od.load(str(d)))["proof"]
+
+
+def test_a_proof_failure_keeps_the_plate_and_comes_first_unless_holes_lead(tools, tmp_path):
+    from PIL.ImageCms import PyCMSError
+    from app.spec import SpecError
+    for n, err in enumerate((SpecError("off the DEM"), OSError("disk full"),
+                             od.OrderError("cannot write"), PyCMSError("bad profile"))):
+        d = _make_order(tmp_path, title=f"Smith {n}") if n == 0 else d
+        state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake(error=err))
+        assert state["proof"] is None and state["plate"]["id"]
+        assert state["warnings"][0].startswith("PROOF NOT RENDERED: ")
+        assert sum(w.startswith("PROOF NOT RENDERED") for w in state["warnings"]) == 1
+    assert len(_builds(d)) == 1
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["proof"] and not any("PROOF NOT RENDERED" in w for w in state["warnings"])
+
+
+def test_a_failed_proof_follows_a_holes_warning_on_both_paths(tools, tmp_path):
+    d = _make_order(tmp_path)
+    order = od.load(str(d))
+    holes = "HOLES IN THE PRINT: 3% of the frame has no elevation."
+    other = "Terrain is upsampled 1.50x (the limit is 2x)."
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())           # fresh
+    od.write_state(order, {"warnings": [holes, other]})
+    state = op.prepare(str(d), tools, log=lambda s: None,                   # current
+                       proofs=_Fake(error=OSError("disk full")))
+    assert state["warnings"] == [holes, PROOF_FAILED + "disk full", other]
+    # fresh path: a build whose hole check reports holes, then a failing proof
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(op, "check_holes", lambda *a, **k: [holes])
+        (d / "in" / "trip.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+        state = op.prepare(str(d), tools, log=lambda s: None,
+                           proofs=_Fake(error=OSError("disk full")))
+    finally:
+        monkey.undo()
+    assert state["warnings"][:2] == [holes, PROOF_FAILED + "disk full"]
+
+
+def test_a_typo_in_the_paper_table_is_a_proof_failure(tools, tmp_path):
+    from app.papers import PaperError
+    d = _make_order(tmp_path)
+    err = PaperError("config/papers.toml must have exactly one paper with enabled = true")
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake(error=err))
+    assert state["proof"] is None and state["plate"]["id"]
+    assert state["warnings"][0] == PROOF_FAILED + str(err)
+
+
+def test_the_cli_prepare_stops_on_a_paper_table_error(tmp_path, tools, capsys, monkeypatch):
+    from scripts import order as order_cli
+    from app.papers import PaperError
+
+    def fail(folder, tools):
+        raise PaperError("config/papers.toml cannot be read")
+    monkeypatch.setattr(order_cli, "prepare", fail)
+    assert order_cli.main(["prepare", str(_make_order(tmp_path))], tools=tools) == 1
+    assert capsys.readouterr().err == "prepare stopped: config/papers.toml cannot be read\n"
+
+
+def test_an_unlisted_proof_error_is_not_swallowed(tools, tmp_path):
+    d = _make_order(tmp_path)
+    with pytest.raises(RuntimeError):
+        op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake(error=RuntimeError("x")))
+
+
+def test_a_rebuilt_plate_clears_the_approval(tools, tmp_path):
+    d = _make_order(tmp_path)
+    order = od.load(str(d))
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    od.write_state(order, {"approval": {"hash": "h0", "at": "2026-10-24"}})
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())     # current
+    assert state["approval"] == {"hash": "h0", "at": "2026-10-24"}
+    (d / "in" / "trip.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())     # rebuilt
+    assert state["approval"] is None and len(_builds(d)) == 2
+
+
+def test_the_report_names_the_proof_and_the_soft_proof(tools, tmp_path):
+    d = _make_order(tmp_path)
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    text = (d / "work" / "report.txt").read_text()
+    lines = text.splitlines()
+    i = next(k for k, l in enumerate(lines) if l.startswith("Upsampling:"))
+    assert lines[i + 1] == "Proof: out/proof/smith_home_ground-proof.jpg and .pdf"
+    assert lines[i + 2] == ("Soft proof: RR Premium Matte Canon Pro-1100.icc, perceptual")
+    skipped = _Fake({**CANNED_PROOF, "soft_proof": None, "soft_proof_why": "no profile"})
+    op.prepare(str(d), tools, log=lambda s: None, proofs=skipped)
+    assert "Soft proof: skipped, no profile" in (d / "work" / "report.txt").read_text()
+
+
+ORDER_CHANGED = ("The order changed (size, orientation or tracks) since the studio save: "
+                 "the saved edits were set aside; open the order and redo them.")
+
+
+def _save_in_studio(d, record_inputs=True):
+    """What Save to order records, without the proof files: the spec, the inputs hash it
+    was framed on, and an approval of it. `record_inputs` False is a save from before
+    the inputs hash was recorded."""
+    from app import orderspec
+    from app.serialize import spec_to_json
+    order = od.load(str(d))
+    st = od.read_state(order)
+    spec = orderspec.default_spec(order, st)
+    od.set_manual(order, "spec", spec_to_json(spec))
+    if record_inputs:
+        od.set_manual(order, "spec_inputs_hash", st["inputs_hash"])
+    od.write_state(order, {"approval": {"at": "x", "hash": orderspec.spec_hash(spec)}})
+    return od.read_state(order)["manual"]["spec"]
+
+
+@pytest.mark.parametrize("change,record_inputs", [("size", True), ("size", False),
+                                                  ("tracks", True), ("orientation", True)])
+def test_a_changed_order_sets_the_saved_spec_aside(tools, tmp_path, change, record_inputs):
+    from app import orderspec
+    d = _make_order(tmp_path, size="11x17")
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    saved = _save_in_studio(d, record_inputs)
+    if change == "size":
+        _make_order(tmp_path, size="17x22")
+    elif change == "tracks":
+        (d / "in" / "more.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+    else:
+        (d / "order.toml").write_text('title = "Smith home ground"\nsize = "11x17"\n'
+                                      'orientation = "landscape"\n')
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["manual"]["spec"] is None and state["manual"]["spec_set_aside"] == saved
+    assert ORDER_CHANGED in state["warnings"] and op.PROJECTION_CHANGED not in state["warnings"]
+    assert state["approval"] is None
+    # the proof, the studio and Finish now paint the order as it is
+    order = od.load(str(d))
+    spec = orderspec.order_spec(order, state)
+    assert [spec.print_w_in, spec.print_h_in] == state["print_in"]
+    assert list(spec.crop) == state["frame"]
+    assert len(spec.tracks) == len(order.payloads())
+
+
+def test_a_rebuild_in_a_new_projection_sets_the_saved_spec_aside(tools, tmp_path):
+    d = _make_order(tmp_path)
+    order = od.load(str(d))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    saved = {"crs": "EPSG:32610", "title_text": "Edited"}
+    od.set_manual(order, "spec", saved)
+    od.set_manual(order, "spec_inputs_hash", state["inputs_hash"])
+    (d / "work" / "plate" / state["plate"]["id"] / "dem.tif").unlink()     # a rebuild
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["manual"]["spec_set_aside"] == saved and not state["manual"].get("spec")
+    assert ("The plate's projection changed: the studio's saved edits were set aside; "
+            "open the order and redo them.") in state["warnings"]
+    assert ORDER_CHANGED not in state["warnings"]
+
+
+def test_a_rebuild_of_the_same_order_keeps_the_saved_spec(tools, tmp_path):
+    d = _make_order(tmp_path)
+    order = od.load(str(d))
+    first = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    saved = {"crs": "EPSG:" + str(first["epsg"]), "title_text": "Edited"}
+    od.set_manual(order, "spec", saved)
+    od.set_manual(order, "spec_inputs_hash", first["inputs_hash"])
+    (d / "work" / "plate" / first["plate"]["id"] / "dem.tif").unlink()     # a rebuild
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(_builds(d)) == 2
+    assert state["manual"]["spec"] == saved and "spec_set_aside" not in state["manual"]
+    assert not any("set aside" in w for w in state["warnings"])
+
+
+def _order_obj(size, panels=1, orientation="portrait", gap=0.0):
+    return od.Order(dir="/x/o", title="t", subtitle="", size=size, orientation=orientation,
+                    notes="", panels=panels, gap=gap)
+
+
+def test_a_widened_17x22_names_11x17_when_it_holds():
+    tracks = (0.0, 0.0, 11000.0, 5500.0)           # long and thin
+    assert op.smaller_size(_order_obj((17.0, 22.0)), tracks, 10.0) == "11x17"
+
+
+def test_no_smaller_size_keeps_the_old_sentence():
+    tracks = (0.0, 0.0, 11000.0, 5500.0)
+    assert op.smaller_size(_order_obj((11.0, 17.0)), tracks, 10.0) is None
+
+
+def test_the_widened_warning_names_the_smaller_size(tools, tmp_path, monkeypatch):
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(NO_LIDAR))
+    monkeypatch.setattr(op, "smaller_size", lambda order, tb, layer: "11x17")
+    d = _make_order(tmp_path)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert any("11 × 17 in would keep them nestled." in w for w in state["warnings"])
+
+
+def test_prepare_never_imports_the_app():
+    import subprocess
+    code = ("import sys, app.orderprep; "
+            "assert 'app.main' not in sys.modules")
+    subprocess.run([sys.executable, "-c", code], check=True)

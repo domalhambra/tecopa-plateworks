@@ -56,6 +56,10 @@ function savePrefAuto(v) {
 // The live proof's object URL (or null) — the Social studio re-fits it into each format
 // preview. hasFreshProof() is the gate for social/film output: a stamped, non-stale spec.
 export function currentProofUrl() { return proofUrl; }
+// How many proofs have been stamped this page load. A refine swaps the proof's URL but
+// not its spec, so the URL cannot say whether the proof is a new one; this can.
+let proofSerial = 0;
+export function proofCount() { return proofSerial; }
 export function hasFreshProof() { return !!proofUrl && state.hasSpec && !state.proofStale; }
 
 // The current crop in OVERVIEW px, or null (draw a frame first).
@@ -143,7 +147,7 @@ export async function renderProof({ auto = false, stay = false } = {}) {
     if (proofUrl) pushHistory(proofUrl);
     proofUrl = URL.createObjectURL(blob);
     $('posterImg').src = proofUrl;
-    state.hasSpec = true; state.proofStale = false;
+    state.hasSpec = true; state.proofStale = false; proofSerial++;
     state.lastFinal = null;
     const da = $('downloadAgain'); if (da) da.hidden = true;
     hooks.onProofed && hooks.onProofed(stay);

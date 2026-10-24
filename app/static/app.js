@@ -15,6 +15,7 @@ import * as library from './library.js';
 import * as create from './create.js';
 import * as social from './social.js';
 import * as films from './films.js';
+import * as order from './order.js';
 import * as exportsCenter from './exports.js';
 import * as presets from './presets.js';
 import * as sunDial from './sunDial.js';
@@ -323,7 +324,7 @@ function initAll() {
     // the Preview without yanking the operator off the map they're framing on.
     onProofed: (stay) => { if (!stay) setView('preview'); refreshShell(); },
     onSnapshotApplied: () => {},
-    onUiRefresh: () => statusbar.refreshProof(),
+    onUiRefresh: () => { statusbar.refreshProof(); order.refresh(); },
   });
   compose.initCompose({
     onLoaded: () => {
@@ -340,6 +341,7 @@ function initAll() {
   // fresh plate) and re-sync the shell so the "Built" chip and cleared session take effect.
   create.initCreate({ reupload: (files) => compose.doUpload(files), refresh: refreshShell });
   exportsCenter.initExports();
+  order.initOrder();
   films.initFilms();
   social.setNav({ goExports: () => statusbar.openDrawer() });
   initPalette({

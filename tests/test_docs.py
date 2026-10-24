@@ -55,6 +55,14 @@ def test_docs_are_indexed_and_every_quoted_path_exists():
             "in/",
             "state.json",
             "build.log",
+            # The proof and print files of Prepare and Finish live in the same
+            # order folder: work/proof.png, work/softproof.png, work/record.png,
+            # out/proof/ and out/print/ with PRINT.txt.
+            "proof.png",
+            "softproof.png",
+            "record.png",
+            "out/print/",
+            "PRINT.txt",
         ),
     )
     assert findings == [], "\n" + "\n".join(str(f) for f in findings)

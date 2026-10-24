@@ -13,7 +13,8 @@ from app import order as od
 from app import orderplate as opl
 from app.orderplate import (CoverageError, PlateError, nestled_frame, order_epsg, project_bbox,
                             track_shares)
-from tests.test_orderprep import NO_LIDAR, SMALL, WIDE, _gpx, _make_order, tools  # noqa: F401
+from tests.test_orderprep import (NO_LIDAR, SMALL, WIDE, _gpx, _make_order,  # noqa: F401
+                                  _no_real_proof, tools)
 
 KM = 1000.0
 

@@ -136,6 +136,22 @@
           <!-- film setup (film target; built by films.js) -->
           <div id="filmPanel" hidden></div>
 
+          <!-- order (a customer order: open it, proof it, save the proof to it, approve it;
+               order.js shows this panel only when the engine lists an order) -->
+          <section id="orderPanel" class="insp-group" aria-label="Order" hidden>
+            <div class="insp-head"><span class="insp-title">Order</span></div>
+            <div class="field">
+              <label for="orderSelect">Customer order</label>
+              <div class="select-wrap"><select id="orderSelect"></select></div>
+            </div>
+            <div class="order-actions">
+              <button id="orderOpen" class="ghost" type="button" disabled>Open</button>
+              <button id="orderSave" class="ghost" type="button" disabled>Save to order</button>
+              <button id="orderApprove" class="primary" type="button" disabled>Approve</button>
+            </div>
+            <p id="orderStatus" class="insp-note order-status" role="status" aria-live="polite"></p>
+          </section>
+
           <section id="filesBlock" class="insp-group">
             <div class="insp-head"><span class="insp-title">Files</span>
               <button id="addFiles" class="mini" type="button" hidden>+ Add</button>

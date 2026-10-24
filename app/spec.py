@@ -213,7 +213,7 @@ class CompositionSpec:
     # Default 1 -> every pre-feature poster and manifest is an unlabeled first edition.
     edition: int = 1
     # data credit (v1.7): the cartouche's attribution line ("Terrain USGS 3DEP - ..."),
-    # DERIVED from the region's sources.json at proof time (main.credit_line) -- never a
+    # DERIVED from the region's sources.json at proof time (app.credit.credit_text) -- never a
     # client style knob. It's a picture decision, so it rides the spec and is stamped at
     # /api/proof; the painter never reads region data (reprint byte-identity). Default ""
     # -> every pre-feature manifest deserializes to a no-op and renders unchanged.

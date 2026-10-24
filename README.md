@@ -30,7 +30,8 @@ recipe, and what to do when a venv dies, is in `docs/changing-things.md`.
 
 An order starts with `.venv/bin/python scripts/order.py new TP-26-001`, which copies
 the intake's upload from Dropbox, and runs with `scripts/order.py preview "<folder>"`
-and `scripts/order.py prepare "<folder>"`; see `docs/changing-things.md` › Run an order.
+and `scripts/order.py prepare "<folder>"`. After the client approves the proof in the studio,
+`scripts/order.py finish "<folder>"` writes the print TIFFs; see `docs/changing-things.md` › Run an order.
 
 ## Prove a change
 

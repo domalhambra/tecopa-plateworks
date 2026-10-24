@@ -266,9 +266,13 @@ def test_a_restored_set_keeps_the_crop_the_engine_returns():
     for name in ("ensurePrintSize", "applyPrefill"):
         body = _function_body("compose.js", name)
         assert "reframe(" not in body and "resetFrame" not in body, name
+    # continueFromPoster lands the poster through landOpened, which an opened order
+    # shares (order.js); the frame rule holds in both
     cont = _function_body("compose.js", "continueFromPoster")
-    assert "state.starterCrop = j.starter_crop; state.crop = null;" in cont
-    assert "reframe(" not in cont
+    assert "landOpened(j)" in cont and "reframe(" not in cont
+    land = _function_body("compose.js", "landOpened")
+    assert "state.starterCrop = j.starter_crop; state.crop = null;" in land
+    assert "reframe(" not in land
     # Reset frame gives a starter of another shape the sheet's shape. Used as it was, it
     # was a wide frame on a tall sheet and the proof was refused for its aspect.
     reset = _function_body("canvas.js", "resetFrame")

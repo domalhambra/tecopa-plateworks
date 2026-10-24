@@ -67,6 +67,14 @@ Customer data stays outside the repo. The repo is public.
 > of 17 × 22 in panels, with a `gap` key. Finish is still not built. See
 > `2026-10-11-print-sizes-panel-sets-and-size-preview-design.md`.
 
+> Amended 2026-10-24: Prepare also writes the client's proof, and Finish is built.
+> After the plate, Prepare writes `out/proof/<title>-proof.jpg` and `.pdf`, with
+> `work/proof.png` and `work/softproof.png`, from the spec Finish prints. The approval is
+> a button in the studio: Open the order, Save to order, then Approve. Approve records
+> the time and the hash of the saved spec in `work/state.json`. `scripts/order.py
+> finish` refuses an order with no approval, and an order that changed after it.
+> See `docs/changing-things.md`, Run an order, and `docs/decisions.md`, 2026-10-24.
+
 1. **Prepare** — `scripts/order.py prepare <folder>`. Runs in `.venv`. Reads the
    tracks and photos. Reuses or builds a plate (section 3). Frames the tracks and
    picks the sheet (section 4). Finds photo spots and lays out photos (section 5).
@@ -142,6 +150,13 @@ plates).
 > from 17 in rolls and hand-cut, so the rows below are superseded. 18×24 and 12×18 are
 > no longer sold. See `docs/decisions.md`, 2026-10-10 (two-size menu).
 
+> Amended 2026-10-24: the paper is Red River Premium Matte 230 on the 17 in roll, the
+> Lab's standard stock, and `config/papers.toml` holds one enabled row for it: the roll
+> width, the profile `RR Premium Matte Canon Pro-1100.icc`, the rendering intent and the
+> name of the Print & Layout preset. The rows below, and PT-101, are superseded. The
+> intent stays `perceptual` until the test sheet picks one. See `docs/decisions.md`,
+> 2026-10-24, P1.
+
 | Paper | Sheet | Print size | At launch |
 |---|---|---|---|
 | PT-101 Platinum | 13×19 | 12×18 (The Print) | on |
@@ -211,6 +226,16 @@ ground and 12 in the band.
 ## 6. Print output
 
 Finish writes `out/print/<title>-<size>.tif` and `out/print/PRINT.txt`.
+
+> Amended 2026-10-24: Finish is built. The TIFF is 8-bit, not 16-bit: the compositor
+> works in `uint8` and Pillow has no 16-bit RGB mode (P4). It is the print at exactly
+> its size, with no border; the first test print settles whether it needs one (P5). The
+> 17 in side goes across the roll, so a piece 17 in tall turns 90° counter-clockwise
+> (P6). A set writes one TIFF for each panel, `<title>-<size>-<k>of<n>.tif`, and no gap
+> strip. `FINAL_FORMATS` does not gain `tif` (P9). `PRINT.txt` names the paper, the
+> profile, the intent, the preset and the feed of each file, and `Removed: <name>` for
+> each other `.tif` that Finish removed from the folder. `work/record.png` holds the
+> reprint record. See `docs/decisions.md`, 2026-10-24.
 
 | Property | Value |
 |---|---|

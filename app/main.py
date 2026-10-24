@@ -13,11 +13,15 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks, load_waypoints, Track
 from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
-                      CREDIT_MAX_CHARS, TITLE_MAX_CHARS, year_span)
+                      TITLE_MAX_CHARS, year_span)
+# the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
+# from the same module, which never imports this one
+from app.credit import CREDIT_DATASETS, credit_line  # noqa: F401
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
-from app import basecache, debug
+from app import basecache, debug, icc
 from app import panels as panel_geo
 from app import ingest, regionbuild
+from app import order as order_mod, orderspec, orderstudio
 
 logconfig.setup_logging()
 log = logging.getLogger("tecopa.api")
@@ -124,21 +128,8 @@ FINAL_FORMATS = {"png": ("PNG", "image/png"), "pdf": ("PDF", "application/pdf")}
 # sRGB ICC profile for the final PNG so a print lab / color-managed viewer reads our
 # colors as intended instead of guessing (V1-10 print-correctness). Pillow bundles
 # littlecms; fall back to no profile rather than fail the render if it's absent.
-def _srgb_profile() -> bytes:
-    import struct
-    from PIL import ImageCms
-    profile = bytearray(ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes())
-    # littlecms stamps the creation date and time, to the second, into header bytes
-    # 24 to 35. The profile is built once per process, so two engine processes gave
-    # the same final two different iCCP chunks and two hashes (invariant 3). One fixed
-    # date makes the bytes the same in every process. It is a real date, not zeros:
-    # Pillow raises on `creation_date` for year 0. The profile ID (bytes 84 to 99) is
-    # zero, so no MD5 goes stale.
-    profile[24:36] = struct.pack(">6H", 2026, 10, 12, 0, 0, 0)
-    return bytes(profile)
-
 try:
-    SRGB_PROFILE = _srgb_profile()
+    SRGB_PROFILE = icc.srgb_profile()
 except Exception:                                          # pragma: no cover
     SRGB_PROFILE = None
 
@@ -939,47 +930,6 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     session.update(session_id, hotspots=spots, spec=None)     # re-proof to apply
     cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
     return {"ok": True, "px": cpx, "py": cpy}
-
-# The cartouche's data-credit line, mapped from the dataset strings region_prep
-# records in sources.json. Substring match, so a wording tweak ("USGS 3DEP 10 m DEM"
-# vs "3DEP 1/3 arc-second") still lands on the canonical short credit.
-CREDIT_DATASETS = (("3DEP", "Terrain USGS 3DEP"),
-                   ("NHD", "Water USGS NHD"),
-                   ("NLCD", "Land cover NLCD 2021"),
-                   ("GNIS", "Names USGS GNIS"))
-
-def credit_line(region) -> str:
-    """The attribution sentence for spec.credit_text, derived from the region's
-    sources.json at proof time -- derived truth, not a client style knob. Known USGS
-    datasets map to short credits; an UNRECOGNIZED dataset passes through verbatim,
-    so a future non-public-domain plate automatically carries its *required* credit
-    instead of relying on memory (courtesy today, load-bearing later). Joined with an
-    ASCII " - " -- validate() gates credit_text to printable ASCII, and the gate and
-    this builder decide the charset once. Clamped to that same gate by construction
-    (drop non-ASCII, cap the length) so a plate's own metadata can never 422 a proof.
-    No sources.json, or none that name datasets -> "" (no credit row painted)."""
-    try:
-        with open(os.path.join(region.dir, "sources.json")) as f:
-            sources = json.load(f).get("sources", [])
-    except Exception:
-        return ""
-    parts = []
-    for s in sources if isinstance(sources, list) else []:
-        ds = s.get("dataset") if isinstance(s, dict) else None
-        if not (isinstance(ds, str) and ds.strip()):
-            continue
-        for token, credit in CREDIT_DATASETS:
-            if token in ds:
-                part = credit
-                break
-        else:
-            part = ds.strip()
-        # a hole-filled dynamic grid records 3DEP twice; the credit names it once
-        if part not in parts:
-            parts.append(part)
-    line = "".join(c for c in " - ".join(parts) if " " <= c <= "~")
-    return line[:CREDIT_MAX_CHARS]
-
 
 def download_stem(region_id: str) -> str:
     """The filename stem every deliverable starts with: tecopa_<region_id>. A plate
@@ -2026,28 +1976,11 @@ def _proof_form_for(spec):
             form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
-@app.post("/api/continue")
-async def continue_poster(file: UploadFile = File(...),
-                          allow_plate_mismatch: bool = Form(False)):
-    """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
-    live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
-    extends the lineage chain, and returns the /api/upload response shape plus prefill
-    hints so the wizard lands with everything restored. The client then adds this year's
-    GPX (/api/upload), re-frames if needed, and renders -- one clean proof stamps the
-    new edition (invariant 1 holds: still one spec per accepted proof)."""
-    data = await _read_capped(file)
-    manifest = _manifest_or_422(data)
-    # same untrusted-manifest door as /api/reprint: parse, keep only size-bounded embedded
-    # photos (so last year's pinned photos ride forward from inside the file, with no
-    # uploads dir), bound the geometry, and validate -- one audited guard chain, so a new
-    # verb can't drift from reprint's hardening. Label + icon always survive.
-    try:
-        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
-    except SpecError as e:
-        raise HTTPException(422, str(e))
-    region = _manifest_region_or_422(spec, "continued", manifest,
-                                     allow_plate_mismatch=allow_plate_mismatch)
-
+def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra=None):
+    """Make a live session from `spec` on `region` and answer the /api/upload response shape
+    plus the prefill and proof_form that restore the wizard. /api/continue and the order
+    studio's Open both land here. `extra` is merged into the session data (the order's
+    folder rides there)."""
     # rebuild live Track objects from the spec (tracks ride the spec, exactly the
     # property reprint relies on). track_days is parallel to tracks; normalize its
     # length rather than trust a crafted mismatch. Track ids only need uniqueness --
@@ -2062,25 +1995,9 @@ async def continue_poster(file: UploadFile = File(...),
     spots = [dict(s) for s in spec.hotspots
              if isinstance(s, dict) and _finite_num(s.get("x")) and _finite_num(s.get("y"))]
 
-    # edition + lineage from the UNTRUSTED manifest: parse defensively (a crafted file
-    # can carry a non-int edition or a non-list lineage) -> clamp, drop garbage, never
-    # 500. The top-level `edition` is the parent's number; the child is one past it,
-    # capped at the ceiling (a millennium of yearly editions never reaches it).
-    try:
-        parent_edition = int(manifest.get("edition", 1))
-    except (TypeError, ValueError):
-        parent_edition = 1
-    parent_edition = min(max(parent_edition, 1), EDITION_MAX)
-    raw_lineage = manifest.get("lineage", [])
-    lineage = [e for e in raw_lineage if isinstance(e, dict)] if isinstance(raw_lineage, list) else []
-    lineage = (lineage + [{"sha256": hashlib.sha256(data).hexdigest(),
-                           "edition": parent_edition}])[-provenance.LINEAGE_MAX:]
-    edition = min(parent_edition + 1, EDITION_MAX)
-    raw_sources = manifest.get("sources", [])
-    sources = [s for s in raw_sources if isinstance(s, dict)] if isinstance(raw_sources, list) else []
-
     sid = session.create({"tracks": tracks, "hotspots": spots, "region_id": region.id,
-                          "sources": sources, "edition": edition, "lineage": lineage})
+                          "sources": list(sources), "edition": edition,
+                          "lineage": list(lineage), **(extra or {})})
 
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
     hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
@@ -2133,8 +2050,6 @@ async def continue_poster(file: UploadFile = File(...),
                   # smart label placement + chronological weave restore from the spec
                   "labelPlace": spec.label_place, "trackWeave": spec.track_weave},
     }
-    log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
-             sid, region.id, edition, len(tracks), len(spots))
     return {"session": sid, "region": region.id, "name": region.name,
             "overview": f"/regions/{region.id}/overview.png",
             "overview_size": region.cfg["overview_size"], "tracks": tpx,
@@ -2158,6 +2073,143 @@ async def continue_poster(file: UploadFile = File(...),
             # additive: the same restore as exact /api/proof form fields, for a client
             # that sends a proof without the studio's prefill -> form mapping
             "proof_form": _proof_form_for(spec)}
+
+@app.post("/api/continue")
+async def continue_poster(file: UploadFile = File(...),
+                          allow_plate_mismatch: bool = Form(False)):
+    """Open a Tecopa Plateworks PNG for its next edition. Reads the embedded spec, rebuilds a
+    live session (tracks, hotspots, style, title, crop, sources), bumps the edition and
+    extends the lineage chain, and returns the /api/upload response shape plus prefill
+    hints so the wizard lands with everything restored. The client then adds this year's
+    GPX (/api/upload), re-frames if needed, and renders -- one clean proof stamps the
+    new edition (invariant 1 holds: still one spec per accepted proof)."""
+    data = await _read_capped(file)
+    manifest = _manifest_or_422(data)
+    # same untrusted-manifest door as /api/reprint: parse, keep only size-bounded embedded
+    # photos (so last year's pinned photos ride forward from inside the file, with no
+    # uploads dir), bound the geometry, and validate -- one audited guard chain, so a new
+    # verb can't drift from reprint's hardening. Label + icon always survive.
+    try:
+        spec = provenance.spec_from_manifest(manifest)   # the one untrusted-manifest door
+    except SpecError as e:
+        raise HTTPException(422, str(e))
+    region = _manifest_region_or_422(spec, "continued", manifest,
+                                     allow_plate_mismatch=allow_plate_mismatch)
+
+    # edition + lineage from the UNTRUSTED manifest: parse defensively (a crafted file
+    # can carry a non-int edition or a non-list lineage) -> clamp, drop garbage, never
+    # 500. The top-level `edition` is the parent's number; the child is one past it,
+    # capped at the ceiling (a millennium of yearly editions never reaches it).
+    try:
+        parent_edition = int(manifest.get("edition", 1))
+    except (TypeError, ValueError):
+        parent_edition = 1
+    parent_edition = min(max(parent_edition, 1), EDITION_MAX)
+    raw_lineage = manifest.get("lineage", [])
+    lineage = [e for e in raw_lineage if isinstance(e, dict)] if isinstance(raw_lineage, list) else []
+    lineage = (lineage + [{"sha256": hashlib.sha256(data).hexdigest(),
+                           "edition": parent_edition}])[-provenance.LINEAGE_MAX:]
+    edition = min(parent_edition + 1, EDITION_MAX)
+    raw_sources = manifest.get("sources", [])
+    sources = [s for s in raw_sources if isinstance(s, dict)] if isinstance(raw_sources, list) else []
+
+    resp = _open_spec_session(spec, region, sources=sources, edition=edition,
+                             lineage=lineage)
+    sid = resp["session"]
+    log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
+             sid, region.id, edition, len(resp["tracks"]), len(resp["hotspots"]))
+    return resp
+
+# The order studio: Open an order's plate and spec in the studio, Save to order, Approve.
+# The session holds the proofed spec under "spec" (/api/proof stamps it) and the order's
+# folder under "order_dir" (Open sets it). The logic is app/orderstudio.py.
+def _order_session(session_id):
+    """(session, order) for a session Open made, or 409."""
+    st = _require_session(session_id)
+    if not st.get("spec"):
+        raise HTTPException(409, "Render a proof first")
+    if not st.get("order_dir"):
+        raise HTTPException(409, "This session was not opened from an order")
+    try:
+        return st, order_mod.load(st["order_dir"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+
+@app.get("/api/orders")
+async def orders_list():
+    return orderstudio.list_orders()
+
+@app.post("/api/order/open")
+async def order_open(folder: str = Form(...)):
+    """Open an order in the studio: its plate joins the region registry, and a session
+    starts from the spec Finish would print (the saved one, else the default)."""
+    root = os.path.realpath(order_mod.orders_root())
+    real = os.path.realpath(os.path.expanduser(folder))
+    if real == root or not real.startswith(root + os.sep) \
+            or not os.path.isfile(os.path.join(real, "order.toml")):
+        raise HTTPException(404, "Not an order in the orders folder")
+    try:
+        order = order_mod.load(real)
+        state = order_mod.read_state(order)
+        spec = orderspec.order_spec(order, state)
+        plate = orderspec.plate_dir(state)
+        plate_id = state["plate"]["id"]
+        region = regions.Region(plate_id, os.path.dirname(plate))
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    except (SpecError, TypeError, ValueError, KeyError, AttributeError) as e:
+        # a hand-edited manual.spec or region.json: say what is wrong, not a 500
+        raise HTTPException(409, f"The order's saved spec or plate cannot be read "
+                                 f"({type(e).__name__}: {e}). Run Prepare, then open "
+                                 f"the order again.")
+    REGIONS[plate_id] = region
+    resp = _open_spec_session(spec, region, extra={"order_dir": real})
+    if not _under(region.dir, REGIONS_ROOT):
+        # the static /regions mount serves REGIONS_ROOT only; a built plate lives in the order
+        resp["overview"] = f"/api/order/plate/{plate_id}/overview.png"
+    resp["order"] = {"folder": real, "title": order.title,
+                     "approved": orderstudio.approval_ok(order, state)}
+    return resp
+
+def _under(path, root):
+    """True when path resolves (realpath) inside root."""
+    root = os.path.realpath(root)
+    return os.path.realpath(path).startswith(root + os.sep)
+
+@app.get("/api/order/plate/{plate_id}/overview.png")
+async def order_plate_overview(plate_id: str):
+    """The overview image of a plate that Open registered from an order's folder. Only a
+    registered plate whose folder is inside the orders folder is served."""
+    region = REGIONS.get(plate_id)
+    path = os.path.join(region.dir, "overview.png") if region else ""
+    if not region or not _under(region.dir, order_mod.orders_root()) \
+            or not os.path.isfile(path):
+        raise HTTPException(404, "No such plate overview")
+    return FileResponse(path, media_type="image/png")
+
+@app.post("/api/order/save")
+async def order_save(session_id: str = Form(...)):
+    """Save to order: the session's proofed spec becomes the order's spec, and the proof
+    files are written again from it."""
+    st, order = _order_session(session_id)
+    try:
+        out = orderstudio.save_spec(order, st["spec"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    answer = {"saved": True, "approved": orderstudio.approval_ok(order, out["state"]),
+              "proof": out["proof"]}
+    if out["proof_error"]:
+        answer["proof_error"] = out["proof_error"]
+    return answer
+
+@app.post("/api/order/approve")
+async def order_approve(session_id: str = Form(...)):
+    st, order = _order_session(session_id)
+    try:
+        state = orderstudio.approve(order, st["spec"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    return {"approved": True, "at": state["approval"]["at"]}
 
 # Debug routes for the `tecopa` tool, present only under TECOPA_DEBUG=1, which the
 # macOS launcher sets. Every route is read-only except POST /api/debug/studio, and
