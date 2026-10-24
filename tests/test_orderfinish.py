@@ -91,6 +91,53 @@ def test_finish_refuses_an_approval_with_no_saved_spec(order):
         orderfinish.finish(order.dir, dpi=DPI)
 
 
+def _no_render(monkeypatch):
+    """Make any render fail loudly: a refusal that must come before the render."""
+    from app import render
+
+    def boom(*a, **k):
+        raise AssertionError("Finish rendered before it refused")
+    monkeypatch.setattr(render, "rasterize", boom)
+
+
+SIZE_MISMATCH = ("The saved studio spec is not this order's size: open the order, proof, "
+                 "save and approve again.")
+
+
+@pytest.mark.parametrize("state", [{"print_in": [17.0, 22.0]}, {"panels": 2, "gap": 2.0}])
+def test_finish_refuses_a_spec_that_is_not_the_orders_size_before_rendering(
+        approved, monkeypatch, state):
+    od.write_state(approved, state)        # Prepare framed another size after the approval
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(approved.dir, dpi=DPI)
+    assert str(ex.value) == SIZE_MISMATCH
+    assert not os.path.exists(os.path.join(approved.dir, "out", "print"))
+
+
+def _approve_spec(order, **change):
+    import dataclasses
+    spec = dataclasses.replace(orderspec.order_spec(order, od.read_state(order)), **change)
+    od.set_manual(order, "spec", spec_to_json(spec))
+    orderstudio.approve(order, spec)
+
+
+def test_finish_refuses_a_bleed_before_rendering(order, monkeypatch):
+    _approve_spec(order, bleed_in=0.125)
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError, match="a print with bleed cannot go to the roll"):
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert not os.path.exists(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_refuses_a_piece_the_roll_cannot_take_before_rendering(order, monkeypatch):
+    od.write_state(order, {"print_in": [12.0, 18.0]})
+    _approve_spec(order, print_w_in=12.0, print_h_in=18.0)
+    _no_render(monkeypatch)
+    with pytest.raises(papers.PaperError, match="does not fit the 17 in roll"):
+        orderfinish.finish(order.dir, dpi=DPI)
+
+
 def test_a_single_sheet_tiff_is_the_print_at_its_size(approved):
     r = orderfinish.finish(approved.dir, dpi=DPI)
     assert len(r["files"]) == 1
@@ -124,6 +171,7 @@ def test_a_17_inch_wide_sheet_is_not_turned(order):
     half_h = half_w * 11.0 / 17.0
     spec = dataclasses.replace(spec, print_w_in=17.0, print_h_in=11.0,
                                crop=(cx - half_w, cy - half_h, cx + half_w, cy + half_h))
+    od.write_state(order, {"print_in": [17.0, 11.0]})          # a landscape 11x17 order
     od.set_manual(order, "spec", spec_to_json(spec))
     orderstudio.approve(order, spec)
     r = orderfinish.finish(order.dir, dpi=DPI)

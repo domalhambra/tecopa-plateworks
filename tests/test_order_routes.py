@@ -347,3 +347,26 @@ def test_a_malformed_region_json_is_409_not_500(client, built_order):
     open(path, "w").write("{not json")
     r = client.post("/api/order/open", data={"folder": built_order.dir})
     assert r.status_code == 409 and "Run Prepare" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("change,words", [
+    (dict(output_kind="wallpaper"), "not a wallpaper"),
+    (dict(print_w_in=17.0, print_h_in=22.0), "not the order's size"),
+    (dict(panels=2, panel_gap_in=2.0), "not the order's size")])
+def test_save_refuses_a_spec_that_is_not_the_orders_print(client, order, change, words):
+    import dataclasses
+    opened = _open(client, order)
+    _proof(client, opened)
+    spec = session.get(opened["session"])["spec"]
+    session.update(opened["session"], spec=dataclasses.replace(spec, **change))
+    r = _post(client, "save", opened)
+    assert r.status_code == 409 and words in r.json()["detail"]
+    assert "spec" not in (od.read_state(order).get("manual") or {})
+
+
+def test_save_records_the_inputs_the_spec_was_framed_on(client, order):
+    od.write_state(order, {"inputs_hash": "inputs-at-prepare"})
+    opened = _open(client, order)
+    _proof(client, opened)
+    assert _post(client, "save", opened).status_code == 200
+    assert od.read_state(order)["manual"]["spec_inputs_hash"] == "inputs-at-prepare"

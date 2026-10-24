@@ -2230,7 +2230,10 @@ async def order_save(session_id: str = Form(...)):
     """Save to order: the session's proofed spec becomes the order's spec, and the proof
     files are written again from it."""
     st, order = _order_session(session_id)
-    out = orderstudio.save_spec(order, st["spec"])
+    try:
+        out = orderstudio.save_spec(order, st["spec"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
     answer = {"saved": True, "approved": orderstudio.approval_ok(order, out["state"]),
               "proof": out["proof"]}
     if out["proof_error"]:

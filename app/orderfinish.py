@@ -33,6 +33,10 @@ from app.orderproof import size_key
 
 NOT_APPROVED = "Approve the proof in the studio first."
 CHANGED = "The order changed after approval: approve it again."
+SIZE_MISMATCH = ("The saved studio spec is not this order's size: open the order, proof, "
+                 "save and approve again.")
+BLEED = ("The render is {have[0]} × {have[1]} px and the print is {want[0]} × {want[1]} px: "
+         "a print with bleed cannot go to the roll as it is.")
 
 PRINT_DIR = ("out", "print")
 NOTE_NAME = "PRINT.txt"
@@ -123,7 +127,15 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     from app import render           # here, so importing this module needs no renderer
     paper = papers.enabled_paper()
     spec = orderspec.order_spec(order, state)
+    # every check that needs no picture comes before the render
+    if orderspec.matches_order(spec, state):
+        raise OrderError(SIZE_MISMATCH)
     dpi = spec.final_dpi() if dpi is None else dpi
+    want = (round(spec.print_w_in * dpi), round(spec.print_h_in * dpi))
+    if spec.pixel_size(dpi) != want:
+        raise OrderError(BLEED.format(have=spec.pixel_size(dpi), want=want))
+    pw, ph = panel_geo.panel_size_in(spec)
+    rotation = papers.feed_rotation(pw, ph, paper.roll_in)
     spec = provenance.build_final_spec(spec, max(24, round(spec.photo_box_in * dpi)))
     plate = orderspec.plate_dir(state)
     with open(os.path.join(plate, "region.json")) as f:
@@ -132,11 +144,8 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     log(f"Painting {order.title} at {_inches(dpi)} ppi ...")
     sheet = render.rasterize(spec, dpi=dpi, region_dir=plate, watermark=False, cfg=cfg)
     sheet = sheet.convert("RGB")
-    want = (round(spec.print_w_in * dpi), round(spec.print_h_in * dpi))
     if sheet.size != want:
-        raise OrderError(f"The render is {sheet.size[0]} × {sheet.size[1]} px and the print "
-                         f"is {want[0]} × {want[1]} px: a print with bleed cannot go to "
-                         f"the roll as it is.")
+        raise OrderError(BLEED.format(have=sheet.size, want=want))
     srgb = icc.srgb_profile()
     manifest = provenance.build_manifest(
         spec, region_pack=provenance.region_pack_block(
@@ -145,8 +154,6 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     # the pieces: a set is cut at its panels (the gap strips are dropped), a sheet is one
     parts = panel_geo.cut(sheet, spec, dpi) if panel_geo.is_set(spec) else [sheet]
     count = len(parts)
-    pw, ph = panel_geo.panel_size_in(spec)
-    rotation = papers.feed_rotation(pw, ph, paper.roll_in)
     stem, size = orderspec.file_stem(order.title), _size_word(spec)
     print_dir = os.path.join(order.dir, *PRINT_DIR)
 

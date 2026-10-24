@@ -119,3 +119,24 @@ def test_orderspec_does_not_import_the_app():
     code = ("import sys, app.orderspec, app.orderpreview; "
             "assert 'app.main' not in sys.modules")
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_a_spec_at_the_orders_size_matches_it(order):
+    st = read_state(order)
+    assert orderspec.matches_order(orderspec.default_spec(order, st), st) is None
+
+
+@pytest.mark.parametrize("change", [dict(print_w_in=17.0, print_h_in=22.0),
+                                    dict(panels=2), dict(panel_gap_in=2.0)])
+def test_a_spec_of_another_size_panels_or_gap_does_not_match(order, change):
+    st = read_state(order)
+    spec = dataclasses.replace(orderspec.default_spec(order, st), **change)
+    why = orderspec.matches_order(spec, st)
+    assert why and "11 x 17 in" in why
+
+
+def test_a_state_from_before_sets_matches_a_single_sheet(order):
+    st = read_state(order)
+    spec = orderspec.default_spec(order, st)
+    old = {k: v for k, v in st.items() if k not in ("panels", "gap")}
+    assert orderspec.matches_order(spec, old) is None

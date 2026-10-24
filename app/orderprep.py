@@ -22,7 +22,7 @@ from PIL.ImageCms import PyCMSError
 from app import orderspec, sizes
 from app.ingest import lonlat_extent
 from app.order import (DEFAULT_GAP, SIZE_KEYS, OrderError, cache_path, load, orders_root,
-                       read_state, refuse_inside_repo, set_manual, write_state)
+                       read_state, refuse_inside_repo, update_manual, write_state)
 from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
                             PlateError, choose_grid, conus_covered, curated_fit, needed_resolution,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
@@ -35,6 +35,8 @@ from app.spec import SpecError
 PROOF_FAILED = "PROOF NOT RENDERED: "
 PROJECTION_CHANGED = ("The plate's projection changed: the studio's saved edits were "
                       "set aside; open the order and redo them.")
+ORDER_CHANGED = ("The order changed (size, orientation or tracks) since the studio save: "
+                 "the saved edits were set aside; open the order and redo them.")
 
 # One pass per 3DEP layer (region_prep.COVERAGE_LAYERS_M: 1, 3, 10, 30, 60). That
 # module needs the prep stack, so it is counted here, not imported (invariant 13).
@@ -416,9 +418,9 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
             warnings.append(f"A route end is behind gap {k}. Move the frame, or use "
                             f"gap = 0 to print every part of the map.")
     track_m = project_bbox(tracks, epsg)
-    aside = _set_spec_aside(order, plate, manual)
+    aside = _set_spec_aside(order, plate, manual, state.get("inputs_hash"), inputs)
     if aside:
-        warnings.append(PROJECTION_CHANGED)
+        warnings.append(aside)
     state = write_state(order, {
         "inputs_hash": inputs, "epsg": epsg, "print_in": [pw, ph],
         "panels": order.panels, "gap": order.gap,
@@ -434,23 +436,34 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     return state
 
 
-def _set_spec_aside(order, plate, manual) -> bool:
-    """A studio spec saved in another projection than the plate just built cannot be
-    rebound (orderspec.order_spec refuses it): keep it as manual.spec_set_aside and let
-    the default spec render. True when it did."""
+def _set_spec_aside(order, plate, manual, last_inputs, inputs) -> str | None:
+    """Keep a studio spec that no longer fits the order as manual.spec_set_aside, so the
+    default spec renders. Two cases set it aside:
+
+    - the order's inputs (size, orientation, panels, gap or tracks) changed since the
+      save: the spec still holds the old size, frame and tracks. The save records the
+      inputs hash it was framed on (manual.spec_inputs_hash); a save from before that
+      record is compared with the inputs of the last Prepare.
+    - the plate just built is in another projection: orderspec.order_spec refuses it.
+
+    Returns the warning, or None when the spec stays."""
     saved = manual.get("spec")
     if not saved:
-        return False
-    try:
-        with open(os.path.join(plate["root"], plate["id"], "region.json")) as f:
-            crs = json.load(f)["crs"]
-    except (OSError, ValueError, KeyError):
-        return False
-    if saved.get("crs") == crs:
-        return False
-    set_manual(order, "spec_set_aside", saved)
-    set_manual(order, "spec", None)
-    return True
+        return None
+    framed_on = manual.get("spec_inputs_hash") or last_inputs
+    if framed_on != inputs:
+        why = ORDER_CHANGED
+    else:
+        try:
+            with open(os.path.join(plate["root"], plate["id"], "region.json")) as f:
+                crs = json.load(f)["crs"]
+        except (OSError, ValueError, KeyError):
+            return None
+        if saved.get("crs") == crs:
+            return None
+        why = PROJECTION_CHANGED
+    update_manual(order, {"spec_set_aside": saved, "spec": None, "spec_inputs_hash": None})
+    return why
 
 
 def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=None,

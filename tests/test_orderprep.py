@@ -890,28 +890,79 @@ def test_the_report_names_the_proof_and_the_soft_proof(tools, tmp_path):
     assert "Soft proof: skipped, no profile" in (d / "work" / "report.txt").read_text()
 
 
+ORDER_CHANGED = ("The order changed (size, orientation or tracks) since the studio save: "
+                 "the saved edits were set aside; open the order and redo them.")
+
+
+def _save_in_studio(d, record_inputs=True):
+    """What Save to order records, without the proof files: the spec, the inputs hash it
+    was framed on, and an approval of it. `record_inputs` False is a save from before
+    the inputs hash was recorded."""
+    from app import orderspec
+    from app.serialize import spec_to_json
+    order = od.load(str(d))
+    st = od.read_state(order)
+    spec = orderspec.default_spec(order, st)
+    od.set_manual(order, "spec", spec_to_json(spec))
+    if record_inputs:
+        od.set_manual(order, "spec_inputs_hash", st["inputs_hash"])
+    od.write_state(order, {"approval": {"at": "x", "hash": orderspec.spec_hash(spec)}})
+    return od.read_state(order)["manual"]["spec"]
+
+
+@pytest.mark.parametrize("change,record_inputs", [("size", True), ("size", False),
+                                                  ("tracks", True), ("orientation", True)])
+def test_a_changed_order_sets_the_saved_spec_aside(tools, tmp_path, change, record_inputs):
+    from app import orderspec
+    d = _make_order(tmp_path, size="11x17")
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    saved = _save_in_studio(d, record_inputs)
+    if change == "size":
+        _make_order(tmp_path, size="17x22")
+    elif change == "tracks":
+        (d / "in" / "more.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+    else:
+        (d / "order.toml").write_text('title = "Smith home ground"\nsize = "11x17"\n'
+                                      'orientation = "landscape"\n')
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["manual"]["spec"] is None and state["manual"]["spec_set_aside"] == saved
+    assert ORDER_CHANGED in state["warnings"] and op.PROJECTION_CHANGED not in state["warnings"]
+    assert state["approval"] is None
+    # the proof, the studio and Finish now paint the order as it is
+    order = od.load(str(d))
+    spec = orderspec.order_spec(order, state)
+    assert [spec.print_w_in, spec.print_h_in] == state["print_in"]
+    assert list(spec.crop) == state["frame"]
+    assert len(spec.tracks) == len(order.payloads())
+
+
 def test_a_rebuild_in_a_new_projection_sets_the_saved_spec_aside(tools, tmp_path):
     d = _make_order(tmp_path)
     order = od.load(str(d))
-    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
     saved = {"crs": "EPSG:32610", "title_text": "Edited"}
     od.set_manual(order, "spec", saved)
-    (d / "in" / "trip.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+    od.set_manual(order, "spec_inputs_hash", state["inputs_hash"])
+    (d / "work" / "plate" / state["plate"]["id"] / "dem.tif").unlink()     # a rebuild
     state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
     assert state["manual"]["spec_set_aside"] == saved and not state["manual"].get("spec")
     assert ("The plate's projection changed: the studio's saved edits were set aside; "
             "open the order and redo them.") in state["warnings"]
+    assert ORDER_CHANGED not in state["warnings"]
 
 
-def test_a_rebuild_in_the_same_projection_keeps_the_saved_spec(tools, tmp_path):
+def test_a_rebuild_of_the_same_order_keeps_the_saved_spec(tools, tmp_path):
     d = _make_order(tmp_path)
     order = od.load(str(d))
     first = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
     saved = {"crs": "EPSG:" + str(first["epsg"]), "title_text": "Edited"}
     od.set_manual(order, "spec", saved)
-    (d / "in" / "trip.gpx").write_text(_gpx(-116.22, 35.88, -116.16, 35.94))
+    od.set_manual(order, "spec_inputs_hash", first["inputs_hash"])
+    (d / "work" / "plate" / first["plate"]["id"] / "dem.tif").unlink()     # a rebuild
     state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(_builds(d)) == 2
     assert state["manual"]["spec"] == saved and "spec_set_aside" not in state["manual"]
+    assert not any("set aside" in w for w in state["warnings"])
 
 
 def _order_obj(size, panels=1, orientation="portrait", gap=0.0):

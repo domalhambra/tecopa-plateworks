@@ -23,6 +23,9 @@ from app.serialize import spec_to_json
 
 PROOF_REMOVED = "The client proof files were removed; save again to write them."
 NOT_SAVED = "Save to order first: the studio's proof differs from the saved one."
+NOT_PRINT = ("Save to order takes a print proof, not a wallpaper: proof the order as a "
+             "print, then save.")
+WRONG_SIZE = "This proof is not the order's size ({why}): open the order again, proof, then save."
 
 
 def _prepared(order: Order, state: dict) -> bool:
@@ -82,9 +85,20 @@ def save_spec(order: Order, spec) -> dict:
 
     The spec is saved before the proofs are written, so a proof that cannot be written
     never loses the save. Returns {"state", "proof", "proof_error"}: the new state, the
-    files written, and the reason they were not written ("" when they were)."""
-    od.set_manual(order, "spec", spec_to_json(spec))
+    files written, and the reason they were not written ("" when they were).
+
+    A wallpaper, or a print of another size, panel count or gap than the order Prepare
+    framed, is refused (OrderError) and nothing is saved: Finish would refuse it. The
+    save records the order's inputs hash (manual.spec_inputs_hash), so a later Prepare
+    of a changed order sets the spec aside."""
     state = od.read_state(order)
+    if spec.output_kind != "print":
+        raise OrderError(NOT_PRINT)
+    why = orderspec.matches_order(spec, state)
+    if why:
+        raise OrderError(WRONG_SIZE.format(why=why))
+    state = od.update_manual(order, {"spec": spec_to_json(spec),
+                                     "spec_inputs_hash": state.get("inputs_hash")})
     if state.get("approval") and not approval_ok(order, state):
         state = od.write_state(order, {"approval": None})
     try:

@@ -290,8 +290,13 @@ def write_state(order: Order, updates: dict) -> dict:
 
 
 def set_manual(order: Order, key: str, value) -> dict:
+    return update_manual(order, {key: value})
+
+
+def update_manual(order: Order, updates: dict) -> dict:
+    """Set several "manual" keys in one write, so a reader never sees half of them."""
     state = read_state(order)
-    state.setdefault("manual", {})[key] = value
+    state.setdefault("manual", {}).update(updates)
     _dump(order, state)
     return state
 

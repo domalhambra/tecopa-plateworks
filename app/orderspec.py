@@ -31,6 +31,7 @@ ORDER_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
                   label_place="smart", track_weave=True)
 SEED = 7                    # the same seed the size preview draws with
 NO_PLATE = "Run Prepare first: work/state.json has no plate."
+SIZE_TOL = 1e-6             # inches: a size read back from JSON is the same size
 
 
 def plate_dir(state: dict) -> str:
@@ -82,6 +83,26 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
         return dataclasses.replace(spec, region_id=cfg["id"], crs=cfg["crs"],
                                    native_resolution_m=cfg["native_resolution_m"])
     return default_spec(order, state)
+
+
+def _size_words(w, h, panels, gap) -> str:
+    return f"{w:g} x {h:g} in, {panels} panel(s), {gap:g} in gap"
+
+
+def matches_order(spec: CompositionSpec, state: dict) -> str | None:
+    """None when `spec` is the print Prepare framed: the print size, panel count and gap
+    in state.json. Else the difference in words. A state.json from before sets has no
+    panels or gap: it is a single sheet. Save to order and Finish both ask this."""
+    try:
+        want = (float(state["print_in"][0]), float(state["print_in"][1]),
+                int(state.get("panels", 1)), float(state.get("gap", 0.0)))
+    except (KeyError, IndexError, TypeError, ValueError):
+        return "work/state.json names no print size: run Prepare first"
+    have = (float(spec.print_w_in), float(spec.print_h_in), int(spec.panels),
+            float(spec.panel_gap_in))
+    if all(abs(a - b) <= SIZE_TOL for a, b in zip(have, want)):
+        return None
+    return f"the spec is {_size_words(*have)}; the order is {_size_words(*want)}"
 
 
 def spec_hash(spec: CompositionSpec) -> str:
