@@ -287,3 +287,42 @@ def pytest_collection_modifyitems(config, items):
         base = getattr(it, "originalname", None) or it.name.split("[")[0]  # strip params
         if stem in _SLOW_MODULES or base in _SLOW_TESTS.get(stem, ()):
             it.add_marker(pytest.mark.slow)
+
+
+# --- an order on disk with a built plate (for the order modules' tests) ---------------
+
+@pytest.fixture
+def order_with_plate(tmp_path, monkeypatch):
+    """An Order in tmp_path whose plate is synthetic_region("lassen_ca") and whose
+    work/state.json Prepare would have written: epsg, print_in, panels, gap, frame,
+    plate. One GPX in in/ lies inside the plate and inside the frame. Returns the
+    Order, freshly loaded; read the state with app.order.read_state(order)."""
+    from pyproj import Transformer
+
+    from app import order as od
+
+    monkeypatch.setenv(od.ORDERS_ENV, str(tmp_path / "orders"))
+    plate = synthetic_region("lassen_ca")
+    with open(os.path.join(plate, "region.json")) as f:
+        cfg = json.load(f)
+    w, s, e, n = cfg["bounds"]
+    cx, cy = (w + e) / 2, (s + n) / 2
+    to_ll = Transformer.from_crs(cfg["crs"], "EPSG:4326", always_xy=True)
+    pts = [to_ll.transform(cx + dx, cy + dy) for dx, dy in ((-3000, -5000), (0, 0),
+                                                            (3000, 5000))]
+    trkpts = "".join(f'<trkpt lat="{lat}" lon="{lon}"/>' for lon, lat in pts)
+    folder = tmp_path / "orders" / "2026-10-001-smith"
+    (folder / "in").mkdir(parents=True)
+    (folder / "in" / "trip.gpx").write_text(
+        '<?xml version="1.0"?><gpx version="1.1" creator="t" '
+        'xmlns="http://www.topografix.com/GPX/1/1"><trk><name>t</name>'
+        f"<trkseg>{trkpts}</trkseg></trk></gpx>")
+    (folder / "order.toml").write_text('title = "Smith home ground"\nsize = "11x17"\n')
+    order = od.load(str(folder))
+    od.write_state(order, {
+        "epsg": int(cfg["crs"].split(":")[1]), "print_in": [11.0, 17.0],
+        "panels": 1, "gap": 0.0,
+        "frame": [cx - 9000.0, cy - 13909.0, cx + 9000.0, cy + 13909.0],   # 11:17, 5.4 m/px
+        "plate": {"id": os.path.basename(plate), "root": os.path.dirname(plate),
+                  "kind": "curated", "grid_m": float(cfg["native_resolution_m"])}})
+    return order

@@ -38,6 +38,7 @@ from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, STATIC_LAYERS_M, STATIC_S
                             CoverageError, PlateError, choose_grid, conus_covered,
                             curated_fit, nestled_frame, order_epsg, plate_bounds,
                             project_bbox, to_lonlat_bbox, track_shares)
+from app.orderspec import ORDER_LOOK
 from app.regionbuild import slugify
 from app.spec import TITLE_MAX_CHARS, CompositionSpec, SpecError
 
@@ -280,9 +281,7 @@ def plan_sizes(bounds_m=None, tracks_m=None, widen=None, forced=(), ground=None)
 
 PREVIEW_SINGLE_PX = 1600   # the long side of a single sheet's map
 PREVIEW_SET_DPI = 50.0     # a set: 1,100 px along a panel's long side
-# the look of a new poster in the studio (the defaults in app/static/store.js)
-PREVIEW_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
-                    label_place="smart", track_weave=True)
+PREVIEW_LOOK = ORDER_LOOK   # the look of a new poster in the studio; app/orderspec.py
 
 
 def preview_dpi(entry) -> float:
