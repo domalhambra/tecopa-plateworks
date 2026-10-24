@@ -657,10 +657,11 @@ queued, and `--force` overrides that.
 A tracked run keeps its files under
 `~/Library/Application Support/TecopaPlateworks/runs/`: the record, the log, the exit
 code, and a marker if it was cancelled. The log has no size limit. No command deletes
-them: remove old ones by hand when the folder grows. The record of an `order prepare`
-or `order preview` run holds the order folder's name, and its log holds the report.
-`order preview` is a tracked run, as `order prepare` is: it reads the network and takes
-minutes. `order new` runs in the call and returns its report: it copies files and
+them: remove old ones by hand when the folder grows. The record of an `order prepare`,
+`order preview` or `order finish` run holds the order folder's name, and its log holds
+the report. `order preview` is a tracked run, as `order prepare` is: it reads the network
+and takes minutes. `order finish` is a tracked run too: it takes minutes and reads no
+network. `order new` runs in the call and returns its report: it copies files and
 reads no network. `order status` reads what Prepare wrote, not the preview's files.
 
 The debug commands (`jobs`, `sessions`, `caches`, `studio state`, `studio errors`) need

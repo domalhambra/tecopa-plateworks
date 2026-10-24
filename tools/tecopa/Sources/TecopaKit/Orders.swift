@@ -80,8 +80,9 @@ enum Orders {
 
     static let finishEntry = CatalogEntry(
         name: "order_finish",
-        summary: "Start Finish for one order folder with scripts/order.py, as a tracked run: render the "
-            + "order's approved sizes and write the print files. It takes minutes and reads the network.",
+        summary: "Start Finish for one order folder with scripts/order.py, as a tracked run. It refuses "
+            + "unless the order's saved studio spec is approved and unchanged; then it renders that spec at "
+            + "300 ppi and writes the print TIFFs, PRINT.txt and the record PNG. It takes minutes.",
         readOnly: false,
         parameters: [folderParameter],
         text: Runs.startedText

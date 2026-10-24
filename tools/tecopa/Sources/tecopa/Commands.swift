@@ -552,12 +552,13 @@ struct PlateCommand: AsyncParsableCommand {
 struct OrderCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "order",
-        abstract: "Make a customer order from the intake, preview its sizes, prepare it, or read what "
-            + "Prepare decided.",
+        abstract: "Make a customer order from the intake, preview its sizes, prepare it, finish it, or "
+            + "read what Prepare decided.",
         discussion: "`order new` copies the intake's job folder into a new order folder and prints what it "
-            + "copied. `order prepare`, `order preview` and `order finish` each start a tracked run and return at once. "
-            + "Read a run with `tecopa runs show <id>`. After Prepare, run `tecopa order status <folder>`. "
-            + "The preview writes its PDF and its email under the order's out/preview/ folder.",
+            + "copied. `order prepare`, `order preview` and `order finish` each start a tracked run and "
+            + "return at once. Read a run with `tecopa runs show <id>`. After Prepare, run "
+            + "`tecopa order status <folder>`. The preview writes its PDF and its email under the "
+            + "order's out/preview/ folder. Finish writes the print files under out/print/.",
         subcommands: [New.self, Prepare.self, Preview.self, Finish.self, Status.self])
 
     /// The one argument of each command.
@@ -603,7 +604,8 @@ struct OrderCommand: AsyncParsableCommand {
     struct Finish: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "finish",
-            abstract: "Start Finish as a tracked run: render the order's approved sizes and write the print files.")
+            abstract: "Start Finish as a tracked run: refuse unless the order's studio spec is approved and "
+                + "unchanged, then render it at 300 ppi and write the print TIFFs.")
         @OptionGroup var global: GlobalOptions
         @OptionGroup var order: Folder
         func run() async throws { try await execute("order_finish", global, order.arguments) }

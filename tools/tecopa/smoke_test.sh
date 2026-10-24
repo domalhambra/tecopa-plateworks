@@ -90,7 +90,7 @@ REPLY="$( ( printf '%s\n' "$INIT" "$NOTE" "$LIST"; sleep 3 ) | "$TECOPA" mcp )"
 TOOLS="$(grep '"id":3' <<<"$REPLY")" || fail "the MCP tools/list sent no reply"
 grep -qF '"name":"doctor"' <<<"$TOOLS" || fail "tools/list does not name doctor"
 grep -qF '"name":"engine_restart"' <<<"$TOOLS" || fail "tools/list does not name engine_restart"
-for tool in render_final reprint continue runs_show plate_build order_preview order_status studio_errors; do
+for tool in render_final reprint continue runs_show plate_build order_preview order_finish order_status studio_errors; do
   grep -qF "\"name\":\"$tool\"" <<<"$TOOLS" || fail "tools/list does not name $tool"
 done
 echo "  MCP tools/list: OK"
