@@ -13,7 +13,10 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
 from app.ingest import load_tracks, load_waypoints, Track
 from app.density import hotspots
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
-                      CREDIT_MAX_CHARS, TITLE_MAX_CHARS, year_span)
+                      TITLE_MAX_CHARS, year_span)
+# the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
+# from the same module, which never imports this one
+from app.credit import CREDIT_DATASETS, credit_line  # noqa: F401
 from app import session, render, regions, blobs, jobs, logconfig, provenance, wallpaper, timelapse, solar
 from app import basecache, debug, icc
 from app import panels as panel_geo
@@ -927,47 +930,6 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     session.update(session_id, hotspots=spots, spec=None)     # re-proof to apply
     cpx, cpy = crs_to_overview_px(region.geo, x, y)           # snap-back position
     return {"ok": True, "px": cpx, "py": cpy}
-
-# The cartouche's data-credit line, mapped from the dataset strings region_prep
-# records in sources.json. Substring match, so a wording tweak ("USGS 3DEP 10 m DEM"
-# vs "3DEP 1/3 arc-second") still lands on the canonical short credit.
-CREDIT_DATASETS = (("3DEP", "Terrain USGS 3DEP"),
-                   ("NHD", "Water USGS NHD"),
-                   ("NLCD", "Land cover NLCD 2021"),
-                   ("GNIS", "Names USGS GNIS"))
-
-def credit_line(region) -> str:
-    """The attribution sentence for spec.credit_text, derived from the region's
-    sources.json at proof time -- derived truth, not a client style knob. Known USGS
-    datasets map to short credits; an UNRECOGNIZED dataset passes through verbatim,
-    so a future non-public-domain plate automatically carries its *required* credit
-    instead of relying on memory (courtesy today, load-bearing later). Joined with an
-    ASCII " - " -- validate() gates credit_text to printable ASCII, and the gate and
-    this builder decide the charset once. Clamped to that same gate by construction
-    (drop non-ASCII, cap the length) so a plate's own metadata can never 422 a proof.
-    No sources.json, or none that name datasets -> "" (no credit row painted)."""
-    try:
-        with open(os.path.join(region.dir, "sources.json")) as f:
-            sources = json.load(f).get("sources", [])
-    except Exception:
-        return ""
-    parts = []
-    for s in sources if isinstance(sources, list) else []:
-        ds = s.get("dataset") if isinstance(s, dict) else None
-        if not (isinstance(ds, str) and ds.strip()):
-            continue
-        for token, credit in CREDIT_DATASETS:
-            if token in ds:
-                part = credit
-                break
-        else:
-            part = ds.strip()
-        # a hole-filled dynamic grid records 3DEP twice; the credit names it once
-        if part not in parts:
-            parts.append(part)
-    line = "".join(c for c in " - ".join(parts) if " " <= c <= "~")
-    return line[:CREDIT_MAX_CHARS]
-
 
 def download_stem(region_id: str) -> str:
     """The filename stem every deliverable starts with: tecopa_<region_id>. A plate

@@ -116,7 +116,7 @@ def test_a_plate_with_no_region_json_says_run_prepare(order, tmp_path):
 def test_orderspec_does_not_import_the_app():
     import subprocess
     import sys
-    code = ("import sys, app.orderspec, app.orderpreview; "
+    code = ("import sys, app.orderspec, app.orderpreview, app.credit; "
             "assert 'app.main' not in sys.modules")
     subprocess.run([sys.executable, "-c", code], check=True)
 
@@ -140,3 +140,11 @@ def test_a_state_from_before_sets_matches_a_single_sheet(order):
     spec = orderspec.default_spec(order, st)
     old = {k: v for k, v in st.items() if k not in ("panels", "gap")}
     assert orderspec.matches_order(spec, old) is None
+
+
+def test_the_default_spec_carries_the_plates_credit(order):
+    from app import credit
+    st = read_state(order)
+    s = orderspec.default_spec(order, st)
+    assert s.credit_text == credit.credit_text(orderspec.plate_dir(st))
+    assert s.credit_text.startswith("Terrain USGS 3DEP")

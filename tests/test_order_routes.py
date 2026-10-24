@@ -370,3 +370,23 @@ def test_save_records_the_inputs_the_spec_was_framed_on(client, order):
     _proof(client, opened)
     assert _post(client, "save", opened).status_code == 200
     assert od.read_state(order)["manual"]["spec_inputs_hash"] == "inputs-at-prepare"
+
+
+def test_a_proof_with_no_changes_saves_the_spec_prepare_proofed(client, order):
+    """Prepare's proof is the default spec. Open, proof with no change and Save must save
+    that same spec, or the client's first proof is not the print."""
+    default = orderspec.default_spec(order, od.read_state(order))
+    opened = _open(client, order)
+    _proof(client, opened)
+    assert orderspec.spec_hash(session.get(opened["session"])["spec"]) == \
+        orderspec.spec_hash(default)
+    assert _post(client, "save", opened).status_code == 200
+    state = od.read_state(order)
+    assert orderspec.spec_hash(orderspec.order_spec(order, state)) == \
+        orderspec.spec_hash(default)
+
+
+def test_main_keeps_the_credit_line_it_always_had():
+    from app import credit, main
+    assert main.credit_line is credit.credit_line
+    assert main.CREDIT_DATASETS is credit.CREDIT_DATASETS

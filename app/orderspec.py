@@ -21,6 +21,7 @@ import json
 import os
 import re
 
+from app.credit import credit_text
 from app.order import Order, OrderError
 from app.regionbuild import slugify
 from app.serialize import spec_from_json, spec_to_json
@@ -64,6 +65,7 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
         native_resolution_m=cfg["native_resolution_m"],
         tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
         hotspots=[], seed=SEED, title_text=order.title,
+        credit_text=credit_text(path),      # as the studio's proof derives it
         labels=os.path.isfile(os.path.join(path, "labels.json")),
         panels=state["panels"], panel_gap_in=state["gap"], **ORDER_LOOK)
 
