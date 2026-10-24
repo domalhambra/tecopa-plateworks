@@ -21,6 +21,7 @@ from app import orderproof, orderspec
 from app.order import Order, OrderError
 from app.serialize import spec_to_json
 
+PROOF_REMOVED = "The client proof files were removed; save again to write them."
 NOT_SAVED = "Save to order first: the studio's proof differs from the saved one."
 
 
@@ -30,6 +31,15 @@ def _prepared(order: Order, state: dict) -> bool:
         return True
     except OrderError:
         return False
+
+
+def _remove_client_proofs(order: Order) -> None:
+    stem = orderspec.file_stem(order.title)
+    for ext in ("jpg", "pdf"):
+        try:
+            os.remove(os.path.join(order.dir, "out", "proof", f"{stem}-proof.{ext}"))
+        except FileNotFoundError:
+            pass
 
 
 def approval_ok(order: Order, state: dict) -> bool:
@@ -81,7 +91,10 @@ def save_spec(order: Order, spec) -> dict:
         written = orderproof.write_proofs(order, orderspec.order_spec(order, state),
                                           orderspec.plate_dir(state))
     except (OrderError, PyCMSError) as ex:
-        return {"state": state, "proof": [], "proof_error": str(ex)}
+        # an earlier save's client files must not stand beside this save: they are not
+        # this print's proof
+        _remove_client_proofs(order)
+        return {"state": state, "proof": [], "proof_error": f"{ex} {PROOF_REMOVED}"}
     return {"state": state, "proof": written["files"], "proof_error": ""}
 
 

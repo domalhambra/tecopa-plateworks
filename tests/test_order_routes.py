@@ -180,8 +180,33 @@ def test_a_proof_that_cannot_be_written_still_saves(client, order, monkeypatch):
     r = _post(client, "save", opened)
     assert r.status_code == 200, r.text
     assert r.json() == {"saved": True, "approved": False, "proof": [],
-                        "proof_error": "the disk is full"}
+                        "proof_error": "the disk is full The client proof files were "
+                                       "removed; save again to write them."}
     assert od.read_state(order)["manual"]["spec"]
+
+
+def test_a_failed_proof_removes_the_old_client_files(client, order, monkeypatch):
+    from app import orderproof
+    proof_dir = os.path.join(order.dir, "out", "proof")
+    os.makedirs(proof_dir)
+    stem = orderspec.file_stem(order.title)
+    old = [os.path.join(proof_dir, f"{stem}-proof.{ext}") for ext in ("jpg", "pdf")]
+    for path in old:
+        open(path, "wb").write(b"old")
+    keep = os.path.join(proof_dir, "notes.txt")
+    open(keep, "w").write("not a client proof")
+
+    def fail(*a, **kw):
+        raise od.OrderError("the disk is full")
+    monkeypatch.setattr(orderproof, "write_proofs", fail)
+    opened = _open(client, order)
+    _proof(client, opened)
+    r = _post(client, "save", opened)
+    assert r.status_code == 200
+    assert r.json()["proof_error"].endswith(
+        " The client proof files were removed; save again to write them.")
+    assert not any(os.path.exists(p) for p in old)
+    assert os.path.exists(keep)
 
 
 def test_a_pycms_error_in_the_proof_still_saves(client, order, monkeypatch):
@@ -243,3 +268,82 @@ def test_continue_still_answers_its_shape(client):
     assert SPEC_KEYS <= set(body) and "order" not in body
     assert body["edition"] == 2 and body["prefill"]["title"] == "Trip"
     assert "order_dir" not in session.get(body["session"])
+
+
+@pytest.fixture
+def built_order(order):
+    """The order whose plate sits in its own work/plate, as Prepare builds one: inside the
+    orders folder and outside REGIONS_ROOT."""
+    import shutil
+    state = od.read_state(order)
+    src = os.path.join(state["plate"]["root"], state["plate"]["id"])
+    dst = os.path.join(order.plate_root, state["plate"]["id"])
+    shutil.copytree(src, dst, symlinks=True)
+    od.write_state(order, {"plate": {**state["plate"], "root": order.plate_root}})
+    return order
+
+
+def test_a_built_plates_overview_is_served(client, built_order):
+    from app.main import REGIONS
+    plate = od.read_state(built_order)["plate"]["id"]
+    try:
+        opened = _open(client, built_order)
+        assert opened["overview"] == f"/api/order/plate/{plate}/overview.png"
+        r = client.get(opened["overview"])
+        assert r.status_code == 200 and r.headers["content-type"] == "image/png"
+        assert r.content.startswith(b"\x89PNG")
+    finally:
+        REGIONS.pop(plate, None)
+
+
+def test_a_curated_plate_keeps_the_regions_overview(client, order):
+    from app import regions
+    from app.main import REGIONS
+    curated = regions.Region("lassen_ca", "regions")
+    plate = od.read_state(order)["plate"]
+    od.write_state(order, {"plate": {**plate, "root": "regions"}})
+    try:
+        opened = _open(client, order)
+        assert opened["overview"] == "/regions/lassen_ca/overview.png"
+        assert opened["region"] == curated.id
+    finally:
+        REGIONS.pop("lassen_ca", None)
+        REGIONS["lassen_ca"] = curated
+
+
+def test_the_overview_route_refuses_what_is_not_an_orders_plate(client, order):
+    from app import regions
+    from app.main import REGIONS
+    assert client.get("/api/order/plate/no_such_plate/overview.png").status_code == 404
+    # a registered plate whose folder is outside the orders folder
+    plate = od.read_state(order)["plate"]
+    outside = regions.Region(plate["id"], plate["root"])
+    saved = REGIONS.get(plate["id"])
+    REGIONS[plate["id"]] = outside
+    try:
+        assert client.get(f"/api/order/plate/{plate['id']}/overview.png").status_code == 404
+    finally:
+        if saved is None:
+            REGIONS.pop(plate["id"], None)
+        else:
+            REGIONS[plate["id"]] = saved
+
+
+def test_a_corrupt_saved_spec_is_409_not_500(client, order):
+    state = od.read_state(order)
+    crs = json.load(open(os.path.join(state["plate"]["root"], state["plate"]["id"],
+                                      "region.json")))["crs"]
+    for bad in ({"crs": crs, "tracks": "not tracks"}, "not a spec", {"crs": crs}):
+        od.set_manual(order, "spec", bad)
+        r = client.post("/api/order/open", data={"folder": order.dir})
+        assert r.status_code == 409, (bad, r.text)
+        assert "cannot be read" in r.json()["detail"] or "Run Prepare" in r.json()["detail"]
+
+
+def test_a_malformed_region_json_is_409_not_500(client, built_order):
+    plate = od.read_state(built_order)["plate"]
+    path = os.path.join(plate["root"], plate["id"], "region.json")
+    os.remove(path)
+    open(path, "w").write("{not json")
+    r = client.post("/api/order/open", data={"folder": built_order.dir})
+    assert r.status_code == 409 and "Run Prepare" in r.json()["detail"]

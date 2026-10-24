@@ -2191,14 +2191,39 @@ async def order_open(folder: str = Form(...)):
         state = order_mod.read_state(order)
         spec = orderspec.order_spec(order, state)
         plate = orderspec.plate_dir(state)
+        plate_id = state["plate"]["id"]
+        region = regions.Region(plate_id, os.path.dirname(plate))
     except order_mod.OrderError as e:
         raise HTTPException(409, str(e))
-    plate_id = state["plate"]["id"]
-    REGIONS[plate_id] = regions.Region(plate_id, os.path.dirname(plate))
-    resp = _open_spec_session(spec, REGIONS[plate_id], extra={"order_dir": real})
+    except (SpecError, TypeError, ValueError, KeyError, AttributeError) as e:
+        # a hand-edited manual.spec or region.json: say what is wrong, not a 500
+        raise HTTPException(409, f"The order's saved spec or plate cannot be read "
+                                 f"({type(e).__name__}: {e}). Run Prepare, then open "
+                                 f"the order again.")
+    REGIONS[plate_id] = region
+    resp = _open_spec_session(spec, region, extra={"order_dir": real})
+    if not _under(region.dir, REGIONS_ROOT):
+        # the static /regions mount serves REGIONS_ROOT only; a built plate lives in the order
+        resp["overview"] = f"/api/order/plate/{plate_id}/overview.png"
     resp["order"] = {"folder": real, "title": order.title,
                      "approved": orderstudio.approval_ok(order, state)}
     return resp
+
+def _under(path, root):
+    """True when path resolves (realpath) inside root."""
+    root = os.path.realpath(root)
+    return os.path.realpath(path).startswith(root + os.sep)
+
+@app.get("/api/order/plate/{plate_id}/overview.png")
+async def order_plate_overview(plate_id: str):
+    """The overview image of a plate that Open registered from an order's folder. Only a
+    registered plate whose folder is inside the orders folder is served."""
+    region = REGIONS.get(plate_id)
+    path = os.path.join(region.dir, "overview.png") if region else ""
+    if not region or not _under(region.dir, order_mod.orders_root()) \
+            or not os.path.isfile(path):
+        raise HTTPException(404, "No such plate overview")
+    return FileResponse(path, media_type="image/png")
 
 @app.post("/api/order/save")
 async def order_save(session_id: str = Form(...)):
