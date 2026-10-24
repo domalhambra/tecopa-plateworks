@@ -55,13 +55,20 @@ def test_a_saved_spec_wins_but_follows_the_current_plate(order):
     st = read_state(order)
     saved = spec_to_json(orderspec.default_spec(order, st))
     saved["region_id"] = "old_plate"
-    saved["crs"] = "EPSG:32611"
     saved["native_resolution_m"] = 99
     saved["title_text"] = "Edited"
     set_manual(order, "spec", saved)
     s = orderspec.order_spec(order, read_state(order))
     assert s.title_text == "Edited" and s.region_id == st["plate"]["id"]
     assert s.crs == "EPSG:32610" and s.native_resolution_m == 10
+
+
+def test_order_spec_refuses_a_saved_spec_in_another_projection(order):
+    saved = spec_to_json(orderspec.default_spec(order, read_state(order)))
+    saved["crs"] = "EPSG:32611"
+    set_manual(order, "spec", saved)
+    with pytest.raises(OrderError, match="projection changed since the studio save"):
+        orderspec.order_spec(order, read_state(order))
 
 
 def test_the_hash_follows_the_spec(order):

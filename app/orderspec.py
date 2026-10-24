@@ -69,11 +69,15 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
 
 def order_spec(order: Order, state: dict) -> CompositionSpec:
     """The spec to paint: the saved one if the studio saved one, else the default.
-    Its region_id, crs and native_resolution_m follow the plate on disk now, so a
-    plate Prepare rebuilt after the save is the plate that is painted."""
+    Its region_id and native_resolution_m follow the plate on disk now, so a plate
+    Prepare rebuilt after the save is the plate that is painted. A saved spec in another
+    projection than that plate is refused: its crop is in the old metres."""
     saved = (state.get("manual") or {}).get("spec")
     if saved:
         _, cfg = _region_config(state)
+        if saved.get("crs") != cfg["crs"]:
+            raise OrderError("The plate's projection changed since the studio save: "
+                             "run Prepare, then open the order and redo the edits.")
         spec = spec_from_json(saved)
         return dataclasses.replace(spec, region_id=cfg["id"], crs=cfg["crs"],
                                    native_resolution_m=cfg["native_resolution_m"])

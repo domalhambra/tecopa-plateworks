@@ -15,11 +15,14 @@ import os
 import shutil
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
+from PIL.ImageCms import PyCMSError
+
+from app import orderspec, sizes
 from app.ingest import lonlat_extent
-from app.order import (OrderError, cache_path, load, orders_root, read_state,
-                       refuse_inside_repo, write_state)
+from app.order import (DEFAULT_GAP, SIZE_KEYS, OrderError, cache_path, load, orders_root,
+                       read_state, refuse_inside_repo, set_manual, write_state)
 from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
                             PlateError, choose_grid, conus_covered, curated_fit, needed_resolution,
                             nestled_frame, order_epsg, plate_bounds, project_bbox,
@@ -27,6 +30,11 @@ from app.orderplate import (FILL_WARN, MAX_UPSAMPLE, PLATE_PAD_M, CoverageError,
                             widen_for_upsample)
 from app.regionbuild import run_build
 from app.regions import Region
+from app.spec import SpecError
+
+PROOF_FAILED = "PROOF NOT RENDERED: "
+PROJECTION_CHANGED = ("The plate's projection changed: the studio's saved edits were "
+                      "set aside; open the order and redo them.")
 
 # One pass per 3DEP layer (region_prep.COVERAGE_LAYERS_M: 1, 3, 10, 30, 60). That
 # module needs the prep stack, so it is counted here, not imported (invariant 13).
@@ -235,12 +243,66 @@ def cache_env() -> tuple:
     return env, cache_dir
 
 
-def prepare(order_dir: str, tools: Tools, log=print) -> dict:
+def _render_proofs(order, state) -> dict:
+    """The default `proofs` of prepare: the proof files of the spec Finish would print.
+    Imported here, so Prepare never loads the renderer or app.main (plan decision P8)."""
+    from app.orderproof import write_proofs
+    return write_proofs(order, orderspec.order_spec(order, state),
+                        orderspec.plate_dir(state))
+
+
+def _size_key(order) -> str | None:
+    if order.panels > 1:
+        return {2: "two", 3: "three"}.get(order.panels)
+    short, long_ = sorted(order.size)
+    return {(11.0, 17.0): "11x17", (17.0, 22.0): "17x22"}.get((short, long_))
+
+
+def _as_size(order, key):
+    """The same order at another menu size, for its print dimensions."""
+    if key in ("two", "three"):
+        gap = order.gap if order.panels > 1 else DEFAULT_GAP
+        return replace(order, size=(17.0, 22.0), panels=2 if key == "two" else 3, gap=gap)
+    short, long_ = (11.0, 17.0) if key == "11x17" else (17.0, 22.0)
+    return replace(order, size=(short, long_), panels=1, gap=0.0)
+
+
+def smaller_size(order, track_bounds_m, layer_m: float) -> str | None:
+    """The key of the largest menu size below the ordered one whose nestled frame holds
+    at `layer_m` data within MAX_UPSAMPLE, or None. The menu is walked from the
+    largest down (three, two, 17x22, 11x17)."""
+    pw, ph = order.print_in()
+    for key in reversed(SIZE_KEYS):
+        cand = _as_size(order, key)
+        cw, ch = cand.print_in()
+        if cw * ch >= pw * ph:
+            continue
+        frame = nestled_frame(track_bounds_m, cw / ch)
+        if layer_m / needed_resolution(frame, cw) <= MAX_UPSAMPLE:
+            return key
+    return None
+
+
+def _prove(order, state, proofs, log) -> dict:
+    """Write the proof files after the plate. A failure is a warning, never a stop: the
+    plate stays and `proof` is None. Only errors a proof can raise are caught."""
+    warnings = [w for w in state.get("warnings", []) if not w.startswith(PROOF_FAILED)]
+    try:
+        proof = proofs(order, state)
+    except (SpecError, OSError, OrderError, PyCMSError) as ex:
+        proof = None
+        warnings.insert(0, PROOF_FAILED + str(ex))
+        log(PROOF_FAILED + str(ex))
+    return write_state(order, {"proof": proof, "warnings": warnings})
+
+
+def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     # load() already refuses an order folder inside the repo; TECOPA_ORDERS_DIR
     # (orders_root(), which cache_path() derives from) is a separate setting and
     # needs its own check, so a customer's orders can't be pointed into the public
     # repo even when the order folder given here is not.
     refuse_inside_repo(orders_root())
+    proofs = proofs or _render_proofs
     order = load(order_dir)
     payloads = order.payloads()
     tracks = lonlat_extent(payloads)["bbox"]
@@ -268,6 +330,7 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
     current = state.get("inputs_hash") == inputs and frame_current
     if current and _plate_present(old_plate, landcover_rebuilds):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
+        state = _prove(order, state, proofs, log)    # the title may have changed
         write_report(order, state)   # the title may have changed; it is not an input
         return state
     # True when the only reason `current` plate above was not present is a missing
@@ -314,7 +377,9 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
                     f"nestled {pw:g}x{ph:g}. The frame was widened, and the tracks now "
                     f"fill {fill:.0%} of it.")
             if fill < FILL_WARN:
-                note += " A smaller print would keep them nestled."
+                key = smaller_size(order, project_bbox(tracks, epsg), forced_by)
+                note += (f" {sizes.table()[key]['name']} would keep them nestled."
+                         if key else " A smaller print would keep them nestled.")
             warnings.append(note)
         if grid["upsample"] > 1.0:
             warnings.append(f"Terrain is upsampled {grid['upsample']:.2f}x "
@@ -356,6 +421,9 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
             warnings.append(f"A route end is behind gap {k}. Move the frame, or use "
                             f"gap = 0 to print every part of the map.")
     track_m = project_bbox(tracks, epsg)
+    aside = _set_spec_aside(order, plate, manual)
+    if aside:
+        warnings.append(PROJECTION_CHANGED)
     state = write_state(order, {
         "inputs_hash": inputs, "epsg": epsg, "print_in": [pw, ph],
         "panels": order.panels, "gap": order.gap,
@@ -364,9 +432,30 @@ def prepare(order_dir: str, tools: Tools, log=print) -> dict:
         "fill": round(track_fill(track_m, frame), 3),
         "need_m": round(needed_resolution(frame, pw), 3),
         "plate": plate, "warnings": warnings,
-        "landcover_rebuilds": landcover_rebuilds})
+        "landcover_rebuilds": landcover_rebuilds,
+        "approval": None})            # a new plate is a new print: nothing approved stands
+    state = _prove(order, read_state(order), proofs, log)
     write_report(order, state)
     return state
+
+
+def _set_spec_aside(order, plate, manual) -> bool:
+    """A studio spec saved in another projection than the plate just built cannot be
+    rebound (orderspec.order_spec refuses it): keep it as manual.spec_set_aside and let
+    the default spec render. True when it did."""
+    saved = manual.get("spec")
+    if not saved:
+        return False
+    try:
+        with open(os.path.join(plate["root"], plate["id"], "region.json")) as f:
+            crs = json.load(f)["crs"]
+    except (OSError, ValueError, KeyError):
+        return False
+    if saved.get("crs") == crs:
+        return False
+    set_manual(order, "spec_set_aside", saved)
+    set_manual(order, "spec", None)
+    return True
 
 
 def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=None,
@@ -528,6 +617,12 @@ def write_report(order, state) -> str:
              f"Frame: {(frame[2] - frame[0]) / 1000:.1f} x "
              f"{(frame[3] - frame[1]) / 1000:.1f} km, tracks fill {state['fill']:.0%}",
              f"Upsampling: {plate['upsample']:.2f}x (limit {MAX_UPSAMPLE:g}x)"]
+    proof = state.get("proof")
+    if proof:
+        lines.append(f"Proof: out/proof/{orderspec.file_stem(order.title)}-proof.jpg "
+                     "and .pdf")
+        lines.append(f"Soft proof: {proof['soft_proof']}" if proof.get("soft_proof")
+                     else f"Soft proof: skipped, {proof.get('soft_proof_why')}")
     fill = plate.get("hole_fill")
     if fill:
         lines.append(f"Hole fill: {fill['filled_share']:.1%} of the plate from the "
