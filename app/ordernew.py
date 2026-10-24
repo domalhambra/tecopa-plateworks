@@ -35,6 +35,7 @@ from datetime import date
 
 from app import order as od
 from app.order import OrderError
+from app.photos import PHOTO_EXTS
 
 INTAKE_ENV = "TECOPA_INTAKE_DIR"
 RECEIVED = "01_received"
@@ -45,8 +46,6 @@ SLUG_MAX_CHARS = 40                   # the client's part of the order folder's 
 SF_DATALESS = 0x40000000              # macOS st_flags: the file's data is in the cloud
 UF_COMPRESSED = 0x20                  # macOS st_flags: APFS keeps the data compressed in
                                       # the file's metadata, and st_blocks can be 0
-PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".webp", ".gif",
-              ".dng")
 FRONT_MATTER_KEYS = ("order_id", "created", "client", "email", "title", "returning", "member",
                      "upload_link", "tally_submission")
 _CHUNK = 1 << 20
