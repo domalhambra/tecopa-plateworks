@@ -18,6 +18,7 @@ from app import session, render, regions, blobs, jobs, logconfig, provenance, wa
 from app import basecache, debug, icc
 from app import panels as panel_geo
 from app import ingest, regionbuild
+from app import order as order_mod, orderspec, orderstudio
 
 logconfig.setup_logging()
 log = logging.getLogger("tecopa.api")
@@ -2156,6 +2157,69 @@ async def continue_poster(file: UploadFile = File(...),
     log.info("event=continue session=%s region=%s edition=%d tracks=%d hotspots=%d",
              sid, region.id, edition, len(resp["tracks"]), len(resp["hotspots"]))
     return resp
+
+# The order studio: Open an order's plate and spec in the studio, Save to order, Approve.
+# The session holds the proofed spec under "spec" (/api/proof stamps it) and the order's
+# folder under "order_dir" (Open sets it). The logic is app/orderstudio.py.
+def _order_session(session_id):
+    """(session, order) for a session Open made, or 409."""
+    st = _require_session(session_id)
+    if not st.get("spec"):
+        raise HTTPException(409, "Render a proof first")
+    if not st.get("order_dir"):
+        raise HTTPException(409, "This session was not opened from an order")
+    try:
+        return st, order_mod.load(st["order_dir"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+
+@app.get("/api/orders")
+async def orders_list():
+    return orderstudio.list_orders()
+
+@app.post("/api/order/open")
+async def order_open(folder: str = Form(...)):
+    """Open an order in the studio: its plate joins the region registry, and a session
+    starts from the spec Finish would print (the saved one, else the default)."""
+    root = os.path.realpath(order_mod.orders_root())
+    real = os.path.realpath(os.path.expanduser(folder))
+    if real == root or not real.startswith(root + os.sep) \
+            or not os.path.isfile(os.path.join(real, "order.toml")):
+        raise HTTPException(404, "Not an order in the orders folder")
+    try:
+        order = order_mod.load(real)
+        state = order_mod.read_state(order)
+        spec = orderspec.order_spec(order, state)
+        plate = orderspec.plate_dir(state)
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    plate_id = state["plate"]["id"]
+    REGIONS[plate_id] = regions.Region(plate_id, os.path.dirname(plate))
+    resp = _open_spec_session(spec, REGIONS[plate_id], extra={"order_dir": real})
+    resp["order"] = {"folder": real, "title": order.title,
+                     "approved": orderstudio.approval_ok(order, state)}
+    return resp
+
+@app.post("/api/order/save")
+async def order_save(session_id: str = Form(...)):
+    """Save to order: the session's proofed spec becomes the order's spec, and the proof
+    files are written again from it."""
+    st, order = _order_session(session_id)
+    out = orderstudio.save_spec(order, st["spec"])
+    answer = {"saved": True, "approved": orderstudio.approval_ok(order, out["state"]),
+              "proof": out["proof"]}
+    if out["proof_error"]:
+        answer["proof_error"] = out["proof_error"]
+    return answer
+
+@app.post("/api/order/approve")
+async def order_approve(session_id: str = Form(...)):
+    st, order = _order_session(session_id)
+    try:
+        state = orderstudio.approve(order, st["spec"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    return {"approved": True, "at": state["approval"]["at"]}
 
 # Debug routes for the `tecopa` tool, present only under TECOPA_DEBUG=1, which the
 # macOS launcher sets. Every route is read-only except POST /api/debug/studio, and
