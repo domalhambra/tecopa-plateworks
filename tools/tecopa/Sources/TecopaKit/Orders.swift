@@ -1,7 +1,7 @@
 import Foundation
 
-/// The four entries of an order: `order new` from the intake's job folder, Prepare
-/// and the size preview as tracked runs, and the order's own state read back.
+/// The five entries of an order: `order new` from the intake's job folder, Prepare,
+/// the size preview and Finish as tracked runs, and the order's own state read back.
 ///
 /// The tool holds no order logic. `scripts/order.py` copies the job folder into a new
 /// order folder, builds or reuses the plate, frames the tracks, and writes
@@ -9,7 +9,7 @@ import Foundation
 /// the PDF and the email under `out/preview/`. No entry writes under the order
 /// folder: only the script does.
 enum Orders {
-    static let entries: [CatalogEntry] = [newEntry, prepareEntry, previewEntry, statusEntry]
+    static let entries: [CatalogEntry] = [newEntry, prepareEntry, previewEntry, finishEntry, statusEntry]
 
     // MARK: Entries
 
@@ -76,6 +76,19 @@ enum Orders {
         let folder = try folder(arguments, runtime)
         // The same script as Prepare, and the same rule: the script judges the folder.
         return try ScriptRunner.start("scripts/order.py", ["preview", folder], command: "order_preview", runtime)
+    }
+
+    static let finishEntry = CatalogEntry(
+        name: "order_finish",
+        summary: "Start Finish for one order folder with scripts/order.py, as a tracked run: render the "
+            + "order's approved sizes and write the print files. It takes minutes and reads the network.",
+        readOnly: false,
+        parameters: [folderParameter],
+        text: Runs.startedText
+    ) { runtime, arguments in
+        let folder = try folder(arguments, runtime)
+        // The same script as Prepare, and the same rule: the script judges the folder.
+        return try ScriptRunner.start("scripts/order.py", ["finish", folder], command: "order_finish", runtime)
     }
 
     static let statusEntry = CatalogEntry(

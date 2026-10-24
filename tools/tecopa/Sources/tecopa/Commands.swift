@@ -555,10 +555,10 @@ struct OrderCommand: AsyncParsableCommand {
         abstract: "Make a customer order from the intake, preview its sizes, prepare it, or read what "
             + "Prepare decided.",
         discussion: "`order new` copies the intake's job folder into a new order folder and prints what it "
-            + "copied. `order prepare` and `order preview` each start a tracked run and return at once. "
+            + "copied. `order prepare`, `order preview` and `order finish` each start a tracked run and return at once. "
             + "Read a run with `tecopa runs show <id>`. After Prepare, run `tecopa order status <folder>`. "
             + "The preview writes its PDF and its email under the order's out/preview/ folder.",
-        subcommands: [New.self, Prepare.self, Preview.self, Status.self])
+        subcommands: [New.self, Prepare.self, Preview.self, Finish.self, Status.self])
 
     /// The one argument of each command.
     struct Folder: ParsableArguments {
@@ -598,6 +598,15 @@ struct OrderCommand: AsyncParsableCommand {
         @OptionGroup var global: GlobalOptions
         @OptionGroup var order: Folder
         func run() async throws { try await execute("order_preview", global, order.arguments) }
+    }
+
+    struct Finish: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "finish",
+            abstract: "Start Finish as a tracked run: render the order's approved sizes and write the print files.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var order: Folder
+        func run() async throws { try await execute("order_finish", global, order.arguments) }
     }
 
     struct Status: AsyncParsableCommand {
