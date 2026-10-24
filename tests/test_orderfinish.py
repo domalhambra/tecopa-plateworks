@@ -212,9 +212,17 @@ def test_finishing_again_removes_a_print_file_that_is_no_longer_the_print(approv
     stale = os.path.join(approved.dir, "out", "print", "old-title-11x17.tif")
     with open(stale, "wb") as f:
         f.write(b"old")
-    r2 = orderfinish.finish(approved.dir, dpi=DPI)
+    lines = []
+    r2 = orderfinish.finish(approved.dir, dpi=DPI, log=lines.append)
     assert r2["files"] == r["files"]
     assert not os.path.exists(stale)
+    assert "Removed: old-title-11x17.tif" in lines          # the log names the file
+    assert _note(approved)[-1] == "Removed: old-title-11x17.tif"    # and so does PRINT.txt
+
+
+def test_the_print_note_has_no_removed_line_when_nothing_was_removed(approved):
+    orderfinish.finish(approved.dir, dpi=DPI)
+    assert not any(line.startswith("Removed:") for line in _note(approved))
 
 
 def test_a_render_that_fails_leaves_the_earlier_print_files(approved, monkeypatch):

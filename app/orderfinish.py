@@ -15,7 +15,8 @@ spec the proof showed (orderspec.order_spec), once, with no watermark, and write
 Each TIFF is the print at exactly its size (no border: plan decision P5), 8-bit RGB
 (P4), uncompressed, sRGB profile embedded, turned so the 17 in side goes across the roll
 (P6). It writes nothing until the render has succeeded, and it removes a print file of an
-earlier Finish that this Finish did not write, so the folder holds one print and no other.
+earlier Finish that this Finish did not write, so the folder holds one print and no other. Each file it removes gets a
+`Removed: <name>` line in its log and at the end of PRINT.txt.
 
 This module never imports app.main (plan decision P8)."""
 from __future__ import annotations
@@ -69,10 +70,11 @@ def _save(img, path: str, fmt: str, **kw) -> None:
         raise
 
 
-def print_note(order, spec, paper, pieces, approval) -> str:
+def print_note(order, spec, paper, pieces, approval, removed=()) -> str:
     """The text of PRINT.txt. `pieces` is one dict for each file, in hang order:
     name, w_in and h_in (the file's size), w_px and h_px, ppi, rotation (0 or 90) and
-    panel ((k, n) for a set, else None)."""
+    panel ((k, n) for a set, else None). `removed` names each .tif that Finish removed
+    from the folder; the note ends with a line for each."""
     number = order.order_number or os.path.basename(os.path.normpath(order.dir))
     roll = _inches(paper.roll_in)
     at = approval.get("at", "")
@@ -101,6 +103,9 @@ def print_note(order, spec, paper, pieces, approval) -> str:
     if panel_geo.is_set(spec):
         lines += ["", f"Hang: panels 1 to {spec.panels}, left to right, with a "
                       f"{_inches(spec.panel_gap_in)} in gap"]
+    if removed:
+        lines.append("")
+        lines += [f"Removed: {name}" for name in removed]
     return "\n".join(lines) + "\n"
 
 
@@ -162,16 +167,18 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     _save(sheet, os.path.join(order.work_dir, RECORD_NAME), "PNG", dpi=(dpi, dpi),
           icc_profile=srgb, pnginfo=provenance.manifest_pnginfo(manifest))
 
+    # a print file of an earlier Finish (another title or size) must not stand beside this one
+    removed = []
+    for name in sorted(os.listdir(print_dir)):
+        if name.lower().endswith(".tif") and os.path.join(print_dir, name) not in files:
+            os.remove(os.path.join(print_dir, name))
+            removed.append(name)
+            log(f"Removed: {name}")
+
     note_path = os.path.join(print_dir, NOTE_NAME)
-    note = print_note(order, spec, paper, pieces, approval)
+    note = print_note(order, spec, paper, pieces, approval, removed)
     tmp = f"{note_path}.{os.getpid()}.tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write(note)
     os.replace(tmp, note_path)
-
-    # a print file of an earlier Finish (another title or size) must not stand beside this one
-    for name in os.listdir(print_dir):
-        if name.lower().endswith(".tif") and os.path.join(print_dir, name) not in files:
-            os.remove(os.path.join(print_dir, name))
-            log(f"Removed {name}: it is not part of this print.")
     return {"files": files, "print_note": note_path}
