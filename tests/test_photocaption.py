@@ -62,3 +62,27 @@ def test_radius_is_a_parameter_and_junk_features_are_skipped():
     )
     assert photocaption.nearest_name(0.0, 0.0, labels) == ""
     assert photocaption.nearest_name(0.0, 0.0, labels, radius_m=3500.0) == "Real"
+
+
+def test_a_tie_ranks_by_the_renderers_kind_rank_not_the_stored_rank():
+    # labels.json stores basin 45 > flat 42, but the renderer ranks flat 52 > basin 50
+    labels = _labels(
+        ("The Basin", "basin", 45, [[500.0, 0.0]]),
+        ("The Flat", "flat", 42, [[0.0, 500.0]]),
+    )
+    assert photocaption.nearest_name(0.0, 0.0, labels) == "The Flat"
+
+
+def test_an_unknown_kind_ranks_last_in_a_tie():
+    labels = _labels(
+        ("Mystery", "mystery", 999, [[500.0, 0.0]]),
+        ("The Valley", "valley", 40, [[0.0, 500.0]]),
+    )
+    assert photocaption.nearest_name(0.0, 0.0, labels) == "The Valley"
+
+
+def test_the_kind_rank_copy_matches_the_renderer():
+    from app import render
+    assert photocaption._KIND_RANK == {k: v[2] for k, v in render.GEO_KINDS.items()
+                                       if k in photocaption._KIND_RANK}
+    assert set(photocaption._KIND_RANK) == set(render.GEO_KINDS)
