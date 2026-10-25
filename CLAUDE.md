@@ -62,6 +62,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 - Nothing here deploys. The landing, order and privacy pages are pages on www.plateworks.org since 2026-09-26, built by the blog folder's ghost-tecopa-pages script in the Ghost era and held in plateworks-site since the 2026-10-13 switch (Ghost retired 2026-10-15). FastAPI auto-docs are off (commit a3d4ba9).
 - TDD, and granular present-tense commits that say why. Cloud sessions squash-merge from `claude/**`; the Mac commits to `main` only when green.
 - `tests/test_docs.py` holds this file under 2,000 tokens.
+- Every pull request passes the impact check (`python3 scripts/docs_check.py --impact origin/main`; CI runs it) and its description ends with `Docs: <path changed>` or `Docs: none, <reason>` (the documentation standard). A change to what a customer pays, sees or is promised also updates the section of Business Plan v2 it touches (plateworks-os, Biz HQ, business/plan), or says why not on that Docs line.
 
 ## Session logging
 

@@ -1,0 +1,22 @@
+# The impact check (documentation standard, "The check"; docs coverage spec
+# part 2): a pull request that changes a file a runbook quotes fails until the
+# runbook changes too, or a commit carries the trailer
+#   Docs-checked: <runbook path>, <why it is still true>
+# A changed Markdown file never counts. scripts/docs_check.py is vendored from
+# Plateworks OS (00-09 System/00 Resources/VENDORED.md).
+name: Docs impact
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - run: python3 scripts/docs_check.py --impact origin/${{ github.base_ref }}
