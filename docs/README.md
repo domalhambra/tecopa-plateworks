@@ -75,6 +75,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-10-10-tecopa-tool-phases-2-to-4.md` | Changing a `tecopa` render, plate, order, run or studio command, the debug routes they read, or the studio's report module. The plan and build record of phases 2 to 4. |
 | `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md` | Changing a panel set, the furniture scale, the size preview of an order, or `tecopa order preview`. The plan and the build record: what each task changed against the plan, the memory gate, the three print checks that need paper, and what is open before a merge. |
 | `superpowers/plans/2026-10-24-order-proof-approval-and-print.md` | Changing an order's proof, the paper table, the studio's Open / Save / Approve for an order, or `order finish`. The plan for sub-projects 2 and 4 of the order pipeline, with its planning decisions. |
+| `superpowers/plans/2026-10-24-order-photos.md` | Changing an order's photos: spots from GPS or time, captions, the open-ground layout, the gallery band and its side, the studio's photo drag, or Finish's photo refusals. The plan for sub-project 3 of the order pipeline, with its planning decisions B1 to B9. |
 
 ## Handoffs
 

@@ -1,5 +1,6 @@
 # app/main.py
 import io, json, math, os, re, shutil, time, zipfile
+import dataclasses
 import hashlib
 import logging
 from typing import List, Optional
@@ -221,6 +222,55 @@ def _embed_photos(spec, dpi):
     lives inside the file ("the file is the whole record")."""
     box_px = max(24, round(spec.photo_box_in * dpi))
     return provenance.build_final_spec(spec, box_px)
+
+FINAL_TRACKS_FILL_RECORD = (
+    "This poster's tracks alone fill its 1 MB record, so its photos cannot ride in it: "
+    "make the final as a share copy (no record), or without the photos.")
+FINAL_PHOTOS_TOO_BIG = ("This poster's record cannot hold its photos within its 1 MB "
+                        "limit: remove some photos, proof again, then make the final.")
+FINAL_NOT_REOPEN = ("This poster's record would not reopen with plain PIL, so the final was "
+                    "not made: remove some photos, proof again, then make it.")
+
+
+def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack, fmt="png"):
+    """(final spec, manifest) for a studio final: the spec with its photos embedded
+    (_embed_photos) and its manifest (None for a share copy). A final whose photos ride
+    in its record keeps the WHOLE manifest within the record budget, with the same code
+    as an order's record (provenance.build_record_manifest): when the plain embedding
+    does not fit, or would not read back, each photo gets its share of the budget, and
+    the render paints those very photos, so the final and its reprint stay identical.
+    A final with no photo, and a share copy, are made as they always were. Raises 422
+    when the tracks alone fill the record (dropping photos cannot help), when a photo
+    cannot fit its share, or when the record would still not read back: never an
+    unreadable PNG. A PDF carries no manifest (_encode_final), so it has no record to
+    budget: its photos stay at full size, as for a share copy."""
+    final = _embed_photos(spec, dpi)
+    if fmt == "pdf":
+        return final, None
+    manifest = _final_manifest(final, sources, embed_spec, lineage, region_pack=region_pack)
+    if manifest is None or not any(isinstance(h, dict) and h.get("photo")
+                                   for h in final.hotspots or []):
+        return final, manifest
+
+    def readable(m):
+        if panel_geo.is_set(final):          # each panel's manifest names its panel
+            m = _panel_manifest(m, final.panels, final.panels)
+        return provenance.manifest_fits(m) and provenance.manifest_reads_back(m)
+
+    if readable(manifest):
+        return final, manifest
+    if (provenance.base_manifest_bytes(spec, region_pack, sources, lineage)
+            > provenance.MAX_RECORD_MANIFEST_BYTES):
+        raise HTTPException(422, FINAL_TRACKS_FILL_RECORD)
+    try:
+        final, manifest, _ = provenance.build_record_manifest(
+            spec, max(24, round(spec.photo_box_in * dpi)), region_pack=region_pack,
+            sources=sources, lineage=lineage)
+    except provenance.RecordBudgetError:
+        raise HTTPException(422, FINAL_PHOTOS_TOO_BIG)
+    if not readable(manifest):
+        raise HTTPException(422, FINAL_NOT_REOPEN)
+    return final, manifest
 
 def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     """The render worker: rasterize the stamped spec at ITS final resolution (print
@@ -866,6 +916,8 @@ async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
         i = e.get("i")
         if not isinstance(i, int) or not (0 <= i < len(spots)):
             continue
+        if st.get("order_dir") and _is_order_photo(spots[i], st["order_dir"]):
+            continue      # an order photo's caption is the Order panel's (/api/order/photo)
         if "label" in e:
             spots[i]["label"] = str(e["label"])[:60]
         if "icon" in e:
@@ -883,6 +935,7 @@ async def set_photo(session_id: str = Form(...), i: int = Form(...),
     spots = st["hotspots"]
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
+    _order_photo_locked(st, i)
     data = await file.read()
     if len(data) > PHOTO_MAX_BYTES:
         raise HTTPException(422, "photo exceeds the size limit")
@@ -916,6 +969,7 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     spots = st["hotspots"]
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
+    _order_photo_locked(st, i)
     import math
     if not (math.isfinite(px) and math.isfinite(py)):
         # pydantic parses "nan"/"inf" floats; min/max would propagate NaN into the
@@ -1019,6 +1073,10 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         edition=st.get("edition", 1),               # living editions: draws in the cartouche
         credit_text=credit_line(region),            # data credit: derived, never a form field
         contours=contours, biome=biome, labels=labels, **kw, **(style or {}))
+    if preset is None and st.get("order_photo"):
+        # an order's photo fields come from its state (orderstudio), never from the form:
+        # the studio's proof paints the layout, band end and box size the print will
+        spec = dataclasses.replace(spec, **st["order_photo"])
     spec.validate(spec.final_dpi())   # gate on the resolution the FINAL uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
@@ -1213,7 +1271,13 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)         # the wallpaper PNG-only policy needs the spec
     dpi = spec.final_dpi()
-    spec = _embed_photos(spec, dpi)    # canonicalize photos -> the render + manifest share them
+    # the file names its plate: hashed from the assets once per final, never cached.
+    # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
+                                      dry_lakes=spec.dry_lakes)
+    # canonicalize photos -> the render + manifest share them, within the record budget
+    spec, manifest = _final_with_record(spec, dpi, sources, embed_spec, lineage, rp,
+                                        fmt)
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=dpi, region_dir=region.dir,
@@ -1226,13 +1290,7 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # The KEY carries the self-documenting name, so every serving path (this
     # FileResponse, /api/jobs/{jid}/result) says what the file is for free.
     key = f"{session_id}/{_delivery_name(spec, fmt)}"
-    # the file names its plate: hashed from the assets once per final, never cached.
-    # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
-    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
-                                      dry_lakes=spec.dry_lakes)
-    BLOBS.put(key, _encode_delivery(img, spec, fmt,
-                                    _final_manifest(spec, sources, embed_spec, lineage,
-                                                    region_pack=rp), dpi))
+    BLOBS.put(key, _encode_delivery(img, spec, fmt, manifest, dpi))
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=_delivery_media(spec, fmt),
@@ -1249,12 +1307,12 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     _require_format(fmt, spec)
     # embed photos NOW (sync), so the manifest built here and the worker's render below
     # paint the identical bytes -- the async final and its reprint stay pixel-identical.
-    spec = _embed_photos(spec, spec.final_dpi())
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
+    spec, manifest = _final_with_record(spec, spec.final_dpi(), sources, embed_spec,
+                                        lineage, rp, fmt)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir,
-                       f"{session_id}/{_delivery_name(spec, fmt)}", fmt,
-                       _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
+                       f"{session_id}/{_delivery_name(spec, fmt)}", fmt, manifest)
     return {"job": jid}
 
 
@@ -1976,6 +2034,20 @@ def _proof_form_for(spec):
             form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
+def _hotspots_px(region, spots, order_dir=None):
+    """The studio's view of the session's hotspots: overview px and what the marker list
+    shows. In an order's session, an order photo's hotspot says so (`order_photo`): the
+    Order panel edits it, and the marker list and the map leave it alone."""
+    out = []
+    for s in spots:
+        h = {"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
+             "weight": s.get("weight", 1), "label": s.get("label", ""),
+             "icon": s.get("icon", ""), "photo": bool(s.get("photo"))}
+        if order_dir and _is_order_photo(s, order_dir):
+            h["order_photo"] = True
+        out.append(h)
+    return out
+
 def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra=None):
     """Make a live session from `spec` on `region` and answer the /api/upload response shape
     plus the prefill and proof_form that restore the wizard. /api/continue and the order
@@ -2000,9 +2072,7 @@ def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra
                           "lineage": list(lineage), **(extra or {})})
 
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
-    hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
-            "weight": s.get("weight", 1), "label": s.get("label", ""),
-            "icon": s.get("icon", ""), "photo": bool(s.get("photo"))} for s in spots]
+    hpx = _hotspots_px(region, spots)
     r, g, b = (int(c) for c in spec.track_rgb)
     output = spec.output_kind
     matched = _match_wallpaper_preset(spec)
@@ -2163,13 +2233,78 @@ async def order_open(folder: str = Form(...)):
                                  f"({type(e).__name__}: {e}). Run Prepare, then open "
                                  f"the order again.")
     REGIONS[plate_id] = region
-    resp = _open_spec_session(spec, region, extra={"order_dir": real})
+    # order_view: the spec the photo panel measures on until a proof is stamped;
+    # order_photo: the photo fields every studio proof of this order paints (_build_spec)
+    resp = _open_spec_session(spec, region, extra={
+        "order_dir": real, "order_view": spec,
+        "order_photo": orderstudio._photo_fields(spec)})
     if not _under(region.dir, REGIONS_ROOT):
         # the static /regions mount serves REGIONS_ROOT only; a built plate lives in the order
         resp["overview"] = f"/api/order/plate/{plate_id}/overview.png"
+    resp["hotspots"] = _hotspots_px(region, session.get(resp["session"])["hotspots"], real)
     resp["order"] = {"folder": real, "title": order.title,
-                     "approved": orderstudio.approval_ok(order, state)}
+                     "approved": orderstudio.approval_ok(order, state),
+                     "photo_view": orderstudio.photo_view(order, state, spec,
+                                                          _proof_dpi(spec))}
     return resp
+
+def _is_order_photo(hs, order_dir):
+    """A hotspot whose photo is the order's own work JPEG (Prepare's work/photos)."""
+    photo = hs.get("photo") if isinstance(hs, dict) else None
+    return isinstance(photo, str) and _under(photo, order_dir) \
+        and os.path.basename(os.path.dirname(photo)) == "photos"
+
+def _order_photo_locked(st, i):
+    """409 when hotspot i of an order's session is one of the order's photos: the Order
+    panel edits it (/api/order/photo), so the saved spec and order_spec agree."""
+    if st.get("order_dir") and _is_order_photo(st["hotspots"][i], st["order_dir"]):
+        raise HTTPException(409, "This marker is an order photo: edit it in the Order panel.")
+
+@app.post("/api/order/photo")
+async def order_photo(session_id: str = Form(...), file: str = Form(""),
+                      change: str = Form("{}")):
+    """The studio's photo controls for an opened order: place a tray photo (spot, or
+    spot_px on the proof), move a box (box, in inches), crop, caption, drop or restore
+    one photo (`file`), or, with `file` empty, move the band to the other end
+    (band_side). `change` is a JSON object; an empty one only answers. An edit clears the
+    approval and unstamps the proof: render a proof again to see it. Answers the photo
+    panel (orderstudio.photo_view) plus the session's hotspots, the frame in overview px
+    and whether that frame moved (`reframed`: the layout or the band's end changed)."""
+    st = _require_session(session_id)
+    if not st.get("order_dir"):
+        raise HTTPException(409, "This session was not opened from an order")
+    try:
+        order = order_mod.load(st["order_dir"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    try:
+        parsed = json.loads(change)
+    except ValueError:
+        raise HTTPException(422, "change must be JSON")
+    region = _region_or_404(st["region_id"])
+    view = st.get("spec") or st.get("order_view")
+    try:
+        out = orderstudio.edit_photo(order, file, parsed, view=view,
+                                     dpi=_proof_dpi(view) if view else orderstudio.PROOF_DPI)
+    except orderstudio.PhotoNotFound as e:
+        raise HTTPException(404, str(e))
+    except orderstudio.PhotoChangeError as e:
+        raise HTTPException(422, str(e))
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    except (SpecError, TypeError, ValueError, KeyError, AttributeError) as e:
+        raise HTTPException(409, f"The order's photos cannot be read ({type(e).__name__}: "
+                                 f"{e}). Run Prepare, then open the order again.")
+    spots = st["hotspots"]
+    if out["edited"] or out["relaid"]:
+        spots = ([h for h in spots if not _is_order_photo(h, order.dir)]
+                 + [dict(h) for h in out["view"].hotspots if _is_order_photo(h, order.dir)])
+        session.update(session_id, hotspots=spots, spec=None, order_view=out["view"],
+                       order_photo=orderstudio._photo_fields(out["view"]))
+    answer = {k: v for k, v in out.items() if k not in ("state", "view")}
+    answer["hotspots"] = _hotspots_px(region, spots, order.dir)
+    answer["crop_px"] = _crop_to_overview_px(region.geo, out["view"].crop)
+    return answer
 
 def _under(path, root):
     """True when path resolves (realpath) inside root."""

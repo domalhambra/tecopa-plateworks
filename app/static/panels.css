@@ -290,3 +290,26 @@
 .order-actions .ghost, .order-actions .primary { flex: 1; min-width: 0; white-space: nowrap; padding: 7px 10px; }
 .order-status { margin: 0; line-height: 1.4; }
 .order-status.is-error { color: var(--color-error); }
+#orderBandSide { margin: 12px 0 0; }
+.marker-row.is-locked { gap: 8px; }
+.marker-row .m-locked { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marker-row .m-note { color: var(--text-2); white-space: nowrap; }
+.order-photos { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.order-photo { border: 1px solid var(--hairline); border-radius: var(--radius-sm); padding: 8px; }
+.order-photo.is-dropped { opacity: .6; }
+.op-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; margin-bottom: 6px; }
+.op-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.op-tag { color: var(--text-2); white-space: nowrap; }
+.op-caption { width: 100%; margin-bottom: 6px; }
+.op-crop { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; margin-bottom: 6px; color: var(--text-2); }
+.op-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.op-actions .mini.is-armed { background: var(--tint); color: var(--on-tint); }
+.op-warn { margin: 6px 0 0; padding-left: 16px; color: var(--color-error); line-height: 1.35; }
+/* the outline layer over the proof: the image's own area (the card's 10px padding) */
+.order-boxes { position: absolute; inset: 10px; pointer-events: none; }
+.order-boxes.is-armed { pointer-events: auto; cursor: crosshair; }
+.order-box { position: absolute; box-sizing: border-box; pointer-events: auto; cursor: move;
+  border: 2px dashed var(--tint); background: rgba(212, 180, 100, .08); touch-action: none; }
+.order-box:focus-visible, .order-box.is-dragging { border-style: solid; outline: none; background: rgba(212, 180, 100, .2); }
+.order-box span { position: absolute; left: 0; top: -1.5em; font-size: 11px; white-space: nowrap;
+  background: var(--tint); color: var(--on-tint); padding: 0 4px; border-radius: 2px; }

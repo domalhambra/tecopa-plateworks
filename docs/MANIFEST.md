@@ -63,7 +63,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `native_resolution_m` — the plate's ground resolution in meters/pixel; the zoom cap allows up to `MAX_UPSAMPLE` (2x) finer than this before it refuses
 - `tracks` — list of (N, 2) coordinate arrays in CRS meters
 - `track_days` — journey identity parallel to `tracks`, or `null` (each track its own journey)
-- `hotspots` — list of `{"x", "y", "weight"}` dicts, optionally `"label"`, `"icon"`, `"photo"` (embedded JPEG data URI — see Privacy)
+- `hotspots` — list of `{"x", "y", "weight"}` dicts, optionally `"label"`, `"icon"`, `"photo"` (embedded JPEG data URI — see Privacy). A hotspot with a photo may also carry `"box"` — `{"dx_in", "dy_in"}`, the box centre's offset from its spot, in inches, `dy_in` down the sheet (the renderer draws the photo there as a `photo_box_in` square, centre-cropped, with one straight leader from the spot to the box edge, kept inside the trim and the panel that holds it); `"crop"` — `{"cx", "cy"}`, the centre-crop focus, 0-1 each; and `"source"` — how the spot was found: `"gps"`, `"time"` or `"manual"`. A reader keeps `box` only when both numbers are finite and no larger than the sheet's longer side in inches, `crop` only when both are finite and within 0-1, and `source` only when it is one of the three words. A key that fails is dropped from its hotspot; the hotspot stays. A hotspot with neither `box` nor `crop` renders as it always did: fitted, up and to the right of its spot
 - `seed` — deterministic-noise seed (integer)
 - `track_width_pt` — route stroke width, points
 - `track_max_darken` — route ink ceiling, 0-1 (grain shows through)
@@ -71,12 +71,14 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `grain_cell_in`, `grain_strength` — paper-grain cell size (inches) and amplitude (0-1)
 - `title_pt`, `title_text` — cartouche title size (points) and text
 - `label_pt` — marker label size, points
-- `photo_box_in` — pinned-photo thumbnail long edge, inches
+- `photo_box_in` — the size of a pinned photo's box, inches. For a hotspot with `box` or `crop` it is the side of the square cut from the photo (a crowded band draws smaller squares). For a hotspot with neither it is the long edge of the fitted thumbnail
 - `contours`, `compass`, `biome`, `labels` — furniture toggles (elevation contours, compass rose, land-cover tint, named geography)
 - `track_rgb` — route ink as three 0-255 integers
 - `track_halo` — paper-halo strength around the route, 0-0.9
 - `marker_ring` — POI ring width as a fraction of diameter, 0-0.25
 - `photo_frame_style` — `"mat" | "keyline" | "borderless" | "polaroid"`
+- `photo_layout` — where photo boxes sit: `"open"` (on open ground beside their spots, default) or `"band"` (a gallery across one end of the sheet: one row of numbered boxes inside the keyline, captions under them, a numbered mark at each spot; a band with no photo draws nothing). Always emitted; a reader fills `"open"` when it is absent
+- `photo_band_side` — the end of the sheet the band takes: `"top"` (default) or `"bottom"`. With a bottom band the furniture stack (cartouche, compass, elevation strip) moves to the upper left; with a top band, or no band, it stays in the lower left. Always emitted; a reader fills `"top"` when it is absent
 - `furniture_scale` — multiplier on the automatic furniture scale, 0.6-1.6
 - `terrain_depth` — multiplier on the terrain-depth pass, 0-1.5
 - `shadow_strength` — cast-shadow / sky-occlusion strength, 0-1
@@ -111,6 +113,20 @@ oldest first, capped at the newest 100 (past the cap the oldest drop; the file n
 refuses to embed). A first edition carries neither key. Normative example:
 `tests/fixtures/manifest_edition_v1.json`. An embedded hotspot photo travels the same
 way across editions — see `manifest_photo_v1.json`.
+
+### Photos in an order's record
+
+PIL refuses to open a PNG whose manifest chunk is past 1 MiB, so the manifest of an
+order's `work/record.png` is held to 900,000 bytes
+(`provenance.MAX_RECORD_MANIFEST_BYTES`), photos included. Each photo gets an equal
+share of what the rest of the manifest leaves. A square-cut photo (a hotspot with `box`
+or `crop`) is embedded with its short side at the box size at the print's dpi, never
+larger than the source. If that is too big for its share, the JPEG quality goes down
+(82, 72, 62, 52), then the size shrinks by 15 % a step. `order finish` says so in
+`PRINT.txt` when a photo went below the print's resolution. The print itself is painted
+from the work JPEGs in the order folder at full resolution, not from the record's copies,
+so a reprint from `record.png` alone can differ slightly from the print where the
+photos were reduced. Reprint from the order folder for full resolution.
 
 ## `animation` — time-lapse pacing
 

@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import numpy as np
+import pytest
 from PIL import Image
 
 from app import provenance
@@ -640,3 +641,295 @@ def test_frozen_photo_manifest_reprints_its_embedded_photo():
     r = c.post("/api/reprint", files={"file": ("photo_v1.png", buf.getvalue(), "image/png")})
     assert r.status_code == 200, r.text
     assert Image.open(io.BytesIO(r.content)).size == (9 * 300, 12 * 300)
+
+
+# ---- a square-cut photo is embedded at its short side (order photos, Task 9) ----
+
+def _gradient_jpeg(path, size):
+    w, h = size
+    x = np.linspace(0, 255, w, dtype=np.uint8)[None, :].repeat(h, 0)
+    y = np.linspace(0, 255, h, dtype=np.uint8)[:, None].repeat(w, 1)
+    Image.fromarray(np.dstack([x, y, (x // 2 + y // 2)]), "RGB").save(path, "JPEG", quality=90)
+    return str(path)
+
+
+def _embedded_size(data_uri):
+    raw = base64.b64decode(data_uri[len(provenance.PHOTO_DATA_PREFIX):])
+    return Image.open(io.BytesIO(raw)).size
+
+
+def _final_photo(path, box_px, **keys):
+    import dataclasses
+    spec, _ = _spec_from_fixture()
+    hs = {"x": 690000.0, "y": 4485000.0, "weight": 1, "photo": path, **keys}
+    s = dataclasses.replace(spec, hotspots=[hs])
+    return provenance.build_final_spec(s, box_px).hotspots[0]["photo"]
+
+
+def test_a_square_cut_photo_is_embedded_with_its_short_side_at_the_box(tmp_path):
+    # 2.25 in box at 300 ppi; a 3:2 source is cut square from the copy, so its SHORT side
+    # must carry the box or the square is upscaled about 1.5x and prints soft
+    src = _gradient_jpeg(tmp_path / "a.jpg", (3000, 2000))
+    box_px = round(2.25 * 300)
+    for keys in ({"crop": {"cx": 0.5, "cy": 0.5}}, {"box": {"dx_in": 1.0, "dy_in": -1.0}},
+                 {"crop": {"cx": 0.2, "cy": 0.5}, "box": {"dx_in": 0.0, "dy_in": 1.0}}):
+        w, h = _embedded_size(_final_photo(src, box_px, **keys))
+        assert min(w, h) >= box_px == 675
+        assert (w, h) == (1013, 675)                  # 3:2 kept; the short side exactly
+
+
+def test_a_portrait_square_cut_photo_is_embedded_at_its_short_side_too(tmp_path):
+    src = _gradient_jpeg(tmp_path / "p.jpg", (2000, 3000))
+    w, h = _embedded_size(_final_photo(src, 675, crop={"cx": 0.5, "cy": 0.5}))
+    assert (w, h) == (675, 1013)
+
+
+def test_a_square_cut_photo_is_never_upscaled_past_its_source(tmp_path):
+    src = _gradient_jpeg(tmp_path / "s.jpg", (600, 400))
+    assert _embedded_size(_final_photo(src, 675, crop={"cx": 0.5, "cy": 0.5})) == (600, 400)
+
+
+def test_a_square_cut_photo_stays_under_the_pixel_guard(tmp_path):
+    src = _gradient_jpeg(tmp_path / "big.jpg", (4000, 3000))          # 12 MP
+    w, h = _embedded_size(_final_photo(src, 3500, crop={"cx": 0.5, "cy": 0.5}))
+    assert w * h <= provenance.MAX_PHOTO_EMBED_PIXELS
+    assert min(w, h) > 2000                                           # still large
+    assert abs(w / h - 4 / 3) < 0.01
+
+
+def test_a_hotspot_without_box_or_crop_embeds_as_it_always_did(tmp_path):
+    src = _gradient_jpeg(tmp_path / "o.jpg", (3000, 2000))
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        im.thumbnail((675, 675))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=provenance.PHOTO_EMBED_QUALITY, optimize=True)
+    old = provenance.PHOTO_DATA_PREFIX + base64.b64encode(buf.getvalue()).decode("ascii")
+    assert _final_photo(src, 675) == old
+    assert _final_photo(src, 675, label="x", source="gps") == old     # no box, no crop
+    assert _embedded_size(old) == (675, 450)
+
+
+def test_a_square_cut_copy_too_big_for_the_byte_ceiling_loses_quality_never_size(
+        tmp_path, monkeypatch):
+    rng = np.random.default_rng(3)
+    noise = rng.integers(0, 256, (1200, 1800, 3), dtype=np.uint8)
+    src = tmp_path / "n.jpg"
+    Image.fromarray(noise, "RGB").save(src, "JPEG", quality=90)
+    keys = {"crop": {"cx": 0.5, "cy": 0.5}}
+    full = _final_photo(str(src), 800, **keys)
+    assert _embedded_size(full) == (1200, 800)
+    size82 = len(base64.b64decode(full.split(",", 1)[1]))
+    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", size82 - 1)
+    lower = _final_photo(str(src), 800, **keys)
+    assert lower is not None and lower != full
+    assert _embedded_size(lower) == (1200, 800)           # the size is kept; not the soft copy
+    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", 10)
+    assert "photo" not in provenance.build_final_spec(
+        _spec_with(str(src), crop={"cx": 0.5, "cy": 0.5}), 800).hotspots[0]   # still dropped
+
+
+def test_square_cut_means_the_renderers_own_reading_of_box_and_crop():
+    big = 10 ** 400                       # a huge int: not a finite real to the renderer
+    assert provenance._is_square_cut({"crop": {"cx": 0.5, "cy": 0.5}})
+    assert provenance._is_square_cut({"box": {"dx_in": 1, "dy_in": -1}})
+    assert not provenance._is_square_cut({"crop": {"cx": big, "cy": 0.5}})
+    assert not provenance._is_square_cut({"box": {"dx_in": True, "dy_in": 1}})
+    assert not provenance._is_square_cut({"label": "x"})
+
+
+# ---- the record's manifest stays under PIL's 1 MiB text chunk (Task 9, fix round 1) ----
+
+def _spec_with(*paths, **keys):
+    import dataclasses
+    spec, _ = _spec_from_fixture()
+    hs = [{"x": 690000.0 + 100 * i, "y": 4485000.0, "weight": 1, "photo": p, **keys}
+          for i, p in enumerate(paths)]
+    return dataclasses.replace(spec, hotspots=hs)
+
+
+def _noisy_jpegs(tmp_path, n, size=(3000, 2000)):
+    rng = np.random.default_rng(11)
+    paths = []
+    for k in range(n):
+        low = rng.integers(0, 256, (size[1] // 20, size[0] // 20, 3), dtype=np.uint8)
+        im = Image.fromarray(low, "RGB").resize(size, Image.BICUBIC)
+        arr = np.asarray(im).astype(np.int16) + rng.integers(-40, 40, (size[1], size[0], 3))
+        path = tmp_path / f"n{k}.jpg"
+        Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").save(path, "JPEG",
+                                                                         quality=88)
+        paths.append(str(path))
+    return paths
+
+
+def _record_png(manifest):
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(buf, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("n", [8, 12])
+def test_the_record_of_n_realistic_photos_stays_inside_the_budget_and_opens(tmp_path, n):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, n), crop={"cx": 0.5, "cy": 0.5})
+    record, manifest, reduced = provenance.build_record_manifest(spec, 675)
+    size = len(provenance._manifest_str(manifest))
+    assert size <= provenance.MAX_RECORD_MANIFEST_BYTES == 900_000
+    assert size < 1_048_576
+    got = provenance.extract(_record_png(manifest))        # plain PIL, no raised limit
+    assert got is not None
+    photos = [h["photo"] for h in got["spec"]["hotspots"]]
+    assert len(photos) == n and all(provenance.is_embedded_photo(p) for p in photos)
+    assert reduced is True                                 # 3000x2000 noise cannot fit whole
+    assert all(h["photo"].startswith("data:") for h in record.hotspots)
+    assert all(not h["photo"].startswith("data:") for h in spec.hotspots)   # spec untouched
+
+
+def test_a_photo_that_fits_its_share_is_embedded_at_the_print_resolution(tmp_path):
+    src = _gradient_jpeg(tmp_path / "g.jpg", (3000, 2000))
+    record, manifest, reduced = provenance.build_record_manifest(
+        _spec_with(src, crop={"cx": 0.5, "cy": 0.5}), 675)
+    assert reduced is False
+    assert _embedded_size(record.hotspots[0]["photo"]) == (1013, 675)
+
+
+def test_a_reduced_record_photo_is_smaller_than_the_print_box_and_follows_the_ladder(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 1), crop={"cx": 0.5, "cy": 0.5})
+    base = len(provenance._manifest_str(provenance.build_manifest(
+        __import__("dataclasses").replace(spec, hotspots=[]))))
+    record, _, reduced = provenance.build_record_manifest(spec, 675, budget=base + 40_000)
+    w, h = _embedded_size(record.hotspots[0]["photo"])
+    assert reduced and min(w, h) < 675 and abs(w / h - 1.5) < 0.02
+    # a step of the ladder: 675 * 0.85 ** k, at quality 62
+    ks = [k for k in range(1, 30) if abs(min(w, h) - round(675 * 0.85 ** k)) <= 1]
+    assert ks
+
+
+def test_the_record_is_deterministic(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 3), crop={"cx": 0.5, "cy": 0.5})
+    a = provenance.build_record_manifest(spec, 675, budget=300_000)[1]
+    b = provenance.build_record_manifest(spec, 675, budget=300_000)[1]
+    assert provenance._manifest_str(a) == provenance._manifest_str(b)
+
+
+def test_a_photo_that_cannot_fit_the_record_at_any_size_raises(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 1, (600, 400)), crop={"cx": 0.5, "cy": 0.5})
+    with pytest.raises(provenance.RecordBudgetError):
+        provenance.build_record_manifest(spec, 675, budget=1_000)
+
+
+def test_an_unreadable_photo_is_left_out_of_the_record(tmp_path):
+    spec = _spec_with(str(tmp_path / "gone.jpg"), crop={"cx": 0.5, "cy": 0.5})
+    record, _, reduced = provenance.build_record_manifest(spec, 675)
+    assert "photo" not in record.hotspots[0] and reduced is False
+
+
+# ---- final fix M5/M6: a studio final with photos keeps its record readable ----
+
+def _noisy_photo_bytes(size=(600, 450), seed=3):
+    px = np.random.default_rng(seed).integers(0, 256, (size[1], size[0], 3), dtype=np.uint8)
+    b = io.BytesIO(); Image.fromarray(px, "RGB").save(b, "JPEG", quality=95)
+    return b.getvalue()
+
+
+def _stamped_session_with_noisy_photo(c):
+    j = c.post("/api/upload", files=[_file()]).json()
+    sid = j["session"]
+    r = c.post("/api/photo", data={"session_id": sid, "i": 0},
+               files={"file": ("pic.jpg", _noisy_photo_bytes(), "image/jpeg")})
+    assert r.status_code == 200, r.text
+    r = c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                   "print_w": 6, "print_h": 8, "title": "Trip"})
+    assert r.status_code == 200, r.text
+    return sid
+
+
+def test_a_final_over_the_record_budget_embeds_smaller_photos_and_reprints(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_noisy_photo(c)
+    whole = len(provenance._manifest_str(provenance.extract(
+        c.post("/api/final", data={"session_id": sid}).content)))
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", whole - 20_000)
+    png = c.post("/api/final", data={"session_id": sid}).content
+    m = provenance.extract(png)
+    assert m is not None and len(provenance._manifest_str(m)) <= whole - 20_000
+    photos = [hs["photo"] for hs in m["spec"]["hotspots"] if hs.get("photo")]
+    assert photos and photos[0].startswith(provenance.PHOTO_DATA_PREFIX)
+    r = c.post("/api/reprint", files={"file": ("poster.png", png, "image/png")})
+    assert r.status_code == 200, r.text
+    a = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+    b = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB"))
+    assert np.array_equal(a, b)                    # the render used the record's photos
+
+
+def test_a_final_whose_tracks_alone_fill_the_record_says_so(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    for route in ("/api/final", "/api/final/submit"):
+        r = c.post(route, data={"session_id": sid})
+        assert r.status_code == 422, (route, r.text)
+        assert "tracks alone" in r.json()["detail"]
+
+
+def test_a_final_whose_record_would_not_reopen_is_refused(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    r = c.post("/api/final", data={"session_id": sid})
+    assert r.status_code == 422 and "would not reopen" in r.json()["detail"]
+
+
+def test_a_photo_less_final_is_as_it_was(monkeypatch):
+    c = _client()
+    sid = _stamped_session(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200
+
+
+def test_a_share_copy_with_photos_needs_no_record_budget(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    r = c.post("/api/final", data={"session_id": sid, "embed_spec": "false"})
+    assert r.status_code == 200 and provenance.extract(r.content) is None
+
+
+# ---- a PDF carries no manifest, so it has no record budget to meet ----
+
+def _stamped_session_with_square_cut_photos(c, n=3):
+    from app import session
+    j = c.post("/api/upload", files=[_file()]).json()
+    sid = j["session"]
+    for i in range(n):
+        r = c.post("/api/photo", data={"session_id": sid, "i": i},
+                   files={"file": ("pic.jpg", _noisy_photo_bytes(seed=i), "image/jpeg")})
+        assert r.status_code == 200, r.text
+    spots = session.get(sid)["hotspots"]
+    for hs in spots[:n]:
+        hs["crop"] = {"cx": 0.5, "cy": 0.5}                  # a square cut
+    session.update(sid, hotspots=spots, spec=None)
+    r = c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                   "print_w": 6, "print_h": 8, "title": "Trip"})
+    assert r.status_code == 200, r.text
+    return sid
+
+
+def test_a_pdf_final_with_photos_is_painted_at_full_photo_size_and_never_refused(monkeypatch):
+    from app import main, render
+    c = _client()
+    sid = _stamped_session_with_square_cut_photos(c)
+    painted = []
+    real = render.rasterize
+    monkeypatch.setattr(main.render, "rasterize",
+                        lambda spec, **kw: (painted.append(spec), real(spec, **kw))[1])
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200
+    full = [hs["photo"] for hs in painted[-1].hotspots if hs.get("photo")]
+    assert len(full) >= 2 and all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in full)
+    # a budget no record could meet: the PNG is refused, the PDF is not, and its photos
+    # are the ones the unconstrained PNG painted
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 422
+    for route in ("/api/final", "/api/final/submit"):
+        r = c.post(route, data={"session_id": sid, "format": "pdf"})
+        assert r.status_code == 200, (route, r.text)
+    assert [hs["photo"] for hs in painted[-1].hotspots if hs.get("photo")] == full

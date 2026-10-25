@@ -191,7 +191,9 @@ approval, `finish`, the printer.
    `order new` writes four more keys, and the reader checks each one: `order_number`
    (like `"TP-26-001"`), `returning` (`true` for a next-year order: the next-year
    prices and links), `client` (the name, at most 80 characters) and `email`. The
-   reader ignores any other key, so a misspelled key is lost without a word.
+   reader ignores any other key, so a misspelled key is lost without a word. An order
+   with photos also takes `band_side`: `"top"` (the default) or `"bottom"`, the end of
+   the sheet the photo band takes when the order uses a band. The studio can change it.
 3. To let the client choose a size, run the preview before Prepare:
    `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
    and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
@@ -258,6 +260,8 @@ approval, `finish`, the printer.
    that the plate has no elevation past what the 3DEP index expects means holes the
    fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
    frame: do not print; delete the plate under work/plate/ and run Prepare again.
+   An order with photos also has a `Photos:` line and photo warnings. Read
+   "An order's photos" below.
 8. Read the proof lines of the report. Prepare writes the proof after the plate. The
    report then has a `Proof:` line that names `out/proof/<stem>-proof.jpg` and
    `.pdf`, and a `Soft proof:` line. `<stem>` is the title as a slug, or `poster` when
@@ -320,13 +324,35 @@ approval, `finish`, the printer.
       it, and press Approve again. Prepare also clears the approval when it builds a
       plate. A pull that adds a spec field changes the hash of every spec, so every
       approved order reads "changed after approval" after it. Approve each one again.
+      A photo replaced in `in/` after the approval, then Prepare, reads the same way.
     - "The saved studio spec is not this order's size: open the order, proof, save
       and approve again." The size, panel count or gap in `state.json` is not the
       saved spec's. Do what it says.
     - "<n> photo(s) on the approved proof can no longer be read: open the order,
-      attach them again, save and approve." The studio keeps an attached photo for
-      24 hours. Attach each photo again in the studio, save, send the new proof, and
-      approve.
+      attach them again, save and approve." Finish could not read a photo of the spec
+      when it built the record. The studio keeps a photo that you attach there for 24
+      hours: attach it again, save, send the new proof, and approve. This refusal
+      does not name an order's own photo: if its work JPEG is missing from the
+      order's work folder, Finish refuses first with "The order changed after
+      approval" (the approval hash covers the JPEG's bytes). For that one, run Prepare
+      again, which writes the missing work JPEG, or drop the photo in the studio. Then
+      save and approve again.
+    - "<n> photos have no spot: place or drop them in the studio." A photo waits in the
+      tray. Open the order, place or drop it, save and approve again.
+    - "<n> photos cannot be read: drop them in the studio." A photo has a spot you gave
+      it and no work JPEG, because Prepare could not read the file. Drop it in the
+      studio, or replace the file in `in/` and run Prepare. Then save and approve again.
+    - "<n> photos: the band holds 12. Drop some in the studio." Drop photos until 12 or
+      fewer stay, then save and approve again.
+    - "<n> photos are outside the frame: widen the frame or drop them in the studio."
+      A placed photo's spot is off the printed map, so it would print with a stem to
+      an anchor off the sheet. Widen the frame or drop the photo, then save and approve
+      again.
+    - "The reprint record cannot hold the photos within its 1 MB limit: drop some photos
+      in the studio." A photo would have to shrink below 16 px to fit. Drop photos.
+    - "The record could not be read back: ... Nothing was put in place; drop a photo
+      in the studio, approve again, then Finish." The staged record of a photo order
+      did not open with plain PIL. A smaller record opens: drop a photo.
     - "Run Prepare first: work/state.json has no plate." Run Prepare.
     - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
       or the piece has no side that fits the roll. Fix the file; the message names the
@@ -339,9 +365,14 @@ approval, `finish`, the printer.
     - "The print file of an earlier Finish cannot be removed: ...". Remove the file
       that it names, then run it again.
     Finish prints the spec that the client approved, once, at 300 ppi, with no
-    watermark. It makes every check before the render. Then it writes every file under
-    a temporary name, renames them all, removes the print files of an earlier Finish,
-    and writes `PRINT.txt` last. A run that fails before the renames deletes its
+    watermark. It makes every check before the render. The approval checks come first.
+    The next three read the photos in `state.json` alone, in this order: a photo in the
+    tray, a photo that cannot be read, and a band over 12. Then it paints the print
+    from the work JPEGs in the order folder, at full resolution. It builds the manifest
+    of `work/record.png` apart, with each photo sized to keep the manifest under 900,000
+    bytes, and reads the staged record back before any rename. Then it writes every file
+    under a temporary name, renames them all, removes the print files of an earlier
+    Finish, and writes `PRINT.txt` last. A run that fails before the renames deletes its
     temporary files, so it keeps the files of the last run.
 15. Read `out/print/PRINT.txt`. It names the paper, the profile, the intent and the
     preset, and lists each file with its size in inches, its size in pixels and how it
@@ -351,7 +382,13 @@ approval, `finish`, the printer.
       the print at exactly its size, 8-bit RGB, uncompressed, with the sRGB profile
       embedded. It has no border. The gap strips of a set are never printed.
     - `out/print/PRINT.txt`.
-    - `work/record.png`, the render with the reprint record, for Edition N+1.
+    - `work/record.png`, the render with the reprint record, for Edition N+1. A
+      paid print is never refused over its record. When the manifest is past the
+      900,000-byte budget with no photo in it (very long tracks), the record keeps
+      the photos as their order-folder paths and is written even if it does not
+      reopen, and `PRINT.txt` says "record.png is over the 1 MB record limit: it will
+      not reopen in the studio; keep this order folder." Keep that folder: it is the
+      only full record of the print.
     Finish turns each piece so that its 17 in side goes across the roll. A piece 17 in
     wide prints as it is. A piece 17 in tall (an 11 × 17 portrait, a 22 × 17 panel)
     turns 90° counter-clockwise. The `Feed:` line of each file in `PRINT.txt` says
@@ -475,11 +512,12 @@ Traps already paid for:
   of more than about 125 km on its longer side, and every Albers plate. When that
   service is down, such a preview stops. Run it again later. A plate that the 30 m
   layer does not cover keeps its coarse grid too. Prepare is not changed.
-- A preview plate for a route of many hundred km can also stop before the build, in
-  the query of the 3DEP index: "more footprints than one query returns". The index
-  gives a limited count of footprints for one query, and `_index_features` in
-  `region_prep.py` stops when the answer is not complete. This is a limit of the index
-  query in the prep stack. It is not fixed.
+- A preview plate for a route of many hundred km used to stop before the build, in
+  the query of the 3DEP index: "more footprints than one query returns". The service
+  cuts an answer by transfer size, not by count, so `_index_features` in
+  `region_prep.py` now asks in pages (`INDEX_PAGE_SIZE`, ordered by OBJECTID) and joins
+  them. It stops, with an error, past `INDEX_MAX_PAGES` pages or on an empty page that
+  claims more. It never returns part of the list.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
 (stub subprocesses, no network), `tests/test_dem_coverage.py`. For `order new`:
@@ -491,6 +529,177 @@ and for a file not on the disk). For the preview:
 `tests/test_papers.py`, `tests/test_orderspec.py`, `tests/test_orderproof.py`,
 `tests/test_softproof.py`, `tests/test_order_routes.py` (Open, Save, Approve),
 `tests/test_orderfinish.py`, and `tests/test_orderprep.py` for the proof lines of the report.
+For the photos: `tests/test_photos.py`, `tests/test_photospot.py`,
+`tests/test_photocaption.py`, `tests/test_photolayout.py`, `tests/test_photo_band.py`,
+`tests/test_photo_spec.py`, `tests/test_orderprep_photos.py`, and the photo cases of
+`tests/test_orderspec.py`, `tests/test_order_routes.py` and `tests/test_orderfinish.py`.
+
+### An order's photos
+
+Read `superpowers/plans/2026-10-24-order-photos.md` before you change them. Its planning
+decisions B1 to B9 are in `docs/decisions.md`, 2026-10-24 (order photos).
+
+A photo is a marker with a photo. It is a hotspot with the optional keys `box`, `crop`
+and `source`. `docs/MANIFEST.md` has the fields.
+
+How photos get on the map:
+
+1. Put the customer's photos in `in/`. `order new` copies them there with the tracks.
+   Prepare picks up files that end in `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.tif`,
+   `.tiff`, `.webp`, `.gif` or `.dng`, in file-name order. It never writes to `in/`.
+2. Run Prepare. It writes an upright JPEG of each photo to `work/photos/<file>.jpg`, where
+   `<file>` is the whole file name (`IMG_1.heic.jpg`), at most 4,000 px on the long side. A photo with an embedded profile other than sRGB
+   (an iPhone photo is Display P3) is converted to sRGB, so it does not print dull.
+   `state.json` records the sha256 of each file in `in/`. Prepare writes the work JPEG
+   again when that digest changes, never by the file's date: a same-named photo copied
+   in with an older date is still a new photo.
+3. Read the `Photos:` line of the report. It counts the photos placed by GPS, by time
+   and by hand, those in the tray, and those dropped, and names the layout.
+4. Read the photo warnings. Most name the photo. The band, layout and moved-box warnings
+   cover all the photos.
+
+Prepare finds a photo's spot in this order:
+
+- **GPS.** The photo's EXIF position, taken from lon/lat to the plate's CRS through
+  `app/geo.py`. A GPS spot is used as it is, even outside the frame.
+- **Time.** The photo's `DateTimeOriginal` against the tracks' times. It needs the
+  photo's `OffsetTimeOriginal`: without the offset the time is not used, even if it
+  looks right. A time inside a track's first-to-last time has no limit: the spot is
+  interpolated between the two surviving track points around it. A time outside every
+  track's span is placed at the nearest track end only when it is within 10 minutes of
+  it. Otherwise the photo gets no spot.
+- **The tray.** A photo with neither waits there. You place it in the studio.
+
+The caption starts as the name of the nearest place in the plate's `labels.json` within
+2,000 m of the spot. It is empty when none is near. You can write your own.
+
+The box is a square cut from the middle of the photo. Its side is 2.25 in on a 12 × 18
+sheet and scales with the sheet's area: 2.09 in on 11 × 17 and 2.96 in on 17 × 22. On a
+set it follows one panel. `crop` moves the cut away from the middle.
+
+The layout has two forms. They never mix on one poster.
+
+- **Open ground.** Each box sits beside its spot with one straight leader. A box keeps
+  clear of the routes, the furniture, the other boxes and the other leaders. Open
+  ground takes 8 photos at most. Place names keep out from under each box: the label
+  pass treats the painted frame as furniture. The layout itself never avoids its own
+  earlier boxes (`render.occupancy` leaves them out).
+- **The band.** A row of numbered boxes across the top or the bottom of the map, with
+  the captions under them and a numbered mark at each spot. It takes over when more
+  than 8 photos are placed, when a photo has no clear spot, or when the layout fails
+  (the report says why). It holds 12 photos at most. The title, compass and credit
+  take the other end of the sheet.
+
+A plate for an order with photos is planned around the open frame and the band frame on
+the band's current side (`manual.band_side`, else `band_side` in `order.toml`, else top),
+so it holds either layout on that side. That is about 1.9 times the area on a landscape
+11 × 17 (the band frame, since it holds the open frame), so Prepare takes a little longer
+for an order with photos. Planning for both ends took about 5 times the area there, and
+far more on a shorter print: a 3,000 km plate whose terrain fetch reached the Pacific
+(acceptance, 2026-10-24). When the band is used, Prepare grows the frame toward the
+band's end by the band's height, so the tracks keep their share of the map.
+
+If the studio switches the band to the other side, the new frame can need ground the plate
+does not have. `place_photos` measures the holes again on the new frame; ground of the
+frame outside `dem.tif` counts as no data, so the check warns "HOLES IN THE PRINT". Run
+Prepare again: it records the side it planned for (`photo_plan_side` in `state.json`),
+sees that the side changed and plans a new plate around the new side's frame. A new plate
+clears the approval. A plan from before `photo_plan_side` was planned for both ends, so it
+stays current on either side.
+
+The layout is computed on the crop that prints: the studio's live crop in the studio, the
+saved spec's crop in Prepare. A reframe followed by a proof lays out again the boxes you
+have not moved. A box you moved never moves. An approved order is the exception: opening
+it can move the studio's frame (the studio fits the frame to the plate), and a look must
+not cost the approval. Its boxes stay as approved, and the Order panel says "The frame
+differs from the approved one: save to lay the photos out again." Save to order lays the
+photos out on the saved crop before it compares the approval. An order with no recorded
+`layout_crop` keeps its boxes until an edit.
+
+The studio's photo controls:
+
+1. Open the order and render a proof. The Order panel lists every photo with its spot's
+   source (GPS, Time, By hand, Tray, Dropped or Unreadable).
+2. To place a tray photo, press Place, then click the proof where it was taken. Press
+   Move spot to do the same for a placed photo. Esc cancels. Place needs a fresh proof.
+3. To move a box, drag its outline on the proof, or focus it and press the arrow keys.
+   An arrow moves it 0.1 in, Shift 0.5 in. Auto box puts a moved box back.
+4. To frame a photo, move its Across and Down sliders. They move the cut of the square.
+5. To caption a photo, type in its Caption field. It holds 60 characters.
+6. To leave a photo off the poster, press Drop. Press Restore to bring it back.
+7. To move the band, press Top or Bottom in Photo band. It shows when the layout is the
+   band.
+8. Render the proof again. Save to order, send the proof, and approve.
+
+The marker list shows an order's photo as locked. Edit it in the Order panel.
+
+Every photo edit goes to `POST /api/order/photo`. It clears the approval and the proof,
+and the studio renders a proof again. A drop onto a route, the furniture or another box is
+kept and warned: the box stays where you put it. Your edits live in `work/state.json`
+under `manual.photos` and `manual.band_side`, never in the saved spec. A field you edited
+wins over Prepare's, and Prepare run again keeps it. When you save the spec, the
+photo fields (`hotspots`, `photo_layout`, `photo_band_side`, `photo_box_in`) are set
+again from this state, so a photo edit always reaches the proof, the approval and the
+print. Take every photo out of `in/` and run Prepare, and a saved spec loses its order
+photos and its band: the layout is open and the crop shrinks back to the open crop.
+Plain markers stay.
+
+The approval covers each photo's pixels, not only its path: the hash reads each work
+JPEG's sha256 and its path inside the order folder (`work/photos/<file>.jpg`). Replace a
+photo in `in/` and run Prepare, and Finish says the order changed. Move the whole orders
+folder, and the approvals stand.
+
+The photo warnings:
+
+- "its spot is outside the frame." Widen the frame or drop the photo.
+- "<w>×<h> px is small for a <box> in box at 300 ppi." The photo is under 300 ppi at its
+  box. Ask the client for a larger file, or accept it.
+- "Photo <file> is behind gap <k>." The spot is under a gap strip of a window set.
+- "<n> photos: the band holds 12." Drop photos in the studio.
+- "its box is over a route / the poster's furniture / <file>'s box / <file>'s spot / a
+  seam between panels. It stays where you put it."
+- "its box runs past the sheet's edge, so the poster pulls it inside."
+- "The moved boxes leave no open ground for the other photos, so all of them hang in the
+  band."
+- "The photos could not be laid out in open ground (...): they hang in the band."
+- "the photo could not be read (...)": the photo stays in the tray. Replace it in `in/`
+  or drop it.
+- "its place or time could not be read (...)": place it in the studio.
+- "its caption could not be found (...)": write one in the studio.
+
+Finish refuses a photo order in four cases before any render: a photo in the tray, a
+photo with a spot and no work JPEG, more than 12 photos placed, and a placed photo whose
+spot is outside the frame or under the band ("<n> photos are outside the frame: widen the
+frame or drop them in the studio."). The steps of Finish above give the words.
+
+The print is painted from the work JPEGs in the order folder at full resolution, so its
+sharpness does not depend on the record. The manifest of `work/record.png` holds each
+photo as an embedded JPEG. PIL refuses a PNG whose manifest passes 1 MiB, so the whole
+manifest is held to 900,000 bytes, and each photo gets an equal share of what the rest
+leaves. A square-cut photo is embedded with its short side at the box side times the
+print's ppi, capped by the source and the pixel guard. If that is too big for its share,
+the JPEG quality goes down (82, 72, 62, 52), then the size shrinks by 15 % a step. A photo
+whose short side would fall below 16 px stops Finish. Finish reads the staged record back before any
+rename. When a photo went below the print's resolution, `PRINT.txt` says "record.png
+carries reduced photos (the 1 MB record limit); reprint from this order folder for full
+resolution." There is no fitted-copy fallback. When the manifest passes the budget
+with no photo in it, Finish prints anyway: see step 15 of Run an order.
+
+The studio's own final (`/api/final`, `/api/final/submit`) holds a record with photos to
+the same budget, with the same code. When the plain embedding does not fit, or does not
+read back, each photo takes its share of the budget, and the final is painted from those
+photos so its reprint stays exact. When the tracks alone fill the record, a photo cannot
+fit, or the record still does not reopen, the route answers a 422 and writes nothing. A
+final with no photo, and a share copy, are made as before.
+
+Known limits:
+
+- The box outlines and the layout ignore High relief (oblique) displacement. The order
+  look has oblique 0.
+- On a panel set, the studio holds a box outline inside the sheet, not inside the panel.
+  The renderer keeps the box in its panel.
+- A reframe made without a proof is lost when an edit flips the layout or moves the
+  band's end. Render a proof after each reframe.
 
 ### The test sheet
 
@@ -547,6 +756,9 @@ they disagree.
    `tests/test_wallpaper_api.py` read the rest.
 5. A knob that reaches the terrain must miss `render.base_cache_key`. A furniture knob
    must hit it. `tests/test_base_cache.py` and `tests/test_ink_cache.py` judge that.
+   `photo_layout` and `photo_band_side` change the overlay only, so both sit in
+   `BASE_KEY_MASK_ALWAYS` and `INK_KEY_MASK_ALWAYS`. `tests/test_photo_spec.py` judges
+   them and the hotspot keys `box`, `crop` and `source`.
 
 ## Change a panel set
 
@@ -633,7 +845,9 @@ only such test in the suite: two of them can run side by side on two workers.
 `MANIFEST.md` is the format doc, internal since 2026-07-27. The CC0 dedication stands
 for the versions published before then and cannot be revoked, but the document is no
 longer a contract for outside implementers. `provenance.spec_from_manifest` is the one
-untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate. Every
+untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate,
+then bound the photo keys (`provenance.bound_photo_keys`: a hotspot's `box`, `crop` and
+`source`; a malformed key is dropped from its hotspot, never an error). Every
 new verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect`
 is the deliberate exception: it reads manifest fields only, and builds no spec.
 Nothing has checked those fields, so `main._inspect_fields` gives each one a type and a

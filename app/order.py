@@ -6,7 +6,7 @@
                             order.toml  Dom's decisions: title, size, orientation;
                                         a set's gap; the preview's sizes. From the
                                         intake: order_number, returning, client, email,
-                                        member
+                                        member. band_side: the photo band's end
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
@@ -42,6 +42,7 @@ ORDER_NUMBER = re.compile(r"TP-[0-9]{2}-[0-9]{3,5}")
 # a mail header or a URL reads as a separator.
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 CLIENT_MAX_CHARS = 80
+BAND_SIDES = ("top", "bottom")         # the photo band's end of the sheet (order photos, B2)
 
 
 class OrderError(ValueError):
@@ -144,6 +145,15 @@ def parse_member(value) -> bool:
     return value
 
 
+def parse_band_side(value) -> str:
+    """The end of the sheet the photo band takes: "top" (the default) or "bottom"."""
+    if value is None:
+        return "top"
+    if value not in BAND_SIDES:
+        raise OrderError(f'band_side must be "top" or "bottom", not {value!r}')
+    return value
+
+
 def parse_client(value) -> str:
     if value is None:
         return ""
@@ -179,6 +189,7 @@ class Order:
     client: str = ""         # the client's name, for the preview email
     email: str = ""          # the client's address, for the To line of that email
     member: bool = False     # a member at plateworks.org: the member links, no shipping
+    band_side: str = "top"   # the photo band's end of the sheet: "top" or "bottom"
 
     @property
     def id(self) -> str:
@@ -216,6 +227,14 @@ class Order:
             return []
         return sorted(os.path.join(self.in_dir, f) for f in os.listdir(self.in_dir)
                       if not f.startswith(".") and f.lower().endswith(TRACK_EXTS))
+
+    def photo_files(self) -> list:
+        """The customer's photos in in/, by file name. Only `order new` writes in/."""
+        from app.photos import PHOTO_EXTS      # here: app.photos loads pillow-heif
+        if not os.path.isdir(self.in_dir):
+            return []
+        return sorted(os.path.join(self.in_dir, f) for f in os.listdir(self.in_dir)
+                      if not f.startswith(".") and f.lower().endswith(PHOTO_EXTS))
 
     def payloads(self) -> list:
         """(bytes, filename) pairs, the shape app.ingest reads."""
@@ -264,7 +283,8 @@ def load(folder) -> Order:
                  order_number=parse_order_number(cfg.get("order_number")),
                  returning=parse_returning(cfg.get("returning")),
                  client=parse_client(cfg.get("client")), email=parse_email(cfg.get("email")),
-                 member=parse_member(cfg.get("member")))
+                 member=parse_member(cfg.get("member")),
+                 band_side=parse_band_side(cfg.get("band_side")))
 
 
 def read_state(order: Order) -> dict:
@@ -293,9 +313,14 @@ def set_manual(order: Order, key: str, value) -> dict:
     return update_manual(order, {key: value})
 
 
-def update_manual(order: Order, updates: dict) -> dict:
-    """Set several "manual" keys in one write, so a reader never sees half of them."""
+def update_manual(order: Order, updates: dict, state_updates: dict | None = None) -> dict:
+    """Set several "manual" keys in one write, so a reader never sees half of them.
+    `state_updates` (top-level keys other than "manual") ride the same write: a studio
+    edit clears the approval with the edit, never in a second write."""
     state = read_state(order)
+    for key, value in (state_updates or {}).items():
+        if key != "manual":
+            state[key] = value
     state.setdefault("manual", {}).update(updates)
     _dump(order, state)
     return state

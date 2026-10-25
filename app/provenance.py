@@ -26,11 +26,12 @@ import dataclasses
 import hashlib
 import io
 import json
+import math
 import os
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
 from app import serialize
-from app.spec import CompositionSpec, SpecError
+from app.spec import CompositionSpec, SpecError, PHOTO_SOURCES
 
 MANIFEST_KEY = "trailprint"        # the zTXt chunk keyword -- FROZEN v1 format keyword: it
                                    # predates the Tecopa Plateworks rename and every existing
@@ -82,6 +83,15 @@ PHOTO_DATA_PREFIX = "data:image/jpeg;base64,"
 PHOTO_EMBED_QUALITY = 82
 MAX_PHOTO_EMBED_BYTES = 512 * 1024     # per-photo ceiling on the encoded JPEG
 MAX_PHOTO_EMBED_PIXELS = 8_000_000     # decode guard for an untrusted embedded photo
+# PIL refuses to open a PNG whose zTXt chunk holds more than 1 MiB (1,048,576 bytes,
+# ImageFile.MAX_TEXT_CHUNK): Image.open() raises and extract() returns None. The file is
+# the record, openable by anyone with plain PIL, so a record the order pipeline writes
+# keeps its WHOLE manifest, photos included, under this budget. Never raise PIL's limit.
+MAX_RECORD_MANIFEST_BYTES = 900_000
+PHOTO_QUALITY_LADDER = (82, 72, 62, 52)   # JPEG qualities tried at the full size, in order
+RECORD_SHRINK = 0.85                   # then each step shrinks the size, at quality 62
+RECORD_SHRINK_QUALITY = 62
+RECORD_MIN_SIDE_PX = 16                # a photo that must go smaller cannot be recorded
 
 # Living editions: the ancestor chain that lets a poster prove its lineage from the
 # file alone is capped so a century of yearly editions can't unbound the manifest
@@ -272,24 +282,178 @@ def is_embedded_photo(value) -> bool:
     return isinstance(value, str) and value.startswith(PHOTO_DATA_PREFIX)
 
 
-def _encode_photo(path: str, box_px: int) -> str | None:
+class RecordBudgetError(ValueError):
+    """A photo cannot be embedded in the record within its share of the manifest budget."""
+
+
+def _is_square_cut(hs: dict) -> bool:
+    """True if the renderer cuts this hotspot's photo to a square: it has a `box` offset
+    or a `crop` focus the renderer reads (render._photo_box_offset / _photo_crop_focus,
+    so their finiteness test, render._finite_real, is the one used here). Without either
+    the photo is fitted, as it always was."""
+    from app import render           # here: render imports this module
+    return (render._photo_box_offset(hs) is not None
+            or render._photo_crop_focus(hs) is not None)
+
+
+def _fit_scale(w: int, h: int, edge: int, square: bool) -> float:
+    """The scale that puts a photo's SHORT side (a square cut) or LONG side (a fitted
+    photo) at `edge` pixels, never above 1 (the source is not upscaled) and never past
+    MAX_PHOTO_EMBED_PIXELS."""
+    side = min(w, h) if square else max(w, h)
+    return min(1.0, edge / side, math.sqrt(MAX_PHOTO_EMBED_PIXELS / (w * h)))
+
+
+def _scaled(im: Image.Image, scale: float) -> Image.Image:
+    """`im` at `scale` (LANCZOS), or `im` itself at 1. Rounding never goes past the pixel
+    guard."""
+    if scale >= 1.0:
+        return im
+    tw, th = max(1, round(im.width * scale)), max(1, round(im.height * scale))
+    while tw * th > MAX_PHOTO_EMBED_PIXELS:
+        tw, th = max(1, tw - 1), max(1, th - 1)
+    return im.resize((tw, th), Image.LANCZOS)
+
+
+def _jpeg(im: Image.Image, quality: int) -> bytes:
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def _data_uri(raw: bytes) -> str:
+    return PHOTO_DATA_PREFIX + base64.b64encode(raw).decode("ascii")
+
+
+def _encode_photo(path: str, box_px: int, square: bool = False) -> str | None:
     """Read a photo file and return a render-resolution JPEG data URI, or None if it
-    can't be read/encoded within the per-photo byte ceiling. `box_px` is the pixel long
-    edge the poster paints the photo at (photo_box_in * final_dpi), so the embedded copy
-    is exactly what the sheet shows -- never larger, so the file stays lean. Encoding is
-    deterministic for fixed pixels (invariant 3: the manifest stays byte-stable)."""
+    can't be read/encoded within the per-photo byte ceiling. `box_px` is the pixel edge
+    the poster paints the photo at (photo_box_in * final_dpi). A fitted photo is its
+    LONG side at `box_px`, so the embedded copy is exactly what the sheet shows -- never
+    larger, so the file stays lean.
+
+    A `square` photo (the hotspot has a box or a crop) is cut to a box x box square from
+    this copy, so its SHORT side must carry `box_px`: fitting the long side would upscale
+    a 3:2 photo's square about 1.5x. That copy is never larger than the source and never
+    past MAX_PHOTO_EMBED_PIXELS. If it breaks the byte ceiling the JPEG quality goes
+    down (PHOTO_QUALITY_LADDER), never the size: the print is never silently soft.
+    Encoding is deterministic for fixed pixels (invariant 3)."""
     try:
         with Image.open(path) as im:
             im = im.convert("RGB")
-            im.thumbnail((box_px, box_px))
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=PHOTO_EMBED_QUALITY, optimize=True)
+            if not square:
+                im.thumbnail((box_px, box_px))
+                qualities = (PHOTO_EMBED_QUALITY,)
+            else:
+                im = _scaled(im, _fit_scale(im.width, im.height, box_px, True))
+                qualities = PHOTO_QUALITY_LADDER
+            for quality in qualities:
+                raw = _jpeg(im, quality)
+                if len(raw) <= MAX_PHOTO_EMBED_BYTES:
+                    return _data_uri(raw)
     except Exception:
         return None
-    raw = buf.getvalue()
-    if len(raw) > MAX_PHOTO_EMBED_BYTES:
+    return None
+
+
+def _record_photo(path: str, box_px: int, square: bool, room: int):
+    """A photo for the record, as a data URI of at most `room` characters, with a flag
+    that says it was reduced below the print's box resolution; None when the file cannot
+    be read. The ladder is fixed, so the same input gives the same bytes (invariant 3):
+    JPEG quality 82, 72, 62, 52 at the size the print uses (the short side of a square cut
+    at `box_px`, else the long side; the source is never upscaled), then the size shrinks
+    by RECORD_SHRINK per step at quality RECORD_SHRINK_QUALITY until the copy fits. Raises
+    RecordBudgetError when it fits only below RECORD_MIN_SIDE_PX."""
+    try:
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            scale0 = _fit_scale(im.width, im.height, box_px, square)
+            full = _scaled(im, scale0)
+            for quality in PHOTO_QUALITY_LADDER:
+                uri = _data_uri(_jpeg(full, quality))
+                if len(uri) <= room:
+                    return uri, False
+            step = 0
+            while True:
+                step += 1
+                scale = scale0 * RECORD_SHRINK ** step
+                if min(im.width, im.height) * scale < RECORD_MIN_SIDE_PX:
+                    raise RecordBudgetError("a photo does not fit the record")
+                uri = _data_uri(_jpeg(_scaled(im, scale), RECORD_SHRINK_QUALITY))
+                if len(uri) <= room:
+                    return uri, True
+    except RecordBudgetError:
+        raise
+    except Exception:
         return None
-    return PHOTO_DATA_PREFIX + base64.b64encode(raw).decode("ascii")
+
+
+def _photo_paths_out(spec: CompositionSpec):
+    """(hotspots copy, [the hotspots whose photo is a path], [those paths]): the photo
+    key popped from each hotspot whose photo is not already embedded."""
+    hotspots = copy.deepcopy(list(spec.hotspots or []))
+    todo = [hs for hs in hotspots if isinstance(hs, dict) and hs.get("photo")
+            and not is_embedded_photo(hs["photo"])]
+    return hotspots, todo, [hs.pop("photo") for hs in todo]
+
+
+def base_manifest_bytes(spec: CompositionSpec, region_pack: dict | None = None,
+                        sources: list | None = None, lineage: list | None = None) -> int:
+    """The length of the manifest `spec` would carry with no photo to embed (each photo
+    that is a path left out; one already embedded stays): what the tracks, the spec and
+    the blocks cost on their own. Over MAX_RECORD_MANIFEST_BYTES, no photo budget can
+    make the record fit, so dropping photos cannot help."""
+    hotspots, _, _ = _photo_paths_out(spec)
+    return len(_manifest_str(build_manifest(
+        dataclasses.replace(spec, hotspots=hotspots), sources, lineage,
+        region_pack=region_pack)))
+
+
+def manifest_fits(manifest: dict, budget: int | None = None) -> bool:
+    """True when `manifest` is within the record budget (MAX_RECORD_MANIFEST_BYTES)."""
+    budget = MAX_RECORD_MANIFEST_BYTES if budget is None else budget
+    return len(_manifest_str(manifest)) <= budget
+
+
+def manifest_reads_back(manifest: dict) -> bool:
+    """True when a PNG carrying `manifest` opens and gives it back through extract(), as
+    anyone with plain PIL would read it. The pixels play no part (the zTXt chunk is what
+    PIL limits), so a one-pixel PNG answers for the whole poster."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(buf, "PNG", pnginfo=manifest_pnginfo(manifest))
+    return extract(buf.getvalue()) is not None
+
+
+def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict | None = None,
+                          budget: int | None = None, sources: list | None = None,
+                          lineage: list | None = None):
+    """The manifest of a print's record (work/record.png) and the record's spec, whose
+    hotspot photos are embedded JPEGs. Returns (record spec, manifest, reduced); a COPY,
+    `spec` is untouched (it keeps the photos as paths: the print renders from those,
+    full resolution, so its sharpness never depends on the record's size).
+
+    The WHOLE manifest stays within `budget` (MAX_RECORD_MANIFEST_BYTES, see there).
+    Each photo's share is (budget - the manifest without these photos) / the photo count;
+    _record_photo fits each into its share. `reduced` is True when a photo had to go
+    below the print's box resolution. A photo that cannot be read is left out of the
+    record spec (the caller compares counts); one that cannot fit raises
+    RecordBudgetError. A photo that is already embedded is kept verbatim. `sources` and
+    `lineage` ride the manifest as build_manifest's do (a studio final passes them)."""
+    budget = MAX_RECORD_MANIFEST_BYTES if budget is None else budget
+    hotspots, todo, paths = _photo_paths_out(spec)
+    base = base_manifest_bytes(spec, region_pack, sources, lineage)
+    overhead = len(',"photo":""')
+    share = (budget - base) // len(todo) if todo else 0
+    reduced = False
+    for hs, path in zip(todo, paths):
+        got = (_record_photo(path, box_px, _is_square_cut(hs), share - overhead)
+               if isinstance(path, str) else None)
+        if got is None:
+            continue                             # unreadable: left out, the caller counts
+        hs["photo"], was_reduced = got
+        reduced = reduced or was_reduced
+    record = dataclasses.replace(spec, hotspots=hotspots)
+    return record, build_manifest(record, sources, lineage, region_pack=region_pack), reduced
 
 
 def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:
@@ -306,7 +470,8 @@ def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:
         p = hs.get("photo")
         if not p or is_embedded_photo(p):
             continue                             # absent, or already the record's bytes
-        enc = _encode_photo(p, box_px) if isinstance(p, str) else None
+        enc = (_encode_photo(p, box_px, square=_is_square_cut(hs))
+               if isinstance(p, str) else None)
         if enc is None:
             hs.pop("photo", None)                # unreadable / oversized: drop cleanly
         else:
@@ -342,6 +507,50 @@ def drop_unembedded_photos(spec: CompositionSpec) -> CompositionSpec:
     return spec
 
 
+def _finite_number(v) -> bool:
+    """A real, finite JSON number. A bool is not one (True would pass as 1)."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):                  # always finite; math.isfinite(10**400) raises
+        return True
+    return isinstance(v, float) and math.isfinite(v)
+
+
+def bound_photo_keys(spec: CompositionSpec) -> CompositionSpec:
+    """SECURITY: bound the keys that place a photo, for an UNTRUSTED manifest-derived
+    spec (order photos, B1). A hotspot's `box` is {"dx_in","dy_in"}, finite numbers whose
+    magnitude is at most the sheet's larger side in inches; `crop` is {"cx","cy"}, finite
+    and within 0..1; `source` is one of PHOTO_SOURCES. A malformed key is dropped from
+    its hotspot -- the hotspot, and its other keys, stay -- so a crafted file is a
+    cleaner render, never an exception. A well-formed key is rebuilt with only its named
+    members, so nothing rides along inside it. Mutates and returns the spec. Call it
+    AFTER validate: the sheet size it bounds against is then a checked pair of numbers."""
+    limit = max(spec.print_w_in, spec.print_h_in)
+    for hs in spec.hotspots:
+        if not isinstance(hs, dict):
+            continue
+        box = hs.get("box")
+        if "box" in hs:
+            if (isinstance(box, dict)
+                    and _finite_number(box.get("dx_in")) and _finite_number(box.get("dy_in"))
+                    and abs(box["dx_in"]) <= limit and abs(box["dy_in"]) <= limit):
+                hs["box"] = {"dx_in": box["dx_in"], "dy_in": box["dy_in"]}
+            else:
+                del hs["box"]
+        crop = hs.get("crop")
+        if "crop" in hs:
+            if (isinstance(crop, dict)
+                    and _finite_number(crop.get("cx")) and _finite_number(crop.get("cy"))
+                    and 0 <= crop["cx"] <= 1 and 0 <= crop["cy"] <= 1):
+                hs["crop"] = {"cx": crop["cx"], "cy": crop["cy"]}
+            else:
+                del hs["crop"]
+        if "source" in hs and not (isinstance(hs["source"], str)
+                                   and hs["source"] in PHOTO_SOURCES):
+            del hs["source"]
+    return spec
+
+
 def load_photo(value: str) -> Image.Image:
     """Open a hotspot photo for rendering, as an RGB image. An embedded (data URI) photo
     decodes from in-memory bytes with a pixel-count guard -- an untrusted manifest could
@@ -372,6 +581,8 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
       3. bound_geometry          -- refuse a geometry bomb (millions of points / thousands
                                     of tracks) BEFORE validate/rasterize allocate anything.
       4. validate(final_dpi)     -- aspect, the 120 MP output ceiling, the zoom cap.
+      5. bound_photo_keys        -- a photo's box / crop / source: finite, on the sheet,
+                                    in range, or dropped from its hotspot.
 
     Raises only SpecError (ManifestError for a bad manifest; ZoomTooTight / OutputTooLarge
     / plain SpecError for a bad geometry), so one `except SpecError` at the call site maps
@@ -391,6 +602,7 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
         drop_unembedded_photos(spec)
         bound_geometry(spec)
         spec.validate(spec.final_dpi())
+        bound_photo_keys(spec)
     except SpecError:
         raise
     except Exception as e:

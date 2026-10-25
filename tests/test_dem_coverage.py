@@ -271,3 +271,82 @@ def test_esri_three_nesting_levels():
              _cw_square(8, 8, 12, 12)]          # an island in that, 16
     assert rp.esri_rings_to_geom(rings).area == pytest.approx(
         400 - 256 + 144 - 64 + 16)
+
+
+# ---- paging: the server cuts by transfer size, so the query pages ----
+import urllib.parse
+
+
+def _feat(oid):
+    return {"attributes": {"OBJECTID": oid}}
+
+
+def _qs(url):
+    return {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(url).query).items()}
+
+
+def test_two_pages_are_joined_in_order(monkeypatch):
+    pages = [{"features": [_feat(1), _feat(2)], "exceededTransferLimit": True},
+             {"features": [_feat(3)]}]
+    urlopen, calls = _fake_urlopen(pages)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    got = rp._index_features(10, (0.0, 0.0, 1.0, 1.0))
+    assert [f["attributes"]["OBJECTID"] for f in got] == [1, 2, 3]
+    assert len(calls) == 2
+    # the offset advances by the features actually returned, not by the page size
+    assert _qs(calls[0])["resultOffset"] == "0"
+    assert _qs(calls[1])["resultOffset"] == "2"
+
+
+def test_the_query_carries_the_paging_parameters(monkeypatch):
+    urlopen, calls = _fake_urlopen([{"features": []}])
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    rp._index_features(10, (0.0, 0.0, 1.0, 1.0))
+    q = _qs(calls[0])
+    assert q["orderByFields"] == "OBJECTID"
+    assert q["resultOffset"] == "0"
+    assert q["resultRecordCount"] == str(rp.INDEX_PAGE_SIZE)
+    assert "/MapServer/21/query" in calls[0]
+
+
+def test_an_empty_page_with_more_to_come_raises_not_loops(monkeypatch):
+    pages = [{"features": [_feat(1)], "exceededTransferLimit": True},
+             {"features": [], "exceededTransferLimit": True}]
+    urlopen, calls = _fake_urlopen(pages)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="10 m.*empty page"):
+        rp._index_features(10, (0.0, 0.0, 1.0, 1.0))
+    assert len(calls) == 2
+
+
+def test_the_page_cap_raises_never_a_partial_list(monkeypatch):
+    calls = []
+
+    def urlopen(url, context=None, timeout=None):
+        calls.append(url)
+        return io.BytesIO(json.dumps(
+            {"features": [_feat(len(calls))], "exceededTransferLimit": True}).encode())
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="10 m: more footprints than .* pages"):
+        rp._index_features(10, (0.0, 0.0, 1.0, 1.0))
+    assert len(calls) == rp.INDEX_MAX_PAGES
+
+
+def test_a_page_retries_once_on_5xx_then_the_next_page_follows(monkeypatch):
+    err = urllib.error.HTTPError("u", 503, "busy", {}, None)
+    pages = [{"features": [_feat(1)], "exceededTransferLimit": True}, err,
+             {"features": [_feat(2)]}]
+    urlopen, calls = _fake_urlopen(pages)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    got = rp._index_features(10, (0.0, 0.0, 1.0, 1.0))
+    assert [f["attributes"]["OBJECTID"] for f in got] == [1, 2]
+    assert _qs(calls[1])["resultOffset"] == _qs(calls[2])["resultOffset"] == "1"
+
+
+def test_a_failure_on_a_later_page_raises_not_partial(monkeypatch):
+    err = urllib.error.HTTPError("u", 500, "boom", {}, None)
+    pages = [{"features": [_feat(1)], "exceededTransferLimit": True}, err, err]
+    urlopen, _ = _fake_urlopen(pages)
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    with pytest.raises(RuntimeError, match="10 m: HTTP 500"):
+        rp._index_features(10, (0.0, 0.0, 1.0, 1.0))

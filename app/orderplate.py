@@ -257,18 +257,79 @@ def widen_for_upsample(frame, layer_m, print_w_in, dpi=DPI) -> tuple:
     return widen_frame(frame, width)
 
 
-def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions):
+def _scaled(frame, factor, cy=None) -> tuple:
+    """`frame` grown by `factor` about its centre (or about the height `cy`)."""
+    cx = (frame[0] + frame[2]) / 2.0
+    cy = (frame[1] + frame[3]) / 2.0 if cy is None else cy
+    return _centred(cx, cy, (frame[2] - frame[0]) * factor, (frame[3] - frame[1]) * factor)
+
+
+def _band_factor(print_h_in, band_h_in) -> float:
+    """How much a frame grows when a band of `band_h_in` takes the top or the bottom of a
+    `print_h_in` tall print and the frame keeps its whole ground height beside it."""
+    if print_h_in <= band_h_in:
+        raise PlateError(f"A {band_h_in:.2f} in photo band does not fit a "
+                         f"{print_h_in:g} in tall print.")
+    return print_h_in / (print_h_in - band_h_in)
+
+
+def _anchored(frame, factor, side) -> tuple:
+    """`frame` scaled by `factor`, its edge away from the band (the bottom for a "top"
+    band, the top for a "bottom" one) held where it is, centred across."""
+    grown = (frame[3] - frame[1]) * factor
+    cy = frame[1] + grown / 2.0 if side != "bottom" else frame[3] - grown / 2.0
+    return _scaled(frame, factor, cy)
+
+
+def band_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The frame of a poster whose photos hang in a band across its `side` ("top" or
+    "bottom") end (order photos, B2): `frame` keeps its ground height below (or above)
+    the band, and the band adds `band_h_in` of ground at the new frame's scale. The
+    width grows by the same factor, so the aspect stays the print's and the whole of
+    `frame` stays on the map, out of the band. unband_frame is its inverse."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    return _anchored(frame, _band_factor(print_h_in, band_h_in), side)
+
+
+def unband_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The open frame a band frame was grown from: band_frame undone, the edge away from
+    the band held, so band_frame(unband_frame(f)) is f."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    return _anchored(frame, 1.0 / _band_factor(print_h_in, band_h_in), side)
+
+
+def photo_plan_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The frame a plate is planned round when the order has photos: the union of `frame`
+    (the open layout's) and the band frame on the band's current `side` ("top" or
+    "bottom"), so the plate holds either layout on that side. The band frame already
+    holds `frame`, so the union is that frame; it is taken as a union anyway, so the
+    promise does not rest on how band_frame is anchored. Only the one side is planned:
+    growing for both ends scaled a short landscape print about 7.5 times in area.
+    A switch to the other side is a Prepare again (check_holes warns first)."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    grown = band_frame(frame, print_h_in, band_h_in, side)
+    return (min(frame[0], grown[0]), min(frame[1], grown[1]),
+            max(frame[2], grown[2]), max(frame[3], grown[3]))
+
+
+def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions, grow=None):
     """The first curated plate that holds the nestled frame's plate (the frame plus
     its PLATE_MARGIN border) at the print's resolution with no upsampling. A built
     plate carries that margin round the frame for oblique previews and studio frame
     changes, so a reused plate must hold it too, not just the bare frame. `regions`
     holds dicts with id, crs ("EPSG:n"), bounds (CRS metres) and native_resolution_m.
+    `grow`, when given, maps the frame to the larger frame the plate must hold (an
+    order with photos: photo_plan_frame on the current band side); the resolution is
+    still the frame's own.
     Returns {"region", "frame", "need_m", "epsg"} or None."""
     for r in regions:
         epsg = int(str(r["crs"]).split(":")[1])
         frame = nestled_frame(project_bbox(track_bbox_lonlat, epsg), aspect)
         need = needed_resolution(frame, print_w_in)
-        plate = plate_bounds(frame)
+        plate = plate_bounds(grow(frame) if grow else frame)
         b = r["bounds"]
         inside = (plate[0] >= b[0] and plate[1] >= b[1]
                   and plate[2] <= b[2] and plate[3] <= b[3])

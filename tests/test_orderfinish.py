@@ -349,6 +349,225 @@ def test_finish_prints_the_photos_it_can_read(order, tmp_path):
     assert len(photos) == 2 and all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in photos)
 
 
+# --- the order's photos: Finish refuses a tray photo and a band over 12 -----------------
+
+TRAY = "{n} photos have no spot: place or drop them in the studio."
+OVER = "{n} photos: the band holds 12. Drop some in the studio."
+
+
+def _photo_state(order, placed, tray=0, dropped=0, layout="open", manual=None,
+                 size=(60, 40), noisy=False):
+    """State photos as Prepare leaves them: `placed` with a spot and a work JPEG on disk,
+    `tray` with no spot (the first of them unreadable: no work JPEG), `dropped` placed but
+    dropped. Then the spec is saved and approved. `manual` is manual.photos."""
+    state = od.read_state(order)
+    cx, cy = (state["frame"][0] + state["frame"][2]) / 2, \
+        (state["frame"][1] + state["frame"][3]) / 2
+    os.makedirs(os.path.join(order.dir, "work", "photos"), exist_ok=True)
+    photos = []
+
+    def entry(name, spot, work=True, **kw):
+        rel = os.path.join("work", "photos", name + ".jpg")
+        if work:
+            if noisy:
+                import numpy as np
+                px = np.random.default_rng(len(photos)).integers(
+                    0, 256, (size[1], size[0], 3), dtype=np.uint8)
+                im = Image.fromarray(px, "RGB")
+            else:
+                im = Image.new("RGB", size, (12, 200, 80))
+            im.save(os.path.join(order.dir, rel), "JPEG")
+        photos.append({"file": name, "work": rel if work else None, "spot": spot,
+                       "source": "gps" if spot else None, "caption": "", "box": None,
+                       "crop": {"cx": 0.5, "cy": 0.5}, "dropped": False, "warnings": [],
+                       **kw})
+    for k in range(placed):
+        entry(f"p{k:02d}", {"x": cx + 300 * k, "y": cy})
+    for k in range(tray):
+        entry(f"t{k:02d}", None, work=k > 0)
+    for k in range(dropped):
+        entry(f"d{k:02d}", {"x": cx, "y": cy + 300 * (k + 1)}, dropped=True)
+    od.write_state(order, {"photos": photos, "photo_layout": layout,
+                           "photo_band_side": "top"})
+    if manual:
+        od.set_manual(order, "photos", manual)
+    return _save_and_approve(order)
+
+
+def _no_print(order):
+    assert not os.path.exists(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_refuses_a_tray_photo(order, monkeypatch):
+    _photo_state(order, placed=2, tray=2)          # one of them unreadable: still the tray
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=2)
+    _no_print(order)
+
+
+def test_a_dropped_photo_and_a_photo_placed_by_hand_are_not_in_the_tray(order, tmp_path):
+    cx = (od.read_state(order)["frame"][0] + od.read_state(order)["frame"][2]) / 2
+    cy = (od.read_state(order)["frame"][1] + od.read_state(order)["frame"][3]) / 2
+    _photo_state(order, placed=1, tray=2, dropped=1, manual={
+        "t00": {"dropped": True},                  # the unreadable one: Dom dropped it
+        "t01": {"spot": {"x": cx, "y": cy + 900}}})  # the other one: Dom placed it
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isdir(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_refuses_more_than_12_photos(order, monkeypatch):
+    _photo_state(order, placed=13, dropped=2, layout="band")   # a dropped one is not counted
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == OVER.format(n=13)
+    _no_print(order)
+
+
+def test_the_tray_is_refused_before_the_band_count(order, monkeypatch):
+    _photo_state(order, placed=13, tray=1, layout="band")
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=1)
+
+
+def test_the_photo_refusals_come_after_the_approval_check(order, monkeypatch):
+    _photo_state(order, placed=1, tray=1)
+    od.write_state(order, {"approval": None})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == orderfinish.NOT_APPROVED
+
+
+def test_finish_embeds_placed_photos(order):
+    from app import provenance
+    _photo_state(order, placed=3, tray=0, dropped=1)
+    orderfinish.finish(order.dir, dpi=DPI)
+    manifest = provenance.extract(open(os.path.join(order.dir, "work", "record.png"),
+                                       "rb").read())
+    photos = [h.get("photo") for h in manifest["spec"]["hotspots"]]
+    assert len(photos) == 3
+    assert all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in photos)
+
+
+def test_twelve_photos_in_the_band_are_printed(order):
+    _photo_state(order, placed=12, layout="band")
+    result = orderfinish.finish(order.dir, dpi=DPI)
+    assert len(result["files"]) == 1
+
+
+def test_finish_refuses_a_hand_placed_photo_with_no_work_jpeg(order, monkeypatch):
+    state = od.read_state(order)
+    cx, cy = state["frame"][0], state["frame"][1]
+    # t00 has no work JPEG (Prepare could not read it); Dom clicked a spot for it anyway
+    _photo_state(order, placed=1, tray=1, manual={"t00": {"spot": {"x": cx + 900, "y": cy}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == "1 photos cannot be read: drop them in the studio."
+    _no_print(order)
+
+
+def test_the_tray_is_refused_before_an_unreadable_photo(order, monkeypatch):
+    state = od.read_state(order)
+    cx, cy = state["frame"][0], state["frame"][1]
+    _photo_state(order, placed=0, tray=2, manual={"t00": {"spot": {"x": cx + 900, "y": cy}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=1)           # t01 is still in the tray
+
+
+def test_the_print_is_painted_from_the_full_resolution_work_jpegs(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=2, size=(1500, 1000))
+    seen = []
+    real = provenance.load_photo
+
+    def spy(value):
+        im = real(value)
+        seen.append((provenance.is_embedded_photo(value), im.size))
+        return im
+    monkeypatch.setattr(provenance, "load_photo", spy)
+    orderfinish.finish(order.dir, dpi=DPI)
+    # every photo the renderer opened was the order folder's own file, whole: never the
+    # record's smaller embedded copy
+    assert seen and all(not emb and size == (1500, 1000) for emb, size in seen)
+
+
+def test_the_record_holds_the_photos_as_embedded_jpegs_the_print_does_not_need(order):
+    from app import provenance
+    _photo_state(order, placed=3, size=(1500, 1000))
+    orderfinish.finish(order.dir, dpi=DPI)
+    got = provenance.extract(open(os.path.join(order.dir, "work", "record.png"), "rb").read())
+    assert got is not None
+    assert len(provenance._manifest_str(got)) <= provenance.MAX_RECORD_MANIFEST_BYTES
+
+
+def test_the_approval_hash_is_of_the_spec_with_paths_and_finish_leaves_it_be(order):
+    spec = _photo_state(order, placed=2)
+    state = od.read_state(order)
+    assert all(not str(h["photo"]).startswith("data:") for h in spec.hotspots)
+    before = state["approval"]["hash"]
+    orderfinish.finish(order.dir, dpi=DPI)
+    after = od.read_state(order)
+    assert after["approval"]["hash"] == before
+    assert orderstudio.approval_ok(order, after)
+
+
+def test_two_finish_runs_write_the_same_record_bytes(order):
+    _photo_state(order, placed=3, size=(1500, 1000))
+    record = os.path.join(order.dir, "work", "record.png")
+    orderfinish.finish(order.dir, dpi=DPI)
+    first = open(record, "rb").read()
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert open(record, "rb").read() == first
+
+
+def test_a_record_that_cannot_be_read_back_puts_nothing_in_place(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=2)
+    orderfinish.finish(order.dir, dpi=DPI)                  # an earlier run to keep whole
+    before = _snapshot(order)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value).startswith("The record could not be read back: ")
+    assert _snapshot(order) == before and _leftover_temps(order) == []
+
+
+def test_a_first_run_whose_record_cannot_be_read_back_writes_nothing(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=1)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    with pytest.raises(od.OrderError, match="The record could not be read back"):
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert not os.path.exists(os.path.join(order.dir, "work", "record.png"))
+    assert not [n for n in os.listdir(os.path.join(order.dir, "out", "print"))] \
+        if os.path.isdir(os.path.join(order.dir, "out", "print")) else True
+
+
+def test_the_note_says_so_when_the_record_carries_reduced_photos(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=2, size=(1500, 1000), noisy=True)
+    orderfinish.finish(order.dir, dpi=60)           # a box of 125 px: noise that is not tiny
+    note = open(os.path.join(order.dir, "out", "print", "PRINT.txt")).read()
+    assert "reduced photos" not in note                    # the photos fit whole
+    record = open(os.path.join(order.dir, "work", "record.png"), "rb").read()
+    full = len(provenance._manifest_str(provenance.extract(record)))
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", full - 8_000)
+    orderfinish.finish(order.dir, dpi=60)
+    note = open(os.path.join(order.dir, "out", "print", "PRINT.txt")).read()
+    assert ("record.png carries reduced photos (the 1 MB record limit); reprint from this "
+            "order folder for full resolution.") in note.splitlines()
+    record = open(os.path.join(order.dir, "work", "record.png"), "rb").read()
+    assert len(provenance._manifest_str(provenance.extract(record))) <= full - 8_000
+
+
 def _snapshot(order) -> dict:
     """Every file of a Finish, by path, with its bytes."""
     out = {}
@@ -401,3 +620,127 @@ def test_a_stale_print_file_that_cannot_be_removed_stops_finish(approved, monkey
     with pytest.raises(od.OrderError, match="old-title-11x17.tif.*Permission denied"):
         orderfinish.finish(approved.dir, dpi=DPI)
     assert not _leftover_temps(approved)
+
+
+# --- final fix I2: a photo whose pixels changed after approval is a changed order --------
+
+def test_finish_refuses_when_a_work_jpeg_changed_after_approval(order, monkeypatch):
+    spec = _photo_state(order, placed=2)
+    Image.new("RGB", (60, 40), (200, 20, 20)).save(spec.hotspots[0]["photo"], "JPEG")
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == orderfinish.CHANGED
+    _no_print(order)
+
+
+# --- final fix I3: a record over the 1 MB limit never stops a paid print -----------------
+
+OVER_LINE = ("record.png is over the 1 MB record limit: it will not reopen in the studio; "
+             "keep this order folder.")
+
+
+def _huge_tracks(order, n=70_000):
+    """One track of `n` points zig-zagging inside the frame: a manifest past 1 MiB."""
+    import numpy as np
+    f = od.read_state(order)["frame"]
+    t = np.linspace(0.0, 1.0, n)
+    xs = f[0] + (f[2] - f[0]) * (0.2 + 0.6 * t) + 0.123456789
+    ys = f[1] + (f[3] - f[1]) * (0.5 + 0.3 * np.sin(t * 400.0)) + 0.987654321
+    return [np.column_stack([xs, ys])]
+
+
+def test_a_photo_less_order_whose_record_is_over_1_mib_still_finishes(order):
+    from app import provenance
+    _approve_spec(order, tracks=_huge_tracks(order), track_days=None)
+    spec = orderspec.order_spec(order, od.read_state(order))
+    assert len(provenance._manifest_str(provenance.build_manifest(spec))) > 1_048_576
+    result = orderfinish.finish(order.dir, dpi=DPI)
+    assert len(result["files"]) == 1 and os.path.isfile(result["files"][0])
+    assert os.path.isfile(os.path.join(order.dir, "work", "record.png"))
+    assert OVER_LINE in _note(order)
+
+
+def test_a_record_whose_base_is_over_the_budget_keeps_its_photo_paths(order, monkeypatch):
+    from app import provenance
+    spec = _photo_state(order, placed=2)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)   # the base is over
+    orderfinish.finish(order.dir, dpi=DPI)
+    got = provenance.extract(open(os.path.join(order.dir, "work", "record.png"), "rb").read())
+    photos = [h["photo"] for h in got["spec"]["hotspots"] if h.get("photo")]
+    assert photos == [h["photo"] for h in spec.hotspots]              # paths, not JPEGs
+    assert OVER_LINE in _note(order)
+    assert not [n for n in _note(order) if "reduced photos" in n]
+
+
+def test_an_over_budget_record_that_does_not_read_back_is_written_anyway(order, monkeypatch):
+    from app import provenance
+    _approve_spec(order)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isfile(os.path.join(order.dir, "work", "record.png"))
+    assert OVER_LINE in _note(order)
+
+
+def test_a_record_under_the_budget_has_no_over_line(approved):
+    orderfinish.finish(approved.dir, dpi=DPI)
+    assert OVER_LINE not in _note(approved)
+
+
+def test_a_record_that_does_not_read_back_never_says_run_finish_again(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=1)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert "run Finish again" not in str(ex.value)
+
+
+# --- final fix M2: moving the orders folder keeps an approval --------------------------
+
+def test_an_approved_photo_order_moved_to_another_folder_stays_approved(order, tmp_path):
+    import shutil
+    _photo_state(order, placed=2)
+    moved = tmp_path / "elsewhere" / os.path.basename(order.dir)
+    shutil.copytree(order.dir, moved)
+    again = od.load(str(moved))
+    state = od.read_state(again)
+    spec = orderspec.order_spec(again, state)
+    assert all(h["photo"].startswith(str(moved) + os.sep) for h in spec.hotspots)
+    assert orderstudio.approval_ok(again, state)
+
+
+# --- final fix M3: a placed photo outside the frame is refused ---------------------------
+
+OUTSIDE = "{n} photos are outside the frame: widen the frame or drop them in the studio."
+
+
+def test_finish_refuses_a_placed_photo_outside_the_frame(order, monkeypatch):
+    f = od.read_state(order)["frame"]
+    cy = (f[1] + f[3]) / 2
+    _photo_state(order, placed=3, manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": cy}},
+                                          "p01": {"spot": {"x": f[2] + 5000.0, "y": cy}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == OUTSIDE.format(n=2)
+    _no_print(order)
+
+
+def test_the_tray_is_refused_before_a_photo_outside_the_frame(order, monkeypatch):
+    f = od.read_state(order)["frame"]
+    _photo_state(order, placed=1, tray=1,
+                 manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": f[1]}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=1)
+
+
+def test_a_dropped_photo_outside_the_frame_is_not_refused(order):
+    f = od.read_state(order)["frame"]
+    _photo_state(order, placed=2, manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": f[1]},
+                                                  "dropped": True}})
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isdir(os.path.join(order.dir, "out", "print"))

@@ -223,6 +223,17 @@ ground and 12 in the band.
 - A photo too small for its box at 300 ppi gets a warning.
 - A spot outside the frame gets a warning. Dom widens the frame or drops the photo.
 
+> Amended 2026-10-24: the plan for photos settled three choices. B1: a photo extends the
+> marker model, not a new record. A hotspot gains optional `box` (the box centre's offset
+> from its spot, in inches), `crop` (the centre-crop focus) and `source` (`gps`, `time` or
+> `manual`). B2: the gallery band runs across the top or the bottom of the map, Dom's
+> choice for each order, set by the spec field `photo_band_side` (`top` by default). The
+> furniture takes the other end, and Prepare grows the frame toward the band's side. "A
+> strip below" is one of the two choices. B3: Dom drags a box on the rendered proof, and
+> places a tray photo by a click on it. A drop onto a route, the furniture or another box
+> is kept and warned. See `docs/decisions.md`, 2026-10-24 (order photos), and
+> `docs/changing-things.md`, "An order's photos".
+
 ## 6. Print output
 
 Finish writes `out/print/<title>-<size>.tif` and `out/print/PRINT.txt`.
