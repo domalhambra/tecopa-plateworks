@@ -460,3 +460,59 @@ def test_a_caption_that_cannot_be_found_never_fails_prepare(tmp_path, tools, mon
     assert p["warnings"] == [op.PHOTO_NO_CAPTION.format(
         file="tray.jpg", why="ValueError: a labels.json feature with no coordinates")]
     assert p["warnings"][0] in state["warnings"]
+
+
+def _record_holes(monkeypatch):
+    seen = []
+
+    def fake(tools, plate, frame, *a, **k):
+        seen.append(list(frame))
+        return [f"HOLES IN THE PRINT: frame {len(seen)}", f"plate note {len(seen)}"]
+    monkeypatch.setattr(op, "check_holes", fake)
+    return seen
+
+
+def test_holes_follow_the_frame_when_the_layout_flips_on_a_current_plate(
+        tmp_path, tools, monkeypatch):
+    seen = _record_holes(monkeypatch)
+    d = _order(tmp_path)
+    _make(d / "in" / "p00.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "open" and seen == [state["frame"]]
+    for k in range(1, opl_open_max() + 1):                  # past open ground: the band
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "band" and len(_builds_of(d)) == 1   # plate current
+    assert seen[-1] == state["frame"] != state["open_frame"]
+    assert state["warnings"][0] == "HOLES IN THE PRINT: frame 2"
+    assert "plate note 2" in state["warnings"]
+    assert not any(w.endswith(" 1") for w in state["warnings"])          # old notes gone
+    # the frame unchanged: no new measure
+    state = _prepare(d, tools)
+    assert len(seen) == 2 and state["warnings"][0] == "HOLES IN THE PRINT: frame 2"
+
+
+def test_a_studio_band_side_change_measures_the_new_frame(tmp_path, tools, monkeypatch):
+    seen = _record_holes(monkeypatch)
+    d = _band_order(tmp_path)
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    od.set_manual(order, "band_side", "bottom")
+    state = op.place_photos(order, od.read_state(order), log=lambda s: None, tools=tools)
+    assert state["photo_band_side"] == "bottom" and seen[-1] == state["frame"]
+    assert state["warnings"][0] == "HOLES IN THE PRINT: frame 2"
+
+
+def test_a_curated_plate_is_never_measured_again(tmp_path, tools, monkeypatch):
+    seen = _record_holes(monkeypatch)
+    d = _band_order(tmp_path)
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    od.write_state(order, {"plate": {**state["plate"], "kind": "curated"}})
+    od.set_manual(order, "band_side", "bottom")
+    op.place_photos(order, od.read_state(order), log=lambda s: None, tools=tools)
+    assert len(seen) == 1
+
+
+def _builds_of(d):
+    return (d / "work" / "plate" / "builds.log").read_text().split()

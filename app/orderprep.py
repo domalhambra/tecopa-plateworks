@@ -25,6 +25,7 @@ from PIL.ImageCms import PyCMSError
 
 from app import orderspec, sizes
 from app.ingest import lonlat_extent
+from app import order as order_mod
 from app.order import (BAND_SIDES, DEFAULT_GAP, SIZE_KEYS, OrderError, cache_path, load,
                        orders_root, read_state, refuse_inside_repo, update_manual,
                        write_state)
@@ -368,7 +369,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
                and bool(state.get("photo_plan")) == with_photos)
     if current and _plate_present(old_plate, landcover_rebuilds):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
-        state = place_photos(order, state, log)       # new photos, or the studio's edits
+        state = place_photos(order, state, log, tools=tools)   # new photos, studio edits
         state = _prove(order, state, proofs, log)    # the title may have changed
         write_report(order, state)   # the title may have changed; it is not an input
         return state
@@ -385,6 +386,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     pw, ph = order.print_in()
     grow = _photo_grow(order, pw, ph) if with_photos else None
     holes_env = None
+    hole_notes = []           # what check_holes said of the frame in use (hole_notes)
     warnings = []
     if skipped_tracks:
         warnings.append(f"Skipped {len(skipped_tracks)} track file(s) that could "
@@ -435,8 +437,9 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
         if with_photos:
             holes_env = env      # measured on the frame in use, once the layout settles it
         else:
-            _add_hole_notes(warnings, check_holes(tools, plate, frame, epsg,
-                                                  needed_resolution(frame, pw), env, log))
+            hole_notes = check_holes(tools, plate, frame, epsg,
+                                     needed_resolution(frame, pw), env, log)
+            _add_hole_notes(warnings, hole_notes)
         if _has_landcover(plate["root"], plate["id"]):
             landcover_rebuilds = 0
         elif gated_landcover_retry:
@@ -473,9 +476,9 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
         # manual.frame is always an open frame, so Prepare never grows a grown frame: a
         # studio save of the frame saves open_frame (from a band proof, its crop through
         # orderspec.crop_for_layout(crop, "band", side, "open", side, spec)).
-        "open_frame": list(frame), "photo_plan": with_photos,
+        "open_frame": list(frame), "photo_plan": with_photos, "hole_notes": hole_notes,
         "approval": None})            # a new plate is a new print: nothing approved stands
-    state = place_photos(order, read_state(order), log)
+    state = place_photos(order, read_state(order), log, recheck_holes=False)
     if holes_env is not None:
         state = _holes_in_use(order, state, tools, holes_env, log)
     state = _prove(order, state, proofs, log)
@@ -495,12 +498,8 @@ def _add_hole_notes(warnings, notes) -> None:
 def _holes_in_use(order, state, tools, env, log) -> dict:
     """check_holes for a freshly built plate of an order with photos, on the frame in use
     (the band frame when the photos hang in the band), which only the layout settles."""
-    plate, frame = dict(state["plate"]), state["frame"]
-    warnings = list(state.get("warnings", []))
-    _add_hole_notes(warnings, check_holes(
-        tools, plate, frame, state["epsg"],
-        needed_resolution(frame, float(state["print_in"][0])), env, log))
-    return write_state(order, {"plate": plate, "warnings": warnings})
+    return write_state(order, _remeasure_holes(tools, state["plate"], state["frame"], state,
+                                               env, state.get("warnings", []), log))
 
 
 def _route_ends_behind_gaps(order, payloads, epsg, frame) -> list:
@@ -679,7 +678,7 @@ def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame) -> list:
     return out
 
 
-def place_photos(order, state: dict, log=print) -> dict:
+def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) -> dict:
     """The photo step of Prepare, after the plate and before the proof (order photos,
     Task 7). Reads every photo in in/ (file-name order), lays the boxes out, settles
     the frame in use and writes state.json:
@@ -693,13 +692,19 @@ def place_photos(order, state: dict, log=print) -> dict:
       grown toward the band's side for the band (B2); fill and need_m follow the frame;
     - photo_warnings, and state.warnings with the last run's photo warnings replaced.
 
-    An order with no photos keeps open_frame and gets an empty list. Returns the state."""
+    When the frame in use changes here (open to band, or the band's side) on a built
+    plate, its holes are measured again on the new frame (check_holes, through `tools`,
+    default_tools when None) and the last measure's notes (hole_notes) are replaced, a
+    hole in the print first. Prepare's fresh build passes recheck_holes=False: it measures
+    the frame in use itself (_holes_in_use). An order with no photos keeps open_frame and
+    gets an empty list. Returns the state."""
     from app import photocaption
     from app.geo import RegionGeo
     from app.orderpreview import load_tracks_m
     from app.photolayout import BAND_MAX
 
     open_frame = list(state.get("open_frame") or state["frame"])
+    was_frame = state.get("frame")
     old = set(state.get("photo_warnings") or [])
     base = [w for w in state.get("warnings", []) if w not in old]
     files = order.photo_files()
@@ -790,8 +795,35 @@ def place_photos(order, state: dict, log=print) -> dict:
                "photo_warnings": photo_warnings, "warnings": base + photo_warnings}
     if track_m:
         updates["fill"] = round(track_fill(track_m, frame), 3)
+    plate_rec = state.get("plate") or {}
+    if (recheck_holes and plate_rec.get("kind") == "built"
+            and not _same_frame(was_frame, frame)):
+        env, _ = cache_env()
+        updates.update(_remeasure_holes(
+            tools or default_tools(order_mod._repo_root()), plate_rec, frame, state, env,
+            [w for w in base if w not in set(state.get("hole_notes") or [])]
+            + photo_warnings, log))
     log(_photos_line({"photos": photos, "photo_layout": layout}))
     return write_state(order, updates)
+
+
+def _same_frame(a, b) -> bool:
+    try:
+        return len(a) == 4 and all(abs(float(x) - float(y)) <= 1e-6 for x, y in zip(a, b))
+    except (TypeError, ValueError):
+        return False
+
+
+def _remeasure_holes(tools, plate_rec, frame, state, env, warnings, log) -> dict:
+    """check_holes on the new frame in use: the plate record, its notes (hole_notes) and
+    `warnings` (the old notes already taken out) with the new notes in, a hole in the
+    print first."""
+    plate = dict(plate_rec)
+    notes = check_holes(tools, plate, frame, state["epsg"],
+                        needed_resolution(frame, float(state["print_in"][0])), env, log)
+    warnings = list(warnings)
+    _add_hole_notes(warnings, notes)
+    return {"plate": plate, "hole_notes": notes, "warnings": warnings}
 
 
 def _set_spec_aside(order, plate, manual, last_inputs, inputs) -> str | None:
