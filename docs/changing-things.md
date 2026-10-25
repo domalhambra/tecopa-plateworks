@@ -191,7 +191,9 @@ approval, `finish`, the printer.
    `order new` writes four more keys, and the reader checks each one: `order_number`
    (like `"TP-26-001"`), `returning` (`true` for a next-year order: the next-year
    prices and links), `client` (the name, at most 80 characters) and `email`. The
-   reader ignores any other key, so a misspelled key is lost without a word.
+   reader ignores any other key, so a misspelled key is lost without a word. An order
+   with photos also takes `band_side`: `"top"` (the default) or `"bottom"`, the end of
+   the sheet the photo band takes when the order uses a band. The studio can change it.
 3. To let the client choose a size, run the preview before Prepare:
    `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
    and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
@@ -258,6 +260,8 @@ approval, `finish`, the printer.
    that the plate has no elevation past what the 3DEP index expects means holes the
    fill did not close. `HOLES IN THE PRINT` leads the warnings when any are inside the
    frame: do not print; delete the plate under work/plate/ and run Prepare again.
+   An order with photos also has a `Photos:` line and photo warnings. Read
+   "An order's photos" below.
 8. Read the proof lines of the report. Prepare writes the proof after the plate. The
    report then has a `Proof:` line that names `out/proof/<stem>-proof.jpg` and
    `.pdf`, and a `Soft proof:` line. `<stem>` is the title as a slug, or `poster` when
@@ -327,6 +331,10 @@ approval, `finish`, the printer.
       attach them again, save and approve." The studio keeps an attached photo for
       24 hours. Attach each photo again in the studio, save, send the new proof, and
       approve.
+    - "<n> photos have no spot: place or drop them in the studio." A photo waits in the
+      tray. Open the order, place or drop it, save and approve again.
+    - "<n> photos: the band holds 12. Drop some in the studio." Drop photos until 12 or
+      fewer stay, then save and approve again.
     - "Run Prepare first: work/state.json has no plate." Run Prepare.
     - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
       or the piece has no side that fits the roll. Fix the file; the message names the
@@ -339,7 +347,8 @@ approval, `finish`, the printer.
     - "The print file of an earlier Finish cannot be removed: ...". Remove the file
       that it names, then run it again.
     Finish prints the spec that the client approved, once, at 300 ppi, with no
-    watermark. It makes every check before the render. Then it writes every file under
+    watermark. It makes every check before the render. The two photo checks come first,
+    from `state.json` alone. Then it writes every file under
     a temporary name, renames them all, removes the print files of an earlier Finish,
     and writes `PRINT.txt` last. A run that fails before the renames deletes its
     temporary files, so it keeps the files of the last run.
@@ -491,6 +500,126 @@ and for a file not on the disk). For the preview:
 `tests/test_papers.py`, `tests/test_orderspec.py`, `tests/test_orderproof.py`,
 `tests/test_softproof.py`, `tests/test_order_routes.py` (Open, Save, Approve),
 `tests/test_orderfinish.py`, and `tests/test_orderprep.py` for the proof lines of the report.
+For the photos: `tests/test_photos.py`, `tests/test_photospot.py`,
+`tests/test_photocaption.py`, `tests/test_photolayout.py`, `tests/test_photo_band.py`,
+`tests/test_photo_spec.py`, `tests/test_orderprep_photos.py`, and the photo cases of
+`tests/test_orderspec.py`, `tests/test_order_routes.py` and `tests/test_orderfinish.py`.
+
+### An order's photos
+
+Read `superpowers/plans/2026-10-24-order-photos.md` before you change them. Its planning
+decisions B1 to B9 are in `docs/decisions.md`, 2026-10-24 (order photos).
+
+A photo is a marker with a photo. It is a hotspot with the optional keys `box`, `crop`
+and `source`. `docs/MANIFEST.md` has the fields.
+
+How photos get on the map:
+
+1. Put the customer's photos in `in/`. `order new` copies them there with the tracks.
+   Prepare picks up files that end in `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.tif`,
+   `.tiff`, `.webp`, `.gif` or `.dng`, in file-name order. It never writes to `in/`.
+2. Run Prepare. It writes an upright JPEG of each photo to `work/photos/<file>.jpg`, at
+   most 4,000 px on the long side. A photo with an embedded profile other than sRGB
+   (an iPhone photo is Display P3) is converted to sRGB, so it does not print dull.
+3. Read the `Photos:` line of the report. It counts the photos placed by GPS, by time
+   and by hand, those in the tray, and those dropped, and names the layout.
+4. Read the photo warnings. Each one starts with the photo's file name.
+
+Prepare finds a photo's spot in this order:
+
+- **GPS.** The photo's EXIF position, taken from lon/lat to the plate's CRS through
+  `app/geo.py`. A GPS spot is used as it is, even outside the frame.
+- **Time.** The photo's `DateTimeOriginal` against the tracks' times. It needs the
+  photo's `OffsetTimeOriginal`: without the offset the time is not used, even if it
+  looks right. The spot is interpolated between the two surviving track points around
+  the time. A photo more than 10 minutes from any track time gets no spot.
+- **The tray.** A photo with neither waits there. You place it in the studio.
+
+The caption starts as the name of the nearest place in the plate's `labels.json` within
+2,000 m of the spot. It is empty when none is near. You can write your own.
+
+The box is a square cut from the middle of the photo. Its side is 2.25 in on a 12 × 18
+sheet and scales with the sheet's area: 2.09 in on 11 × 17 and 2.96 in on 17 × 22. On a
+set it follows one panel. `crop` moves the cut away from the middle.
+
+The layout has two forms. They never mix on one poster.
+
+- **Open ground.** Each box sits beside its spot with one straight leader. A box keeps
+  clear of the routes, the furniture, the other boxes and the other leaders. Open
+  ground takes 8 photos at most.
+- **The band.** A row of numbered boxes across the top or the bottom of the map, with
+  the captions under them and a numbered mark at each spot. It takes over when more
+  than 8 photos are placed, when a photo has no clear spot, or when the layout fails
+  (the report says why). It holds 12 photos at most. The title, compass and credit
+  take the other end of the sheet.
+
+A plate for an order with photos is planned around a frame grown by the band's height at
+both ends, so it holds either layout. That is about 5 times the area on a landscape
+11 × 17, so Prepare takes longer for an order with photos. When the band is used,
+Prepare grows the frame toward the band's end by the band's height, so the tracks keep
+their share of the map.
+
+The layout is computed on the crop that prints: the studio's live crop in the studio, the
+saved spec's crop in Prepare. A reframe followed by a proof lays out again the boxes you
+have not moved. A box you moved never moves.
+
+The studio's photo controls:
+
+1. Open the order and render a proof. The Order panel lists every photo with its spot's
+   source (GPS, Time, By hand, Tray, Dropped or Unreadable).
+2. To place a tray photo, press Place, then click the proof where it was taken. Press
+   Move spot to do the same for a placed photo. Esc cancels. Place needs a fresh proof.
+3. To move a box, drag its outline on the proof, or focus it and press the arrow keys.
+   An arrow moves it 0.1 in, Shift 0.5 in. Auto box puts a moved box back.
+4. To frame a photo, move its Across and Down sliders. They move the cut of the square.
+5. To caption a photo, type in its Caption field. It holds 60 characters.
+6. To leave a photo off the poster, press Drop. Press Restore to bring it back.
+7. To move the band, press Top or Bottom in Photo band. It shows when the layout is the
+   band.
+8. Render the proof again. Save to order, send the proof, and approve.
+
+The marker list shows an order's photo as locked. Edit it in the Order panel.
+
+Every photo edit goes to `POST /api/order/photo`. It clears the approval and the proof,
+and the studio renders a proof again. A drop onto a route, the furniture or another box is
+kept and warned: the box stays where you put it. Your edits live in `work/state.json`
+under `manual.photos` and `manual.band_side`, never in the saved spec. A field you edited
+wins over Prepare's, and Prepare run again keeps it. When you save the spec, the
+photo fields (`hotspots`, `photo_layout`, `photo_band_side`, `photo_box_in`) are set
+again from this state, so a photo edit always reaches the proof, the approval and the
+print.
+
+The photo warnings:
+
+- "its spot is outside the frame." Widen the frame or drop the photo.
+- "<w>×<h> px is small for a <box> in box at 300 ppi." The photo is under 300 ppi at its
+  box. Ask the client for a larger file, or accept it.
+- "Photo <file> is behind gap <k>." The spot is under a gap strip of a window set.
+- "<n> photos: the band holds 12." Drop photos in the studio.
+- "its box is over a route / the poster's furniture / <file>'s box / <file>'s spot / a
+  seam between panels. It stays where you put it."
+- "its box runs past the sheet's edge, so the poster pulls it inside."
+- "The moved boxes leave no open ground for the other photos, so all of them hang in the
+  band."
+- "The photos could not be laid out in open ground (...): they hang in the band."
+- "the photo could not be read (...)": the photo stays in the tray. Replace it in `in/`
+  or drop it.
+- "its place or time could not be read (...)": place it in the studio.
+- "its caption could not be found (...)": write one in the studio.
+
+Finish refuses a photo order in two cases, before any render: a photo in the tray, and
+more than 12 photos placed. The steps of Finish above give the words. Finish embeds a
+photo cut to a square with its short side at least the box side times 300 ppi, capped by
+the source and by the pixel guard. A copy over 512 KB falls back to the fitted copy.
+
+Known limits:
+
+- The box outlines and the layout ignore High relief (oblique) displacement. The order
+  look has oblique 0.
+- On a panel set, the studio holds a box outline inside the sheet, not inside the panel.
+  The renderer keeps the box in its panel.
+- A reframe made without a proof is lost when an edit flips the layout or moves the
+  band's end. Render a proof after each reframe.
 
 ### The test sheet
 

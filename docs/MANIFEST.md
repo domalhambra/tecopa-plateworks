@@ -71,7 +71,7 @@ same pixels. Fields (defaults may be omitted by future writers; readers fill the
 - `grain_cell_in`, `grain_strength` — paper-grain cell size (inches) and amplitude (0-1)
 - `title_pt`, `title_text` — cartouche title size (points) and text
 - `label_pt` — marker label size, points
-- `photo_box_in` — pinned-photo thumbnail long edge, inches
+- `photo_box_in` — the size of a pinned photo's box, inches. For a hotspot with `box` or `crop` it is the side of the square cut from the photo (a crowded band draws smaller squares). For a hotspot with neither it is the long edge of the fitted thumbnail
 - `contours`, `compass`, `biome`, `labels` — furniture toggles (elevation contours, compass rose, land-cover tint, named geography)
 - `track_rgb` — route ink as three 0-255 integers
 - `track_halo` — paper-halo strength around the route, 0-0.9
