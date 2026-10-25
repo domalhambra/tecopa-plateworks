@@ -310,12 +310,50 @@ def _transient_errors() -> tuple:
     return tuple(kinds)
 
 
+# A 3DEP tile can come back as bytes GDAL cannot read ("'/vsimem/....tif' not recognized
+# as being in a supported file format"): the service answered, but with a body that is
+# not a GeoTIFF, and a call a minute later gets a good one. rasterio raises it as
+# RasterioIOError or CPLE_OpenFailedError, directly or as the __cause__ of the
+# ServiceUnavailableError py3dep wraps it in. Matched on GDAL's words alone, never on
+# the class: the same classes also carry "No such file or directory", "Permission
+# denied" and a 404, which are lasting and must not wait. It needs neither rasterio nor
+# GDAL imported here.
+_UNREADABLE_TILE_TEXT = "not recognized as being in a supported file format"
+
+
+def _is_unreadable_tile(ex) -> bool:
+    """True when `ex`, or an exception in its __cause__ / __context__ chain, says GDAL
+    could not recognise the tile's format (_UNREADABLE_TILE_TEXT)."""
+    seen = set()
+    while ex is not None and id(ex) not in seen:
+        seen.add(id(ex))
+        if _UNREADABLE_TILE_TEXT in str(ex):
+            return True
+        ex = ex.__cause__ or ex.__context__
+    return False
+
+
+# rasterio's open error is an OSError, which _transient_errors retries as a network
+# hiccup. These words say the file is not there, not allowed, or 4xx: lasting.
+_GDAL_OPEN_ERRORS = ("RasterioIOError", "CPLE_OpenFailedError")
+_LASTING_GDAL_TEXT = ("No such file or directory", "Permission denied", "does not exist",
+                      "HTTP response code: 4")
+
+
+def _is_lasting_gdal_error(ex) -> bool:
+    """True for a rasterio/GDAL open error whose words say the file is missing, not
+    allowed, or a 4xx: waiting does not change the answer."""
+    return (any(k.__name__ in _GDAL_OPEN_ERRORS for k in type(ex).__mro__)
+            and any(t in str(ex) for t in _LASTING_GDAL_TEXT))
+
+
 def with_retries(fetch, service):
-    """fetch(), retried after each _RETRY_WAITS wait on a transient failure. Each
-    retry is announced on stdout (whitespace collapsed to one line, so a
-    multi-line service error can't break the build log into ragged lines), so it
-    streams into the build's progress log. A lasting error, or the last transient
-    one, raises.
+    """fetch(), retried after each _RETRY_WAITS wait on a transient failure, or on a
+    tile that came back unreadable (_is_unreadable_tile): the same waits and the same
+    cap as for a busy service. Each retry is announced on stdout (whitespace
+    collapsed to one line, so a multi-line service error can't break the build log
+    into ragged lines), so it streams into the build's progress log. A lasting
+    error, or the last transient one, raises.
 
     A retry runs with HYRIVER_CACHE_DISABLE set, restored to whatever it was
     right after: a service that fails as an HTTP 200 carrying an XML error body
@@ -333,8 +371,12 @@ def with_retries(fetch, service):
             os.environ["HYRIVER_CACHE_DISABLE"] = "true"
         try:
             return fetch()
-        except transient as ex:
-            if wait is None or isinstance(ex, _LASTING_OS_ERRORS):
+        except Exception as ex:
+            # a lasting error is never retried, whatever its chain holds
+            retryable = (not isinstance(ex, _LASTING_OS_ERRORS)
+                         and not _is_lasting_gdal_error(ex)
+                         and (isinstance(ex, transient) or _is_unreadable_tile(ex)))
+            if wait is None or not retryable:
                 raise
             msg = f"{service} busy, retrying in {wait:g} s ({type(ex).__name__}: {ex})"
             print(" ".join(msg.split()), flush=True)

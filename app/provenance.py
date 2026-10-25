@@ -398,7 +398,8 @@ def _photo_paths_out(spec: CompositionSpec):
 
 
 def base_manifest_bytes(spec: CompositionSpec, region_pack: dict | None = None,
-                        sources: list | None = None, lineage: list | None = None) -> int:
+                        sources: list | None = None, lineage: list | None = None,
+                        animation: dict | None = None) -> int:
     """The length of the manifest `spec` would carry with no photo to embed (each photo
     that is a path left out; one already embedded stays): what the tracks, the spec and
     the blocks cost on their own. Over MAX_RECORD_MANIFEST_BYTES, no photo budget can
@@ -406,7 +407,7 @@ def base_manifest_bytes(spec: CompositionSpec, region_pack: dict | None = None,
     hotspots, _, _ = _photo_paths_out(spec)
     return len(_manifest_str(build_manifest(
         dataclasses.replace(spec, hotspots=hotspots), sources, lineage,
-        region_pack=region_pack)))
+        animation=animation, region_pack=region_pack)))
 
 
 def manifest_fits(manifest: dict, budget: int | None = None) -> bool:
@@ -426,7 +427,7 @@ def manifest_reads_back(manifest: dict) -> bool:
 
 def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict | None = None,
                           budget: int | None = None, sources: list | None = None,
-                          lineage: list | None = None):
+                          lineage: list | None = None, animation: dict | None = None):
     """The manifest of a print's record (work/record.png) and the record's spec, whose
     hotspot photos are embedded JPEGs. Returns (record spec, manifest, reduced); a COPY,
     `spec` is untouched (it keeps the photos as paths: the print renders from those,
@@ -438,10 +439,11 @@ def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict 
     below the print's box resolution. A photo that cannot be read is left out of the
     record spec (the caller compares counts); one that cannot fit raises
     RecordBudgetError. A photo that is already embedded is kept verbatim. `sources` and
-    `lineage` ride the manifest as build_manifest's do (a studio final passes them)."""
+    `lineage` ride the manifest as build_manifest's do (a studio final passes them), and
+    so does `animation` (a time-lapse's pacing block, which the film's file carries)."""
     budget = MAX_RECORD_MANIFEST_BYTES if budget is None else budget
     hotspots, todo, paths = _photo_paths_out(spec)
-    base = base_manifest_bytes(spec, region_pack, sources, lineage)
+    base = base_manifest_bytes(spec, region_pack, sources, lineage, animation)
     overhead = len(',"photo":""')
     share = (budget - base) // len(todo) if todo else 0
     reduced = False
@@ -453,7 +455,8 @@ def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict 
         hs["photo"], was_reduced = got
         reduced = reduced or was_reduced
     record = dataclasses.replace(spec, hotspots=hotspots)
-    return record, build_manifest(record, sources, lineage, region_pack=region_pack), reduced
+    return record, build_manifest(record, sources, lineage, animation=animation,
+                                  region_pack=region_pack), reduced
 
 
 def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:

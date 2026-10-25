@@ -223,31 +223,39 @@ def _embed_photos(spec, dpi):
     box_px = max(24, round(spec.photo_box_in * dpi))
     return provenance.build_final_spec(spec, box_px)
 
-FINAL_TRACKS_FILL_RECORD = (
-    "This poster's tracks alone fill its 1 MB record, so its photos cannot ride in it: "
-    "make the final as a share copy (no record), or without the photos.")
-FINAL_PHOTOS_TOO_BIG = ("This poster's record cannot hold its photos within its 1 MB "
-                        "limit: remove some photos, proof again, then make the final.")
-FINAL_NOT_REOPEN = ("This poster's record would not reopen with plain PIL, so the final was "
-                    "not made: remove some photos, proof again, then make it.")
+def _record_refusals(what: str):
+    """The three 422 messages of a record that cannot be made, for the file named `what`
+    (a "final", a "film", a "wallpaper bundle")."""
+    return (
+        "This poster's tracks alone fill its 1 MB record, so its photos cannot ride in it: "
+        f"make the {what} as a share copy (no record), or without the photos.",
+        "This poster's record cannot hold its photos within its 1 MB limit: remove some "
+        f"photos, proof again, then make the {what}.",
+        "This poster's record would not reopen with plain PIL, so the "
+        f"{what} was not made: remove some photos, proof again, then make it.")
 
 
-def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack, fmt="png"):
-    """(final spec, manifest) for a studio final: the spec with its photos embedded
-    (_embed_photos) and its manifest (None for a share copy). A final whose photos ride
-    in its record keeps the WHOLE manifest within the record budget, with the same code
-    as an order's record (provenance.build_record_manifest): when the plain embedding
-    does not fit, or would not read back, each photo gets its share of the budget, and
-    the render paints those very photos, so the final and its reprint stay identical.
-    A final with no photo, and a share copy, are made as they always were. Raises 422
-    when the tracks alone fill the record (dropping photos cannot help), when a photo
-    cannot fit its share, or when the record would still not read back: never an
-    unreadable PNG. A PDF carries no manifest (_encode_final), so it has no record to
-    budget: its photos stay at full size, as for a share copy."""
+def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack, fmt="png",
+                       animation=None, what="final"):
+    """(final spec, manifest) for a file that carries a record: a studio final, a
+    time-lapse APNG (`animation` is its pacing block) or a wallpaper-bundle device. The
+    spec has its photos embedded (_embed_photos); the manifest is None for a share copy.
+    A file whose photos ride in its record keeps the WHOLE manifest within the record
+    budget, with the same code as an order's record (provenance.build_record_manifest):
+    when the plain embedding does not fit, or would not read back, each photo gets its
+    share of the budget, and the render paints those very photos, so the file and its
+    reprint stay identical. A file with no photo, and a share copy, are made as they
+    always were. Raises 422 (worded for `what`) when the tracks alone fill the record
+    (dropping photos cannot help), when a photo cannot fit its share, or when the record
+    would still not read back: never an unreadable PNG. A PDF carries no manifest
+    (_encode_final), so it has no record to budget: its photos stay at full size, as
+    for a share copy."""
+    tracks_fill, too_big, not_reopen = _record_refusals(what)
     final = _embed_photos(spec, dpi)
     if fmt == "pdf":
         return final, None
-    manifest = _final_manifest(final, sources, embed_spec, lineage, region_pack=region_pack)
+    manifest = _final_manifest(final, sources, embed_spec, lineage, region_pack=region_pack,
+                               animation=animation)
     if manifest is None or not any(isinstance(h, dict) and h.get("photo")
                                    for h in final.hotspots or []):
         return final, manifest
@@ -259,17 +267,17 @@ def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack, fmt
 
     if readable(manifest):
         return final, manifest
-    if (provenance.base_manifest_bytes(spec, region_pack, sources, lineage)
+    if (provenance.base_manifest_bytes(spec, region_pack, sources, lineage, animation)
             > provenance.MAX_RECORD_MANIFEST_BYTES):
-        raise HTTPException(422, FINAL_TRACKS_FILL_RECORD)
+        raise HTTPException(422, tracks_fill)
     try:
         final, manifest, _ = provenance.build_record_manifest(
             spec, max(24, round(spec.photo_box_in * dpi)), region_pack=region_pack,
-            sources=sources, lineage=lineage)
+            sources=sources, lineage=lineage, animation=animation)
     except provenance.RecordBudgetError:
-        raise HTTPException(422, FINAL_PHOTOS_TOO_BIG)
+        raise HTTPException(422, too_big)
     if not readable(manifest):
-        raise HTTPException(422, FINAL_NOT_REOPEN)
+        raise HTTPException(422, not_reopen)
     return final, manifest
 
 def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
@@ -889,13 +897,15 @@ def _require_stamped(session_id):
     return (spec, _region_or_404(st["region_id"]),
             st.get("sources", []), st.get("lineage", []))
 
-def _final_manifest(spec, sources, embed_spec, lineage=None, region_pack=None):
+def _final_manifest(spec, sources, embed_spec, lineage=None, region_pack=None,
+                    animation=None):
     """Build the provenance manifest for a final, or None when the client opted out of
     embedding (a share copy: the manifest carries the exact track coordinates). The
     lineage (living editions) rides along; it is emitted only from the 2nd edition on.
     The region_pack block (the plate's hash identity) rides the same way -- omitted
     when the region has no sources.json to name it from."""
-    return (provenance.build_manifest(spec, sources, lineage, region_pack=region_pack)
+    return (provenance.build_manifest(spec, sources, lineage, animation=animation,
+                                      region_pack=region_pack)
             if embed_spec else None)
 
 @app.post("/api/markers")
@@ -1340,6 +1350,8 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
     ids = list(dict.fromkeys(p.strip() for p in presets.split(",") if p.strip()))
     if not ids:
         raise HTTPException(422, "presets must name at least one wallpaper preset")
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
+                                      dry_lakes=spec.dry_lakes)
     items, skipped, fitted = [], [], []
     for pid in ids:
         p = _preset_or_422(pid)
@@ -1367,16 +1379,22 @@ async def wallpapers_submit(session_id: str = Form(...), presets: str = Form(...
         pa = (spec.crop[2] - spec.crop[0]) * (spec.crop[3] - spec.crop[1])
         na = (pspec.crop[2] - pspec.crop[0]) * (pspec.crop[3] - pspec.crop[1])
         fitted.append({"preset": pid, "crop_growth": round(na / pa, 2)})
+        if embed_spec:
+            # each device file carries a record, so its photos are held to the record
+            # budget NOW: a bundle that would hold an unreadable PNG is a 422, not a job
+            # that fails after the paint. The worker finds the photos embedded already.
+            try:
+                pspec, _ = _final_with_record(pspec, pspec.final_dpi(), sources, True,
+                                              lineage, rp, what="wallpaper bundle")
+            except HTTPException as e:
+                raise HTTPException(e.status_code, f"{p.name}: {e.detail}")
         items.append((pspec, f"{download_stem(region.id)}_{p.id}_{p.px_w}x{p.px_h}.png"))
     if not items:
         raise HTTPException(422, "No requested device fits this region: "
                             + "; ".join(s["reason"] for s in skipped))
     jid = QUEUE.submit(_render_bundle_to_blob, items, region.dir,
                        f"{session_id}/{download_name(spec, '_wallpapers', 'zip')}",
-                       region.cfg, sources, embed_spec,
-                       lineage, provenance.region_pack_block(
-                           region.dir, labels=spec.labels, biome=spec.biome,
-                           dry_lakes=spec.dry_lakes))
+                       region.cfg, sources, embed_spec, lineage, rp)
     log.info("event=wallpapers.submit session=%s region=%s n=%d skipped=%d",
              session_id, region.id, len(items), len(skipped))
     return {"job": jid, "count": len(items), "skipped": skipped, "fitted": fitted}
@@ -1528,13 +1546,21 @@ async def timelapse_submit(session_id: str = Form(...),
             raise HTTPException(422, "A Journey Light film needs timestamped tracks "
                                      "(a GPX with <time>).")
         track_times = [t.coords_t for t in st["tracks"]]
+    rp = provenance.region_pack_block(region.dir, labels=tspec.labels, biome=tspec.biome,
+                                      dry_lakes=tspec.dry_lakes)
+    if fmt == "apng" and embed_spec:
+        # the APNG carries a record: hold its photos to the record budget NOW (a 422, not
+        # a job that fails after the paint). The animation block is the worker's own, so
+        # the manifest checked here is the one it writes; the worker finds the photos
+        # embedded already. WebP and MP4 carry no manifest, so they skip the budget.
+        tspec, _ = _final_with_record(
+            tspec, target_dpi, sources, True, lineage, rp,
+            animation=timelapse.animation_meta(dpi=target_dpi, default_image=True, **pacing),
+            what="film")
     jid = QUEUE.submit(_render_timelapse_to_blob, tspec, region.dir,
                        f"{session_id}/{download_name(tspec, '_film', TIMELAPSE_FORMATS[fmt])}",
                        target_dpi,
-                       pacing, sources, embed_spec, lineage,
-                       provenance.region_pack_block(region.dir, labels=tspec.labels,
-                                                    biome=tspec.biome,
-                                                    dry_lakes=tspec.dry_lakes), fmt,
+                       pacing, sources, embed_spec, lineage, rp, fmt,
                        light_motion, track_times, anchor,
                        # new films are flatten-safe (the complete poster as the APNG
                        # default image); the flag rides the manifest so the file
