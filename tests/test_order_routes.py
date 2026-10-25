@@ -56,8 +56,10 @@ def _post(client, route, opened):
 def test_open_save_approve_round_trip(client, order):
     opened = _open(client, order)
     assert SPEC_KEYS <= set(opened)
-    assert opened["order"] == {"folder": os.path.realpath(order.dir),
-                               "title": "Smith home ground", "approved": False}
+    assert {k: v for k, v in opened["order"].items() if k != "photo_view"} == \
+        {"folder": os.path.realpath(order.dir), "title": "Smith home ground",
+         "approved": False}
+    assert opened["order"]["photo_view"]["photos"] == []       # an order with no photos
     assert opened["prefill"]["title"] == "Smith home ground"
     _proof(client, opened)
 
@@ -439,3 +441,348 @@ def test_approve_refuses_when_the_client_proof_was_not_written(client, order, mo
     monkeypatch.setattr(orderproof, "write_proofs", real)
     assert "proof_error" not in _post(client, "save", opened).json()
     assert _post(client, "approve", opened).status_code == 200
+
+
+# ---- the studio's photo controls (order photos, Task 8) --------------------------------
+# An order with three photos: one with GPS, one with only a time (it lands on the track
+# halfway along, as it was taken halfway through), one with neither (the tray). Its plate
+# sits in the order's work/plate, as Prepare builds one, and its state is current, so a
+# second Prepare takes the "Plate is current" path a Prepare after a studio edit takes.
+
+T0 = 1791043200            # 2026-10-03 16:00:00 UTC, the track's start
+GPS_AT = (5000.0, -6000.0)  # metres from the plate's centre: right of and below the track
+TRAY_AT = (-5000.0, 6000.0)  # where the tray photo is placed: left of and above the track
+
+
+def _gpx_with_times(to_ll, cx, cy):
+    import time as _t
+    pts = []
+    for (dx, dy), t in (((-3000, -5000), T0), ((0, 0), T0 + 1800), ((3000, 5000), T0 + 3600)):
+        lon, lat = to_ll.transform(cx + dx, cy + dy)
+        pts.append(f'<trkpt lat="{lat}" lon="{lon}"><time>'
+                   f'{_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(t))}</time></trkpt>')
+    return ('<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            'xmlns="http://www.topografix.com/GPX/1/1"><trk><name>t</name>'
+            f"<trkseg>{''.join(pts)}</trkseg></trk></gpx>")
+
+
+def _centre(order):
+    f = od.read_state(order)["open_frame"]
+    return (f[0] + f[2]) / 2, (f[1] + f[3]) / 2
+
+
+@pytest.fixture
+def photo_order(built_order):
+    from pyproj import Transformer
+
+    from app import orderprep
+    from tests.test_photos import _make
+    order = built_order
+    state = od.read_state(order)
+    cfg = json.load(open(os.path.join(state["plate"]["root"], state["plate"]["id"],
+                                      "region.json")))
+    f = state["frame"]
+    cx, cy = (f[0] + f[2]) / 2, (f[1] + f[3]) / 2
+    to_ll = Transformer.from_crs(cfg["crs"], "EPSG:4326", always_xy=True)
+    with open(os.path.join(order.in_dir, "trip.gpx"), "w") as fh:
+        fh.write(_gpx_with_times(to_ll, cx, cy))
+    lon, lat = to_ll.transform(cx + GPS_AT[0], cy + GPS_AT[1])
+    big = (700, 500)
+    _make(os.path.join(order.in_dir, "a_gps.jpg"), size=big,
+          gps=(abs(lat), "N" if lat >= 0 else "S", abs(lon), "E" if lon >= 0 else "W"))
+    _make(os.path.join(order.in_dir, "b_time.jpg"), size=big,
+          taken="2026:10:03 09:30:00", offset="-07:00")
+    _make(os.path.join(order.in_dir, "c_tray.jpg"), size=big)
+    order = od.load(order.dir)
+    od.write_state(order, {"inputs_hash": order.inputs_hash(), "photo_plan": True,
+                           "plate": {**state["plate"], "kind": "built", "upsample": 1.0,
+                                     "us_share": 1.0},
+                           "landcover_rebuilds": 1, "open_frame": list(f),
+                           "track_bounds_m": [cx - 3000, cy - 5000, cx + 3000, cy + 5000]})
+    state = orderprep.place_photos(order, od.read_state(order), log=lambda s: None)
+    assert state["photo_layout"] == "open"
+    yield order
+    from app.main import REGIONS
+    REGIONS.pop(state["plate"]["id"], None)
+
+
+def _photo(client, opened, file, change, raw=None):
+    return client.post("/api/order/photo", data={
+        "session_id": opened["session"], "file": file,
+        "change": raw if raw is not None else json.dumps(change)})
+
+
+def _by_file(view):
+    return {p["file"]: p for p in view["photos"]}
+
+
+def _sheet_in(order, x, y):
+    spec = orderspec.order_spec(order, od.read_state(order))
+    return orderspec.ground_to_sheet_in(spec, x, y)
+
+
+def test_open_answers_the_photos(client, photo_order):
+    opened = _open(client, photo_order)
+    view = opened["order"]["photo_view"]
+    assert view["layout"] == "open" and view["dpi"] == 96
+    assert view["sheet_px"] == [pytest.approx(11 * 96), pytest.approx(17 * 96)]
+    a, b, c = (_by_file(view)[f] for f in ("a_gps.jpg", "b_time.jpg", "c_tray.jpg"))
+    assert a["source"] == "gps" and b["source"] == "time"
+    assert c["tray"] is True and c["spot"] is None and c["box_px"] is None
+    for p in (a, b):
+        assert p["placed"] and len(p["box_px"]) == 4 and len(p["spot_px"]) == 2
+        assert p["box_px"][2] - p["box_px"][0] == pytest.approx(view["box_in"] * 96)
+
+
+def test_place_a_tray_photo_by_proof_pixel(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    cx, cy = _centre(order)
+    target = (cx + TRAY_AT[0], cy + TRAY_AT[1])
+    spec = orderspec.order_spec(order, od.read_state(order))
+    px, py = orderstudio.ground_to_proof_px(spec, 96, *target)
+    r = _photo(client, opened, "c_tray.jpg", {"spot_px": {"px": px, "py": py}})
+    assert r.status_code == 200, r.text
+    c = _by_file(r.json())["c_tray.jpg"]
+    assert c["source"] == "manual" and c["tray"] is False and c["placed"] is True
+    assert (c["spot"]["x"], c["spot"]["y"]) == (pytest.approx(target[0], abs=1e-6),
+                                                pytest.approx(target[1], abs=1e-6))
+    assert c["spot_px"] == [pytest.approx(px), pytest.approx(py)]
+    assert c["box_px"] is not None                      # the layout gave it open ground
+    saved = od.read_state(order)["manual"]["photos"]["c_tray.jpg"]["spot"]
+    assert (saved["x"], saved["y"]) == (pytest.approx(target[0], abs=1e-6),
+                                        pytest.approx(target[1], abs=1e-6))
+    st = session.get(opened["session"])
+    assert st["spec"] is None                           # proof again to see it
+    photos = [h for h in st["hotspots"] if h.get("photo")]
+    assert any(h["photo"].endswith("c_tray.jpg.jpg") for h in photos) and len(photos) == 3
+    assert len(r.json()["hotspots"]) == len(st["hotspots"])
+
+
+def test_drag_a_box_sets_its_offset_in_inches(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    before = _by_file(opened["order"]["photo_view"])
+    r = _photo(client, opened, "a_gps.jpg", {"box": {"dx_in": -1.6, "dy_in": -1.9}})
+    assert r.status_code == 200, r.text
+    a = _by_file(r.json())["a_gps.jpg"]
+    assert a["box"] == {"dx_in": -1.6, "dy_in": -1.9} and a["moved"] is True
+    x0, y0, x1, y1 = a["box_px"]
+    assert (x0 + x1) / 2 == pytest.approx(a["spot_px"][0] - 1.6 * 96, abs=1e-6)
+    assert (y0 + y1) / 2 == pytest.approx(a["spot_px"][1] - 1.9 * 96, abs=1e-6)
+    assert od.read_state(order)["manual"]["photos"]["a_gps.jpg"]["box"] == \
+        {"dx_in": -1.6, "dy_in": -1.9}
+    hs = [h for h in session.get(opened["session"])["hotspots"]
+          if h.get("photo", "").endswith("a_gps.jpg.jpg")]
+    assert hs[0]["box"] == {"dx_in": -1.6, "dy_in": -1.9}
+    assert before["a_gps.jpg"]["moved"] is False
+    assert not any("route" in w for w in r.json()["warnings"])
+
+
+def test_a_drop_on_a_route_is_kept_and_warned(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    cx, cy = _centre(order)
+    sx, sy = _sheet_in(order, cx + GPS_AT[0], cy + GPS_AT[1])
+    tx, ty = _sheet_in(order, cx, cy)                    # the track's middle point
+    box = {"dx_in": round(tx - sx, 4), "dy_in": round(ty - sy, 4)}
+    r = _photo(client, opened, "a_gps.jpg", {"box": box})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["layout"] == "open"
+    assert _by_file(body)["a_gps.jpg"]["box"] == box  # kept where it was dropped
+    assert "a_gps.jpg: its box is over a route. It stays where you put it." in body["warnings"]
+    assert od.read_state(order)["manual"]["photos"]["a_gps.jpg"]["box"] == box
+
+
+def test_a_box_over_another_photos_spot_is_kept_and_warned(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    cx, cy = _centre(order)
+    target = (cx + TRAY_AT[0], cy + TRAY_AT[1])
+    assert _photo(client, opened, "c_tray.jpg",
+                  {"spot": {"x": target[0], "y": target[1]}}).status_code == 200
+    sx, sy = _sheet_in(order, cx + GPS_AT[0], cy + GPS_AT[1])
+    tx, ty = _sheet_in(order, *target)
+    box = {"dx_in": round(tx - sx, 4), "dy_in": round(ty - sy, 4)}
+    body = _photo(client, opened, "a_gps.jpg", {"box": box}).json()
+    assert body["layout"] == "open"                      # never silently sent to the band
+    assert _by_file(body)["a_gps.jpg"]["box"] == box
+    assert _by_file(body)["c_tray.jpg"]["box_px"] is not None
+    assert ("a_gps.jpg: its box is over c_tray.jpg's spot. It stays where you put it."
+            in body["warnings"])
+
+
+def test_proof_px_and_ground_round_trip(client, photo_order):
+    order = photo_order
+    spec = orderspec.order_spec(order, od.read_state(order))
+    x0, y0, x1, y1 = spec.crop
+    assert orderstudio.ground_to_proof_px(spec, 96, x0, y1) == \
+        (pytest.approx(0.0, abs=1e-6), pytest.approx(0.0, abs=1e-6))
+    assert orderstudio.ground_to_proof_px(spec, 96, x1, y0) == \
+        (pytest.approx(11 * 96), pytest.approx(17 * 96))
+    for gx, gy in ((x0 + 1234.5, y0 + 9876.5), ((x0 + x1) / 2, (y0 + y1) / 2), (x1, y1)):
+        px, py = orderstudio.ground_to_proof_px(spec, 96, gx, gy)
+        assert orderstudio.proof_px_to_ground(spec, 96, px, py) == \
+            (pytest.approx(gx, abs=1e-6), pytest.approx(gy, abs=1e-6))
+    # the proof image is the sheet at the proof's dpi, the bleed cropped off: proof px
+    # are sheet inches x dpi from the trim's corner, with a bleed or without
+    from PIL import Image
+    import io
+    opened = _open(client, order)
+    crop = dict(zip(("x0", "y0", "x1", "y1"), opened["starter_crop"]))
+    view = opened["order"]["photo_view"]
+    for bleed in ("0", "0.125"):
+        r = client.post("/api/proof", data={"session_id": opened["session"], **crop,
+                                            **_form(opened["proof_form"]), "bleed": bleed})
+        assert r.status_code == 200, r.text
+        w, h = Image.open(io.BytesIO(r.content)).size
+        assert abs(w - view["sheet_px"][0]) <= 1 and abs(h - view["sheet_px"][1]) <= 1
+
+
+def test_drop_and_restore(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    body = _photo(client, opened, "b_time.jpg", {"dropped": True}).json()
+    b = _by_file(body)["b_time.jpg"]
+    assert b["dropped"] is True and b["placed"] is False and b["box_px"] is None
+    photos = [h["photo"] for h in session.get(opened["session"])["hotspots"] if h.get("photo")]
+    assert not any(p.endswith("b_time.jpg.jpg") for p in photos)
+    assert od.read_state(order)["manual"]["photos"]["b_time.jpg"]["dropped"] is True
+    body = _photo(client, opened, "b_time.jpg", {"dropped": False}).json()
+    b = _by_file(body)["b_time.jpg"]
+    assert b["dropped"] is False and b["placed"] is True and b["box_px"] is not None
+    photos = [h["photo"] for h in session.get(opened["session"])["hotspots"] if h.get("photo")]
+    assert any(p.endswith("b_time.jpg.jpg") for p in photos)
+
+
+def test_edits_survive_prepare_again(client, photo_order):
+    import sys
+
+    from app import orderprep
+    from tests.test_orderprep import _Fake
+    order = photo_order
+    opened = _open(client, order)
+    cx, cy = _centre(order)
+    target = (cx + TRAY_AT[0], cy + TRAY_AT[1])
+    for file, change in (("c_tray.jpg", {"spot": {"x": target[0], "y": target[1]}}),
+                         ("a_gps.jpg", {"box": {"dx_in": -1.6, "dy_in": -1.9},
+                                        "crop": {"cx": 0.2, "cy": 0.8}}),
+                         ("b_time.jpg", {"caption": "Lunch stop"})):
+        assert _photo(client, opened, file, change).status_code == 200
+    manual = od.read_state(order)["manual"]["photos"]
+    tools = orderprep.Tools(prep_python=sys.executable, prep_script="-", labels_script="-",
+                            coverage_script="-", repo_root=order.dir, curated_root=order.dir)
+    fake = _Fake()
+    state = orderprep.prepare(order.dir, tools, log=lambda s: None, proofs=fake)
+    assert fake.calls                                    # the current path: no build
+    assert state["manual"]["photos"] == manual
+    p = {e["file"]: e for e in state["photos"]}
+    assert p["c_tray.jpg"]["source"] == "manual"
+    assert p["c_tray.jpg"]["spot"] == {"x": pytest.approx(target[0]),
+                                       "y": pytest.approx(target[1])}
+    assert p["a_gps.jpg"]["box"] == {"dx_in": -1.6, "dy_in": -1.9}
+    assert p["a_gps.jpg"]["crop"] == {"cx": 0.2, "cy": 0.8}
+    assert p["b_time.jpg"]["caption"] == "Lunch stop"
+
+
+def test_an_edit_clears_the_approval(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    assert _post(client, "save", opened).status_code == 200
+    assert _post(client, "approve", opened).status_code == 200      # photo fields ride
+    r = _photo(client, opened, "b_time.jpg", {"caption": "Lunch stop"})
+    assert r.status_code == 200 and r.json()["approved"] is False
+    state = od.read_state(order)
+    assert state["approval"] is None and not orderstudio.approval_ok(order, state)
+    assert _post(client, "approve", opened).status_code == 409       # proof again first
+
+
+def test_an_empty_change_only_answers(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    _post(client, "save", opened)
+    _post(client, "approve", opened)
+    before = od.read_state(order)
+    body = _photo(client, opened, "", {}).json()
+    assert body["approved"] is True
+    was = opened["order"]["photo_view"]["photos"]
+    assert [(p["file"], p["box"]) for p in body["photos"]] == \
+        [(p["file"], p["box"]) for p in was]
+    assert od.read_state(order) == before
+    assert session.get(opened["session"])["spec"] is not None
+
+
+def test_the_studio_proof_paints_the_orders_photo_fields(client, photo_order, monkeypatch):
+    from app import orderprep, photolayout
+    order = photo_order
+    monkeypatch.setattr(photolayout, "OPEN_MAX", 0)       # every photo hangs in the band
+    state = orderprep.place_photos(order, od.read_state(order), log=lambda s: None)
+    assert state["photo_layout"] == "band"
+    opened = _open(client, order)
+    _proof(client, opened)
+    spec = session.get(opened["session"])["spec"]
+    assert (spec.photo_layout, spec.photo_band_side, spec.photo_box_in) == \
+        ("band", "top", state["photo_box_in"])
+    assert _post(client, "save", opened).status_code == 200
+    assert _post(client, "approve", opened).status_code == 200
+
+
+def test_a_band_side_change_moves_the_band_and_reframes(client, photo_order, monkeypatch):
+    from app import orderplate, orderprep, photolayout
+    order = photo_order
+    monkeypatch.setattr(photolayout, "OPEN_MAX", 0)
+    orderprep.place_photos(order, od.read_state(order), log=lambda s: None)
+    opened = _open(client, order)
+    assert opened["order"]["photo_view"]["band_side"] == "top"
+    r = _photo(client, opened, "", {"band_side": "bottom"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    state = od.read_state(order)
+    assert state["manual"]["band_side"] == "bottom" and state["photo_band_side"] == "bottom"
+    assert orderspec.photo_band_side(state) == "bottom"
+    bh = orderspec.band_height_for(state["photo_box_in"])
+    want = orderplate.band_frame(state["open_frame"], 17.0, bh, "bottom")
+    assert state["frame"] == [pytest.approx(v) for v in want]
+    assert body["band_side"] == "bottom" and body["reframed"] is True
+    assert body["crop_px"] != opened["starter_crop"]
+    # the next proof paints the bottom band on the moved frame
+    session_st = session.get(opened["session"])
+    assert session_st["order_photo"]["photo_band_side"] == "bottom"
+    # a side Prepare left in state is not the one Dom chose: Dom's wins
+    assert orderspec.photo_band_side({"photo_band_side": "top",
+                                      "manual": {"band_side": "bottom"}}) == "bottom"
+
+
+@pytest.mark.parametrize("file,raw,status,words", [
+    ("nope.jpg", '{"caption": "x"}', 404, "No photo named"),
+    ("a_gps.jpg", "{not json", 422, "change must be JSON"),
+    ("a_gps.jpg", '["caption"]', 422, "change must be a JSON object"),
+    ("a_gps.jpg", '{"colour": "red"}', 422, "unknown change"),
+    ("a_gps.jpg", '{"box": {"dx_in": 99, "dy_in": 0}}', 422, "box must be"),
+    ("a_gps.jpg", '{"box": {"dx_in": "NaN", "dy_in": 0}}', 422, "box must be"),
+    ("a_gps.jpg", '{"crop": {"cx": 1.5, "cy": 0.5}}', 422, "crop must be"),
+    ("a_gps.jpg", '{"caption": 7}', 422, "caption must be"),
+    ("a_gps.jpg", '{"dropped": "yes"}', 422, "dropped must be"),
+    ("a_gps.jpg", '{"spot": {"x": 1e30, "y": 0}}', 422, "spot"),
+    ("a_gps.jpg", '{"band_side": "bottom"}', 422, "band_side"),
+    ("", '{"band_side": "left"}', 422, "band_side"),
+    ("", '{"caption": "x"}', 422, "Name a photo"),
+    ("c_tray.jpg", '{"box": {"dx_in": 1, "dy_in": 1}}', 422, "Place c_tray.jpg"),
+])
+def test_a_bad_photo_change_is_refused_and_writes_nothing(client, photo_order, file, raw,
+                                                          status, words):
+    opened = _open(client, photo_order)
+    before = od.read_state(photo_order)
+    r = _photo(client, opened, file, None, raw=raw)
+    assert r.status_code == status, r.text
+    assert words in r.json()["detail"]
+    assert od.read_state(photo_order) == before
+
+
+def test_the_photo_route_needs_an_order_session(client, photo_order):
+    opened = _open(client, photo_order)
+    session.update(opened["session"], order_dir=None)
+    assert _photo(client, opened, "a_gps.jpg", {"caption": "x"}).status_code == 409

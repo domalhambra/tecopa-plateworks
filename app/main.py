@@ -1,5 +1,6 @@
 # app/main.py
 import io, json, math, os, re, shutil, time, zipfile
+import dataclasses
 import hashlib
 import logging
 from typing import List, Optional
@@ -1019,6 +1020,10 @@ def _build_spec(sid, crop_px, print_w, print_h, title="", contours=False, compas
         edition=st.get("edition", 1),               # living editions: draws in the cartouche
         credit_text=credit_line(region),            # data credit: derived, never a form field
         contours=contours, biome=biome, labels=labels, **kw, **(style or {}))
+    if preset is None and st.get("order_photo"):
+        # an order's photo fields come from its state (orderstudio), never from the form:
+        # the studio's proof paints the layout, band end and box size the print will
+        spec = dataclasses.replace(spec, **st["order_photo"])
     spec.validate(spec.final_dpi())   # gate on the resolution the FINAL uses, not the proof's
     # NB: not stamped here -- the caller stamps only after a clean proof render, so a
     # proof that 422s (e.g. off-DEM) leaves no stamped spec for the async final to enqueue.
@@ -1976,6 +1981,13 @@ def _proof_form_for(spec):
             form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
+def _hotspots_px(region, spots):
+    """The studio's view of the session's hotspots: overview px and what the marker list
+    shows."""
+    return [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
+             "weight": s.get("weight", 1), "label": s.get("label", ""),
+             "icon": s.get("icon", ""), "photo": bool(s.get("photo"))} for s in spots]
+
 def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra=None):
     """Make a live session from `spec` on `region` and answer the /api/upload response shape
     plus the prefill and proof_form that restore the wizard. /api/continue and the order
@@ -2000,9 +2012,7 @@ def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra
                           "lineage": list(lineage), **(extra or {})})
 
     tpx = [[crs_to_overview_px(region.geo, x, y) for x, y in t.coords] for t in tracks]
-    hpx = [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
-            "weight": s.get("weight", 1), "label": s.get("label", ""),
-            "icon": s.get("icon", ""), "photo": bool(s.get("photo"))} for s in spots]
+    hpx = _hotspots_px(region, spots)
     r, g, b = (int(c) for c in spec.track_rgb)
     output = spec.output_kind
     matched = _match_wallpaper_preset(spec)
@@ -2163,13 +2173,71 @@ async def order_open(folder: str = Form(...)):
                                  f"({type(e).__name__}: {e}). Run Prepare, then open "
                                  f"the order again.")
     REGIONS[plate_id] = region
-    resp = _open_spec_session(spec, region, extra={"order_dir": real})
+    # order_view: the spec the photo panel measures on until a proof is stamped;
+    # order_photo: the photo fields every studio proof of this order paints (_build_spec)
+    resp = _open_spec_session(spec, region, extra={
+        "order_dir": real, "order_view": spec,
+        "order_photo": orderstudio._photo_fields(spec)})
     if not _under(region.dir, REGIONS_ROOT):
         # the static /regions mount serves REGIONS_ROOT only; a built plate lives in the order
         resp["overview"] = f"/api/order/plate/{plate_id}/overview.png"
     resp["order"] = {"folder": real, "title": order.title,
-                     "approved": orderstudio.approval_ok(order, state)}
+                     "approved": orderstudio.approval_ok(order, state),
+                     "photo_view": orderstudio.photo_view(order, state, spec,
+                                                          _proof_dpi(spec))}
     return resp
+
+def _is_order_photo(hs, order):
+    """A hotspot whose photo is the order's own work JPEG (Prepare's work/photos)."""
+    photo = hs.get("photo") if isinstance(hs, dict) else None
+    return isinstance(photo, str) and _under(photo, order.dir) \
+        and os.path.basename(os.path.dirname(photo)) == "photos"
+
+@app.post("/api/order/photo")
+async def order_photo(session_id: str = Form(...), file: str = Form(""),
+                      change: str = Form("{}")):
+    """The studio's photo controls for an opened order: place a tray photo (spot, or
+    spot_px on the proof), move a box (box, in inches), crop, caption, drop or restore
+    one photo (`file`), or, with `file` empty, move the band to the other end
+    (band_side). `change` is a JSON object; an empty one only answers. An edit clears the
+    approval and unstamps the proof: render a proof again to see it. Answers the photo
+    panel (orderstudio.photo_view) plus the session's hotspots, the frame in overview px
+    and whether that frame moved (`reframed`: the layout or the band's end changed)."""
+    st = _require_session(session_id)
+    if not st.get("order_dir"):
+        raise HTTPException(409, "This session was not opened from an order")
+    try:
+        order = order_mod.load(st["order_dir"])
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    try:
+        parsed = json.loads(change)
+    except ValueError:
+        raise HTTPException(422, "change must be JSON")
+    region = _region_or_404(st["region_id"])
+    view = st.get("spec") or st.get("order_view")
+    try:
+        out = orderstudio.edit_photo(order, file, parsed, view=view,
+                                     dpi=_proof_dpi(view) if view else orderstudio.PROOF_DPI)
+    except orderstudio.PhotoNotFound as e:
+        raise HTTPException(404, str(e))
+    except orderstudio.PhotoChangeError as e:
+        raise HTTPException(422, str(e))
+    except order_mod.OrderError as e:
+        raise HTTPException(409, str(e))
+    except (SpecError, TypeError, ValueError, KeyError, AttributeError) as e:
+        raise HTTPException(409, f"The order's photos cannot be read ({type(e).__name__}: "
+                                 f"{e}). Run Prepare, then open the order again.")
+    spots = st["hotspots"]
+    if out["edited"]:
+        spots = ([h for h in spots if not _is_order_photo(h, order)]
+                 + [dict(h) for h in out["view"].hotspots if _is_order_photo(h, order)])
+        session.update(session_id, hotspots=spots, spec=None, order_view=out["view"],
+                       order_photo=orderstudio._photo_fields(out["view"]))
+    answer = {k: v for k, v in out.items() if k not in ("state", "view")}
+    answer["hotspots"] = _hotspots_px(region, spots)
+    answer["crop_px"] = _crop_to_overview_px(region.geo, out["view"].crop)
+    return answer
 
 def _under(path, root):
     """True when path resolves (realpath) inside root."""

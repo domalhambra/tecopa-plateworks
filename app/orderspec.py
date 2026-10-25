@@ -160,6 +160,11 @@ def photo_layout(state: dict) -> str:
 
 
 def photo_band_side(state: dict) -> str:
+    """The band's end: Dom's choice in the studio (manual.band_side) first, then the side
+    Prepare wrote (order.toml's), then "top"."""
+    v = (state.get("manual") or {}).get("band_side")
+    if v in PHOTO_BAND_SIDES:
+        return v
     v = state.get("photo_band_side")
     return v if v in PHOTO_BAND_SIDES else "top"
 

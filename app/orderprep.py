@@ -102,6 +102,12 @@ PHOTO_NO_PLACE = ("{file}: its place or time could not be read ({why}); place it
                   "the studio.")
 PHOTO_LAYOUT_FAILED = ("The photos could not be laid out in open ground ({why}): they "
                        "hang in the band.")
+# a box Dom moved in the studio is kept where he put it, and warned (Task 8)
+PHOTO_BOX_OVER = "{file}: its box is over {what}. It stays where you put it."
+PHOTO_BOX_OFF_SHEET = ("{file}: its box runs past the sheet's edge, so the poster pulls "
+                       "it inside.")
+PHOTO_FIXED_BAND = ("The moved boxes leave no open ground for the other photos, so all of "
+                    "them hang in the band. Move a box, or drop a photo.")
 ROUTE_END_BEHIND_GAP = ("A route end is behind gap {k}. Move the frame, or use gap = 0 "
                         "to print every part of the map.")
 
@@ -612,13 +618,14 @@ def _in_crop(spot, crop) -> bool:
 
 def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
     """Open ground for every placed photo whose spot is on the sheet, or the band.
-    Returns (layout, {photo index: (dx_in, dy_in)}). A box Dom set in
-    the studio (a photo's bounded box, here) is fixed: the layout keeps it as it is."""
+    Returns (layout, {photo index: (dx_in, dy_in)}, [(photo index, warning)]). A box Dom
+    set in the studio (a photo's bounded box, here) is fixed: the layout keeps it as it
+    is, and _fixed_warnings says what it lies over."""
     from app import photolayout, render
     spec = _photo_spec(order, state, open_frame, "open", box_in, side)
     todo = [i for i, p in enumerate(photos) if _placed(p) and _in_crop(p["spot"], spec.crop)]
     if not todo:
-        return "open", {}
+        return "open", {}, []
     occ = render.occupancy(spec, plate, PHOTO_LAYOUT_DPI, cfg=cfg)
     bleed = float(spec.bleed_in)          # the canvas is the sheet grown by the bleed
     spots = []
@@ -628,9 +635,47 @@ def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
         spots.append((x_in + bleed, y_in + bleed))
     fixed = {k: (photos[i]["box"]["dx_in"], photos[i]["box"]["dy_in"])
              for k, i in enumerate(todo) if photos[i]["box"]}
-    got = photolayout.layout(spots, box_in, occ, fixed=fixed,
-                             frame=render._photo_frame_fracs(spec.photo_frame_style))
-    return got["layout"], {todo[k]: off for k, off in got["boxes"].items()}
+    frame = render._photo_frame_fracs(spec.photo_frame_style)
+    got = photolayout.layout(spots, box_in, occ, fixed=fixed, frame=frame)
+    if got["layout"] != "open":
+        warns = ([(None, PHOTO_FIXED_BAND)]
+                 if fixed and len(todo) <= photolayout.OPEN_MAX else [])
+        return got["layout"], {}, warns
+    names = [photos[i]["file"] for i in todo]
+    warns = [(todo[k], w) for k, w in
+             _fixed_warnings(spots, got["boxes"], fixed, names, box_in, occ, frame)]
+    return got["layout"], {todo[k]: off for k, off in got["boxes"].items()}, warns
+
+
+def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame) -> list:
+    """[(k, warning)] for each fixed box (Dom's, from the studio) that lies over a route,
+    the poster's furniture, another box or another photo's spot, or past the sheet's
+    edge. The rects are photolayout's, the frame the renderer paints. A pair of fixed
+    boxes over each other is named once, by the earlier one."""
+    from app import photolayout as pl
+    dpi = float(occ.dpi)
+    rects = {k: pl._box_rect(spots[k], off, box_in, dpi, frame) for k, off in boxes.items()}
+    w, h = occ.size_px
+    tx0, ty0, tx1, ty1 = occ.trim_px if occ.trim_px is not None else (0, 0, w, h)
+    out = []
+    for k in sorted(fixed):
+        r, file = rects[k], names[k]
+        eps = pl._EPS
+        if r[0] < tx0 - eps or r[1] < ty0 - eps or r[2] > tx1 + eps or r[3] > ty1 + eps:
+            out.append((k, PHOTO_BOX_OFF_SHEET.format(file=file)))
+        x0, y0 = max(0, int(r[0])), max(0, int(r[1]))
+        x1, y1 = min(w, int(r[2]) + 1), min(h, int(r[3]) + 1)
+        if x1 > x0 and y1 > y0 and occ.route[y0:y1, x0:x1].any():
+            out.append((k, PHOTO_BOX_OVER.format(file=file, what="a route")))
+        if any(pl._rects_overlap(r, o) for o in occ.rects):
+            out.append((k, PHOTO_BOX_OVER.format(file=file, what="the poster's furniture")))
+        for j in sorted(rects):
+            if j != k and not (j in fixed and j < k) and pl._rects_overlap(r, rects[j]):
+                out.append((k, PHOTO_BOX_OVER.format(file=file, what=f"{names[j]}'s box")))
+        for j in range(len(spots)):
+            if j != k and pl._covers(r, spots[j], spots[k], dpi):
+                out.append((k, PHOTO_BOX_OVER.format(file=file, what=f"{names[j]}'s spot")))
+    return out
 
 
 def place_photos(order, state: dict, log=print) -> dict:
@@ -689,10 +734,10 @@ def place_photos(order, state: dict, log=print) -> dict:
 
     warnings = []
     try:
-        layout, boxes = _lay_out(order, state, photos, open_frame, box_in, side, plate,
-                                 cfg)
+        layout, boxes, fixed_warns = _lay_out(order, state, photos, open_frame, box_in,
+                                              side, plate, cfg)
     except (SpecError, OrderError, OSError, ValueError, KeyError) as ex:
-        layout, boxes = "band", {}
+        layout, boxes, fixed_warns = "band", {}, []
         warnings.append(PHOTO_LAYOUT_FAILED.format(why=str(ex)[:200]))
     for i, p in enumerate(photos):
         if layout == "band":
@@ -722,6 +767,11 @@ def place_photos(order, state: dict, log=print) -> dict:
             continue
         for k in gaps_hiding_ends([[(p["spot"]["x"], p["spot"]["y"])]], crop, cand):
             p["warnings"].append(PHOTO_BEHIND_GAP.format(file=p["file"], k=k))
+    for i, w in fixed_warns:
+        if i is None:
+            warnings.append(w)
+        else:
+            photos[i]["warnings"].append(w)
     if len(placed) > BAND_MAX:
         warnings.append(PHOTO_OVER_BAND.format(n=len(placed), most=BAND_MAX))
     photo_warnings = ([w for p in photos for w in p["warnings"]] + warnings
