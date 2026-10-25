@@ -497,11 +497,12 @@ Traps already paid for:
   of more than about 125 km on its longer side, and every Albers plate. When that
   service is down, such a preview stops. Run it again later. A plate that the 30 m
   layer does not cover keeps its coarse grid too. Prepare is not changed.
-- A preview plate for a route of many hundred km can also stop before the build, in
-  the query of the 3DEP index: "more footprints than one query returns". The index
-  gives a limited count of footprints for one query, and `_index_features` in
-  `region_prep.py` stops when the answer is not complete. This is a limit of the index
-  query in the prep stack. It is not fixed.
+- A preview plate for a route of many hundred km used to stop before the build, in
+  the query of the 3DEP index: "more footprints than one query returns". The service
+  cuts an answer by transfer size, not by count, so `_index_features` in
+  `region_prep.py` now asks in pages (`INDEX_PAGE_SIZE`, ordered by OBJECTID) and joins
+  them. It stops, with an error, past `INDEX_MAX_PAGES` pages or on an empty page that
+  claims more. It never returns part of the list.
 
 Tests: `tests/test_orderplate.py`, `tests/test_order.py`, `tests/test_orderprep.py`
 (stub subprocesses, no network), `tests/test_dem_coverage.py`. For `order new`:

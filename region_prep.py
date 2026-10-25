@@ -385,6 +385,11 @@ INDEX_QUERY_URL = ("https://index.nationalmap.gov/arcgis/rest/services/"
 INDEX_LAYERS = {1: 18, 3: 19, 5: 20, 10: 21, 30: 22, 60: 23}   # py3dep's own table
 INDEX_SIMPLIFY_DEG = 0.0005
 INDEX_TIMEOUT_S = 60        # 30 s timed out on a corridor-sized box
+# The server cuts a response by transfer size (outline geometry), not by record count:
+# the 10 m layer over Reno to Salt Lake returns ~238 features, far under its
+# maxRecordCount of 2000, yet sets exceededTransferLimit. So the query pages.
+INDEX_PAGE_SIZE = 100       # features asked per page
+INDEX_MAX_PAGES = 50        # 5,000 footprints; past it the box is too big to trust
 
 
 def _signed_area(ring):
@@ -444,52 +449,71 @@ def esri_rings_to_geom(rings):
 
 def _index_features(layer_m, bbox_4326):
     """The index features for one layer that intersect the bbox, with simplified
-    outlines. Retries once on a 5xx, a timeout or a dropped connection; a 4xx is
-    not retried. Any failure raises RuntimeError naming the layer: a failed query
-    must never read as 'no data here'."""
+    outlines, fetched in pages of INDEX_PAGE_SIZE ordered by OBJECTID while the
+    server says exceededTransferLimit. Each page retries once on a 5xx, a timeout
+    or a dropped connection; a 4xx is not retried. Returns the full list. Any
+    failure raises RuntimeError naming the layer, never a partial list: a failed
+    query must never read as 'no data here'."""
     import http.client
     import ssl
     import urllib.error
     import urllib.parse
     import urllib.request
-    query = urllib.parse.urlencode({
+    base = {
         "geometry": ",".join(str(v) for v in bbox_4326),
         "geometryType": "esriGeometryEnvelope", "inSR": 4326,
         "spatialRel": "esriSpatialRelIntersects", "returnGeometry": "true",
         "outSR": 4326, "maxAllowableOffset": INDEX_SIMPLIFY_DEG,
-        "outFields": "OBJECTID", "f": "json"})
-    url = INDEX_QUERY_URL.format(layer=INDEX_LAYERS[layer_m]) + "?" + query
+        "outFields": "OBJECTID", "orderByFields": "OBJECTID",
+        "resultRecordCount": INDEX_PAGE_SIZE, "f": "json"}
+    endpoint = INDEX_QUERY_URL.format(layer=INDEX_LAYERS[layer_m])
     ctx = ssl.create_default_context(cafile=certifi.where())
     name = f"3DEP index layer {layer_m} m"
-    for attempt in (1, 2):
-        retry = attempt == 1
-        try:
-            with urllib.request.urlopen(url, context=ctx, timeout=INDEX_TIMEOUT_S) as r:
-                body = json.load(r)
-        except urllib.error.HTTPError as ex:
-            if retry and ex.code >= 500:
-                continue
-            raise RuntimeError(f"{name}: HTTP {ex.code}") from ex
-        except (OSError, http.client.HTTPException) as ex:
-            # a timeout, a reset or dropped connection (often raised from
-            # getresponse, not urlopen's own URLError), a truncated body
-            if retry:
-                continue
-            raise RuntimeError(f"{name}: {type(ex).__name__}: {ex}") from ex
-        except ValueError as ex:          # a body that isn't JSON
-            raise RuntimeError(f"{name}: unreadable response ({ex})") from ex
-        if "error" in body:
-            code = body["error"].get("code") if isinstance(body["error"], dict) else None
-            if retry and isinstance(code, int) and code >= 500:
-                continue
-            raise RuntimeError(f"{name}: server error {body['error']}")
-        if body.get("exceededTransferLimit"):
-            raise RuntimeError(f"{name}: more footprints than one query returns")
-        features = body.get("features")
-        if features is None:
+
+    def fetch_page(offset):
+        url = endpoint + "?" + urllib.parse.urlencode(
+            {**base, "resultOffset": offset})
+        for attempt in (1, 2):
+            retry = attempt == 1
+            try:
+                with urllib.request.urlopen(url, context=ctx,
+                                            timeout=INDEX_TIMEOUT_S) as r:
+                    body = json.load(r)
+            except urllib.error.HTTPError as ex:
+                if retry and ex.code >= 500:
+                    continue
+                raise RuntimeError(f"{name}: HTTP {ex.code}") from ex
+            except (OSError, http.client.HTTPException) as ex:
+                # a timeout, a reset or dropped connection (often raised from
+                # getresponse, not urlopen's own URLError), a truncated body
+                if retry:
+                    continue
+                raise RuntimeError(f"{name}: {type(ex).__name__}: {ex}") from ex
+            except ValueError as ex:          # a body that isn't JSON
+                raise RuntimeError(f"{name}: unreadable response ({ex})") from ex
+            if "error" in body:
+                code = (body["error"].get("code")
+                        if isinstance(body["error"], dict) else None)
+                if retry and isinstance(code, int) and code >= 500:
+                    continue
+                raise RuntimeError(f"{name}: server error {body['error']}")
+            return body
+        raise AssertionError("unreachable")
+
+    features = []
+    for _ in range(INDEX_MAX_PAGES):
+        body = fetch_page(len(features))
+        page = body.get("features")
+        if page is None:
             raise RuntimeError(f"{name}: response has no features list")
-        return features
-    raise AssertionError("unreachable")
+        features.extend(page)
+        if not body.get("exceededTransferLimit"):
+            return features
+        if not page:
+            raise RuntimeError(f"{name}: the server reports more footprints "
+                               f"but returned an empty page")
+    raise RuntimeError(f"{name}: more footprints than {INDEX_MAX_PAGES} pages "
+                       f"of {INDEX_PAGE_SIZE} return")
 
 
 def layer_coverage(bbox_4326, layers=COVERAGE_LAYERS_M):
