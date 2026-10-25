@@ -3,19 +3,34 @@
 
 Pure geometry on an ``render.Occupancy`` (what a box must stay off, in pixels at its
 ``dpi``). Spots are sheet inches (x, y), y down, the canvas origin: pixel = inch x dpi.
-A box is a square of side ``box_in``. A box offset ``(dx_in, dy_in)`` is the box CENTRE's
-offset from its spot, in inches, y down, as ``render._photo_box_offset`` reads it.
+A box is a square of side ``box_in``. A box offset ``(dx_in, dy_in)`` is the PHOTO's centre offset from
+its spot, in inches, y down, as ``render._photo_box_offset`` reads it.
 
-A leader runs from the spot to the edge of its box on the line toward the box centre:
-``render._leader_end``, the line the renderer draws, so layout and render agree. A
-candidate's leader length is the distance from the spot to that edge point.
+What a box occupies is the whole frame the renderer paints, not the bare square: the
+photo plus its mat. ``frame = (side, top, bottom)`` are fractions of ``box_in`` (the triple
+``render._photo_frame_fracs(style)`` returns), so the occupied rect runs from
+``cx - box/2 - side*box`` to ``cx + box/2 + side*box`` across and from
+``cy - box/2 - top*box`` to ``cy + box/2 + bottom*box`` down. That rect is the one tested
+against the trim, the keep-out rects, the route and the other boxes (``BAND_PAD_IN`` clear),
+and the one the leader ends on. The open-ground photo draws no caption (only the band
+does), so there is no caption allowance here.
+
+A leader runs from the spot to the edge of the frame on the line toward the frame's
+centre: ``render._leader_end``, the line the renderer draws, so layout and render agree.
+A candidate's leader length is the distance from the spot to that edge point.
 
 Candidates are RING_DIRECTIONS directions (N, NE, E, SE, S, SW, W, NW) at each of
 RING_STEPS_IN. A step is the gap between the spot and the nearest edge of the box along
-the direction, so the leader is that long. On an axis the centre sits at
-``step + box/2``; on a diagonal the unit direction ``u`` gives centre =
-``u * step + (sx * box/2, sy * box/2)``, which puts the box's nearest corner exactly
-``step`` away along the diagonal.
+the direction (the frame edge, mat included), so the leader is that long. With ``hx`` and
+``hy`` the half-extents of the frame from the photo centre on the side facing the spot,
+an axis direction puts the centre at ``step + h`` and a diagonal with unit direction ``u``
+at ``u * step + (sx * hx, sy * hy)``, which puts the frame's nearest corner ``step`` away
+along the diagonal.
+
+Extra rule beyond the ring: a candidate's frame may not touch a placed leader, and its
+leader may not pass through a placed frame. This is how a later photo avoids a fixed box
+and its leader, and it holds for every placed photo. A photo whose spot lies inside a
+placed frame therefore has no valid candidate.
 
 Deterministic: no randomness, and no dependence on dict order or on the order of float
 ties (ties go to the earlier direction).
@@ -36,18 +51,23 @@ _DIRECTIONS = ((0, -1), (1, -1), (1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, 
 _EPS = 1e-6
 
 
-def _centre_offset(direction, step, box_in):
+def _centre_offset(direction, step, box_in, frame):
+    """The photo-centre offset that puts the frame's near edge `step` from the spot."""
     sx, sy = direction
     norm = math.hypot(sx, sy)
-    h = box_in / 2.0
-    return (round(sx / norm * step + sx * h, 9), round(sy / norm * step + sy * h, 9))
+    fs, ft, fb = frame
+    hx = box_in * (0.5 + fs)
+    hy = box_in * (0.5 + (fb if sy < 0 else ft))     # box above: its bottom mat faces the spot
+    return (round(sx / norm * step + sx * hx, 9), round(sy / norm * step + sy * hy, 9))
 
 
-def _box_rect(spot, off, box_in, dpi):
-    """The box as a float pixel rect (x0, y0, x1, y1)."""
-    h = box_in * dpi / 2.0
+def _box_rect(spot, off, box_in, dpi, frame):
+    """The frame as a float pixel rect (x0, y0, x1, y1): photo plus mat."""
+    fs, ft, fb = frame
     cx, cy = (spot[0] + off[0]) * dpi, (spot[1] + off[1]) * dpi
-    return (cx - h, cy - h, cx + h, cy + h)
+    h = box_in * dpi / 2.0
+    s, t, b = box_in * dpi * fs, box_in * dpi * ft, box_in * dpi * fb
+    return (cx - h - s, cy - h - t, cx + h + s, cy + h + b)
 
 
 def _leader(spot, rect, dpi):
@@ -123,14 +143,17 @@ def _ground_ok(rect, occ):
     return not occ.route[y0:y1, x0:x1].any()
 
 
-def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None) -> dict:
-    """Place a square box of side ``box_in`` for each spot, or send every photo to the band.
+def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None,
+           frame: tuple = (0.0, 0.0, 0.0)) -> dict:
+    """Place a square photo of side ``box_in`` (plus its ``frame`` mat) for each spot, or send
+    every photo to the band.
 
     Returns ``{"layout": "open" | "band", "boxes": {i: (dx_in, dy_in)}, "unplaced": []}``.
     "open" carries a box for every photo (``fixed`` ones as given); "band" carries
     ``boxes = {}`` and ``unplaced = []`` (the renderer lays the band out itself, and the
     two layouts never mix). ``fixed`` maps photo index -> (dx_in, dy_in), Dom's moves, kept
     as they are even if invalid; later photos still keep off the fixed box and its leader.
+    ``frame`` is (side, top, bottom) as fractions of ``box_in``: ``render._photo_frame_fracs``.
 
     Order: fixed photos by index, then the rest by spot y, then x, then index. A candidate
     is valid when its box is inside the trim, outside every ``occ.rects`` rect (a set's seam
@@ -144,11 +167,12 @@ def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None) -> dic
                  for i, o in (fixed or {}).items() if 0 <= int(i) < n}
     if n > OPEN_MAX:
         return band
+    frame = tuple(float(f) for f in frame)
     dpi = float(occ.dpi)
     pad = render.BAND_PAD_IN * dpi
     boxes, rects, leaders = {}, {}, []
     for i in sorted(fixed_map):
-        rect = _box_rect(spots_in[i], fixed_map[i], box_in, dpi)
+        rect = _box_rect(spots_in[i], fixed_map[i], box_in, dpi, frame)
         boxes[i], rects[i] = fixed_map[i], rect
         seg = _leader(spots_in[i], rect, dpi)
         if seg is not None:
@@ -159,8 +183,8 @@ def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None) -> dic
         best = None                                   # (rounded length, direction rank, offset)
         for step in RING_STEPS_IN:
             for rank, direction in enumerate(_DIRECTIONS):
-                off = _centre_offset(direction, step, box_in)
-                rect = _box_rect(spots_in[i], off, box_in, dpi)
+                off = _centre_offset(direction, step, box_in, frame)
+                rect = _box_rect(spots_in[i], off, box_in, dpi, frame)
                 if not _ground_ok(rect, occ):
                     continue
                 if any(_rects_overlap(rect, other, pad) for other in rects.values()):

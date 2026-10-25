@@ -150,3 +150,26 @@ def test_same_inputs_same_layout():
     c = photolayout.layout(list(spots), BOX, o, fixed={1: (-1.5, 0.5), 3: (1.0, 1.0)})
     assert a == b == c
     assert list(a["boxes"]) == list(b["boxes"])
+
+
+def test_frame_mat_is_reserved():
+    # a one-box-wide corridor (x 8.9 to 11.1 in); no way north of photo 0, none south of photo 1.
+    # Photo 0 must hang south of its spot; photo 1's only way is north, into photo 0's air.
+    spots = [(10.0, 10.0), (10.0, 13.45)]
+    o = occ(route_rects=[(0, 0, 890, H), (1110, 0, W, H)], rects=[(0, 0, W, 950), (0, 1370, W, H)])
+    bare = photolayout.layout(spots, BOX, o)
+    assert bare["layout"] == "open"                    # bare squares fit, a pad apart
+    a, b = (box_px(spots[i], bare["boxes"][i]) for i in (0, 1))
+    assert b[1] - a[3] >= render.BAND_PAD_IN * DPI - 1e-6
+    frame = render._photo_frame_fracs("polaroid")
+    assert frame[2] > frame[0]                         # the polaroid has the deepest bottom mat
+    out = photolayout.layout(spots, BOX, o, frame=frame)
+    if out["layout"] == "open":
+        fs, ft, fb = frame
+
+        def framed(i):
+            x0, y0, x1, y1 = box_px(spots[i], out["boxes"][i])
+            return x0 - fs * BOX * DPI, y0 - ft * BOX * DPI, x1 + fs * BOX * DPI, y1 + fb * BOX * DPI
+        assert not overlaps(framed(0), framed(1), pad=render.BAND_PAD_IN * DPI - 1e-6)
+    else:
+        assert out == {"layout": "band", "boxes": {}, "unplaced": []}
