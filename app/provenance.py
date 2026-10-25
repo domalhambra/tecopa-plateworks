@@ -273,24 +273,57 @@ def is_embedded_photo(value) -> bool:
     return isinstance(value, str) and value.startswith(PHOTO_DATA_PREFIX)
 
 
-def _encode_photo(path: str, box_px: int) -> str | None:
+def _is_square_cut(hs: dict) -> bool:
+    """True if the renderer cuts this hotspot's photo to a square: it has a well-formed
+    `box` offset or `crop` focus (render._photo_box_offset / _photo_crop_focus read the
+    same two keys the same way). Without either the photo is fitted, as it always was."""
+    box, crop = hs.get("box"), hs.get("crop")
+    return bool((isinstance(box, dict) and _finite_number(box.get("dx_in"))
+                 and _finite_number(box.get("dy_in")))
+                or (isinstance(crop, dict) and _finite_number(crop.get("cx"))
+                    and _finite_number(crop.get("cy"))))
+
+
+def _encode_photo(path: str, box_px: int, square: bool = False) -> str | None:
     """Read a photo file and return a render-resolution JPEG data URI, or None if it
-    can't be read/encoded within the per-photo byte ceiling. `box_px` is the pixel long
-    edge the poster paints the photo at (photo_box_in * final_dpi), so the embedded copy
-    is exactly what the sheet shows -- never larger, so the file stays lean. Encoding is
+    can't be read/encoded within the per-photo byte ceiling. `box_px` is the pixel edge
+    the poster paints the photo at (photo_box_in * final_dpi). A fitted photo is its
+    LONG side at `box_px`, so the embedded copy is exactly what the sheet shows -- never
+    larger, so the file stays lean.
+
+    A `square` photo (the hotspot has a box or a crop) is cut to a box x box square from
+    this copy, so its SHORT side must carry `box_px`: fitting the long side would upscale
+    a 3:2 photo's square about 1.5x. That copy is never larger than the source and never
+    past MAX_PHOTO_EMBED_PIXELS; if it will not fit the byte ceiling, the fitted copy
+    (long side at `box_px`) is tried before the photo is given up. Encoding is
     deterministic for fixed pixels (invariant 3: the manifest stays byte-stable)."""
     try:
         with Image.open(path) as im:
             im = im.convert("RGB")
-            im.thumbnail((box_px, box_px))
-            buf = io.BytesIO()
-            im.save(buf, "JPEG", quality=PHOTO_EMBED_QUALITY, optimize=True)
+            w, h = im.size
+            tries = []
+            if square and min(w, h) > 0:
+                scale = min(1.0, box_px / min(w, h),
+                            math.sqrt(MAX_PHOTO_EMBED_PIXELS / (w * h)))
+                if scale < 1.0:
+                    tw, th = max(1, round(w * scale)), max(1, round(h * scale))
+                    while tw * th > MAX_PHOTO_EMBED_PIXELS:     # rounding went over
+                        tw, th = max(1, tw - 1), max(1, th - 1)
+                    tries.append(im.resize((tw, th), Image.LANCZOS))
+                else:
+                    tries.append(im)                            # the source, as it is
+            fitted = im.copy()
+            fitted.thumbnail((box_px, box_px))
+            tries.append(fitted)
+            for cand in tries:
+                buf = io.BytesIO()
+                cand.save(buf, "JPEG", quality=PHOTO_EMBED_QUALITY, optimize=True)
+                raw = buf.getvalue()
+                if len(raw) <= MAX_PHOTO_EMBED_BYTES:
+                    return PHOTO_DATA_PREFIX + base64.b64encode(raw).decode("ascii")
     except Exception:
         return None
-    raw = buf.getvalue()
-    if len(raw) > MAX_PHOTO_EMBED_BYTES:
-        return None
-    return PHOTO_DATA_PREFIX + base64.b64encode(raw).decode("ascii")
+    return None
 
 
 def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:
@@ -307,7 +340,8 @@ def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:
         p = hs.get("photo")
         if not p or is_embedded_photo(p):
             continue                             # absent, or already the record's bytes
-        enc = _encode_photo(p, box_px) if isinstance(p, str) else None
+        enc = (_encode_photo(p, box_px, square=_is_square_cut(hs))
+               if isinstance(p, str) else None)
         if enc is None:
             hs.pop("photo", None)                # unreadable / oversized: drop cleanly
         else:

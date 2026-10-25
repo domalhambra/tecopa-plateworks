@@ -640,3 +640,86 @@ def test_frozen_photo_manifest_reprints_its_embedded_photo():
     r = c.post("/api/reprint", files={"file": ("photo_v1.png", buf.getvalue(), "image/png")})
     assert r.status_code == 200, r.text
     assert Image.open(io.BytesIO(r.content)).size == (9 * 300, 12 * 300)
+
+
+# ---- a square-cut photo is embedded at its short side (order photos, Task 9) ----
+
+def _gradient_jpeg(path, size):
+    w, h = size
+    x = np.linspace(0, 255, w, dtype=np.uint8)[None, :].repeat(h, 0)
+    y = np.linspace(0, 255, h, dtype=np.uint8)[:, None].repeat(w, 1)
+    Image.fromarray(np.dstack([x, y, (x // 2 + y // 2)]), "RGB").save(path, "JPEG", quality=90)
+    return str(path)
+
+
+def _embedded_size(data_uri):
+    raw = base64.b64decode(data_uri[len(provenance.PHOTO_DATA_PREFIX):])
+    return Image.open(io.BytesIO(raw)).size
+
+
+def _final_photo(path, box_px, **keys):
+    import dataclasses
+    spec, _ = _spec_from_fixture()
+    hs = {"x": 690000.0, "y": 4485000.0, "weight": 1, "photo": path, **keys}
+    s = dataclasses.replace(spec, hotspots=[hs])
+    return provenance.build_final_spec(s, box_px).hotspots[0]["photo"]
+
+
+def test_a_square_cut_photo_is_embedded_with_its_short_side_at_the_box(tmp_path):
+    # 2.25 in box at 300 ppi; a 3:2 source is cut square from the copy, so its SHORT side
+    # must carry the box or the square is upscaled about 1.5x and prints soft
+    src = _gradient_jpeg(tmp_path / "a.jpg", (3000, 2000))
+    box_px = round(2.25 * 300)
+    for keys in ({"crop": {"cx": 0.5, "cy": 0.5}}, {"box": {"dx_in": 1.0, "dy_in": -1.0}},
+                 {"crop": {"cx": 0.2, "cy": 0.5}, "box": {"dx_in": 0.0, "dy_in": 1.0}}):
+        w, h = _embedded_size(_final_photo(src, box_px, **keys))
+        assert min(w, h) >= box_px == 675
+        assert (w, h) == (1013, 675)                  # 3:2 kept; the short side exactly
+
+
+def test_a_portrait_square_cut_photo_is_embedded_at_its_short_side_too(tmp_path):
+    src = _gradient_jpeg(tmp_path / "p.jpg", (2000, 3000))
+    w, h = _embedded_size(_final_photo(src, 675, crop={"cx": 0.5, "cy": 0.5}))
+    assert (w, h) == (675, 1013)
+
+
+def test_a_square_cut_photo_is_never_upscaled_past_its_source(tmp_path):
+    src = _gradient_jpeg(tmp_path / "s.jpg", (600, 400))
+    assert _embedded_size(_final_photo(src, 675, crop={"cx": 0.5, "cy": 0.5})) == (600, 400)
+
+
+def test_a_square_cut_photo_stays_under_the_pixel_guard(tmp_path):
+    src = _gradient_jpeg(tmp_path / "big.jpg", (4000, 3000))          # 12 MP
+    w, h = _embedded_size(_final_photo(src, 3500, crop={"cx": 0.5, "cy": 0.5}))
+    assert w * h <= provenance.MAX_PHOTO_EMBED_PIXELS
+    assert min(w, h) > 2000                                           # still large
+    assert abs(w / h - 4 / 3) < 0.01
+
+
+def test_a_hotspot_without_box_or_crop_embeds_as_it_always_did(tmp_path):
+    src = _gradient_jpeg(tmp_path / "o.jpg", (3000, 2000))
+    with Image.open(src) as im:
+        im = im.convert("RGB")
+        im.thumbnail((675, 675))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=provenance.PHOTO_EMBED_QUALITY, optimize=True)
+    old = provenance.PHOTO_DATA_PREFIX + base64.b64encode(buf.getvalue()).decode("ascii")
+    assert _final_photo(src, 675) == old
+    assert _final_photo(src, 675, label="x", source="gps") == old     # no box, no crop
+    assert _embedded_size(old) == (675, 450)
+
+
+def test_a_square_cut_copy_too_big_for_the_byte_ceiling_falls_back_to_the_fitted_copy(
+        tmp_path, monkeypatch):
+    rng = np.random.default_rng(3)
+    noise = rng.integers(0, 256, (1200, 1800, 3), dtype=np.uint8)
+    src = tmp_path / "n.jpg"
+    Image.fromarray(noise, "RGB").save(src, "JPEG", quality=90)
+    keys = {"crop": {"cx": 0.5, "cy": 0.5}}
+    square = _final_photo(str(src), 800, **keys)
+    fitted = _final_photo(str(src), 800)
+    assert _embedded_size(square) == (1200, 800) and _embedded_size(fitted) == (800, 533)
+    mid = (len(base64.b64decode(square.split(",", 1)[1]))
+           + len(base64.b64decode(fitted.split(",", 1)[1]))) // 2
+    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", mid)
+    assert _final_photo(str(src), 800, **keys) == fitted              # kept, not dropped
