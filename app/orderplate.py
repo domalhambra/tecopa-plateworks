@@ -257,18 +257,57 @@ def widen_for_upsample(frame, layer_m, print_w_in, dpi=DPI) -> tuple:
     return widen_frame(frame, width)
 
 
-def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions):
+def _scaled(frame, factor, cy=None) -> tuple:
+    """`frame` grown by `factor` about its centre (or about the height `cy`)."""
+    cx = (frame[0] + frame[2]) / 2.0
+    cy = (frame[1] + frame[3]) / 2.0 if cy is None else cy
+    return _centred(cx, cy, (frame[2] - frame[0]) * factor, (frame[3] - frame[1]) * factor)
+
+
+def band_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The frame of a poster whose photos hang in a band across its `side` ("top" or
+    "bottom") end (order photos, B2): `frame` keeps its ground height below (or above)
+    the band, and the band adds `band_h_in` of ground at the new frame's scale. The
+    width grows by the same factor, so the aspect stays the print's and the whole of
+    `frame` stays on the map, out of the band."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    if print_h_in <= band_h_in:
+        raise PlateError(f"A {band_h_in:.2f} in photo band does not fit a "
+                         f"{print_h_in:g} in tall print.")
+    factor = print_h_in / (print_h_in - band_h_in)
+    h = frame[3] - frame[1]
+    grown = h * factor
+    cy = frame[1] + grown / 2.0 if side != "bottom" else frame[3] - grown / 2.0
+    return _scaled(frame, factor, cy)
+
+
+def photo_plan_frame(frame, print_h_in, band_h_in) -> tuple:
+    """The frame a plate is planned round when the order has photos: `frame` grown by a
+    band at both ends, so the plate holds the open layout's frame and the band's, on
+    either side, before the layout is known. It is `frame` scaled about its centre."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    if print_h_in <= 2 * band_h_in:
+        raise PlateError(f"Two {band_h_in:.2f} in photo bands do not fit a "
+                         f"{print_h_in:g} in tall print.")
+    return _scaled(frame, print_h_in / (print_h_in - 2 * band_h_in))
+
+
+def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions, grow=None):
     """The first curated plate that holds the nestled frame's plate (the frame plus
     its PLATE_MARGIN border) at the print's resolution with no upsampling. A built
     plate carries that margin round the frame for oblique previews and studio frame
     changes, so a reused plate must hold it too, not just the bare frame. `regions`
     holds dicts with id, crs ("EPSG:n"), bounds (CRS metres) and native_resolution_m.
+    `grow`, when given, maps the frame to the larger frame the plate must hold (an
+    order with photos: photo_plan_frame); the resolution is still the frame's own.
     Returns {"region", "frame", "need_m", "epsg"} or None."""
     for r in regions:
         epsg = int(str(r["crs"]).split(":")[1])
         frame = nestled_frame(project_bbox(track_bbox_lonlat, epsg), aspect)
         need = needed_resolution(frame, print_w_in)
-        plate = plate_bounds(frame)
+        plate = plate_bounds(grow(frame) if grow else frame)
         b = r["bounds"]
         inside = (plate[0] >= b[0] and plate[1] >= b[1]
                   and plate[2] <= b[2] and plate[3] <= b[3])
