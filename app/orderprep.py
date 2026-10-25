@@ -377,6 +377,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
 
     pw, ph = order.print_in()
     grow = _photo_grow(order, pw, ph) if with_photos else None
+    holes_env = None
     warnings = []
     if skipped_tracks:
         warnings.append(f"Skipped {len(skipped_tracks)} track file(s) that could "
@@ -424,13 +425,11 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
                                     grid, env, log, cwd=cache_dir)
         if labels_note:
             warnings.append(labels_note)
-        for note in check_holes(tools, plate, frame, epsg,
-                                needed_resolution(frame, pw), env, log):
-            # a hole in the print leads the list; a hole outside it follows
-            if note.startswith("HOLES IN THE PRINT"):
-                warnings.insert(0, note)
-            else:
-                warnings.append(note)
+        if with_photos:
+            holes_env = env      # measured on the frame in use, once the layout settles it
+        else:
+            _add_hole_notes(warnings, check_holes(tools, plate, frame, epsg,
+                                                  needed_resolution(frame, pw), env, log))
         if _has_landcover(plate["root"], plate["id"]):
             landcover_rebuilds = 0
         elif gated_landcover_retry:
@@ -461,12 +460,40 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
         "need_m": round(needed_resolution(frame, pw), 3),
         "plate": plate, "warnings": warnings,
         "landcover_rebuilds": landcover_rebuilds,
+        # open_frame: the frame planned for the tracks (the nestled one, a curated fit or
+        # manual.frame, widened for coarse data), before any photo band. state["frame"]
+        # is the frame in use: open_frame, or open_frame grown toward the band's side.
+        # manual.frame is always an open frame, so Prepare never grows a grown frame: a
+        # studio save of the frame saves open_frame (from a band proof, its crop through
+        # orderspec.crop_for_layout(crop, "band", side, "open", side, spec)).
         "open_frame": list(frame), "photo_plan": with_photos,
         "approval": None})            # a new plate is a new print: nothing approved stands
     state = place_photos(order, read_state(order), log)
+    if holes_env is not None:
+        state = _holes_in_use(order, state, tools, holes_env, log)
     state = _prove(order, state, proofs, log)
     write_report(order, state)
     return state
+
+
+def _add_hole_notes(warnings, notes) -> None:
+    """A hole in the print leads the list; a hole outside it follows."""
+    for note in notes:
+        if note.startswith("HOLES IN THE PRINT"):
+            warnings.insert(0, note)
+        else:
+            warnings.append(note)
+
+
+def _holes_in_use(order, state, tools, env, log) -> dict:
+    """check_holes for a freshly built plate of an order with photos, on the frame in use
+    (the band frame when the photos hang in the band), which only the layout settles."""
+    plate, frame = dict(state["plate"]), state["frame"]
+    warnings = list(state.get("warnings", []))
+    _add_hole_notes(warnings, check_holes(
+        tools, plate, frame, state["epsg"],
+        needed_resolution(frame, float(state["print_in"][0])), env, log))
+    return write_state(order, {"plate": plate, "warnings": warnings})
 
 
 def _route_ends_behind_gaps(order, payloads, epsg, frame) -> list:

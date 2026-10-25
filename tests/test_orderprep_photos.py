@@ -307,6 +307,15 @@ def _band_order(tmp_path, extra=""):
     return d
 
 
+def test_holes_are_measured_on_the_frame_in_use(tmp_path, tools, monkeypatch):
+    seen = []
+    monkeypatch.setattr(op, "check_holes",
+                        lambda tools, plate, frame, *a, **k: seen.append(list(frame)) or [])
+    state = _prepare(_band_order(tmp_path), tools)
+    assert state["band_frame"] is True
+    assert seen == [state["frame"]] and state["frame"] != state["open_frame"]
+
+
 def test_a_spot_under_the_band_is_outside_the_frame(tmp_path, tools):
     from app import render
     d = _band_order(tmp_path)
@@ -399,3 +408,14 @@ def test_a_manual_frame_is_the_open_frame(tmp_path, tools):
     bh = orderspec.band_height_for(state["photo_box_in"])
     assert state["frame"] == pytest.approx(
         list(opl.band_frame(moved, state["print_in"][1], bh, "top")))
+
+
+def test_a_hole_in_a_photo_orders_frame_leads_the_warnings(tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "frame")
+    d = _band_order(tmp_path)
+    state = _prepare(d, tools)
+    assert state["warnings"][0].startswith("HOLES IN THE PRINT")
+    assert state["plate"]["frame_nan_share"] > 0
+    # a second Prepare (the plate is current) keeps the hole note where it was
+    state = _prepare(d, tools)
+    assert state["warnings"][0].startswith("HOLES IN THE PRINT")
