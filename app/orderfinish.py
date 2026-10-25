@@ -16,9 +16,10 @@ Each TIFF is the print at exactly its size (no border: plan decision P5), 8-bit 
 (P4), uncompressed, sRGB profile embedded, turned so the 17 in side goes across the roll
 (P6).
 
-Every check that needs no picture runs before the render: the approval, the spec's size,
-panels and gap against state.json (orderspec.matches_order), bleed, the roll, and every
-hotspot photo still readable. Then the files go in place in four steps, so a failed run
+Every check that needs no picture runs before the render: the approval, the photos'
+state (a photo in the tray, a band over 12), the spec's size, panels and gap against
+state.json (orderspec.matches_order), bleed, the roll, and every hotspot photo still
+readable. Then the files go in place in four steps, so a failed run
 keeps the files of the last run:
 
   1. write every file (the TIFFs, record.png, PRINT.txt) under a temporary name;
@@ -47,6 +48,8 @@ SIZE_MISMATCH = ("The saved studio spec is not this order's size: open the order
                  "save and approve again.")
 BLEED = ("The render is {have[0]} × {have[1]} px and the print is {want[0]} × {want[1]} px: "
          "a print with bleed cannot go to the roll as it is.")
+TRAY_PHOTOS = "{n} photos have no spot: place or drop them in the studio."
+BAND_OVER = "{n} photos: the band holds 12. Drop some in the studio."
 PHOTOS_GONE = ("{n} photo(s) on the approved proof can no longer be read: open the order, "
                "attach them again, save and approve.")
 NOT_PLACED = "The print files cannot be put in place ({why}): run Finish again."
@@ -108,6 +111,23 @@ def _photo_count(spec) -> int:
     return sum(1 for hs in spec.hotspots or [] if isinstance(hs, dict) and hs.get("photo"))
 
 
+def _check_photos(state: dict) -> None:
+    """Refuse an order whose photos are not settled, from the state alone (no picture).
+    A tray photo (not dropped, no spot: an unreadable photo is one, since Prepare leaves
+    it there) has no place on the sheet, so Dom places or drops it. The band holds
+    photolayout.BAND_MAX photos, counting each placed one (not dropped, with a spot and a
+    work JPEG). Both read the studio's edits over Prepare's (orderspec.effective_photos)."""
+    from app.photolayout import BAND_MAX
+    photos = orderspec.effective_photos(state)
+    tray = sum(1 for p in photos if not p.get("dropped") and p.get("spot") is None)
+    if tray:
+        raise OrderError(TRAY_PHOTOS.format(n=tray))
+    placed = sum(1 for p in photos if not p.get("dropped") and p.get("spot") is not None
+                 and p.get("work"))
+    if placed > BAND_MAX:
+        raise OrderError(BAND_OVER.format(n=placed))
+
+
 def print_note(order, spec, paper, pieces, approval, removed=()) -> str:
     """The text of PRINT.txt. `pieces` is one dict for each file, in hang order:
     name, w_in and h_in (the file's size), w_px and h_px, ppi, rotation (0 or 90) and
@@ -158,6 +178,7 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
         raise OrderError(NOT_APPROVED)
     if not orderstudio.approval_ok(order, state):
         raise OrderError(CHANGED)
+    _check_photos(state)             # the state alone: before Plan A's render-time checks
     from app import render           # here, so importing this module needs no renderer
     paper = papers.enabled_paper()
     spec = orderspec.order_spec(order, state)

@@ -349,6 +349,110 @@ def test_finish_prints_the_photos_it_can_read(order, tmp_path):
     assert len(photos) == 2 and all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in photos)
 
 
+# --- the order's photos: Finish refuses a tray photo and a band over 12 -----------------
+
+TRAY = "{n} photos have no spot: place or drop them in the studio."
+OVER = "{n} photos: the band holds 12. Drop some in the studio."
+
+
+def _photo_state(order, placed, tray=0, dropped=0, layout="open", manual=None):
+    """State photos as Prepare leaves them: `placed` with a spot and a work JPEG on disk,
+    `tray` with no spot (the first of them unreadable: no work JPEG), `dropped` placed but
+    dropped. Then the spec is saved and approved. `manual` is manual.photos."""
+    state = od.read_state(order)
+    cx, cy = (state["frame"][0] + state["frame"][2]) / 2, \
+        (state["frame"][1] + state["frame"][3]) / 2
+    os.makedirs(os.path.join(order.dir, "work", "photos"), exist_ok=True)
+    photos = []
+
+    def entry(name, spot, work=True, **kw):
+        rel = os.path.join("work", "photos", name + ".jpg")
+        if work:
+            Image.new("RGB", (60, 40), (12, 200, 80)).save(os.path.join(order.dir, rel),
+                                                           "JPEG")
+        photos.append({"file": name, "work": rel if work else None, "spot": spot,
+                       "source": "gps" if spot else None, "caption": "", "box": None,
+                       "crop": {"cx": 0.5, "cy": 0.5}, "dropped": False, "warnings": [],
+                       **kw})
+    for k in range(placed):
+        entry(f"p{k:02d}", {"x": cx + 300 * k, "y": cy})
+    for k in range(tray):
+        entry(f"t{k:02d}", None, work=k > 0)
+    for k in range(dropped):
+        entry(f"d{k:02d}", {"x": cx, "y": cy + 300 * (k + 1)}, dropped=True)
+    od.write_state(order, {"photos": photos, "photo_layout": layout,
+                           "photo_band_side": "top"})
+    if manual:
+        od.set_manual(order, "photos", manual)
+    return _save_and_approve(order)
+
+
+def _no_print(order):
+    assert not os.path.exists(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_refuses_a_tray_photo(order, monkeypatch):
+    _photo_state(order, placed=2, tray=2)          # one of them unreadable: still the tray
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=2)
+    _no_print(order)
+
+
+def test_a_dropped_photo_and_a_photo_placed_by_hand_are_not_in_the_tray(order, tmp_path):
+    cx = (od.read_state(order)["frame"][0] + od.read_state(order)["frame"][2]) / 2
+    cy = (od.read_state(order)["frame"][1] + od.read_state(order)["frame"][3]) / 2
+    _photo_state(order, placed=1, tray=2, dropped=1, manual={
+        "t00": {"dropped": True},                  # the unreadable one: Dom dropped it
+        "t01": {"spot": {"x": cx, "y": cy + 900}}})  # the other one: Dom placed it
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isdir(os.path.join(order.dir, "out", "print"))
+
+
+def test_finish_refuses_more_than_12_photos(order, monkeypatch):
+    _photo_state(order, placed=13, dropped=2, layout="band")   # a dropped one is not counted
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == OVER.format(n=13)
+    _no_print(order)
+
+
+def test_the_tray_is_refused_before_the_band_count(order, monkeypatch):
+    _photo_state(order, placed=13, tray=1, layout="band")
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=1)
+
+
+def test_the_photo_refusals_come_after_the_approval_check(order, monkeypatch):
+    _photo_state(order, placed=1, tray=1)
+    od.write_state(order, {"approval": None})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == orderfinish.NOT_APPROVED
+
+
+def test_finish_embeds_placed_photos(order):
+    from app import provenance
+    _photo_state(order, placed=3, tray=0, dropped=1)
+    orderfinish.finish(order.dir, dpi=DPI)
+    manifest = provenance.extract(open(os.path.join(order.dir, "work", "record.png"),
+                                       "rb").read())
+    photos = [h.get("photo") for h in manifest["spec"]["hotspots"]]
+    assert len(photos) == 3
+    assert all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in photos)
+
+
+def test_twelve_photos_in_the_band_are_printed(order):
+    _photo_state(order, placed=12, layout="band")
+    result = orderfinish.finish(order.dir, dpi=DPI)
+    assert len(result["files"]) == 1
+
+
 def _snapshot(order) -> dict:
     """Every file of a Finish, by path, with its bytes."""
     out = {}
