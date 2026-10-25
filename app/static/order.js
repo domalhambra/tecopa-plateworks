@@ -248,8 +248,10 @@ async function editPhoto(file, change) {
       else canvas.draw();
       state.proofStale = true;
       proof.refreshProofUI();
-      const warned = (j.warnings || []).filter((w) => !file || w.startsWith(file + ':'));
-      toast(warned.length ? warned[0] : 'Photo changed: re-proofing', warned.length ? 'error' : 'info');
+      // the warning this edit earned, if any (a box dropped on a route, say)
+      const warned = file ? (j.warnings || []).filter((w) => w.startsWith(file + ':')) : [];
+      toast(warned.length ? warned[0] : (file ? 'Photo changed' : 'Band moved') + ': re-proofing',
+        warned.length ? 'error' : 'info');
     }
     renderPhotos();
     if (j.edited) proof.renderProof({ auto: true });
