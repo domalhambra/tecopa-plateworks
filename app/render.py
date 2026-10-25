@@ -2590,7 +2590,8 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     # the open-ground photo frames: a name under a box is a name nobody reads. Here and
     # not in _label_keepout, which occupancy() reads: the layout must not avoid its own
     # previous boxes.
-    keepout += _photo_frame_rects(spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
+    frames = _photo_frame_rects(spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
+    keepout += frames
     placed, occupied = [], list(keepout)
 
     def overlaps(box):
@@ -2619,13 +2620,18 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         route_mask = (_coverage(spec, out_w, out_h, ink_w + 2 * cas_pad,
                                 _journey_groups(spec), ctx=ctx) > GEO_ROUTE_PRESENT)
 
-    # smart mode on a set: a leader and its anchor dot stay out of each seam band, as
-    # the name does. A leader into a gap strip points at ground that is never printed,
-    # and a leader across a seam is cut in two. The bands are the ones in the keep-out.
+    # smart mode: a leader and its anchor dot stay out of each seam band of a set, as the
+    # name does, and out of each open-ground photo frame. A leader into a gap strip points
+    # at ground that is never printed, and a leader across a seam is cut in two; a leader
+    # or dot over a photo frame is painted onto the picture, and the feature under a frame
+    # is not drawn (the photo is what shows there). The seam bands are the ones in the
+    # keep-out. With no set and no photo the list is empty and nothing changes.
     seams, leader_ok = [], None
-    if spec.label_place == "smart" and panel_geo.is_set(spec):
-        seams = panel_geo.seam_bands_px(spec, dpi, edge)
-
+    if spec.label_place == "smart":
+        if panel_geo.is_set(spec):
+            seams = panel_geo.seam_bands_px(spec, dpi, edge)
+        seams = seams + frames
+    if seams:
         def leader_ok(anchor, label_box):
             lx0, ly0, lx1, ly1 = _leader_bounds(anchor, label_box, dpi)
             return not any(lx0 < bx1 and bx0 < lx1 and ly0 < by1 and by0 < ly1
@@ -2658,7 +2664,7 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
         th = b - t
         if spec.label_place == "smart":
             if any(bx0 <= ax < bx1 and by0 <= ay < by1 for bx0, by0, bx1, by1 in seams):
-                continue          # the feature is behind a gap strip or on a seam
+                continue          # the feature is behind a gap strip, on a seam or under a photo
             place = _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps,
                                        route_mask, out_w, out_h, leader_ok=leader_ok)
             if place is None:

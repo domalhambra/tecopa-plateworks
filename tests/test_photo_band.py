@@ -306,8 +306,25 @@ def _frame_px(spec, dpi):
     return xs.min(), ys.min(), xs.max(), ys.max()
 
 
+@pytest.fixture(params=["host_fonts", "fallback_fonts"])
+def fonts(request, monkeypatch):
+    """The host's faces, then the faces CI has (no Georgia): the labels are a different
+    size, so the same name can land in a different slot. Both must keep clear of a frame."""
+    if request.param == "fallback_fonts":
+        real = render.ImageFont.truetype
+
+        def truetype(name, *a, **k):
+            if name in ("Georgia.ttf", "DejaVuSerif.ttf", "DejaVuSans.ttf"):
+                raise OSError("cannot open resource")
+            return real(name, *a, **k)
+        monkeypatch.setattr(render.ImageFont, "truetype", truetype)
+        render._font_local.fonts = {}
+    yield request.param
+    render._font_local.fonts = {}
+
+
 @pytest.mark.parametrize("place", ["anchor", "smart"])
-def test_a_name_under_an_open_photo_box_is_moved_or_dropped(tmp_path, place):
+def test_a_name_under_an_open_photo_box_is_moved_or_dropped(tmp_path, place, fonts):
     dpi = 40
     spec, spot = _boxed_sheet(tmp_path, label_place=place)
     w, h = spec.pixel_size(dpi)
@@ -322,6 +339,36 @@ def test_a_name_under_an_open_photo_box_is_moved_or_dropped(tmp_path, place):
     out = np.asarray(render._draw_labels(blank.copy(), _name_at(spot),
                                          {"lakes": [], "rivers": []}, bare, w, h, dpi))
     assert np.any(out[..., :3] != 128, axis=2)[y0:y1 + 1, x0:x1 + 1].any()
+
+
+@pytest.mark.parametrize("dx_frac", [0.0, 0.03, 0.06, 0.1])
+def test_a_smart_leader_and_its_dot_stay_off_an_open_photo_frame(tmp_path, dx_frac, fonts):
+    # the feature just beside the frame, so the nearby slots are taken by the frame and a
+    # name pushed out would draw its leader across it; the feature under the frame is dropped
+    dpi = 40
+    spec, spot = _boxed_sheet(tmp_path, label_place="smart")
+    w, h = spec.pixel_size(dpi)
+    x0, y0, x1, y1 = _frame_px(spec, dpi)
+    near = {"x": spot["x"] + dx_frac * (spec.crop[2] - spec.crop[0]), "y": spot["y"]}
+    blank = Image.new("RGBA", (w, h), (128, 128, 128, 255))
+    out = np.asarray(render._draw_labels(blank, _name_at(near),
+                                         {"lakes": [], "rivers": []}, spec, w, h, dpi))
+    inked = np.any(out[..., :3] != 128, axis=2)
+    assert not inked[y0:y1 + 1, x0:x1 + 1].any()
+
+
+def test_a_photo_less_sheet_has_no_photo_frames_to_keep_labels_from(tmp_path):
+    spec, spot = _boxed_sheet(tmp_path, label_place="smart")
+    w, h = spec.pixel_size(40)
+    assert len(render._photo_frame_rects(spec, w, h, 40)) == 1
+    bare = replace(spec, hotspots=[])
+    assert render._photo_frame_rects(bare, w, h, 40) == []
+    # and the name sits on its spot, centred, with no leader: smart placement is unchanged
+    out = np.asarray(render._draw_labels(Image.new("RGBA", (w, h), (128, 128, 128, 255)),
+                                         _name_at(spot), {"lakes": [], "rivers": []},
+                                         bare, w, h, 40))
+    ys, xs = np.nonzero(np.any(out[..., :3] != 128, axis=2))
+    assert xs.min() < w / 2 < xs.max() and ys.min() < h / 2 < ys.max()
 
 
 def test_the_layout_occupancy_never_holds_its_own_boxes(tmp_path):
