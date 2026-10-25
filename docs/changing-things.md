@@ -328,13 +328,22 @@ approval, `finish`, the printer.
       and approve again." The size, panel count or gap in `state.json` is not the
       saved spec's. Do what it says.
     - "<n> photo(s) on the approved proof can no longer be read: open the order,
-      attach them again, save and approve." The studio keeps an attached photo for
-      24 hours. Attach each photo again in the studio, save, send the new proof, and
-      approve.
+      attach them again, save and approve." Finish could not read a photo of the spec
+      when it built the record. The studio keeps a photo that you attach there for 24
+      hours: attach it again, save, send the new proof, and approve. For an order's
+      own photo, run Prepare again, which writes a missing work JPEG, or drop the photo
+      in the studio. Then save and approve again.
     - "<n> photos have no spot: place or drop them in the studio." A photo waits in the
       tray. Open the order, place or drop it, save and approve again.
+    - "<n> photos cannot be read: drop them in the studio." A photo has a spot you gave
+      it and no work JPEG, because Prepare could not read the file. Drop it in the
+      studio, or replace the file in `in/` and run Prepare. Then save and approve again.
     - "<n> photos: the band holds 12. Drop some in the studio." Drop photos until 12 or
       fewer stay, then save and approve again.
+    - "The reprint record cannot hold the photos within its 1 MB limit: drop some photos
+      in the studio." A photo would have to shrink below 16 px to fit. Drop photos.
+    - "The record could not be read back: ... Nothing was put in place; run Finish
+      again." The staged record did not open with plain PIL. Run Finish again.
     - "Run Prepare first: work/state.json has no plate." Run Prepare.
     - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
       or the piece has no side that fits the roll. Fix the file; the message names the
@@ -347,10 +356,14 @@ approval, `finish`, the printer.
     - "The print file of an earlier Finish cannot be removed: ...". Remove the file
       that it names, then run it again.
     Finish prints the spec that the client approved, once, at 300 ppi, with no
-    watermark. It makes every check before the render. The two photo checks come first,
-    from `state.json` alone. Then it writes every file under
-    a temporary name, renames them all, removes the print files of an earlier Finish,
-    and writes `PRINT.txt` last. A run that fails before the renames deletes its
+    watermark. It makes every check before the render. The approval checks come first.
+    The next three read the photos in `state.json` alone, in this order: a photo in the
+    tray, a photo that cannot be read, and a band over 12. Then it paints the print
+    from the work JPEGs in the order folder, at full resolution. It builds the manifest
+    of `work/record.png` apart, with each photo sized to keep the manifest under 900,000
+    bytes, and reads the staged record back before any rename. Then it writes every file
+    under a temporary name, renames them all, removes the print files of an earlier
+    Finish, and writes `PRINT.txt` last. A run that fails before the renames deletes its
     temporary files, so it keeps the files of the last run.
 15. Read `out/print/PRINT.txt`. It names the paper, the profile, the intent and the
     preset, and lists each file with its size in inches, its size in pixels and how it
@@ -518,12 +531,13 @@ How photos get on the map:
 1. Put the customer's photos in `in/`. `order new` copies them there with the tracks.
    Prepare picks up files that end in `.jpg`, `.jpeg`, `.png`, `.heic`, `.heif`, `.tif`,
    `.tiff`, `.webp`, `.gif` or `.dng`, in file-name order. It never writes to `in/`.
-2. Run Prepare. It writes an upright JPEG of each photo to `work/photos/<file>.jpg`, at
-   most 4,000 px on the long side. A photo with an embedded profile other than sRGB
+2. Run Prepare. It writes an upright JPEG of each photo to `work/photos/<file>.jpg`, where
+   `<file>` is the whole file name (`IMG_1.heic.jpg`), at most 4,000 px on the long side. A photo with an embedded profile other than sRGB
    (an iPhone photo is Display P3) is converted to sRGB, so it does not print dull.
 3. Read the `Photos:` line of the report. It counts the photos placed by GPS, by time
    and by hand, those in the tray, and those dropped, and names the layout.
-4. Read the photo warnings. Each one starts with the photo's file name.
+4. Read the photo warnings. Most name the photo. The band, layout and moved-box warnings
+   cover all the photos.
 
 Prepare finds a photo's spot in this order:
 
@@ -531,8 +545,10 @@ Prepare finds a photo's spot in this order:
   `app/geo.py`. A GPS spot is used as it is, even outside the frame.
 - **Time.** The photo's `DateTimeOriginal` against the tracks' times. It needs the
   photo's `OffsetTimeOriginal`: without the offset the time is not used, even if it
-  looks right. The spot is interpolated between the two surviving track points around
-  the time. A photo more than 10 minutes from any track time gets no spot.
+  looks right. A time inside a track's first-to-last time has no limit: the spot is
+  interpolated between the two surviving track points around it. A time outside every
+  track's span is placed at the nearest track end only when it is within 10 minutes of
+  it. Otherwise the photo gets no spot.
 - **The tray.** A photo with neither waits there. You place it in the studio.
 
 The caption starts as the name of the nearest place in the plate's `labels.json` within
@@ -607,10 +623,21 @@ The photo warnings:
 - "its place or time could not be read (...)": place it in the studio.
 - "its caption could not be found (...)": write one in the studio.
 
-Finish refuses a photo order in two cases, before any render: a photo in the tray, and
-more than 12 photos placed. The steps of Finish above give the words. Finish embeds a
-photo cut to a square with its short side at least the box side times 300 ppi, capped by
-the source and by the pixel guard. A copy over 512 KB falls back to the fitted copy.
+Finish refuses a photo order in three cases before any render: a photo in the tray, a
+photo with a spot and no work JPEG, and more than 12 photos placed. The steps of Finish
+above give the words.
+
+The print is painted from the work JPEGs in the order folder at full resolution, so its
+sharpness does not depend on the record. The manifest of `work/record.png` holds each
+photo as an embedded JPEG. PIL refuses a PNG whose manifest passes 1 MiB, so the whole
+manifest is held to 900,000 bytes, and each photo gets an equal share of what the rest
+leaves. A square-cut photo is embedded with its short side at the box side times the
+print's ppi, capped by the source and the pixel guard. If that is too big for its share,
+the JPEG quality goes down (82, 72, 62, 52), then the size shrinks by 15 % a step. A photo
+whose short side would fall below 16 px stops Finish. Finish reads the staged record back before any
+rename. When a photo went below the print's resolution, `PRINT.txt` says "record.png
+carries reduced photos (the 1 MB record limit); reprint from this order folder for full
+resolution." There is no fitted-copy fallback.
 
 Known limits:
 
