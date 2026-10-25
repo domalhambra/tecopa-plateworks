@@ -114,6 +114,20 @@ refuses to embed). A first edition carries neither key. Normative example:
 `tests/fixtures/manifest_edition_v1.json`. An embedded hotspot photo travels the same
 way across editions — see `manifest_photo_v1.json`.
 
+### Photos in an order's record
+
+PIL refuses to open a PNG whose manifest chunk is past 1 MiB, so the manifest of an
+order's `work/record.png` is held to 900,000 bytes
+(`provenance.MAX_RECORD_MANIFEST_BYTES`), photos included. Each photo gets an equal
+share of what the rest of the manifest leaves. A square-cut photo (a hotspot with `box`
+or `crop`) is embedded with its short side at the box size at the print's dpi, never
+larger than the source. If that is too big for its share, the JPEG quality goes down
+(82, 72, 62, 52), then the size shrinks by 15 % a step. `order finish` says so in
+`PRINT.txt` when a photo went below the print's resolution. The print itself is painted
+from the work JPEGs in the order folder at full resolution, not from the record's copies,
+so a reprint from `record.png` alone can differ slightly from the print where the
+photos were reduced. Reprint from the order folder for full resolution.
+
 ## `animation` — time-lapse pacing
 
 An APNG time-lapse carries
