@@ -324,6 +324,7 @@ approval, `finish`, the printer.
       it, and press Approve again. Prepare also clears the approval when it builds a
       plate. A pull that adds a spec field changes the hash of every spec, so every
       approved order reads "changed after approval" after it. Approve each one again.
+      A photo replaced in `in/` after the approval, then Prepare, reads the same way.
     - "The saved studio spec is not this order's size: open the order, proof, save
       and approve again." The size, panel count or gap in `state.json` is not the
       saved spec's. Do what it says.
@@ -340,6 +341,10 @@ approval, `finish`, the printer.
       studio, or replace the file in `in/` and run Prepare. Then save and approve again.
     - "<n> photos: the band holds 12. Drop some in the studio." Drop photos until 12 or
       fewer stay, then save and approve again.
+    - "<n> photos are outside the frame: widen the frame or drop them in the studio."
+      A placed photo's spot is off the printed map, so it would print with a stem to
+      an anchor off the sheet. Widen the frame or drop the photo, then save and approve
+      again.
     - "The reprint record cannot hold the photos within its 1 MB limit: drop some photos
       in the studio." A photo would have to shrink below 16 px to fit. Drop photos.
     - "The record could not be read back: ... Nothing was put in place; drop a photo
@@ -542,6 +547,9 @@ How photos get on the map:
 2. Run Prepare. It writes an upright JPEG of each photo to `work/photos/<file>.jpg`, where
    `<file>` is the whole file name (`IMG_1.heic.jpg`), at most 4,000 px on the long side. A photo with an embedded profile other than sRGB
    (an iPhone photo is Display P3) is converted to sRGB, so it does not print dull.
+   `state.json` records the sha256 of each file in `in/`. Prepare writes the work JPEG
+   again when that digest changes, never by the file's date: a same-named photo copied
+   in with an older date is still a new photo.
 3. Read the `Photos:` line of the report. It counts the photos placed by GPS, by time
    and by hand, those in the tray, and those dropped, and names the layout.
 4. Read the photo warnings. Most name the photo. The band, layout and moved-box warnings
@@ -570,7 +578,9 @@ The layout has two forms. They never mix on one poster.
 
 - **Open ground.** Each box sits beside its spot with one straight leader. A box keeps
   clear of the routes, the furniture, the other boxes and the other leaders. Open
-  ground takes 8 photos at most.
+  ground takes 8 photos at most. Place names keep out from under each box: the label
+  pass treats the painted frame as furniture. The layout itself never avoids its own
+  earlier boxes (`render.occupancy` leaves them out).
 - **The band.** A row of numbered boxes across the top or the bottom of the map, with
   the captions under them and a numbered mark at each spot. It takes over when more
   than 8 photos are placed, when a photo has no clear spot, or when the layout fails
@@ -585,7 +595,12 @@ their share of the map.
 
 The layout is computed on the crop that prints: the studio's live crop in the studio, the
 saved spec's crop in Prepare. A reframe followed by a proof lays out again the boxes you
-have not moved. A box you moved never moves.
+have not moved. A box you moved never moves. An approved order is the exception: opening
+it can move the studio's frame (the studio fits the frame to the plate), and a look must
+not cost the approval. Its boxes stay as approved, and the Order panel says "The frame
+differs from the approved one: save to lay the photos out again." Save to order lays the
+photos out on the saved crop before it compares the approval. An order with no recorded
+`layout_crop` keeps its boxes until an edit.
 
 The studio's photo controls:
 
@@ -611,7 +626,14 @@ under `manual.photos` and `manual.band_side`, never in the saved spec. A field y
 wins over Prepare's, and Prepare run again keeps it. When you save the spec, the
 photo fields (`hotspots`, `photo_layout`, `photo_band_side`, `photo_box_in`) are set
 again from this state, so a photo edit always reaches the proof, the approval and the
-print.
+print. Take every photo out of `in/` and run Prepare, and a saved spec loses its order
+photos and its band: the layout is open and the crop shrinks back to the open crop.
+Plain markers stay.
+
+The approval covers each photo's pixels, not only its path: the hash reads each work
+JPEG's sha256 and its path inside the order folder (`work/photos/<file>.jpg`). Replace a
+photo in `in/` and run Prepare, and Finish says the order changed. Move the whole orders
+folder, and the approvals stand.
 
 The photo warnings:
 
@@ -631,9 +653,10 @@ The photo warnings:
 - "its place or time could not be read (...)": place it in the studio.
 - "its caption could not be found (...)": write one in the studio.
 
-Finish refuses a photo order in three cases before any render: a photo in the tray, a
-photo with a spot and no work JPEG, and more than 12 photos placed. The steps of Finish
-above give the words.
+Finish refuses a photo order in four cases before any render: a photo in the tray, a
+photo with a spot and no work JPEG, more than 12 photos placed, and a placed photo whose
+spot is outside the frame or under the band ("<n> photos are outside the frame: widen the
+frame or drop them in the studio."). The steps of Finish above give the words.
 
 The print is painted from the work JPEGs in the order folder at full resolution, so its
 sharpness does not depend on the record. The manifest of `work/record.png` holds each
@@ -645,7 +668,15 @@ the JPEG quality goes down (82, 72, 62, 52), then the size shrinks by 15 % a ste
 whose short side would fall below 16 px stops Finish. Finish reads the staged record back before any
 rename. When a photo went below the print's resolution, `PRINT.txt` says "record.png
 carries reduced photos (the 1 MB record limit); reprint from this order folder for full
-resolution." There is no fitted-copy fallback.
+resolution." There is no fitted-copy fallback. When the manifest passes the budget
+with no photo in it, Finish prints anyway: see step 15 of Run an order.
+
+The studio's own final (`/api/final`, `/api/final/submit`) holds a record with photos to
+the same budget, with the same code. When the plain embedding does not fit, or does not
+read back, each photo takes its share of the budget, and the final is painted from those
+photos so its reprint stays exact. When the tracks alone fill the record, a photo cannot
+fit, or the record still does not reopen, the route answers a 422 and writes nothing. A
+final with no photo, and a share copy, are made as before.
 
 Known limits:
 
