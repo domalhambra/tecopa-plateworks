@@ -214,3 +214,20 @@ def test_fixed_index_out_of_range_is_ignored():
     out = photolayout.layout(spots, BOX, occ(), fixed={7: (1.0, 1.0), -1: (2.0, 2.0)})
     assert out == photolayout.layout(spots, BOX, occ())
     assert sorted(out["boxes"]) == [0, 1]
+
+
+def test_a_fixed_box_over_another_spot_keeps_open_ground():
+    """Dom may drop a box on another photo's spot (order photos, Task 8): the box stays,
+    and that photo still finds open ground. Its leader starts under the fixed box, so the
+    fixed box it starts in does not block it; every other rule holds."""
+    spots = [(5.0, 5.0), (10.0, 10.0), (15.0, 4.0)]
+    mine = (5.0, 5.0)                                    # centred on photo 1's spot
+    out = photolayout.layout(spots, BOX, occ(), fixed={0: mine})
+    assert out["layout"] == "open"
+    assert out["boxes"][0] == mine
+    fixed_box = box_px(spots[0], mine)
+    for i in (1, 2):
+        b = box_px(spots[i], out["boxes"][i])
+        assert not overlaps(b, fixed_box, pad=render.BAND_PAD_IN * DPI - 1e-6)
+    # photo 2's spot is under no box: its leader still keeps off the fixed box
+    assert not photolayout._segment_hits_rect(leader(spots[2], out["boxes"][2]), fixed_box)

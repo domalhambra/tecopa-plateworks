@@ -33,6 +33,9 @@ and its leader, and it holds for every placed photo. A photo whose spot lies ins
 placed frame therefore has no valid candidate, so a candidate frame may not cover any other
 photo's spot either (a spot equal to its own does not count). Leaders that start at one
 spot (photos at the same place) ignore contact at that start, but not a shared line.
+A fixed box Dom dropped on another photo's spot is the one exception: that photo's leader
+starts under the fixed box, and may leave it (order photos, Task 8), so the layout stays
+open and the caller warns.
 
 Deterministic: no randomness, and no dependence on dict order or on the order of float
 ties (ties go to the earlier direction).
@@ -155,6 +158,14 @@ def _covers(rect, other_spot, own_spot, dpi):
     return rect[0] - _EPS <= x <= rect[2] + _EPS and rect[1] - _EPS <= y <= rect[3] + _EPS
 
 
+def _holds(rect, spot, dpi):
+    """True when the frame rect holds the spot. Only a fixed box can (a candidate frame
+    never covers another photo's spot): a leader that starts under Dom's box leaves it,
+    and that crossing is allowed, or the photo could never be placed."""
+    x, y = spot[0] * dpi, spot[1] * dpi
+    return rect[0] - _EPS <= x <= rect[2] + _EPS and rect[1] - _EPS <= y <= rect[3] + _EPS
+
+
 def _ground_ok(rect, occ):
     """Inside the trim, outside every keep-out rect, off the route mask."""
     w, h = occ.size_px
@@ -222,7 +233,8 @@ def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None,
                     continue
                 if any(_leaders_clash(seg, other, dpi) for other in leaders):
                     continue
-                if any(_segment_hits_rect(seg, other) for other in rects.values()):
+                if any(_segment_hits_rect(seg, other) for other in rects.values()
+                       if not _holds(other, spots_in[i], dpi)):
                     continue
                 if any(_segment_hits_rect(other, rect) for other in leaders):
                     continue
