@@ -173,3 +173,44 @@ def test_frame_mat_is_reserved():
         assert not overlaps(framed(0), framed(1), pad=render.BAND_PAD_IN * DPI - 1e-6)
     else:
         assert out == {"layout": "band", "boxes": {}, "unplaced": []}
+
+
+def _separate(out, spots, pad=render.BAND_PAD_IN * DPI - 1e-6):
+    rects = [box_px(spots[i], out["boxes"][i]) for i in sorted(out["boxes"])]
+    assert len({out["boxes"][i] for i in out["boxes"]}) == len(rects)
+    for a in range(len(rects)):
+        for b in range(a + 1, len(rects)):
+            assert not overlaps(rects[a], rects[b], pad=pad)
+
+
+def test_photos_at_one_spot_are_both_placed():
+    for n in (2, 3):
+        spots = [(10.0, 10.0)] * n
+        out = photolayout.layout(spots, BOX, occ())
+        assert out["layout"] == "open", n
+        assert sorted(out["boxes"]) == list(range(n))
+        _separate(out, spots)
+        leads = [leader(spots[i], out["boxes"][i]) for i in range(n)]
+        for a in range(n):
+            for b in range(a + 1, n):
+                assert not segments_cross(leads[a], leads[b])
+
+
+def test_a_box_never_covers_another_spot():
+    spots = [(10.0, 10.0), (11.0, 10.0)]
+    o = occ(rects=[(900, 700, 1200, 950)])           # blocks N and NE of photo 0
+    out = photolayout.layout(spots, BOX, o)
+    assert out["layout"] == "open"
+    for i, off in out["boxes"].items():
+        for j, s in enumerate(spots):
+            if j != i:
+                b = box_px(spots[i], off)
+                assert not (b[0] <= s[0] * DPI <= b[2] and b[1] <= s[1] * DPI <= b[3])
+    _separate(out, spots)
+
+
+def test_fixed_index_out_of_range_is_ignored():
+    spots = [(5.0, 5.0), (12.0, 12.0)]
+    out = photolayout.layout(spots, BOX, occ(), fixed={7: (1.0, 1.0), -1: (2.0, 2.0)})
+    assert out == photolayout.layout(spots, BOX, occ())
+    assert sorted(out["boxes"]) == [0, 1]

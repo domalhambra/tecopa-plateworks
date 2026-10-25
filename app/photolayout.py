@@ -30,7 +30,9 @@ along the diagonal.
 Extra rule beyond the ring: a candidate's frame may not touch a placed leader, and its
 leader may not pass through a placed frame. This is how a later photo avoids a fixed box
 and its leader, and it holds for every placed photo. A photo whose spot lies inside a
-placed frame therefore has no valid candidate.
+placed frame therefore has no valid candidate, so a candidate frame may not cover any other
+photo's spot either (a spot equal to its own does not count). Leaders that start at one
+spot (photos at the same place) ignore contact at that start, but not a shared line.
 
 Deterministic: no randomness, and no dependence on dict order or on the order of float
 ties (ties go to the earlier direction).
@@ -108,6 +110,20 @@ def _segments_touch(s, t):
             or (o3 == 0 and _on_segment(p3, p4, p1)) or (o4 == 0 and _on_segment(p3, p4, p2)))
 
 
+def _leaders_clash(s, t, dpi):
+    """True when two leaders cross, or run along each other. Leaders that start at the same
+    spot (photos at one spot, within 1e-9 in) touch there by construction: that contact is
+    ignored, but two leaders leaving it along the same line still clash."""
+    if (abs(s[0][0] - t[0][0]) <= 1e-9 * dpi and abs(s[0][1] - t[0][1]) <= 1e-9 * dpi):
+        (ax, ay), (ex, ey) = s
+        (_, _), (fx, fy) = t
+        ux, uy, vx, vy = ex - ax, ey - ay, fx - ax, fy - ay
+        cross = ux * vy - uy * vx
+        return abs(cross) <= _EPS * max(1.0, math.hypot(ux, uy) * math.hypot(vx, vy)) \
+            and ux * vx + uy * vy > 0
+    return _segments_touch(s, t)
+
+
 def _segment_hits_rect(seg, rect):
     """Liang-Barsky: does the segment touch the rect (edges included)?"""
     (x0, y0), (x1, y1) = seg
@@ -128,6 +144,15 @@ def _segment_hits_rect(seg, rect):
                 return False
             t1 = min(t1, r)
     return t0 <= t1 + _EPS
+
+
+def _covers(rect, other_spot, own_spot, dpi):
+    """True when the frame rect covers another photo's spot (a spot equal to the photo's own
+    does not count): that photo's leader would start inside a frame and could never be placed."""
+    if (abs(other_spot[0] - own_spot[0]) <= 1e-9 and abs(other_spot[1] - own_spot[1]) <= 1e-9):
+        return False
+    x, y = other_spot[0] * dpi, other_spot[1] * dpi
+    return rect[0] - _EPS <= x <= rect[2] + _EPS and rect[1] - _EPS <= y <= rect[3] + _EPS
 
 
 def _ground_ok(rect, occ):
@@ -187,12 +212,15 @@ def layout(spots_in: list, box_in: float, occ, fixed: dict | None = None,
                 rect = _box_rect(spots_in[i], off, box_in, dpi, frame)
                 if not _ground_ok(rect, occ):
                     continue
+                if any(_covers(rect, spots_in[j], spots_in[i], dpi)
+                       for j in range(n) if j != i):
+                    continue
                 if any(_rects_overlap(rect, other, pad) for other in rects.values()):
                     continue
                 seg = _leader(spots_in[i], rect, dpi)
                 if seg is None:
                     continue
-                if any(_segments_touch(seg, other) for other in leaders):
+                if any(_leaders_clash(seg, other, dpi) for other in leaders):
                     continue
                 if any(_segment_hits_rect(seg, other) for other in rects.values()):
                     continue
