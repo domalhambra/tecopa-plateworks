@@ -100,6 +100,7 @@ PHOTO_UNREADABLE = ("{file}: the photo could not be read ({why}). Replace it in 
                     "or drop it in the studio.")
 PHOTO_NO_PLACE = ("{file}: its place or time could not be read ({why}); place it in "
                   "the studio.")
+PHOTO_NO_CAPTION = "{file}: its caption could not be found ({why}). Write one in the studio."
 PHOTO_LAYOUT_FAILED = ("The photos could not be laid out in open ground ({why}): they "
                        "hang in the band.")
 # a box Dom moved in the studio is kept where he put it, and warned (Task 8)
@@ -693,9 +694,9 @@ def place_photos(order, state: dict, log=print) -> dict:
     - photo_warnings, and state.warnings with the last run's photo warnings replaced.
 
     An order with no photos keeps open_frame and gets an empty list. Returns the state."""
+    from app import photocaption
     from app.geo import RegionGeo
     from app.orderpreview import load_tracks_m
-    from app.photocaption import nearest_name
     from app.photolayout import BAND_MAX
 
     open_frame = list(state.get("open_frame") or state["frame"])
@@ -730,7 +731,13 @@ def place_photos(order, state: dict, log=print) -> dict:
     for p in photos:
         edit = edits.get(p["file"]) if isinstance(edits.get(p["file"]), dict) else {}
         if p["source"] == "manual" and not isinstance(edit.get("caption"), str):
-            p["caption"] = nearest_name(p["spot"]["x"], p["spot"]["y"], labels)
+            try:
+                p["caption"] = photocaption.nearest_name(p["spot"]["x"], p["spot"]["y"],
+                                                         labels)
+            except Exception as ex:      # as on Prepare's own path: a warning, never a stop
+                p["caption"] = ""
+                why = f"{type(ex).__name__}: {ex}" if str(ex) else type(ex).__name__
+                p["warnings"].append(PHOTO_NO_CAPTION.format(file=p["file"], why=why[:200]))
 
     warnings = []
     try:

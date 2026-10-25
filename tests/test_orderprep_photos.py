@@ -419,3 +419,44 @@ def test_a_hole_in_a_photo_orders_frame_leads_the_warnings(tmp_path, tools, monk
     # a second Prepare (the plate is current) keeps the hole note where it was
     state = _prepare(d, tools)
     assert state["warnings"][0].startswith("HOLES IN THE PRINT")
+
+
+# --- fix round 2 -----------------------------------------------------------------------
+
+def test_a_hand_placed_unreadable_photo_inside_the_crop_is_not_placed(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    (d / "in" / "b_broken.jpg").write_bytes(b"not a picture")
+    state = _prepare(d, tools)
+    spot = _by_file(state)["a.jpg"]["spot"]
+    inside = {"x": spot["x"] + 500.0, "y": spot["y"] - 500.0}
+    f = state["frame"]
+    assert f[0] < inside["x"] < f[2] and f[1] < inside["y"] < f[3]
+    od.set_manual(od.load(str(d)), "photos", {"b_broken.jpg": {"spot": inside}})
+    state = _prepare(d, tools)
+    broken = _by_file(state)["b_broken.jpg"]
+    assert broken["spot"] == inside and broken["box"] is None
+    assert _by_file(state)["a.jpg"]["box"] is not None
+    assert "Photos: 1 placed (1 by GPS, 0 by time, 0 by hand), 1 in the tray" \
+        in (d / "work" / "report.txt").read_text()
+
+
+def test_a_caption_that_cannot_be_found_never_fails_prepare(tmp_path, tools, monkeypatch):
+    from app import photocaption
+    d = _order(tmp_path)
+    _make(d / "in" / "tray.jpg", size=BIG)                     # no GPS, no time
+    state = _prepare(d, tools)
+    od.set_manual(od.load(str(d)), "photos",
+                  {"tray.jpg": {"spot": dict(_by_file(state)["tray.jpg"]["spot"] or
+                                             {"x": (state["frame"][0] + state["frame"][2]) / 2,
+                                              "y": (state["frame"][1] + state["frame"][3]) / 2})}})
+
+    def boom(*a, **k):
+        raise ValueError("a labels.json feature with no coordinates")
+    monkeypatch.setattr(photocaption, "nearest_name", boom)
+    state = _prepare(d, tools)
+    p = _by_file(state)["tray.jpg"]
+    assert p["source"] == "manual" and p["caption"] == ""
+    assert p["warnings"] == [op.PHOTO_NO_CAPTION.format(
+        file="tray.jpg", why="ValueError: a labels.json feature with no coordinates")]
+    assert p["warnings"][0] in state["warnings"]
