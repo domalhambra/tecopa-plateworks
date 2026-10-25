@@ -695,3 +695,17 @@ def test_a_record_that_does_not_read_back_never_says_run_finish_again(order, mon
     with pytest.raises(od.OrderError) as ex:
         orderfinish.finish(order.dir, dpi=DPI)
     assert "run Finish again" not in str(ex.value)
+
+
+# --- final fix M2: moving the orders folder keeps an approval --------------------------
+
+def test_an_approved_photo_order_moved_to_another_folder_stays_approved(order, tmp_path):
+    import shutil
+    _photo_state(order, placed=2)
+    moved = tmp_path / "elsewhere" / os.path.basename(order.dir)
+    shutil.copytree(order.dir, moved)
+    again = od.load(str(moved))
+    state = od.read_state(again)
+    spec = orderspec.order_spec(again, state)
+    assert all(h["photo"].startswith(str(moved) + os.sep) for h in spec.hotspots)
+    assert orderstudio.approval_ok(again, state)

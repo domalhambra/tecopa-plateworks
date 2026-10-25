@@ -351,17 +351,22 @@ def file_sha256(path) -> str | None:
 
 
 def _hashed_hotspot(hs):
-    """A hotspot as the hash reads it: an order photo (is_order_photo) carries its work
-    JPEG's sha256 beside its path, so a photo whose pixels changed is a changed print."""
+    """A hotspot as the hash reads it: an order photo (is_order_photo) is its path inside
+    the order folder (work/photos/<name>), so moving the orders folder keeps an approval,
+    and its work JPEG's sha256, so a photo whose pixels changed is a changed print. The
+    render still reads the absolute path."""
     if not (isinstance(hs, dict) and is_order_photo(hs.get("photo"))):
         return hs
-    return {**hs, "photo_sha256": file_sha256(hs["photo"])}
+    path = hs["photo"]
+    return {**hs, "photo": "/".join(("work", "photos", os.path.basename(path))),
+            "photo_sha256": file_sha256(path)}
 
 
 def spec_hash(spec: CompositionSpec) -> str:
     """sha256 hex of the spec's canonical JSON. A spec that carries order photos hashes
-    each one's work JPEG bytes too (its sha256, read from disk); a spec with none hashes
-    exactly as it always did."""
+    each one by its path inside the order folder and its work JPEG's bytes (its sha256,
+    read from disk), never by the folder it sits in; a spec with none hashes exactly as
+    it always did."""
     payload = spec_to_json(spec)
     hotspots = payload.get("hotspots") or []
     if any(isinstance(hs, dict) and is_order_photo(hs.get("photo")) for hs in hotspots):
