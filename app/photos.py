@@ -7,12 +7,13 @@ wherever the caller points it (the order folder), never into ``in/``.
 from __future__ import annotations
 
 import calendar
+import io
 import math
 import os
 import time
 from dataclasses import dataclass
 
-from PIL import ExifTags, Image, ImageOps
+from PIL import ExifTags, Image, ImageCms, ImageOps
 
 try:  # HEIC/HEIF needs pillow-heif (requirements.txt); JPEG, PNG etc. do not.
     import pillow_heif
@@ -85,10 +86,32 @@ def read_meta(path: str) -> PhotoMeta:
         return PhotoMeta(os.path.basename(path), _lonlat(exif), _taken_utc(exif), (w, h))
 
 
+_SRGB = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB"))
+
+
+def _to_srgb(im: Image.Image, icc: bytes | None) -> Image.Image:
+    """``im`` as sRGB RGB. A photo tagged with another profile (an iPhone's Display P3) is
+    converted, perceptual intent: the poster composites in sRGB, so an unconverted P3
+    photo would print desaturated (ruling RB3). An untagged or sRGB-tagged photo, or one
+    whose profile cannot be used, is only converted to RGB."""
+    if icc:
+        try:
+            profile = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+            if "srgb" not in ImageCms.getProfileDescription(profile).lower():
+                mode = im.mode if im.mode in ("RGB", "CMYK", "L") else "RGB"
+                return ImageCms.profileToProfile(
+                    im.convert(mode), profile, _SRGB,
+                    renderingIntent=ImageCms.Intent.PERCEPTUAL, outputMode="RGB")
+        except (ImageCms.PyCMSError, OSError, ValueError):
+            pass            # a broken or mismatched profile: the pixels as they are
+    return im.convert("RGB")
+
+
 def write_work_jpeg(src: str, dst: str, max_px: int = 4000) -> tuple:
-    """Write an upright RGB JPEG of ``src``, long side at most ``max_px``; return its size."""
+    """Write an upright sRGB JPEG of ``src``, long side at most ``max_px``; return its size."""
     with Image.open(src) as im:
-        im = ImageOps.exif_transpose(im).convert("RGB")
+        icc = im.info.get("icc_profile")
+        im = _to_srgb(ImageOps.exif_transpose(im), icc)
         if max(im.size) > max_px:
             im.thumbnail((max_px, max_px), Image.LANCZOS)
         im.save(dst, "JPEG", quality=WORK_JPEG_QUALITY)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import calendar
+import io
 
 import pytest
 from PIL import ExifTags, Image
@@ -112,3 +113,76 @@ def test_work_jpeg_never_enlarges(tmp_path):
 def test_ordernew_keeps_using_the_moved_photo_exts():
     from app import ordernew
     assert ordernew.PHOTO_EXTS is photos.PHOTO_EXTS
+
+
+# --- RB3: a wide-gamut photo is converted to sRGB before the poster composites it ------
+
+def _rgb_matrix_icc(desc, red, green, blue, gamma=2.2):
+    """A minimal ICC v2 display profile: RGB primaries (D50 XYZ) and one gamma curve.
+    Built by hand, so the test needs no profile file (Pillow only makes sRGB)."""
+    import struct
+
+    def s15(v):
+        return struct.pack(">i", round(v * 65536))
+
+    def xyz(v):
+        return b"XYZ \0\0\0\0" + b"".join(s15(c) for c in v)
+
+    text = desc.encode("ascii") + b"\0"
+    desc_tag = (b"desc\0\0\0\0" + struct.pack(">I", len(text)) + text
+                + struct.pack(">II", 0, 0) + struct.pack(">HB", 0, 0) + b"\0" * 67)
+    curve = b"curv\0\0\0\0" + struct.pack(">IH", 1, round(gamma * 256)) + b"\0\0"
+    d50 = (0.9642, 1.0, 0.8249)
+    blocks = [(b"desc", desc_tag), (b"wtpt", xyz(d50)), (b"rXYZ", xyz(red)),
+              (b"gXYZ", xyz(green)), (b"bXYZ", xyz(blue)), (b"rTRC", curve)]
+    shared = {b"gTRC": b"rTRC", b"bTRC": b"rTRC"}
+    count = len(blocks) + len(shared)
+    offset = 128 + 4 + 12 * count
+    table, data, where = b"", b"", {}
+    for sig, body in blocks:
+        body += b"\0" * (-len(body) % 4)
+        where[sig] = (offset + len(data), len(body))
+        data += body
+    for sig in [s for s, _ in blocks] + list(shared):
+        table += sig + struct.pack(">II", *where[shared.get(sig, sig)])
+    size = offset + len(data)
+    header = (struct.pack(">I", size) + b"\0" * 4 + struct.pack(">I", 0x02100000)
+              + b"mntrRGB XYZ " + b"\0" * 12 + b"acsp" + b"\0" * 24
+              + struct.pack(">I", 0) + b"".join(s15(c) for c in d50) + b"\0" * 48)
+    assert len(header) == 128
+    return header + struct.pack(">I", count) + table + data
+
+
+# Display P3's primaries, adapted to D50 (the iPhone's camera profile)
+P3 = dict(red=(0.5151, 0.2412, -0.0011), green=(0.2920, 0.6922, 0.0419),
+          blue=(0.1571, 0.0666, 0.7841))
+
+
+def _pixel(path):
+    with Image.open(path) as im:
+        return im.convert("RGB").getpixel((10, 10))
+
+
+def test_work_jpeg_converts_a_wide_gamut_photo_to_srgb(tmp_path):
+    from PIL import ImageCms
+    icc = _rgb_matrix_icc("Display P3 (test)", **P3)
+    assert ImageCms.getProfileDescription(ImageCms.ImageCmsProfile(io.BytesIO(icc)))
+    src = tmp_path / "p3.jpg"
+    Image.new("RGB", (40, 40), (190, 120, 110)).save(src, icc_profile=icc, quality=100)
+    photos.write_work_jpeg(str(src), str(tmp_path / "out.jpg"))
+    r, g, b = _pixel(tmp_path / "out.jpg")
+    # the same colour in sRGB's smaller gamut: the red reaches further, the green less
+    assert r >= 190 + 8 and g <= 120 - 2 and b <= 110 - 2, (r, g, b)
+    with Image.open(tmp_path / "out.jpg") as im:
+        assert im.mode == "RGB"
+
+
+def test_work_jpeg_leaves_an_srgb_or_untagged_photo_alone(tmp_path):
+    from PIL import ImageCms
+    srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    for name, kw in (("srgb.jpg", {"icc_profile": srgb}), ("plain.jpg", {})):
+        src = tmp_path / name
+        Image.new("RGB", (40, 40), (190, 120, 110)).save(src, quality=100, **kw)
+        photos.write_work_jpeg(str(src), str(tmp_path / ("out-" + name)))
+        got = _pixel(tmp_path / ("out-" + name))
+        assert all(abs(a - b) <= 2 for a, b in zip(got, (190, 120, 110))), (name, got)
