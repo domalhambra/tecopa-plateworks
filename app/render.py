@@ -1638,7 +1638,6 @@ def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None, trim=None, sheet=None):
     ms, mt, mb, edge_w = _photo_frame_params(spec.photo_frame_style, box, dpi)
     stem = max(1, round(box * 0.02))
     shadow_r = max(1.0, box * 0.04)
-    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
     for hs in spec.hotspots:
         src = hs.get("photo") if isinstance(hs, dict) else None
@@ -1654,30 +1653,67 @@ def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None, trim=None, sheet=None):
         else:
             photo = _crop_square(photo, box, focus)
         pw, ph = photo.size
-        fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
-        ax, ay, _ = _place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)
+        fx, fy, fw, fh, ax, ay = _photo_frame_at(hs, spec, out_w, out_h, dpi, box,
+                                                 (ms, mt, mb), (pw, ph), ctx, trim)
         if offset is None:
-            # place the framed photo up-and-right of the anchor, clamped to the frame.
-            # A photo box never crosses a seam: it stays in the panel that holds its anchor
-            lo, hi = panel_geo.span_px_at(spec, ax, dpi, out_w)
-            fx = int(np.clip(ax + box * 0.35, lo, hi - fw - 1))
-            fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
             # stem from anchor to the frame's near corner
             d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
                    fill=PHOTO_EDGE + (255,), width=stem)
         else:
-            # the box where the layout (or Dom's drag) put it: centred on spot + offset,
-            # inside the trim and inside the panel that holds that centre
-            tcx, tcy = ax + offset[0] * dpi, ay + offset[1] * dpi
-            lo, hi = panel_geo.span_px_at(spec, min(max(tcx, -1.0), out_w + 1.0), dpi, out_w)
-            lo, hi = max(lo, tx0), min(hi, tx1)
-            fx = int(round(np.clip(tcx - pw / 2 - ms, lo, max(lo, hi - fw - 1))))
-            fy = int(round(np.clip(tcy - ph / 2 - mt, ty0, max(ty0, ty1 - fh - 1))))
             end = _leader_end(ax, ay, (fx, fy, fx + fw, fy + fh))
             if end is not None:
                 d.line([(ax, ay), end], fill=PHOTO_EDGE + (255,), width=stem)
         d = _paste_framed(img, photo, fx, fy, ms, mt, mb, edge_w, shadow_r)
     return img
+
+def _photo_frame_at(hs, spec, out_w, out_h, dpi, box, mats, size, ctx=None, trim=None):
+    """(fx, fy, fw, fh, ax, ay): the frame's top-left corner and outer size, and the
+    spot's pixel, of a photo `size` (w, h) px with mats (side, top, bottom) px. The ONE
+    placement _draw_photos paints and the label keep-out reads (_photo_frame_rects), so
+    the two cannot drift."""
+    ms, mt, mb = mats
+    pw, ph = size
+    fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
+    ax, ay, _ = _place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)
+    offset = _photo_box_offset(hs)
+    if offset is None:
+        # place the framed photo up-and-right of the anchor, clamped to the frame.
+        # A photo box never crosses a seam: it stays in the panel that holds its anchor
+        lo, hi = panel_geo.span_px_at(spec, ax, dpi, out_w)
+        fx = int(np.clip(ax + box * 0.35, lo, hi - fw - 1))
+        fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
+    else:
+        # the box where the layout (or Dom's drag) put it: centred on spot + offset,
+        # inside the trim and inside the panel that holds that centre
+        tcx, tcy = ax + offset[0] * dpi, ay + offset[1] * dpi
+        lo, hi = panel_geo.span_px_at(spec, min(max(tcx, -1.0), out_w + 1.0), dpi, out_w)
+        lo, hi = max(lo, tx0), min(hi, tx1)
+        fx = int(round(np.clip(tcx - pw / 2 - ms, lo, max(lo, hi - fw - 1))))
+        fy = int(round(np.clip(tcy - ph / 2 - mt, ty0, max(ty0, ty1 - fh - 1))))
+    return fx, fy, fw, fh, ax, ay
+
+def _photo_frame_rects(spec, out_w, out_h, dpi, ctx=None, trim=None):
+    """[(x0, y0, x1, y1)] (right and bottom exclusive) of each open-ground photo frame
+    whose size is known from the spec alone: a photo cut to its box square (a hotspot
+    with a box or a crop, as every order photo is). Empty under the band, whose strip is
+    its own keep-out. A fitted photo of an old session is left out: its size is its
+    pixels', and its labels stay as they always were. For label placement only, never
+    for occupancy(): the layout must not avoid its own previous boxes."""
+    if _band_active(spec):
+        return []
+    box = max(24, round(spec.photo_box_in * dpi))
+    ms, mt, mb, _ = _photo_frame_params(spec.photo_frame_style, box, dpi)
+    rects = []
+    for hs in spec.hotspots or []:
+        if not (isinstance(hs, dict) and hs.get("photo")):
+            continue
+        if _photo_box_offset(hs) is None and _photo_crop_focus(hs) is None:
+            continue
+        fx, fy, fw, fh, _, _ = _photo_frame_at(hs, spec, out_w, out_h, dpi, box,
+                                               (ms, mt, mb), (box, box), ctx, trim)
+        rects.append((fx, fy, fx + fw + 1, fy + fh + 1))
+    return rects
 
 def _draw_photo_band(img, spec, out_w, out_h, dpi, trim=None, sheet=None):
     """The gallery band (B2): the photos in one row across the map inside the trim, at
@@ -2550,6 +2586,10 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     # -- rev 2 -- the exact elevation-strip rect): one shared builder so the drawn
     # furniture and the placement obstacles can't drift.
     keepout = _label_keepout(spec, d, out_w, out_h, dpi, trim=trim)
+    # the open-ground photo frames: a name under a box is a name nobody reads. Here and
+    # not in _label_keepout, which occupancy() reads: the layout must not avoid its own
+    # previous boxes.
+    keepout += _photo_frame_rects(spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
     placed, occupied = [], list(keepout)
 
     def overlaps(box):

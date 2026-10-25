@@ -274,3 +274,59 @@ def test_occupancy_follows_the_route_under_high_relief():
     assert np.array_equal(cheap.winner, ctx.winner) and cheap.s == ctx.s
     flat = render.occupancy(replace(spec, oblique=0.0), REGION_DIR, dpi, cfg=_cfg())
     assert not np.array_equal(occ.route, flat.route)              # the warp moved the route
+
+
+# --- final fix A1: place names keep out from under open-ground photo boxes ---------------
+
+def _boxed_sheet(tmp_path, **kw):
+    """One order photo in open ground: its box centred on its spot, mid-sheet."""
+    spec = _sheet([], keyline=False, title_text="", compass=False, labels=True, **kw)
+    x0, y0, x1, y1 = spec.crop
+    spot = {"x": (x0 + x1) / 2, "y": (y0 + y1) / 2}
+    hs = {**spot, "weight": 1, "photo": _photos(tmp_path, 1)[0],
+          "box": {"dx_in": 0.0, "dy_in": 0.0}, "crop": {"cx": 0.5, "cy": 0.5}}
+    return replace(spec, hotspots=[hs]), spot
+
+
+def _name_at(spot):
+    return {"crs": "EPSG:32610", "features": [
+        {"name": "Tungsten Peak", "kind": "summit", "rank": 90,
+         "coords": [[spot["x"], spot["y"]]]}]}
+
+
+def _frame_px(spec, dpi):
+    """The painted frame of the one photo: where _draw_photos puts its pixels."""
+    w, h = spec.pixel_size(dpi)
+    out = np.asarray(render._draw_photos(Image.new("RGBA", (w, h), (128, 128, 128, 255)),
+                                         spec, w, h, dpi))
+    solid = np.zeros(out.shape[:2], bool)
+    for rgb in (render.PHOTO_FRAME, render.PHOTO_EDGE, COLOURS[0]):  # mat, keyline, photo
+        solid |= np.all(out[..., :3] == rgb, axis=2)
+    ys, xs = np.nonzero(solid)
+    return xs.min(), ys.min(), xs.max(), ys.max()
+
+
+@pytest.mark.parametrize("place", ["anchor", "smart"])
+def test_a_name_under_an_open_photo_box_is_moved_or_dropped(tmp_path, place):
+    dpi = 40
+    spec, spot = _boxed_sheet(tmp_path, label_place=place)
+    w, h = spec.pixel_size(dpi)
+    blank = Image.new("RGBA", (w, h), (128, 128, 128, 255))
+    out = np.asarray(render._draw_labels(blank.copy(), _name_at(spot),
+                                         {"lakes": [], "rivers": []}, spec, w, h, dpi))
+    x0, y0, x1, y1 = _frame_px(spec, dpi)
+    inked = np.any(out[..., :3] != 128, axis=2)
+    assert not inked[y0:y1 + 1, x0:x1 + 1].any()
+    # without the photo the name sits on its spot: the keep-out is what moved it
+    bare = replace(spec, hotspots=[])
+    out = np.asarray(render._draw_labels(blank.copy(), _name_at(spot),
+                                         {"lakes": [], "rivers": []}, bare, w, h, dpi))
+    assert np.any(out[..., :3] != 128, axis=2)[y0:y1 + 1, x0:x1 + 1].any()
+
+
+def test_the_layout_occupancy_never_holds_its_own_boxes(tmp_path):
+    dpi = 30
+    spec, _ = _boxed_sheet(tmp_path)
+    occ = render.occupancy(spec, REGION_DIR, dpi, cfg=_cfg())
+    bare = render.occupancy(replace(spec, hotspots=[]), REGION_DIR, dpi, cfg=_cfg())
+    assert occ.rects == bare.rects
