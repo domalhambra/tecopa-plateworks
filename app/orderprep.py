@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass, replace
+from types import SimpleNamespace
 
 from PIL.ImageCms import PyCMSError
 
@@ -97,6 +98,8 @@ PHOTO_BEHIND_GAP = "Photo {file} is behind gap {k}."
 PHOTO_OVER_BAND = "{n} photos: the band holds {most}. Drop some in the studio."
 PHOTO_UNREADABLE = ("{file}: the photo could not be read ({why}). Replace it in in/, "
                     "or drop it in the studio.")
+PHOTO_NO_PLACE = ("{file}: its place or time could not be read ({why}); place it in "
+                  "the studio.")
 PHOTO_LAYOUT_FAILED = ("The photos could not be laid out in open ground ({why}): they "
                        "hang in the band.")
 ROUTE_END_BEHIND_GAP = ("A route end is behind gap {k}. Move the frame, or use gap = 0 "
@@ -494,7 +497,8 @@ def _fresh(dst, src) -> bool:
 def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
     """Prepare's own entry for each photo file: its work JPEG, its spot and source, its
     caption, and the small-photo warning. One photo that cannot be read (or written) is
-    warned and kept with no work JPEG and no spot: it never fails Prepare."""
+    warned and kept with no work JPEG and no spot: it never fails Prepare. A photo whose
+    place or time cannot be read keeps its work JPEG and waits in the tray, warned."""
     from app.photocaption import nearest_name
     from app.photos import read_meta, write_work_jpeg
     from app.photospot import spot_for
@@ -524,10 +528,16 @@ def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
             out.append(entry)
             continue
         entry["work"] = work
-        spot = spot_for(meta, tracks, region)
-        if spot is not None:
-            entry.update(spot={"x": spot.x, "y": spot.y}, source=spot.source,
-                         caption=nearest_name(spot.x, spot.y, labels))
+        try:
+            spot = spot_for(meta, tracks, region)
+            if spot is not None:
+                entry.update(spot={"x": spot.x, "y": spot.y}, source=spot.source,
+                             caption=nearest_name(spot.x, spot.y, labels))
+        except Exception as ex:          # an odd EXIF value: the photo waits in the tray
+            entry.update(spot=None, source=None, caption="")
+            why = f"{type(ex).__name__}: {ex}" if str(ex) else type(ex).__name__
+            entry["warnings"].append(PHOTO_NO_PLACE.format(file=name, why=why[:200]))
+            log(entry["warnings"][-1])
         w, h = meta.size_px
         if max(w, h) < box_in * PHOTO_PPI:
             entry["warnings"].append(PHOTO_SMALL.format(file=name, w=w, h=h, box=box_in))
@@ -546,6 +556,29 @@ def _photo_spec(order, state, open_frame, layout, box_in, side):
         spec.crop, spec.photo_layout, spec.photo_band_side, layout, side, target))
 
 
+def _placed(p) -> bool:
+    """A photo that is on the poster: a spot, a work JPEG to paint, not dropped. One with
+    no work JPEG (unreadable, even if placed by hand) takes no part in the layout, the
+    placed count or the band's limit."""
+    return bool(p.get("spot") and p.get("work") and not p.get("dropped"))
+
+
+def _visible(spot, spec) -> bool:
+    """The spot is on the map the poster shows: inside the crop and, under the band, not
+    under the band's strip (render._band_layout_in, the strip the renderer paints)."""
+    crop = spec.crop
+    if not _in_crop(spot, crop):
+        return False
+    if spec.photo_layout != "band":
+        return True
+    from app import render
+    pw, ph = float(spec.print_w_in), float(spec.print_h_in)
+    _, y0, _, y1 = render._band_layout_in(spec, pw, ph)["strip"]
+    if spec.photo_band_side == "bottom":
+        return spot["y"] >= orderspec.sheet_in_to_ground(spec, 0.0, y0)[1]
+    return spot["y"] <= orderspec.sheet_in_to_ground(spec, 0.0, y1)[1]
+
+
 def _in_crop(spot, crop) -> bool:
     return crop[0] <= spot["x"] <= crop[2] and crop[1] <= spot["y"] <= crop[3]
 
@@ -556,8 +589,7 @@ def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
     the studio (a photo's bounded box, here) is fixed: the layout keeps it as it is."""
     from app import photolayout, render
     spec = _photo_spec(order, state, open_frame, "open", box_in, side)
-    todo = [i for i, p in enumerate(photos)
-            if p["spot"] and not p["dropped"] and _in_crop(p["spot"], spec.crop)]
+    todo = [i for i, p in enumerate(photos) if _placed(p) and _in_crop(p["spot"], spec.crop)]
     if not todo:
         return "open", {}
     occ = render.occupancy(spec, plate, PHOTO_LAYOUT_DPI, cfg=cfg)
@@ -645,19 +677,20 @@ def place_photos(order, state: dict, log=print) -> dict:
 
     state = {**state, "photo_layout": layout}
     try:
-        crop = _photo_spec(order, state, open_frame, layout, box_in, side).crop
+        shown = _photo_spec(order, state, open_frame, layout, box_in, side)
     except (SpecError, OrderError, OSError, ValueError, KeyError):
-        crop = tuple(frame)
+        shown = SimpleNamespace(crop=tuple(frame), photo_layout="open")
+    crop = shown.crop
     from app.orderpreview import Candidate, gaps_hiding_ends
     cand = Candidate("", order.panels, order.orientation, (pw, ph), order.gap)
-    placed = [p for p in photos if p["spot"] and not p["dropped"]]
+    placed = [p for p in photos if _placed(p)]
     for p in photos:
         if p["dropped"]:
             p["warnings"] = []
             continue
-        if not p["spot"]:
+        if not _placed(p):
             continue
-        if not _in_crop(p["spot"], crop):
+        if not _visible(p["spot"], shown):
             p["warnings"].append(PHOTO_OUTSIDE.format(file=p["file"]))
             continue
         for k in gaps_hiding_ends([[(p["spot"]["x"], p["spot"]["y"])]], crop, cand):
@@ -860,7 +893,7 @@ def _photos_line(state) -> str:
     the tray, <dropped> dropped; layout <open|band>"""
     photos = state.get("photos") or []
     kept = [p for p in photos if not p.get("dropped")]
-    placed = [p for p in kept if p.get("spot")]
+    placed = [p for p in kept if _placed(p)]
     by = {s: sum(1 for p in placed if p.get("source") == s) for s in ("gps", "time", "manual")}
     return (f"Photos: {len(placed)} placed ({by['gps']} by GPS, {by['time']} by time, "
             f"{by['manual']} by hand), {len(kept) - len(placed)} in the tray, "

@@ -296,3 +296,106 @@ def test_band_side_comes_from_order_toml(tmp_path, tools):
     (d / "order.toml").write_text((d / "order.toml").read_text() + 'band_side = "left"\n')
     with pytest.raises(od.OrderError, match='band_side must be "top" or "bottom"'):
         od.load(str(d))
+
+
+# --- fix round 1 -----------------------------------------------------------------------
+
+def _band_order(tmp_path, extra=""):
+    d = _order(tmp_path, extra=extra)
+    for k in range(opl_open_max() + 1):
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    return d
+
+
+def test_a_spot_under_the_band_is_outside_the_frame(tmp_path, tools):
+    from app import render
+    d = _band_order(tmp_path)
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    spec = orderspec.order_spec(order, state)
+    pw, ph = state["print_in"]
+    strip = render._band_layout_in(spec, pw, ph)["strip"]
+    x, y = orderspec.sheet_in_to_ground(spec, pw / 2, (strip[1] + strip[3]) / 2)
+    from pyproj import Transformer
+    lon, lat = Transformer.from_crs(f"EPSG:{state['epsg']}", "EPSG:4326",
+                                    always_xy=True).transform(x, y)
+    assert state["frame"][1] <= y <= state["frame"][3]           # inside the crop ...
+    _make(d / "in" / "under.jpg", size=BIG, gps=(lat, "N", -lon, "W"))
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "band"
+    under = _by_file(state)["under.jpg"]
+    assert under["warnings"] == [                                  # ... but under the band
+        "under.jpg: its spot is outside the frame. Widen the frame or drop it."]
+
+
+def test_a_hand_placed_unreadable_photo_takes_no_part(tmp_path, tools):
+    d = _order(tmp_path)
+    for k in range(12):
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    (d / "in" / "zz_broken.jpg").write_bytes(b"not a picture")
+    state = _prepare(d, tools)
+    spot = _by_file(state)["p00.jpg"]["spot"]
+    od.set_manual(od.load(str(d)), "photos", {"zz_broken.jpg": {"spot": dict(spot)}})
+    state = _prepare(d, tools)
+    assert not any("the band holds 12" in w for w in state["warnings"])
+    assert "Photos: 12 placed" in (d / "work" / "report.txt").read_text()
+
+
+def test_a_hand_placed_unreadable_photo_is_not_laid_out(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    (d / "in" / "b_broken.jpg").write_bytes(b"not a picture")
+    _prepare(d, tools)
+    od.set_manual(od.load(str(d)), "photos",
+                  {"b_broken.jpg": {"spot": {"x": 1.0e9, "y": 1.0e9}}})    # far off the sheet
+    state = _prepare(d, tools)
+    photos = _by_file(state)
+    assert state["photo_layout"] == "open" and photos["b_broken.jpg"]["box"] is None
+    assert photos["a.jpg"]["box"] is not None
+    assert not any("b_broken.jpg: its spot is outside" in w for w in state["warnings"])
+
+
+def test_an_odd_exif_value_never_fails_prepare(tmp_path, tools, monkeypatch):
+    from app import photospot
+    real = photospot.spot_for
+
+    def odd(meta, tracks, region):
+        if meta.name == "odd.jpg":
+            raise TypeError("an EXIF rational with a zero denominator")
+        return real(meta, tracks, region)
+    monkeypatch.setattr(photospot, "spot_for", odd)
+    d = _order(tmp_path)
+    _make(d / "in" / "good.jpg", size=BIG, gps=NEAR_PEAK)
+    _make(d / "in" / "odd.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    odd_entry = _by_file(state)["odd.jpg"]
+    assert odd_entry["spot"] is None and odd_entry["work"] is not None    # Dom can place it
+    assert len(odd_entry["warnings"]) == 1
+    assert odd_entry["warnings"][0].startswith("odd.jpg: its place or time could not be read")
+    assert _by_file(state)["good.jpg"]["source"] == "gps"
+
+
+def test_a_layout_that_fails_hangs_the_photos_in_the_band(tmp_path, tools, monkeypatch):
+    from app import render
+
+    def boom(*a, **k):
+        raise ValueError("boom")
+    monkeypatch.setattr(render, "occupancy", boom)
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "band" and state["band_frame"] is True
+    assert op.PHOTO_LAYOUT_FAILED.format(why="boom") in state["warnings"]
+
+
+def test_a_manual_frame_is_the_open_frame(tmp_path, tools):
+    d = _band_order(tmp_path)
+    state = _prepare(d, tools)
+    f = state["open_frame"]
+    moved = [f[0] + 100.0, f[1] + 100.0, f[2] + 100.0, f[3] + 100.0]
+    od.set_manual(od.load(str(d)), "frame", moved)
+    state = _prepare(d, tools)
+    assert state["open_frame"] == pytest.approx(moved)              # never grown twice
+    bh = orderspec.band_height_for(state["photo_box_in"])
+    assert state["frame"] == pytest.approx(
+        list(opl.band_frame(moved, state["print_in"][1], bh, "top")))
