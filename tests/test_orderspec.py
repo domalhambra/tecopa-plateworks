@@ -351,17 +351,21 @@ def _fixed_spec(**kw):
         hotspots=[{"x": 605000.0, "y": 4490000.0, "weight": 1, "label": "a marker"}], **kw)
 
 
-# spec_hash of _fixed_spec() by main's code (136af61:app/orderspec.py, run against this
-# CompositionSpec): a spec with no order photo hashes as it always did
-MAIN_HASH_OF_FIXED_SPEC = "dc40681848f36bc805addd3e896e56fb924ee7948f211f7f006ccbe60c2205c0"
+# spec_hash of _fixed_spec() as this branch serialized it BEFORE the photo digests (I2) were
+# added: it proves only that I2 left photo-less hashing unchanged on this branch. It is not
+# a hash from main: this branch added two spec fields (photo_layout, photo_band_side), so
+# every spec hashes differently here than on main, and an order approved on main needs
+# approving again after the merge.
+PHOTOLESS_HASH_BEFORE_PHOTO_DIGESTS = (
+    "dc40681848f36bc805addd3e896e56fb924ee7948f211f7f006ccbe60c2205c0")
 
 
-def test_a_spec_with_no_order_photo_hashes_as_main_did():
+def test_a_spec_with_no_order_photo_hashes_as_it_did_before_photo_digests():
     import hashlib
     s = _fixed_spec()
     text = json.dumps(spec_to_json(s), sort_keys=True, separators=(",", ":"))
     assert orderspec.spec_hash(s) == hashlib.sha256(text.encode()).hexdigest()
-    assert orderspec.spec_hash(s) == MAIN_HASH_OF_FIXED_SPEC
+    assert orderspec.spec_hash(s) == PHOTOLESS_HASH_BEFORE_PHOTO_DIGESTS
 
 
 def test_the_hash_follows_an_order_photos_pixels(order):

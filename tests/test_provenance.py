@@ -892,3 +892,44 @@ def test_a_share_copy_with_photos_needs_no_record_budget(monkeypatch):
     monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
     r = c.post("/api/final", data={"session_id": sid, "embed_spec": "false"})
     assert r.status_code == 200 and provenance.extract(r.content) is None
+
+
+# ---- a PDF carries no manifest, so it has no record budget to meet ----
+
+def _stamped_session_with_square_cut_photos(c, n=3):
+    from app import session
+    j = c.post("/api/upload", files=[_file()]).json()
+    sid = j["session"]
+    for i in range(n):
+        r = c.post("/api/photo", data={"session_id": sid, "i": i},
+                   files={"file": ("pic.jpg", _noisy_photo_bytes(seed=i), "image/jpeg")})
+        assert r.status_code == 200, r.text
+    spots = session.get(sid)["hotspots"]
+    for hs in spots[:n]:
+        hs["crop"] = {"cx": 0.5, "cy": 0.5}                  # a square cut
+    session.update(sid, hotspots=spots, spec=None)
+    r = c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                   "print_w": 6, "print_h": 8, "title": "Trip"})
+    assert r.status_code == 200, r.text
+    return sid
+
+
+def test_a_pdf_final_with_photos_is_painted_at_full_photo_size_and_never_refused(monkeypatch):
+    from app import main, render
+    c = _client()
+    sid = _stamped_session_with_square_cut_photos(c)
+    painted = []
+    real = render.rasterize
+    monkeypatch.setattr(main.render, "rasterize",
+                        lambda spec, **kw: (painted.append(spec), real(spec, **kw))[1])
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200
+    full = [hs["photo"] for hs in painted[-1].hotspots if hs.get("photo")]
+    assert len(full) >= 2 and all(p.startswith(provenance.PHOTO_DATA_PREFIX) for p in full)
+    # a budget no record could meet: the PNG is refused, the PDF is not, and its photos
+    # are the ones the unconstrained PNG painted
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 422
+    for route in ("/api/final", "/api/final/submit"):
+        r = c.post(route, data={"session_id": sid, "format": "pdf"})
+        assert r.status_code == 200, (route, r.text)
+    assert [hs["photo"] for hs in painted[-1].hotspots if hs.get("photo")] == full

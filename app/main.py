@@ -232,7 +232,7 @@ FINAL_NOT_REOPEN = ("This poster's record would not reopen with plain PIL, so th
                     "not made: remove some photos, proof again, then make it.")
 
 
-def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack):
+def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack, fmt="png"):
     """(final spec, manifest) for a studio final: the spec with its photos embedded
     (_embed_photos) and its manifest (None for a share copy). A final whose photos ride
     in its record keeps the WHOLE manifest within the record budget, with the same code
@@ -242,8 +242,11 @@ def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack):
     A final with no photo, and a share copy, are made as they always were. Raises 422
     when the tracks alone fill the record (dropping photos cannot help), when a photo
     cannot fit its share, or when the record would still not read back: never an
-    unreadable PNG."""
+    unreadable PNG. A PDF carries no manifest (_encode_final), so it has no record to
+    budget: its photos stay at full size, as for a share copy."""
     final = _embed_photos(spec, dpi)
+    if fmt == "pdf":
+        return final, None
     manifest = _final_manifest(final, sources, embed_spec, lineage, region_pack=region_pack)
     if manifest is None or not any(isinstance(h, dict) and h.get("photo")
                                    for h in final.hotspots or []):
@@ -1273,7 +1276,8 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
     # canonicalize photos -> the render + manifest share them, within the record budget
-    spec, manifest = _final_with_record(spec, dpi, sources, embed_spec, lineage, rp)
+    spec, manifest = _final_with_record(spec, dpi, sources, embed_spec, lineage, rp,
+                                        fmt)
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=dpi, region_dir=region.dir,
@@ -1306,7 +1310,7 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
     spec, manifest = _final_with_record(spec, spec.final_dpi(), sources, embed_spec,
-                                        lineage, rp)
+                                        lineage, rp, fmt)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir,
                        f"{session_id}/{_delivery_name(spec, fmt)}", fmt, manifest)
     return {"job": jid}

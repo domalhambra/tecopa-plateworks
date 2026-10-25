@@ -331,9 +331,12 @@ approval, `finish`, the printer.
     - "<n> photo(s) on the approved proof can no longer be read: open the order,
       attach them again, save and approve." Finish could not read a photo of the spec
       when it built the record. The studio keeps a photo that you attach there for 24
-      hours: attach it again, save, send the new proof, and approve. For an order's
-      own photo, run Prepare again, which writes a missing work JPEG, or drop the photo
-      in the studio. Then save and approve again.
+      hours: attach it again, save, send the new proof, and approve. This refusal
+      does not name an order's own photo: if its work JPEG is missing from the
+      order's work folder, Finish refuses first with "The order changed after
+      approval" (the approval hash covers the JPEG's bytes). For that one, run Prepare
+      again, which writes the missing work JPEG, or drop the photo in the studio. Then
+      save and approve again.
     - "<n> photos have no spot: place or drop them in the studio." A photo waits in the
       tray. Open the order, place or drop it, save and approve again.
     - "<n> photos cannot be read: drop them in the studio." A photo has a spot you gave
