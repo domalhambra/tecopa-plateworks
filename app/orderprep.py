@@ -578,15 +578,37 @@ def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
     return out
 
 
-def _photo_spec(order, state, open_frame, layout, box_in, side):
+def _photo_spec(order, state, open_frame, layout, box_in, side, crop=None):
     """The spec the photos are laid out on, with no photo hotspots: order_spec at the
     open frame (a saved spec keeps its own crop), moved to `layout` and `side` by
-    orderspec.crop_for_layout, the one function Prepare's frame and a saved crop share."""
+    orderspec.crop_for_layout, the one function Prepare's frame and a saved crop share.
+    `crop`, when given, is the crop of the spec that will print, as it is with open
+    photos (the studio's live view, through open_crop): it replaces order_spec's."""
     spec = orderspec.order_spec(order, {**state, "frame": list(open_frame), "photos": []})
+    if crop is not None:
+        spec = dataclasses.replace(spec, crop=tuple(float(v) for v in crop),
+                                   photo_layout="open", photo_band_side=side)
     target = dataclasses.replace(spec, hotspots=[], photo_layout=layout,
                                  photo_box_in=box_in, photo_band_side=side)
     return dataclasses.replace(target, crop=orderspec.crop_for_layout(
         spec.crop, spec.photo_layout, spec.photo_band_side, layout, side, target))
+
+
+def open_crop(spec) -> tuple:
+    """`spec`'s crop as it is with open photos: a band spec's crop shrunk back the way
+    Prepare grows its frame (orderspec.crop_for_layout). What place_photos lays out on
+    and what state's layout_crop records."""
+    return tuple(orderspec.crop_for_layout(spec.crop, spec.photo_layout,
+                                           spec.photo_band_side, "open", None, spec))
+
+
+def same_crop(a, b, tol=1e-3) -> bool:
+    """Two crops within `tol` metres at every edge."""
+    try:
+        return len(a) == 4 and len(b) == 4 and all(
+            abs(float(x) - float(y)) <= tol for x, y in zip(a, b))
+    except (TypeError, ValueError):
+        return False
 
 
 def _placed(p) -> bool:
@@ -616,13 +638,13 @@ def _in_crop(spot, crop) -> bool:
     return crop[0] <= spot["x"] <= crop[2] and crop[1] <= spot["y"] <= crop[3]
 
 
-def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
-    """Open ground for every placed photo whose spot is on the sheet, or the band.
-    Returns (layout, {photo index: (dx_in, dy_in)}, [(photo index, warning)]). A box Dom
-    set in the studio (a photo's bounded box, here) is fixed: the layout keeps it as it
-    is, and _fixed_warnings says what it lies over."""
+def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg, crop=None):
+    """Open ground for every placed photo whose spot is on the sheet, or the band, on
+    the open `crop` (see _photo_spec). Returns (layout, {photo index: (dx_in, dy_in)},
+    [(photo index, warning)]). A box Dom set in the studio (a photo's bounded box, here)
+    is fixed: the layout keeps it as it is, and _fixed_warnings says what it lies over."""
     from app import photolayout, render
-    spec = _photo_spec(order, state, open_frame, "open", box_in, side)
+    spec = _photo_spec(order, state, open_frame, "open", box_in, side, crop)
     todo = [i for i, p in enumerate(photos) if _placed(p) and _in_crop(p["spot"], spec.crop)]
     if not todo:
         return "open", {}, []
@@ -642,18 +664,24 @@ def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
                  if fixed and len(todo) <= photolayout.OPEN_MAX else [])
         return got["layout"], {}, warns
     names = [photos[i]["file"] for i in todo]
+    seams = (render.panel_geo.seam_bands_px(spec, occ.dpi,
+                                            round(render.GEO_EDGE_IN * occ.dpi))
+             if render.panel_geo.is_set(spec) else [])
     warns = [(todo[k], w) for k, w in
-             _fixed_warnings(spots, got["boxes"], fixed, names, box_in, occ, frame)]
+             _fixed_warnings(spots, got["boxes"], fixed, names, box_in, occ, frame,
+                             seams=seams)]
     return got["layout"], {todo[k]: off for k, off in got["boxes"].items()}, warns
 
 
-def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame) -> list:
+def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame, seams=()) -> list:
     """[(k, warning)] for each fixed box (Dom's, from the studio) that lies over a route,
-    the poster's furniture, another box or another photo's spot, or past the sheet's
-    edge. The rects are photolayout's, the frame the renderer paints. A pair of fixed
-    boxes over each other is named once, by the earlier one."""
+    the poster's furniture, a seam between panels (`seams`: the seam bands among
+    occ.rects, panels.seam_bands_px), another box or another photo's spot, or past the
+    sheet's edge. The rects are photolayout's, the frame the renderer paints. A pair of
+    fixed boxes over each other is named once, by the earlier one."""
     from app import photolayout as pl
     dpi = float(occ.dpi)
+    seam_set = {tuple(int(v) for v in r) for r in seams}
     rects = {k: pl._box_rect(spots[k], off, box_in, dpi, frame) for k, off in boxes.items()}
     w, h = occ.size_px
     tx0, ty0, tx1, ty1 = occ.trim_px if occ.trim_px is not None else (0, 0, w, h)
@@ -667,7 +695,10 @@ def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame) -> list:
         x1, y1 = min(w, int(r[2]) + 1), min(h, int(r[3]) + 1)
         if x1 > x0 and y1 > y0 and occ.route[y0:y1, x0:x1].any():
             out.append((k, PHOTO_BOX_OVER.format(file=file, what="a route")))
-        if any(pl._rects_overlap(r, o) for o in occ.rects):
+        hit = [o for o in occ.rects if pl._rects_overlap(r, o)]
+        if any(tuple(int(v) for v in o) in seam_set for o in hit):
+            out.append((k, PHOTO_BOX_OVER.format(file=file, what="a seam between panels")))
+        if any(tuple(int(v) for v in o) not in seam_set for o in hit):
             out.append((k, PHOTO_BOX_OVER.format(file=file, what="the poster's furniture")))
         for j in sorted(rects):
             if j != k and not (j in fixed and j < k) and pl._rects_overlap(r, rects[j]):
@@ -678,7 +709,8 @@ def _fixed_warnings(spots, boxes, fixed, names, box_in, occ, frame) -> list:
     return out
 
 
-def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) -> dict:
+def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True,
+                 crop=None) -> dict:
     """The photo step of Prepare, after the plate and before the proof (order photos,
     Task 7). Reads every photo in in/ (file-name order), lays the boxes out, settles
     the frame in use and writes state.json:
@@ -690,7 +722,14 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) 
     - photo_layout ("open" | "band"), photo_box_in (B6), photo_band_side (manual's, else
       order.toml's), band_frame, and frame: open_frame for the open layout, open_frame
       grown toward the band's side for the band (B2); fill and need_m follow the frame;
-    - photo_warnings, and state.warnings with the last run's photo warnings replaced.
+    - photo_warnings, and state.warnings with the last run's photo warnings replaced;
+    - layout_crop: the open crop the layout was computed on.
+
+    The layout, its occupancy, the outside, under-band and gap warnings for photos and
+    the moved-box warnings use the crop of the spec that will print, as it is with open
+    photos: `crop` (the studio passes its live view's, through open_crop), or, when None,
+    order_spec's (a saved studio crop, else the frame). The frame in use, and its hole
+    check, stay Prepare's (the plate's concern).
 
     When the frame in use changes here (open to band, or the band's side) on a built
     plate, its holes are measured again on the new frame (check_holes, through `tools`,
@@ -745,9 +784,15 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) 
                 p["warnings"].append(PHOTO_NO_CAPTION.format(file=p["file"], why=why[:200]))
 
     warnings = []
+    if crop is None:
+        try:
+            crop = _photo_spec(order, state, open_frame, "open", box_in, side).crop
+        except (SpecError, OrderError, OSError, ValueError, KeyError):
+            crop = tuple(open_frame)
+    crop = tuple(float(v) for v in crop)
     try:
         layout, boxes, fixed_warns = _lay_out(order, state, photos, open_frame, box_in,
-                                              side, plate, cfg)
+                                              side, plate, cfg, crop)
     except (SpecError, OrderError, OSError, ValueError, KeyError) as ex:
         layout, boxes, fixed_warns = "band", {}, []
         warnings.append(PHOTO_LAYOUT_FAILED.format(why=str(ex)[:200]))
@@ -761,10 +806,10 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) 
 
     state = {**state, "photo_layout": layout}
     try:
-        shown = _photo_spec(order, state, open_frame, layout, box_in, side)
+        shown = _photo_spec(order, state, open_frame, layout, box_in, side, crop)
     except (SpecError, OrderError, OSError, ValueError, KeyError):
         shown = SimpleNamespace(crop=tuple(frame), photo_layout="open")
-    crop = shown.crop
+    layout_crop, crop = crop, shown.crop
     from app.orderpreview import Candidate, gaps_hiding_ends
     cand = Candidate("", order.panels, order.orientation, (pw, ph), order.gap)
     placed = [p for p in photos if _placed(p)]
@@ -792,7 +837,8 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True) 
     updates = {"photos": photos, "photo_layout": layout, "photo_box_in": box_in,
                "photo_band_side": side, "band_frame": layout == "band",
                "frame": list(frame), "need_m": round(needed_resolution(frame, pw), 3),
-               "photo_warnings": photo_warnings, "warnings": base + photo_warnings}
+               "photo_warnings": photo_warnings, "warnings": base + photo_warnings,
+               "layout_crop": list(layout_crop)}
     if track_m:
         updates["fill"] = round(track_fill(track_m, frame), 3)
     plate_rec = state.get("plate") or {}

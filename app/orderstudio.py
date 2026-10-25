@@ -25,7 +25,6 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import json
-import math
 import os
 from types import SimpleNamespace
 
@@ -191,9 +190,13 @@ def ground_to_proof_px(spec, dpi, x, y) -> tuple:
     return x_in * float(dpi), y_in * float(dpi)
 
 
+PX_LIMIT = 1e7               # proof pixels: far past any sheet, short of float overflow
+
+
 def _finite(v) -> bool:
-    return (not isinstance(v, bool) and isinstance(v, (int, float))
-            and math.isfinite(v))
+    """A real, finite JSON number (provenance's own test: a huge integer is finite, and
+    math.isfinite would raise on it)."""
+    return provenance._finite_number(v)
 
 
 def _plate_bounds(state: dict) -> tuple:
@@ -239,7 +242,8 @@ def _checked(state: dict, file: str, change, view, dpi) -> dict:
         raise PhotoChangeError("Send spot or spot_px, not both.")
     if "spot_px" in change:
         sp = change["spot_px"]
-        if not (isinstance(sp, dict) and _finite(sp.get("px")) and _finite(sp.get("py"))):
+        if not (isinstance(sp, dict) and _finite(sp.get("px")) and _finite(sp.get("py"))
+                and abs(sp["px"]) <= PX_LIMIT and abs(sp["py"]) <= PX_LIMIT):
             raise PhotoChangeError(BAD_SPOT_PX)
         x, y = proof_px_to_ground(view, dpi, sp["px"], sp["py"])
         change = {**change, "spot": {"x": x, "y": y}}
@@ -362,15 +366,31 @@ def edit_photo(order: Order, file: str, change: dict, view=None,
     furniture, another box or another photo's spot. `view` is the spec of the proof on
     screen (default: order_spec); the answer is measured on it moved to the new layout.
 
-    Returns {"edited", "state", "view", "reframed", **photo_view}. Raises PhotoNotFound,
-    PhotoChangeError (nothing written) or OrderError."""
+    The layout is computed on the view's crop (orderprep.open_crop of it), the crop that
+    will print, and state's layout_crop records it. Any call, the read-only one included,
+    lays the photos out again when the view's crop is not layout_crop (a reframe, then a
+    proof): the boxes not fixed move to the new sheet, "relaid" says so, and the studio
+    proofs again. Fixed boxes never move.
+
+    The edit and the cleared approval are one write; a layout that then fails leaves the
+    edit saved and the order unapproved.
+
+    Returns {"edited", "relaid", "state", "view", "reframed", **photo_view}. Raises
+    PhotoNotFound, PhotoChangeError (nothing written) or OrderError."""
+    from app import orderprep                            # here: it loads the build tools
     state = od.read_state(order)
     orderspec.plate_dir(state)                           # Prepare first
     if view is None:
         view = orderspec.order_spec(order, state)
+    crop = orderprep.open_crop(view)
     if change == {} and isinstance(change, dict):
-        return {"edited": False, "state": state, "view": view, "reframed": False,
-                **photo_view(order, state, view, dpi)}
+        if orderprep.same_crop(state.get("layout_crop"), crop) or not state.get("photos"):
+            return {"edited": False, "relaid": False, "state": state, "view": view,
+                    "reframed": False, **photo_view(order, state, view, dpi)}
+        state = orderprep.place_photos(order, state, log=lambda line: None, crop=crop)
+        spec, reframed = view_after(order, state, view)
+        return {"edited": False, "relaid": True, "state": state, "view": spec,
+                "reframed": reframed, **photo_view(order, state, spec, dpi)}
     values = _checked(state, file, change, view, dpi)
     if file:
         photos = dict((state.get("manual") or {}).get("photos") or {})
@@ -384,12 +404,10 @@ def edit_photo(order: Order, file: str, change: dict, view=None,
             photos[file] = entry
         else:
             photos.pop(file, None)
-        od.update_manual(order, {"photos": photos})
-    else:
-        od.update_manual(order, values)
-    od.write_state(order, {"approval": None})            # an edit is a new print
-    from app import orderprep                            # here: it loads the build tools
-    state = orderprep.place_photos(order, od.read_state(order), log=lambda line: None)
+        values = {"photos": photos}
+    # an edit is a new print: the approval goes in the same write as the edit
+    state = od.update_manual(order, values, {"approval": None})
+    state = orderprep.place_photos(order, state, log=lambda line: None, crop=crop)
     spec, reframed = view_after(order, state, view)
-    return {"edited": True, "state": state, "view": spec, "reframed": reframed,
-            **photo_view(order, state, spec, dpi)}
+    return {"edited": True, "relaid": False, "state": state, "view": spec,
+            "reframed": reframed, **photo_view(order, state, spec, dpi)}

@@ -867,6 +867,8 @@ async def set_markers(session_id: str = Form(...), markers: str = Form(...)):
         i = e.get("i")
         if not isinstance(i, int) or not (0 <= i < len(spots)):
             continue
+        if st.get("order_dir") and _is_order_photo(spots[i], st["order_dir"]):
+            continue      # an order photo's caption is the Order panel's (/api/order/photo)
         if "label" in e:
             spots[i]["label"] = str(e["label"])[:60]
         if "icon" in e:
@@ -884,6 +886,7 @@ async def set_photo(session_id: str = Form(...), i: int = Form(...),
     spots = st["hotspots"]
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
+    _order_photo_locked(st, i)
     data = await file.read()
     if len(data) > PHOTO_MAX_BYTES:
         raise HTTPException(422, "photo exceeds the size limit")
@@ -917,6 +920,7 @@ async def move_marker(session_id: str = Form(...), i: int = Form(...),
     spots = st["hotspots"]
     if not (0 <= i < len(spots)):
         raise HTTPException(422, "marker index out of range")
+    _order_photo_locked(st, i)
     import math
     if not (math.isfinite(px) and math.isfinite(py)):
         # pydantic parses "nan"/"inf" floats; min/max would propagate NaN into the
@@ -1981,12 +1985,19 @@ def _proof_form_for(spec):
             form["custom_ppi"] = f(spec.screen_ppi)
     return form
 
-def _hotspots_px(region, spots):
+def _hotspots_px(region, spots, order_dir=None):
     """The studio's view of the session's hotspots: overview px and what the marker list
-    shows."""
-    return [{"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
+    shows. In an order's session, an order photo's hotspot says so (`order_photo`): the
+    Order panel edits it, and the marker list and the map leave it alone."""
+    out = []
+    for s in spots:
+        h = {"px": crs_to_overview_px(region.geo, s["x"], s["y"]),
              "weight": s.get("weight", 1), "label": s.get("label", ""),
-             "icon": s.get("icon", ""), "photo": bool(s.get("photo"))} for s in spots]
+             "icon": s.get("icon", ""), "photo": bool(s.get("photo"))}
+        if order_dir and _is_order_photo(s, order_dir):
+            h["order_photo"] = True
+        out.append(h)
+    return out
 
 def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra=None):
     """Make a live session from `spec` on `region` and answer the /api/upload response shape
@@ -2181,17 +2192,24 @@ async def order_open(folder: str = Form(...)):
     if not _under(region.dir, REGIONS_ROOT):
         # the static /regions mount serves REGIONS_ROOT only; a built plate lives in the order
         resp["overview"] = f"/api/order/plate/{plate_id}/overview.png"
+    resp["hotspots"] = _hotspots_px(region, session.get(resp["session"])["hotspots"], real)
     resp["order"] = {"folder": real, "title": order.title,
                      "approved": orderstudio.approval_ok(order, state),
                      "photo_view": orderstudio.photo_view(order, state, spec,
                                                           _proof_dpi(spec))}
     return resp
 
-def _is_order_photo(hs, order):
+def _is_order_photo(hs, order_dir):
     """A hotspot whose photo is the order's own work JPEG (Prepare's work/photos)."""
     photo = hs.get("photo") if isinstance(hs, dict) else None
-    return isinstance(photo, str) and _under(photo, order.dir) \
+    return isinstance(photo, str) and _under(photo, order_dir) \
         and os.path.basename(os.path.dirname(photo)) == "photos"
+
+def _order_photo_locked(st, i):
+    """409 when hotspot i of an order's session is one of the order's photos: the Order
+    panel edits it (/api/order/photo), so the saved spec and order_spec agree."""
+    if st.get("order_dir") and _is_order_photo(st["hotspots"][i], st["order_dir"]):
+        raise HTTPException(409, "This marker is an order photo: edit it in the Order panel.")
 
 @app.post("/api/order/photo")
 async def order_photo(session_id: str = Form(...), file: str = Form(""),
@@ -2229,13 +2247,13 @@ async def order_photo(session_id: str = Form(...), file: str = Form(""),
         raise HTTPException(409, f"The order's photos cannot be read ({type(e).__name__}: "
                                  f"{e}). Run Prepare, then open the order again.")
     spots = st["hotspots"]
-    if out["edited"]:
-        spots = ([h for h in spots if not _is_order_photo(h, order)]
-                 + [dict(h) for h in out["view"].hotspots if _is_order_photo(h, order)])
+    if out["edited"] or out["relaid"]:
+        spots = ([h for h in spots if not _is_order_photo(h, order.dir)]
+                 + [dict(h) for h in out["view"].hotspots if _is_order_photo(h, order.dir)])
         session.update(session_id, hotspots=spots, spec=None, order_view=out["view"],
                        order_photo=orderstudio._photo_fields(out["view"]))
     answer = {k: v for k, v in out.items() if k not in ("state", "view")}
-    answer["hotspots"] = _hotspots_px(region, spots)
+    answer["hotspots"] = _hotspots_px(region, spots, order.dir)
     answer["crop_px"] = _crop_to_overview_px(region.geo, out["view"].crop)
     return answer
 

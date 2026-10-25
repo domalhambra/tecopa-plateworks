@@ -786,3 +786,199 @@ def test_the_photo_route_needs_an_order_session(client, photo_order):
     opened = _open(client, photo_order)
     session.update(opened["session"], order_dir=None)
     assert _photo(client, opened, "a_gps.jpg", {"caption": "x"}).status_code == 409
+
+
+# ---- fix round 1: the layout is computed on the crop that will print -------------------
+# The studio's frame can be wider than Prepare's (refitForSize grows it to the plate's 1x
+# target). The layout, its warnings and box_px follow the live view's crop.
+
+WIDE = (16500.0, 25500.0)    # half-width, half-height of a wider 11:17 view (frame: 9000)
+
+
+def _proof_at(client, opened, order, half=WIDE):
+    """The studio's proof of the opened order with its frame widened about the centre."""
+    from app.geo import crs_to_overview_px
+    from app.main import REGIONS
+    region = REGIONS[opened["region"]]
+    cx, cy = _centre(order)
+    x0, y1 = crs_to_overview_px(region.geo, cx - half[0], cy + half[1])
+    x1, y0 = crs_to_overview_px(region.geo, cx + half[0], cy - half[1])
+    crop = {"x0": min(x0, x1), "y0": min(y0, y1), "x1": max(x0, x1), "y1": max(y0, y1)}
+    r = client.post("/api/proof", data={"session_id": opened["session"], **crop,
+                                        **_form(opened["proof_form"])})
+    assert r.status_code == 200, r.text
+    return session.get(opened["session"])["spec"]
+
+
+def test_a_spot_inside_a_wider_view_is_not_outside_the_frame(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    view = _proof_at(client, opened, order)
+    cx, cy = _centre(order)
+    spot = {"x": cx - 12000.0, "y": cy + 6000.0}         # in the view, past the frame
+    assert not (od.read_state(order)["frame"][0] <= spot["x"])
+    body = _photo(client, opened, "c_tray.jpg", {"spot": spot}).json()
+    c = _by_file(body)["c_tray.jpg"]
+    assert not any("outside the frame" in w for w in body["warnings"])
+    assert c["box_px"] is not None and c["placed"]
+    assert od.read_state(order)["layout_crop"] == [pytest.approx(v) for v in view.crop]
+
+
+def test_a_box_dropped_on_the_views_route_is_warned(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    view = _proof_at(client, opened, order)
+    cx, cy = _centre(order)
+    sx, sy = orderspec.ground_to_sheet_in(view, cx + GPS_AT[0], cy + GPS_AT[1])
+    tx, ty = orderspec.ground_to_sheet_in(view, cx, cy)
+    box = {"dx_in": round(tx - sx, 4), "dy_in": round(ty - sy, 4)}
+    body = _photo(client, opened, "a_gps.jpg", {"box": box}).json()
+    assert "a_gps.jpg: its box is over a route. It stays where you put it." in body["warnings"]
+    assert not any("past the sheet's edge" in w for w in body["warnings"])
+
+
+def test_a_reframe_then_a_measure_lays_the_boxes_out_again(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    view = _proof_at(client, opened, order)
+    assert od.read_state(order)["layout_crop"] != [pytest.approx(v) for v in view.crop]
+    body = _photo(client, opened, "", {}).json()
+    assert body["relaid"] is True and body["edited"] is False
+    state = od.read_state(order)
+    assert state["layout_crop"] == [pytest.approx(v) for v in view.crop]
+    boxes = [p["box_px"] for p in body["photos"] if p["box_px"]]
+    assert len(boxes) == 2
+    a, b = boxes
+    assert not (a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3])
+    assert session.get(opened["session"])["spec"] is None          # proof again
+    # the next measure on the same frame lays nothing out again
+    _proof(client, opened, **dict(zip(("x0", "y0", "x1", "y1"), body["crop_px"])))
+    assert _photo(client, opened, "", {}).json()["relaid"] is False
+
+
+def test_prepare_after_a_save_lays_out_on_the_saved_crop(client, photo_order):
+    import sys
+
+    from app import orderprep
+    from tests.test_orderprep import _Fake
+    order = photo_order
+    opened = _open(client, order)
+    _proof_at(client, opened, order)
+    cx, cy = _centre(order)
+    assert _photo(client, opened, "c_tray.jpg",
+                  {"spot": {"x": cx - 12000.0, "y": cy + 6000.0}}).status_code == 200
+    _proof_at(client, opened, order)
+    assert _post(client, "save", opened).status_code == 200
+    saved = od.read_state(order)["manual"]["spec"]["crop"]
+    tools = orderprep.Tools(prep_python=sys.executable, prep_script="-", labels_script="-",
+                            coverage_script="-", repo_root=order.dir, curated_root=order.dir)
+    state = orderprep.prepare(order.dir, tools, log=lambda s: None, proofs=_Fake())
+    assert state["layout_crop"] == [pytest.approx(v) for v in saved]
+    assert not any("outside the frame" in w for w in state["photo_warnings"])
+    assert {p["file"]: p for p in state["photos"]}["c_tray.jpg"]["box"] is not None
+
+
+# ---- fix round 1: review minors ---------------------------------------------------------
+
+@pytest.mark.parametrize("raw", [
+    '{"spot": {"x": %s, "y": 0}}' % (10 ** 400),
+    '{"spot_px": {"px": %s, "py": 10}}' % (10 ** 400),
+    '{"box": {"dx_in": NaN, "dy_in": 0}}',
+])
+def test_a_huge_integer_or_a_nan_is_refused_not_a_500(client, photo_order, raw):
+    opened = _open(client, photo_order)
+    before = od.read_state(photo_order)
+    r = _photo(client, opened, "a_gps.jpg", None, raw=raw)
+    assert r.status_code == 422, r.text
+    assert od.read_state(photo_order) == before
+
+
+def test_a_path_for_a_file_name_is_404(client, photo_order):
+    opened = _open(client, photo_order)
+    before = od.read_state(photo_order)
+    for name in ("../order.toml", "../in/a_gps.jpg", "/etc/passwd"):
+        r = _photo(client, opened, name, {"caption": "x"})
+        assert r.status_code == 404 and "No photo named" in r.json()["detail"]
+    assert od.read_state(photo_order) == before
+
+
+def test_a_long_caption_is_cut_to_60(client, photo_order):
+    opened = _open(client, photo_order)
+    body = _photo(client, opened, "b_time.jpg", {"caption": "x" * 10_000}).json()
+    assert _by_file(body)["b_time.jpg"]["caption"] == "x" * 60
+    assert od.read_state(photo_order)["manual"]["photos"]["b_time.jpg"]["caption"] == "x" * 60
+
+
+def test_an_edit_then_proof_save_and_approve_approves_again(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    _post(client, "save", opened)
+    assert _post(client, "approve", opened).status_code == 200
+    body = _photo(client, opened, "b_time.jpg", {"caption": "Lunch stop"}).json()
+    assert body["approved"] is False
+    _proof(client, opened, **dict(zip(("x0", "y0", "x1", "y1"), body["crop_px"])))
+    assert _post(client, "save", opened).status_code == 200
+    assert _post(client, "approve", opened).status_code == 200
+    state = od.read_state(order)
+    assert orderstudio.approval_ok(order, state)
+    assert {p["file"]: p for p in state["photos"]}["b_time.jpg"]["caption"] == "Lunch stop"
+
+
+def test_the_edit_and_the_cleared_approval_are_one_write(client, photo_order, monkeypatch):
+    from app import orderprep
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    _post(client, "save", opened)
+    _post(client, "approve", opened)
+    writes = []
+    real = od._dump
+    monkeypatch.setattr(od, "_dump", lambda o, s: (writes.append(dict(s)), real(o, s)))
+
+    def fail(*a, **kw):
+        raise od.OrderError("the layout failed")
+    monkeypatch.setattr(orderprep, "place_photos", fail)
+    r = _photo(client, opened, "b_time.jpg", {"caption": "Lunch stop"})
+    assert r.status_code == 409
+    assert len(writes) == 1
+    assert writes[0]["approval"] is None
+    assert writes[0]["manual"]["photos"]["b_time.jpg"]["caption"] == "Lunch stop"
+
+
+def test_the_marker_routes_leave_an_order_photo_alone(client, photo_order):
+    opened = _open(client, photo_order)
+    st = session.get(opened["session"])
+    i = next(k for k, h in enumerate(st["hotspots"]) if h.get("photo"))
+    assert opened["hotspots"][i].get("order_photo") is True
+    label = st["hotspots"][i]["label"]
+    r = client.post("/api/markers", data={"session_id": opened["session"],
+                                          "markers": json.dumps([{"i": i, "label": "Renamed"}])})
+    assert r.status_code == 200
+    assert session.get(opened["session"])["hotspots"][i]["label"] == label
+    r = client.post("/api/markers/move", data={"session_id": opened["session"], "i": i,
+                                               "px": 10, "py": 10})
+    assert r.status_code == 409 and "Order panel" in r.json()["detail"]
+    r = client.post("/api/photo", data={"session_id": opened["session"], "i": i},
+                    files={"file": ("x.jpg", b"not read", "image/jpeg")})
+    assert r.status_code == 409
+
+
+def test_a_box_over_a_seam_is_named_a_seam():
+    import numpy as np
+
+    from app import orderprep
+    from app.render import Occupancy
+    occ = Occupancy(size_px=(1000, 1000), route=np.zeros((1000, 1000), bool),
+                    rects=[(480, 0, 520, 1000), (0, 900, 300, 1000)], dpi=100.0,
+                    trim_px=(0, 0, 1000, 1000))
+    spots = [(3.0, 5.0)]
+    out = orderprep._fixed_warnings(spots, {0: (2.0, 0.0)}, {0: (2.0, 0.0)}, ["a.jpg"],
+                                    1.0, occ, (0.0, 0.0, 0.0), seams=[(480, 0, 520, 1000)])
+    assert [w for _, w in out] == [
+        "a.jpg: its box is over a seam between panels. It stays where you put it."]
+    out = orderprep._fixed_warnings([(1.0, 8.5)], {0: (0.5, 1.0)}, {0: (0.5, 1.0)},
+                                    ["a.jpg"], 1.0, occ, (0.0, 0.0, 0.0),
+                                    seams=[(480, 0, 520, 1000)])
+    assert [w for _, w in out] == [
+        "a.jpg: its box is over the poster's furniture. It stays where you put it."]

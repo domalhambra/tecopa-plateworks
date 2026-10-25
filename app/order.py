@@ -313,9 +313,14 @@ def set_manual(order: Order, key: str, value) -> dict:
     return update_manual(order, {key: value})
 
 
-def update_manual(order: Order, updates: dict) -> dict:
-    """Set several "manual" keys in one write, so a reader never sees half of them."""
+def update_manual(order: Order, updates: dict, state_updates: dict | None = None) -> dict:
+    """Set several "manual" keys in one write, so a reader never sees half of them.
+    `state_updates` (top-level keys other than "manual") ride the same write: a studio
+    edit clears the approval with the edit, never in a second write."""
     state = read_state(order)
+    for key, value in (state_updates or {}).items():
+        if key != "manual":
+            state[key] = value
     state.setdefault("manual", {}).update(updates)
     _dump(order, state)
     return state
