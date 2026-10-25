@@ -342,8 +342,9 @@ approval, `finish`, the printer.
       fewer stay, then save and approve again.
     - "The reprint record cannot hold the photos within its 1 MB limit: drop some photos
       in the studio." A photo would have to shrink below 16 px to fit. Drop photos.
-    - "The record could not be read back: ... Nothing was put in place; run Finish
-      again." The staged record did not open with plain PIL. Run Finish again.
+    - "The record could not be read back: ... Nothing was put in place; drop a photo
+      in the studio, approve again, then Finish." The staged record of a photo order
+      did not open with plain PIL. A smaller record opens: drop a photo.
     - "Run Prepare first: work/state.json has no plate." Run Prepare.
     - A `config/papers.toml` message. The paper table is wrong or has no enabled row,
       or the piece has no side that fits the roll. Fix the file; the message names the
@@ -373,7 +374,13 @@ approval, `finish`, the printer.
       the print at exactly its size, 8-bit RGB, uncompressed, with the sRGB profile
       embedded. It has no border. The gap strips of a set are never printed.
     - `out/print/PRINT.txt`.
-    - `work/record.png`, the render with the reprint record, for Edition N+1.
+    - `work/record.png`, the render with the reprint record, for Edition N+1. A
+      paid print is never refused over its record. When the manifest is past the
+      900,000-byte budget with no photo in it (very long tracks), the record keeps
+      the photos as their order-folder paths and is written even if it does not
+      reopen, and `PRINT.txt` says "record.png is over the 1 MB record limit: it will
+      not reopen in the studio; keep this order folder." Keep that folder: it is the
+      only full record of the print.
     Finish turns each piece so that its 17 in side goes across the roll. A piece 17 in
     wide prints as it is. A piece 17 in tall (an 11 × 17 portrait, a 22 × 17 panel)
     turns 90° counter-clockwise. The `Feed:` line of each file in `PRINT.txt` says

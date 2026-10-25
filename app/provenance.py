@@ -388,8 +388,45 @@ def _record_photo(path: str, box_px: int, square: bool, room: int):
         return None
 
 
+def _photo_paths_out(spec: CompositionSpec):
+    """(hotspots copy, [the hotspots whose photo is a path], [those paths]): the photo
+    key popped from each hotspot whose photo is not already embedded."""
+    hotspots = copy.deepcopy(list(spec.hotspots or []))
+    todo = [hs for hs in hotspots if isinstance(hs, dict) and hs.get("photo")
+            and not is_embedded_photo(hs["photo"])]
+    return hotspots, todo, [hs.pop("photo") for hs in todo]
+
+
+def base_manifest_bytes(spec: CompositionSpec, region_pack: dict | None = None,
+                        sources: list | None = None, lineage: list | None = None) -> int:
+    """The length of the manifest `spec` would carry with no photo to embed (each photo
+    that is a path left out; one already embedded stays): what the tracks, the spec and
+    the blocks cost on their own. Over MAX_RECORD_MANIFEST_BYTES, no photo budget can
+    make the record fit, so dropping photos cannot help."""
+    hotspots, _, _ = _photo_paths_out(spec)
+    return len(_manifest_str(build_manifest(
+        dataclasses.replace(spec, hotspots=hotspots), sources, lineage,
+        region_pack=region_pack)))
+
+
+def manifest_fits(manifest: dict, budget: int | None = None) -> bool:
+    """True when `manifest` is within the record budget (MAX_RECORD_MANIFEST_BYTES)."""
+    budget = MAX_RECORD_MANIFEST_BYTES if budget is None else budget
+    return len(_manifest_str(manifest)) <= budget
+
+
+def manifest_reads_back(manifest: dict) -> bool:
+    """True when a PNG carrying `manifest` opens and gives it back through extract(), as
+    anyone with plain PIL would read it. The pixels play no part (the zTXt chunk is what
+    PIL limits), so a one-pixel PNG answers for the whole poster."""
+    buf = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(buf, "PNG", pnginfo=manifest_pnginfo(manifest))
+    return extract(buf.getvalue()) is not None
+
+
 def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict | None = None,
-                          budget: int | None = None):
+                          budget: int | None = None, sources: list | None = None,
+                          lineage: list | None = None):
     """The manifest of a print's record (work/record.png) and the record's spec, whose
     hotspot photos are embedded JPEGs. Returns (record spec, manifest, reduced); a COPY,
     `spec` is untouched (it keeps the photos as paths: the print renders from those,
@@ -400,14 +437,11 @@ def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict 
     _record_photo fits each into its share. `reduced` is True when a photo had to go
     below the print's box resolution. A photo that cannot be read is left out of the
     record spec (the caller compares counts); one that cannot fit raises
-    RecordBudgetError. A photo that is already embedded is kept verbatim."""
+    RecordBudgetError. A photo that is already embedded is kept verbatim. `sources` and
+    `lineage` ride the manifest as build_manifest's do (a studio final passes them)."""
     budget = MAX_RECORD_MANIFEST_BYTES if budget is None else budget
-    hotspots = copy.deepcopy(list(spec.hotspots or []))
-    todo = [hs for hs in hotspots if isinstance(hs, dict) and hs.get("photo")
-            and not is_embedded_photo(hs["photo"])]
-    paths = [hs.pop("photo") for hs in todo]
-    base = len(_manifest_str(build_manifest(
-        dataclasses.replace(spec, hotspots=hotspots), region_pack=region_pack)))
+    hotspots, todo, paths = _photo_paths_out(spec)
+    base = base_manifest_bytes(spec, region_pack, sources, lineage)
     overhead = len(',"photo":""')
     share = (budget - base) // len(todo) if todo else 0
     reduced = False
@@ -419,7 +453,7 @@ def build_record_manifest(spec: CompositionSpec, box_px: int, region_pack: dict 
         hs["photo"], was_reduced = got
         reduced = reduced or was_reduced
     record = dataclasses.replace(spec, hotspots=hotspots)
-    return record, build_manifest(record, region_pack=region_pack), reduced
+    return record, build_manifest(record, sources, lineage, region_pack=region_pack), reduced
 
 
 def build_final_spec(spec: CompositionSpec, box_px: int) -> CompositionSpec:

@@ -20,7 +20,9 @@ The print is painted from the approved spec, its photos read from the order fold
 JPEGs at full resolution. The record's manifest holds those photos as JPEGs sized to keep
 the manifest under 900,000 bytes (provenance.build_record_manifest), because PIL will not
 open a PNG whose manifest chunk passes 1 MiB; the staged record.png is read back before
-anything is put in place.
+anything is put in place. A paid print is never refused over its record: when the
+manifest is past the budget without any photo (huge tracks), the record keeps the
+photos as paths, is written even if it does not read back, and PRINT.txt says so.
 
 Every check that needs no picture runs before the render: the approval, the photos'
 state (a photo in the tray, a band over 12), the spec's size, panels and gap against
@@ -62,7 +64,9 @@ PHOTOS_GONE = ("{n} photo(s) on the approved proof can no longer be read: open t
 RECORD_TOO_BIG = ("The reprint record cannot hold the photos within its 1 MB limit: "
                   "drop some photos in the studio.")
 NOT_READ_BACK = ("The record could not be read back: {why}. Nothing was put in place; "
-                 "run Finish again.")
+                 "drop a photo in the studio, approve again, then Finish.")
+RECORD_OVER = ("record.png is over the 1 MB record limit: it will not reopen in the "
+               "studio; keep this order folder.")
 RECORD_REDUCED = ("record.png carries reduced photos (the 1 MB record limit); reprint from "
                   "this order folder for full resolution.")
 NOT_PLACED = "The print files cannot be put in place ({why}): run Finish again."
@@ -159,12 +163,30 @@ def _check_photos(state: dict) -> None:
         raise OrderError(BAND_OVER.format(n=placed))
 
 
-def print_note(order, spec, paper, pieces, approval, removed=(), record_reduced=False) -> str:
+def _unreadable_photos(spec) -> int:
+    """How many of the spec's photo paths PIL cannot open (the header only)."""
+    from PIL import Image
+    gone = 0
+    for hs in spec.hotspots or []:
+        p = hs.get("photo") if isinstance(hs, dict) else None
+        if not p or provenance.is_embedded_photo(p):
+            continue
+        try:
+            with Image.open(p) as im:
+                im.size
+        except Exception:
+            gone += 1
+    return gone
+
+
+def print_note(order, spec, paper, pieces, approval, removed=(), record_reduced=False,
+               record_over=False) -> str:
     """The text of PRINT.txt. `pieces` is one dict for each file, in hang order:
     name, w_in and h_in (the file's size), w_px and h_px, ppi, rotation (0 or 90) and
     panel ((k, n) for a set, else None). `removed` names each .tif that Finish removed
     from the folder; the note ends with a line for each. `record_reduced` adds the line
-    that says record.png carries photos below the print's resolution."""
+    that says record.png carries photos below the print's resolution; `record_over` the
+    line that says its manifest is past the 1 MB record limit."""
     number = order.order_number or os.path.basename(os.path.normpath(order.dir))
     roll = _inches(paper.roll_in)
     at = approval.get("at", "")
@@ -181,6 +203,8 @@ def print_note(order, spec, paper, pieces, approval, removed=(), record_reduced=
     ]
     if record_reduced:
         lines.append(RECORD_REDUCED)
+    if record_over:
+        lines.append(RECORD_OVER)
     for p in pieces:
         lines += ["", f"File: {p['name']}",
                   f"  Size: {_inches(p['w_in'])} × {_inches(p['h_in'])} in, "
@@ -234,16 +258,29 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     # photo embedded as a JPEG, sized to keep the whole manifest under the 1 MiB PIL will
     # open (provenance.MAX_RECORD_MANIFEST_BYTES); only record.png's manifest is built
     # from it. The approval hash is of `spec` (paths), which this never changes.
+    #
+    # A paid print never waits on its record. When the manifest without any photo is
+    # already past the budget (huge tracks: Plan A printed these), no photo budget can
+    # help: the record keeps the photos as their order-folder paths, is written even if
+    # PIL will not read it back, and PRINT.txt says so (RECORD_OVER).
     photos = _photo_count(spec)
-    try:
-        record_spec, manifest, reduced = provenance.build_record_manifest(
-            spec, max(24, round(spec.photo_box_in * dpi)),
-            region_pack=provenance.region_pack_block(
-                plate, labels=spec.labels, biome=spec.biome, dry_lakes=spec.dry_lakes))
-    except provenance.RecordBudgetError as ex:
-        raise OrderError(RECORD_TOO_BIG) from ex
-    if _photo_count(record_spec) < photos:   # a photo the record could not read
-        raise OrderError(PHOTOS_GONE.format(n=photos - _photo_count(record_spec)))
+    region_pack = provenance.region_pack_block(
+        plate, labels=spec.labels, biome=spec.biome, dry_lakes=spec.dry_lakes)
+    over = (provenance.base_manifest_bytes(spec, region_pack)
+            > provenance.MAX_RECORD_MANIFEST_BYTES)
+    if over:
+        gone = _unreadable_photos(spec)
+        if gone:
+            raise OrderError(PHOTOS_GONE.format(n=gone))
+        manifest, reduced = provenance.build_manifest(spec, region_pack=region_pack), False
+    else:
+        try:
+            record_spec, manifest, reduced = provenance.build_record_manifest(
+                spec, max(24, round(spec.photo_box_in * dpi)), region_pack=region_pack)
+        except provenance.RecordBudgetError as ex:
+            raise OrderError(RECORD_TOO_BIG) from ex
+        if _photo_count(record_spec) < photos:   # a photo the record could not read
+            raise OrderError(PHOTOS_GONE.format(n=photos - _photo_count(record_spec)))
 
     log(f"Painting {order.title} at {_inches(dpi)} ppi ...")
     sheet = render.rasterize(spec, dpi=dpi, region_dir=plate, watermark=False, cfg=cfg)
@@ -278,13 +315,18 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
         staged.append((_stage(record, lambda tmp: sheet.save(
             tmp, "PNG", dpi=(dpi, dpi), icc_profile=srgb,
             pnginfo=provenance.manifest_pnginfo(manifest))), record))
-        _read_back(staged[-1][0])
+        try:
+            _read_back(staged[-1][0])
+        except OrderError:
+            if not over:
+                raise
+            log("record.png does not read back (over the 1 MB record limit); kept anyway.")
         # a print file of an earlier Finish (another title or size) must not stand
         # beside this one
         removed = [name for name in sorted(os.listdir(print_dir))
                    if name.lower().endswith(".tif")
                    and os.path.join(print_dir, name) not in files]
-        note = print_note(order, spec, paper, pieces, approval, removed, reduced)
+        note = print_note(order, spec, paper, pieces, approval, removed, reduced, over)
 
         def write_note(tmp):
             with open(tmp, "w", encoding="utf-8") as f:

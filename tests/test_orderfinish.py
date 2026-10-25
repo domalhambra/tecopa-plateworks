@@ -632,3 +632,66 @@ def test_finish_refuses_when_a_work_jpeg_changed_after_approval(order, monkeypat
         orderfinish.finish(order.dir, dpi=DPI)
     assert str(ex.value) == orderfinish.CHANGED
     _no_print(order)
+
+
+# --- final fix I3: a record over the 1 MB limit never stops a paid print -----------------
+
+OVER_LINE = ("record.png is over the 1 MB record limit: it will not reopen in the studio; "
+             "keep this order folder.")
+
+
+def _huge_tracks(order, n=70_000):
+    """One track of `n` points zig-zagging inside the frame: a manifest past 1 MiB."""
+    import numpy as np
+    f = od.read_state(order)["frame"]
+    t = np.linspace(0.0, 1.0, n)
+    xs = f[0] + (f[2] - f[0]) * (0.2 + 0.6 * t) + 0.123456789
+    ys = f[1] + (f[3] - f[1]) * (0.5 + 0.3 * np.sin(t * 400.0)) + 0.987654321
+    return [np.column_stack([xs, ys])]
+
+
+def test_a_photo_less_order_whose_record_is_over_1_mib_still_finishes(order):
+    from app import provenance
+    _approve_spec(order, tracks=_huge_tracks(order), track_days=None)
+    spec = orderspec.order_spec(order, od.read_state(order))
+    assert len(provenance._manifest_str(provenance.build_manifest(spec))) > 1_048_576
+    result = orderfinish.finish(order.dir, dpi=DPI)
+    assert len(result["files"]) == 1 and os.path.isfile(result["files"][0])
+    assert os.path.isfile(os.path.join(order.dir, "work", "record.png"))
+    assert OVER_LINE in _note(order)
+
+
+def test_a_record_whose_base_is_over_the_budget_keeps_its_photo_paths(order, monkeypatch):
+    from app import provenance
+    spec = _photo_state(order, placed=2)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)   # the base is over
+    orderfinish.finish(order.dir, dpi=DPI)
+    got = provenance.extract(open(os.path.join(order.dir, "work", "record.png"), "rb").read())
+    photos = [h["photo"] for h in got["spec"]["hotspots"] if h.get("photo")]
+    assert photos == [h["photo"] for h in spec.hotspots]              # paths, not JPEGs
+    assert OVER_LINE in _note(order)
+    assert not [n for n in _note(order) if "reduced photos" in n]
+
+
+def test_an_over_budget_record_that_does_not_read_back_is_written_anyway(order, monkeypatch):
+    from app import provenance
+    _approve_spec(order)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isfile(os.path.join(order.dir, "work", "record.png"))
+    assert OVER_LINE in _note(order)
+
+
+def test_a_record_under_the_budget_has_no_over_line(approved):
+    orderfinish.finish(approved.dir, dpi=DPI)
+    assert OVER_LINE not in _note(approved)
+
+
+def test_a_record_that_does_not_read_back_never_says_run_finish_again(order, monkeypatch):
+    from app import provenance
+    _photo_state(order, placed=1)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert "run Finish again" not in str(ex.value)
