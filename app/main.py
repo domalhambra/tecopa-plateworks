@@ -223,6 +223,52 @@ def _embed_photos(spec, dpi):
     box_px = max(24, round(spec.photo_box_in * dpi))
     return provenance.build_final_spec(spec, box_px)
 
+FINAL_TRACKS_FILL_RECORD = (
+    "This poster's tracks alone fill its 1 MB record, so its photos cannot ride in it: "
+    "make the final as a share copy (no record), or without the photos.")
+FINAL_PHOTOS_TOO_BIG = ("This poster's record cannot hold its photos within its 1 MB "
+                        "limit: remove some photos, proof again, then make the final.")
+FINAL_NOT_REOPEN = ("This poster's record would not reopen with plain PIL, so the final was "
+                    "not made: remove some photos, proof again, then make it.")
+
+
+def _final_with_record(spec, dpi, sources, embed_spec, lineage, region_pack):
+    """(final spec, manifest) for a studio final: the spec with its photos embedded
+    (_embed_photos) and its manifest (None for a share copy). A final whose photos ride
+    in its record keeps the WHOLE manifest within the record budget, with the same code
+    as an order's record (provenance.build_record_manifest): when the plain embedding
+    does not fit, or would not read back, each photo gets its share of the budget, and
+    the render paints those very photos, so the final and its reprint stay identical.
+    A final with no photo, and a share copy, are made as they always were. Raises 422
+    when the tracks alone fill the record (dropping photos cannot help), when a photo
+    cannot fit its share, or when the record would still not read back: never an
+    unreadable PNG."""
+    final = _embed_photos(spec, dpi)
+    manifest = _final_manifest(final, sources, embed_spec, lineage, region_pack=region_pack)
+    if manifest is None or not any(isinstance(h, dict) and h.get("photo")
+                                   for h in final.hotspots or []):
+        return final, manifest
+
+    def readable(m):
+        if panel_geo.is_set(final):          # each panel's manifest names its panel
+            m = _panel_manifest(m, final.panels, final.panels)
+        return provenance.manifest_fits(m) and provenance.manifest_reads_back(m)
+
+    if readable(manifest):
+        return final, manifest
+    if (provenance.base_manifest_bytes(spec, region_pack, sources, lineage)
+            > provenance.MAX_RECORD_MANIFEST_BYTES):
+        raise HTTPException(422, FINAL_TRACKS_FILL_RECORD)
+    try:
+        final, manifest, _ = provenance.build_record_manifest(
+            spec, max(24, round(spec.photo_box_in * dpi)), region_pack=region_pack,
+            sources=sources, lineage=lineage)
+    except provenance.RecordBudgetError:
+        raise HTTPException(422, FINAL_PHOTOS_TOO_BIG)
+    if not readable(manifest):
+        raise HTTPException(422, FINAL_NOT_REOPEN)
+    return final, manifest
+
 def _render_to_blob(spec, region_dir, key, fmt="png", manifest=None):
     """The render worker: rasterize the stamped spec at ITS final resolution (print
     dpi, or the device's ppi for a wallpaper) and store the encoded output. Runs on a
@@ -1222,7 +1268,12 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     spec, region, sources, lineage = _require_stamped(session_id)
     _require_format(fmt, spec)         # the wallpaper PNG-only policy needs the spec
     dpi = spec.final_dpi()
-    spec = _embed_photos(spec, dpi)    # canonicalize photos -> the render + manifest share them
+    # the file names its plate: hashed from the assets once per final, never cached.
+    # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
+    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
+                                      dry_lakes=spec.dry_lakes)
+    # canonicalize photos -> the render + manifest share them, within the record budget
+    spec, manifest = _final_with_record(spec, dpi, sources, embed_spec, lineage, rp)
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=dpi, region_dir=region.dir,
@@ -1235,13 +1286,7 @@ async def final(session_id: str = Form(...), format: str = Form("png"),
     # The KEY carries the self-documenting name, so every serving path (this
     # FileResponse, /api/jobs/{jid}/result) says what the file is for free.
     key = f"{session_id}/{_delivery_name(spec, fmt)}"
-    # the file names its plate: hashed from the assets once per final, never cached.
-    # spec.labels/biome ride along so the block covers exactly the assets these pixels read.
-    rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
-                                      dry_lakes=spec.dry_lakes)
-    BLOBS.put(key, _encode_delivery(img, spec, fmt,
-                                    _final_manifest(spec, sources, embed_spec, lineage,
-                                                    region_pack=rp), dpi))
+    BLOBS.put(key, _encode_delivery(img, spec, fmt, manifest, dpi))
     log.info("event=final session=%s region=%s dpi=%.0f fmt=%s embed=%s ms=%d",
              session_id, region.id, dpi, fmt, embed_spec, int((time.time() - t0) * 1000))
     return FileResponse(BLOBS.path(key), media_type=_delivery_media(spec, fmt),
@@ -1258,12 +1303,12 @@ async def final_submit(session_id: str = Form(...), format: str = Form("png"),
     _require_format(fmt, spec)
     # embed photos NOW (sync), so the manifest built here and the worker's render below
     # paint the identical bytes -- the async final and its reprint stay pixel-identical.
-    spec = _embed_photos(spec, spec.final_dpi())
     rp = provenance.region_pack_block(region.dir, labels=spec.labels, biome=spec.biome,
                                       dry_lakes=spec.dry_lakes)
+    spec, manifest = _final_with_record(spec, spec.final_dpi(), sources, embed_spec,
+                                        lineage, rp)
     jid = QUEUE.submit(_render_to_blob, spec, region.dir,
-                       f"{session_id}/{_delivery_name(spec, fmt)}", fmt,
-                       _final_manifest(spec, sources, embed_spec, lineage, region_pack=rp))
+                       f"{session_id}/{_delivery_name(spec, fmt)}", fmt, manifest)
     return {"job": jid}
 
 

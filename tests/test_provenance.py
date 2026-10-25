@@ -821,3 +821,74 @@ def test_an_unreadable_photo_is_left_out_of_the_record(tmp_path):
     spec = _spec_with(str(tmp_path / "gone.jpg"), crop={"cx": 0.5, "cy": 0.5})
     record, _, reduced = provenance.build_record_manifest(spec, 675)
     assert "photo" not in record.hotspots[0] and reduced is False
+
+
+# ---- final fix M5/M6: a studio final with photos keeps its record readable ----
+
+def _noisy_photo_bytes(size=(600, 450), seed=3):
+    px = np.random.default_rng(seed).integers(0, 256, (size[1], size[0], 3), dtype=np.uint8)
+    b = io.BytesIO(); Image.fromarray(px, "RGB").save(b, "JPEG", quality=95)
+    return b.getvalue()
+
+
+def _stamped_session_with_noisy_photo(c):
+    j = c.post("/api/upload", files=[_file()]).json()
+    sid = j["session"]
+    r = c.post("/api/photo", data={"session_id": sid, "i": 0},
+               files={"file": ("pic.jpg", _noisy_photo_bytes(), "image/jpeg")})
+    assert r.status_code == 200, r.text
+    r = c.post("/api/proof", data={"session_id": sid, **_crop(j),
+                                   "print_w": 6, "print_h": 8, "title": "Trip"})
+    assert r.status_code == 200, r.text
+    return sid
+
+
+def test_a_final_over_the_record_budget_embeds_smaller_photos_and_reprints(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_noisy_photo(c)
+    whole = len(provenance._manifest_str(provenance.extract(
+        c.post("/api/final", data={"session_id": sid}).content)))
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", whole - 20_000)
+    png = c.post("/api/final", data={"session_id": sid}).content
+    m = provenance.extract(png)
+    assert m is not None and len(provenance._manifest_str(m)) <= whole - 20_000
+    photos = [hs["photo"] for hs in m["spec"]["hotspots"] if hs.get("photo")]
+    assert photos and photos[0].startswith(provenance.PHOTO_DATA_PREFIX)
+    r = c.post("/api/reprint", files={"file": ("poster.png", png, "image/png")})
+    assert r.status_code == 200, r.text
+    a = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"))
+    b = np.asarray(Image.open(io.BytesIO(r.content)).convert("RGB"))
+    assert np.array_equal(a, b)                    # the render used the record's photos
+
+
+def test_a_final_whose_tracks_alone_fill_the_record_says_so(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    for route in ("/api/final", "/api/final/submit"):
+        r = c.post(route, data={"session_id": sid})
+        assert r.status_code == 422, (route, r.text)
+        assert "tracks alone" in r.json()["detail"]
+
+
+def test_a_final_whose_record_would_not_reopen_is_refused(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "extract", lambda png: None)
+    r = c.post("/api/final", data={"session_id": sid})
+    assert r.status_code == 422 and "would not reopen" in r.json()["detail"]
+
+
+def test_a_photo_less_final_is_as_it_was(monkeypatch):
+    c = _client()
+    sid = _stamped_session(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    assert c.post("/api/final", data={"session_id": sid}).status_code == 200
+
+
+def test_a_share_copy_with_photos_needs_no_record_budget(monkeypatch):
+    c = _client()
+    sid = _stamped_session_with_photo(c)
+    monkeypatch.setattr(provenance, "MAX_RECORD_MANIFEST_BYTES", 500)
+    r = c.post("/api/final", data={"session_id": sid, "embed_spec": "false"})
+    assert r.status_code == 200 and provenance.extract(r.content) is None
