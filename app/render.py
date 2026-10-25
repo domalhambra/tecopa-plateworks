@@ -1340,7 +1340,7 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
     def in_frame(cx, cy):
         return 0 <= cx <= out_w and 0 <= cy <= out_h
 
-    placed = [(cx, cy, hidden, hs) for hs in spec.hotspots
+    placed = [(cx, cy, hidden, i, hs) for i, hs in enumerate(spec.hotspots)
               for (cx, cy, hidden) in [_place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)]
               if in_frame(cx, cy)]
 
@@ -1349,7 +1349,7 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
     # ridge, not a solid object on the paper.
     shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
     sd = ImageDraw.Draw(shadow)
-    for cx, cy, hidden, hs in placed:
+    for cx, cy, hidden, _, hs in placed:
         if not hidden:
             sd.ellipse([cx-r, cy-r+drop, cx+r, cy+r+drop], fill=(22, 19, 16, 105))
     shadow = shadow.filter(ImageFilter.GaussianBlur(max(1.0, dia * 0.11)))
@@ -1361,10 +1361,11 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
     ghost = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0)) if any(p[2] for p in placed) else None
     dg = ImageDraw.Draw(ghost, "RGBA") if ghost is not None else None
     label_font = _font(max(8, round(_pt_to_px(spec.label_pt, dpi))))
-    # the gallery band: a photo's spot is a numbered mark, its caption hangs in the band
-    numbers = ({id(spec.hotspots[i]): k + 1 for k, i in enumerate(_photo_indices(spec))}
+    # the gallery band: a photo's spot is a numbered mark, its caption hangs in the band.
+    # Keyed by the hotspot's index, never by the object: one dict can sit twice in a list.
+    numbers = ({i: k + 1 for k, i in enumerate(_photo_indices(spec))}
                if _band_active(spec) else {})
-    for cx, cy, hidden, hs in placed:
+    for cx, cy, hidden, i, hs in placed:
         dd = dg if hidden else d
         # contrast ring: light on dark terrain, dark on light (the DISPLAYED spot --
         # elev_lum is computed from the warped sheet, so this keys on what's drawn)
@@ -1376,7 +1377,7 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
         dd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
                    outline=ring if ring_w > 0 else None,
                    width=max(1, ring_w))
-        number = numbers.get(id(hs))
+        number = numbers.get(i)
         if number is not None:
             _draw_number(dd, str(number), cx, cy, dia * 0.62, ICON_INK + (255,))
             continue
@@ -3282,7 +3283,11 @@ def _furniture_stack_top(spec, d, ty1, dpi):
     _furniture_stack_rects. ty1 is the bottom of the furniture datum (the trim box's
     bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
     no stack (no title, no compass). The lower-left stack only: with a bottom photo
-    band the stack is in the upper left and _profile_rect reads its bottom instead."""
+    band the stack is in the upper left and _profile_rect reads its bottom instead, so
+    asking this of such a spec raises ValueError rather than answer a wrong top."""
+    if _furniture_on_top(spec):
+        raise ValueError("_furniture_stack_top measures the lower-left stack; a bottom "
+                         "photo band puts it in the upper left")
     return min([ty1] + [r[1] for r in _furniture_stack_rects(spec, d, 0, ty1, dpi)])
 
 

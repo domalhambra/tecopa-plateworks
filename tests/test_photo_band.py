@@ -330,3 +330,29 @@ def test_the_layout_occupancy_never_holds_its_own_boxes(tmp_path):
     occ = render.occupancy(spec, REGION_DIR, dpi, cfg=_cfg())
     bare = render.occupancy(replace(spec, hotspots=[]), REGION_DIR, dpi, cfg=_cfg())
     assert occ.rects == bare.rects
+
+
+# --- final fix M8 and M9 -----------------------------------------------------------------
+
+def test_the_lower_left_stack_top_refuses_a_bottom_band(tmp_path):
+    spec = _band(tmp_path, 2, "bottom")
+    d = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    with pytest.raises(ValueError):
+        render._furniture_stack_top(spec, d, 1000, 30)
+    top = _band(tmp_path, 2, "top")                 # the lower-left stack: an answer
+    assert 0 < render._furniture_stack_top(top, d, 1000, 30) < 1000
+
+
+def test_band_numbers_follow_the_hotspot_order_not_the_object(tmp_path, monkeypatch):
+    spec = _band(tmp_path, 1)
+    same = spec.hotspots[0]
+    twin = {**same, "x": same["x"] + 2000.0}
+    spec = replace(spec, hotspots=[same, twin, same])   # one dict object twice
+    drawn = []
+    real = render._draw_number
+    monkeypatch.setattr(render, "_draw_number",
+                        lambda d, text, *a, **k: (drawn.append(text), real(d, text, *a, **k)))
+    w, h = spec.pixel_size(30)
+    render._draw_markers(Image.new("RGBA", (w, h), (128, 128, 128, 255)), spec,
+                         np.ones((h, w)), w, h, 30)
+    assert sorted(drawn) == ["1", "2", "3"]
