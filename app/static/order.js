@@ -117,7 +117,7 @@ async function save() {
   busy = true; refresh();
   try {
     const r = await api.saveOrder(open.session);
-    open.approved = !!r.approved;
+    setApproved(!!r.approved);
     // the engine saved the spec of the last stamped proof. If another proof landed while
     // the request ran, which proof was saved is not known: leave `current` unset.
     const same = proof.proofCount() === serial && !state.proofStale;
@@ -148,7 +148,7 @@ async function approve() {
   busy = true; refresh();
   try {
     await api.approveOrder(open.session);
-    open.approved = true;
+    setApproved(true);
     open.note = 'Approved. Finish prints this proof.'; open.noteError = false; open.sig = sig();
     toast('Order approved', 'ok');
     announce('Order approved');
@@ -158,6 +158,14 @@ async function approve() {
   } finally {
     busy = false; refresh();
   }
+}
+
+// The engine's word on the approval. A change also renames the order in the picker
+// ("— approved"), which reads the list again.
+function setApproved(v) {
+  if (!open || open.approved === v) return;
+  open.approved = v;
+  loadOrders();
 }
 
 // ---- the buttons and the status line ----------------------------------------------------
@@ -251,7 +259,7 @@ async function editPhoto(file, change) {
     photoView = j;
     photoSerial = proof.proofCount();
     if (j.edited) {
-      open.approved = !!j.approved;
+      setApproved(!!j.approved);
       open.dirty = true; open.current = null;
       warned = file ? (j.warnings || []).filter((w) => w.startsWith(file + ':')) : [];
     }
@@ -276,6 +284,7 @@ async function editPhoto(file, change) {
 // when the engine moved it, and say a proof is due. True when a proof is due.
 function landPhotoAnswer(j) {
   if (!j.edited && !j.relaid) return false;
+  setApproved(!!j.approved);
   state.hotspots = j.hotspots;
   markers.render($('markerList'), (msg) => toast(msg, 'info'));
   if (j.reframed) { state.starterCrop = j.crop_px; canvas.resetFrame(); }
@@ -299,6 +308,11 @@ function refreshPhotos() {
       // an edit sent since this measure left wins: its answer is newer
       if (!open || open.session !== session || busy || gen !== photoGen) return;
       photoView = j;
+      // an approved order is never laid out again by a look: the engine says so instead
+      if (j.note) {
+        open.note = j.note; open.noteError = false; open.sig = sig();
+        toast(j.note, 'info'); refresh();
+      }
       // a frame the layout was not computed on: the engine laid the boxes out again on
       // it, so the proof on screen is stale and renders once more
       if (landPhotoAnswer(j)) { renderPhotos(); proof.renderProof({ auto: true }); return; }

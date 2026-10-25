@@ -982,3 +982,60 @@ def test_a_box_over_a_seam_is_named_a_seam():
                                     seams=[(480, 0, 520, 1000)])
     assert [w for _, w in out] == [
         "a.jpg: its box is over the poster's furniture. It stays where you put it."]
+
+
+# ---- final fix M1: an approved order never loses its approval to a read-only measure ---
+
+REFRAMED_NOTE = "The frame differs from the approved one: save to lay the photos out again."
+
+
+def test_an_approved_order_is_not_relaid_by_a_read_only_measure(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    assert _post(client, "save", opened).status_code == 200
+    assert _post(client, "approve", opened).status_code == 200
+    before = od.read_state(order)
+    view = _proof_at(client, opened, order)                 # refitForSize, on open
+    assert before["layout_crop"] != [pytest.approx(v) for v in view.crop]
+    body = _photo(client, opened, "", {}).json()
+    assert body["relaid"] is False and body["edited"] is False
+    assert body["note"] == REFRAMED_NOTE and body["approved"] is True
+    assert od.read_state(order) == before                   # nothing written
+    assert orderstudio.approval_ok(order, od.read_state(order))
+
+
+def test_save_lays_the_photos_out_on_the_saved_crop_first(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof(client, opened)
+    _post(client, "save", opened)
+    _post(client, "approve", opened)
+    view = _proof_at(client, opened, order)
+    assert _photo(client, opened, "", {}).json()["relaid"] is False   # approved: kept
+    r = _post(client, "save", opened)
+    assert r.status_code == 200 and r.json()["approved"] is False
+    state = od.read_state(order)
+    assert state["layout_crop"] == [pytest.approx(v) for v in view.crop]
+    assert state["proof"]["hash"] == orderspec.spec_hash(orderspec.order_spec(order, state))
+
+
+def test_an_unapproved_order_still_relays_on_a_measure(client, photo_order):
+    order = photo_order
+    opened = _open(client, order)
+    _proof_at(client, opened, order)
+    body = _photo(client, opened, "", {}).json()
+    assert body["relaid"] is True and "note" not in body
+
+
+def test_an_order_with_no_layout_crop_is_not_relaid_by_a_measure(client, photo_order):
+    # an order prepared before layout_crop existed: its boxes stand until an edit
+    order = photo_order
+    state = od.read_state(order)
+    state.pop("layout_crop", None)
+    with open(os.path.join(order.work_dir, "state.json"), "w") as f:
+        json.dump(state, f)
+    opened = _open(client, order)
+    _proof_at(client, opened, order)
+    body = _photo(client, opened, "", {}).json()
+    assert body["relaid"] is False and "layout_crop" not in od.read_state(order)

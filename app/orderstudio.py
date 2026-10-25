@@ -59,6 +59,8 @@ BAD_CROP = "crop must be {cx, cy}: numbers from 0 to 1, or null."
 BAD_CAPTION = "caption must be text, or null."
 BAD_DROPPED = "dropped must be true or false."
 PLACE_FIRST = "Place {file} before moving its box."
+REFRAMED_APPROVED = ("The frame differs from the approved one: save to lay the photos out "
+                     "again.")
 
 
 class PhotoNotFound(OrderError):
@@ -84,6 +86,14 @@ def _remove_client_proofs(order: Order) -> None:
             os.remove(os.path.join(order.dir, "out", "proof", f"{stem}-proof.{ext}"))
         except FileNotFoundError:
             pass
+
+
+def _layout_stands(state: dict, crop, orderprep) -> bool:
+    """The photos were laid out on `crop` (state's layout_crop). A state with no
+    layout_crop (prepared before it was recorded) counts as laid out on it: its boxes
+    stand until an edit lays them out again."""
+    return (state.get("layout_crop") is None
+            or orderprep.same_crop(state.get("layout_crop"), crop))
 
 
 def approval_ok(order: Order, state: dict) -> bool:
@@ -131,7 +141,11 @@ def save_spec(order: Order, spec) -> dict:
     A wallpaper, or a print of another size, panel count or gap than the order Prepare
     framed, is refused (OrderError) and nothing is saved: Finish would refuse it. The
     save records the order's inputs hash (manual.spec_inputs_hash), so a later Prepare
-    of a changed order sets the spec aside."""
+    of a changed order sets the spec aside.
+
+    An order with photos whose saved crop is not the one its photos were laid out on
+    (state's layout_crop) is laid out again on it (orderprep.place_photos) before the
+    approval is compared."""
     state = od.read_state(order)
     if spec.output_kind != "print":
         raise OrderError(NOT_PRINT)
@@ -140,6 +154,14 @@ def save_spec(order: Order, spec) -> dict:
         raise OrderError(WRONG_SIZE.format(why=why))
     state = od.update_manual(order, {"spec": spec_to_json(spec),
                                      "spec_inputs_hash": state.get("inputs_hash")})
+    if state.get("photos"):
+        # the boxes follow the crop that prints: a frame that moved since the last layout
+        # (an approved order's read-only measure leaves it) is laid out again here,
+        # before the approval is compared
+        from app import orderprep                        # here: it loads the build tools
+        crop = orderprep.open_crop(spec)
+        if not _layout_stands(state, crop, orderprep):
+            state = orderprep.place_photos(order, state, log=lambda line: None, crop=crop)
     if state.get("approval") and not approval_ok(order, state):
         state = od.write_state(order, {"approval": None})
     try:
@@ -370,7 +392,9 @@ def edit_photo(order: Order, file: str, change: dict, view=None,
     will print, and state's layout_crop records it. Any call, the read-only one included,
     lays the photos out again when the view's crop is not layout_crop (a reframe, then a
     proof): the boxes not fixed move to the new sheet, "relaid" says so, and the studio
-    proofs again. Fixed boxes never move.
+    proofs again. Fixed boxes never move. An approved order's read-only call writes
+    nothing: it answers relaid false and a "note" (REFRAMED_APPROVED), and Save lays the
+    photos out on the saved crop.
 
     The edit and the cleared approval are one write; a layout that then fails leaves the
     edit saved and the order unapproved.
@@ -384,9 +408,14 @@ def edit_photo(order: Order, file: str, change: dict, view=None,
         view = orderspec.order_spec(order, state)
     crop = orderprep.open_crop(view)
     if change == {} and isinstance(change, dict):
-        if orderprep.same_crop(state.get("layout_crop"), crop) or not state.get("photos"):
+        if _layout_stands(state, crop, orderprep) or not state.get("photos"):
             return {"edited": False, "relaid": False, "state": state, "view": view,
                     "reframed": False, **photo_view(order, state, view, dpi)}
+        if approval_ok(order, state):
+            # an approved order is never relaid by a look: the next save lays it out
+            return {"edited": False, "relaid": False, "state": state, "view": view,
+                    "reframed": False, "note": REFRAMED_APPROVED,
+                    **photo_view(order, state, view, dpi)}
         state = orderprep.place_photos(order, state, log=lambda line: None, crop=crop)
         spec, reframed = view_after(order, state, view)
         return {"edited": False, "relaid": True, "state": state, "view": spec,
