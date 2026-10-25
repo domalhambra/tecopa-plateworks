@@ -1361,6 +1361,9 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
     ghost = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0)) if any(p[2] for p in placed) else None
     dg = ImageDraw.Draw(ghost, "RGBA") if ghost is not None else None
     label_font = _font(max(8, round(_pt_to_px(spec.label_pt, dpi))))
+    # the gallery band: a photo's spot is a numbered mark, its caption hangs in the band
+    numbers = ({id(spec.hotspots[i]): k + 1 for k, i in enumerate(_photo_indices(spec))}
+               if _band_active(spec) else {})
     for cx, cy, hidden, hs in placed:
         dd = dg if hidden else d
         # contrast ring: light on dark terrain, dark on light (the DISPLAYED spot --
@@ -1373,6 +1376,10 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
         dd.ellipse([cx-r, cy-r, cx+r, cy+r], fill=MARKER_FILL + (255,),
                    outline=ring if ring_w > 0 else None,
                    width=max(1, ring_w))
+        number = numbers.get(id(hs))
+        if number is not None:
+            _draw_number(dd, str(number), cx, cy, dia * 0.62, ICON_INK + (255,))
+            continue
         icon = (hs.get("icon") or "").strip()
         if icon:
             _draw_glyph(dd, icon, cx, cy, r * 0.62, ICON_INK)
@@ -1421,50 +1428,306 @@ def _photo_frame_params(style, box, dpi):
         return m, m, max(4, round(box * 0.16)), max(1, m // 3)
     return m, m, m, max(1, m // 2)                     # "mat" (the classic default)
 
-def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None):
+# ---- order photos (sub-project 3): a box where the layout puts it, or the band -------
+BAND_PAD_IN = 0.25              # clear air: keyline to box, box to box, caption to edge
+PHOTO_ROUTE_CLEARANCE_IN = 0.15 # open ground keeps a box this far off the drawn route
+PHOTO_CAPTION_LINE_EM = 1.6     # a band caption's line, as a multiple of label_pt
+
+def _photo_frame_fracs(style):
+    """(side, top, bottom) of the frame as fractions of the box: the inch-level twin of
+    _photo_frame_params, so the band's height is known from the spec alone."""
+    if style == "keyline":
+        return 0.012, 0.012, 0.012
+    if style == "borderless":
+        return 0.0, 0.0, 0.0
+    if style == "polaroid":
+        return 0.05, 0.05, 0.16
+    return 0.05, 0.05, 0.05
+
+def _photo_indices(spec):
+    """Indices of the hotspots that carry a photo, in hotspot order: the photo numbers
+    of a band (index k here is photo number k + 1)."""
+    return [i for i, hs in enumerate(spec.hotspots or [])
+            if isinstance(hs, dict) and hs.get("photo")]
+
+def _band_active(spec):
+    """The gallery band is drawn: the layout says band and there is a photo to hang.
+    A band layout with no photo changes nothing."""
+    return getattr(spec, "photo_layout", "open") == "band" and bool(_photo_indices(spec))
+
+def _furniture_on_top(spec):
+    """A bottom band sends the furniture stack to the upper left (B2). With a top band,
+    or no band, the stack stays in the lower left where it has always been."""
+    return _band_active(spec) and getattr(spec, "photo_band_side", "top") == "bottom"
+
+def _finite_real(v):
+    """A finite real number, never a bool; a huge int that overflows a float is not."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    try:
+        f = float(v)
+    except OverflowError:
+        return None
+    return f if _m.isfinite(f) else None
+
+def _photo_box_offset(hs):
+    """(dx_in, dy_in) of a hotspot's box centre from its spot, y down the sheet, or None
+    when the hotspot has no box or a malformed one. A live session is not bounded at
+    the manifest door, so a box that is not a dict of finite numbers is absent here:
+    today's placement stands, and the render never raises on it."""
+    box = hs.get("box")
+    if not isinstance(box, dict):
+        return None
+    dx, dy = _finite_real(box.get("dx_in")), _finite_real(box.get("dy_in"))
+    return None if dx is None or dy is None else (dx, dy)
+
+def _photo_crop_focus(hs):
+    """(cx, cy) of the centre-crop window, each clamped to 0..1, or None when absent or
+    malformed (the centre)."""
+    crop = hs.get("crop")
+    if not isinstance(crop, dict):
+        return None
+    cx, cy = _finite_real(crop.get("cx")), _finite_real(crop.get("cy"))
+    if cx is None or cy is None:
+        return None
+    return min(max(cx, 0.0), 1.0), min(max(cy, 0.0), 1.0)
+
+def _crop_square(photo, box, focus):
+    """The photo centre-cropped to a box x box square (spec section 5): the largest
+    square of the source, its centre moved toward `focus` (0..1 on each axis) as far
+    as the photo allows, resampled once. Deterministic for fixed pixels."""
+    w, h = photo.size
+    side = min(w, h)
+    fx, fy = focus if focus is not None else (0.5, 0.5)
+    x0 = min(max(round(fx * w - side / 2), 0), w - side)
+    y0 = min(max(round(fy * h - side / 2), 0), h - side)
+    return photo.crop((x0, y0, x0 + side, y0 + side)).resize((box, box), Image.LANCZOS)
+
+def _leader_end(ax, ay, rect):
+    """Where the straight leader from the spot (ax, ay) toward the centre of `rect`
+    (x0, y0, x1, y1, inclusive) meets the rect's edge; None when the spot is inside.
+    The layout's leaders run on the same line: spot to box centre."""
+    x0, y0, x1, y1 = rect
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    if x0 <= ax <= x1 and y0 <= ay <= y1:
+        return None
+    t = 0.0
+    for a, c, lo, hi in ((ax, cx, x0, x1), (ay, cy, y0, y1)):
+        if a < lo:
+            t = max(t, (lo - a) / (c - a))
+        elif a > hi:
+            t = max(t, (hi - a) / (c - a))
+    return ax + t * (cx - ax), ay + t * (cy - ay)
+
+def _band_segments_in(spec, w_in):
+    """[(x0, x1)] in inches from the trim's left edge where band boxes may sit: one per
+    panel of a set (so no box crosses a seam band), else one across the sheet; each
+    inside its keyline by the band pad."""
+    inset = KEYLINE_INSET_IN + BAND_PAD_IN
+    spans = panel_geo.panel_spans_in(spec) if panel_geo.is_set(spec) else [(0.0, w_in)]
+    return [(x0 + inset, x1 - inset) for x0, x1 in spans]
+
+def band_height_in(spec):
+    """The gallery band's height in inches: the framed box, a pad on each side, and the
+    caption line. A pure function of the spec (no dpi, no photo count), so Prepare can
+    grow the frame by it before the layout is known (B2)."""
+    _, ft, fb = _photo_frame_fracs(spec.photo_frame_style)
+    return (spec.photo_box_in * (1 + ft + fb) + 2 * BAND_PAD_IN
+            + spec.label_pt * PHOTO_CAPTION_LINE_EM / 72.0)
+
+def _band_layout_in(spec, w_in, h_in):
+    """The band in inches from the trim's top-left: {"box_in", "strip", "slots"}.
+    strip is (x0, y0, x1, y1) inside the keyline at the band's end; slots is one
+    (cx, cy, slot_w) per photo in hotspot order, left to right, the photo square's
+    centre and the width its caption may use. A crowded band shrinks its boxes until
+    one row fits; a set spreads its boxes across the panels, never over a seam."""
+    n = len(_photo_indices(spec))
+    fs, ft, _ = _photo_frame_fracs(spec.photo_frame_style)
+    pad = BAND_PAD_IN
+    segs = _band_segments_in(spec, w_in)
+    widths = [max(0.0, x1 - x0) for x0, x1 in segs]
+
+    def capacity(s):
+        return [int((wd + pad) // (s * (1 + 2 * fs) + pad)) for wd in widths]
+
+    box = float(spec.photo_box_in)
+    if n and sum(capacity(box)) < n:
+        lo, hi = 0.0, box
+        for _ in range(48):                         # deterministic bisection
+            mid = (lo + hi) / 2
+            lo, hi = (mid, hi) if sum(capacity(mid)) >= n else (lo, mid)
+        box = lo
+    cap = capacity(box) if box > 0 else [0] * len(segs)
+    counts = [0] * len(segs)
+    for _ in range(n):                              # even share, by width, left first
+        open_ = [k for k in range(len(segs)) if counts[k] < cap[k]]
+        if not open_:
+            break
+        k = min(open_, key=lambda k: ((counts[k] + 1) / widths[k], k))
+        counts[k] += 1
+    height = band_height_in(spec)
+    inset = KEYLINE_INSET_IN
+    y0 = inset if spec.photo_band_side != "bottom" else h_in - inset - height
+    cy = y0 + pad + box * ft + box / 2
+    slots = []
+    for (x0, _x1), wd, c in zip(segs, widths, counts):
+        for j in range(c):
+            slot = wd / c
+            slots.append((x0 + (j + 0.5) * slot, cy, slot))
+    return {"box_in": box, "strip": (inset, y0, w_in - inset, y0 + height), "slots": slots}
+
+def _sheet_in(spec, trim, out_w, out_h, dpi):
+    """The trim box in inches for a spec handed to a keep-out: the spec's own print size
+    when it is the sheet spec, or the trim measured in pixels when it is the bleed-grown
+    paint spec (its print size includes the bleed). Sub-pixel only, and only there."""
+    if trim is None or tuple(trim) == (0, 0, out_w, out_h) or spec.bleed_in > 0:
+        return float(spec.print_w_in), float(spec.print_h_in)
+    tx0, ty0, tx1, ty1 = trim
+    return (tx1 - tx0) / dpi, (ty1 - ty0) / dpi
+
+def _band_strip_px(spec, out_w, out_h, dpi, trim=None):
+    """(x0, y0, x1, y1) of the band's strip on the canvas, right and bottom exclusive."""
+    tx0, ty0 = (trim or (0, 0, out_w, out_h))[:2]
+    w_in, h_in = _sheet_in(spec, trim, out_w, out_h, dpi)
+    x0, y0, x1, y1 = _band_layout_in(spec, w_in, h_in)["strip"]
+    return (tx0 + round(x0 * dpi), ty0 + round(y0 * dpi),
+            tx0 + round(x1 * dpi), ty0 + round(y1 * dpi))
+
+def _draw_number(d, text, cx, cy, size, fill):
+    """A photo number centred on (cx, cy): the band box's badge and the spot's mark."""
+    font = _font(max(6, round(size)))
+    l, t, r, b = d.textbbox((0, 0), text, font=font)
+    d.text((cx - (r - l) / 2 - l, cy - (b - t) / 2 - t), text, fill=fill, font=font)
+
+def _paste_framed(img, photo, fx, fy, ms, mt, mb, edge_w, shadow_r):
+    """One framed photo at frame corner (fx, fy): drop shadow, mat, photo, keyline."""
+    out_w, out_h = img.size
+    fw, fh = photo.size[0] + 2 * ms, photo.size[1] + mt + mb
+    shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rectangle([fx, fy, fx + fw, fy + fh], fill=(20, 16, 12, 110))
+    img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(shadow_r)))
+    d = ImageDraw.Draw(img, "RGBA")
+    if ms or mt or mb:
+        d.rectangle([fx, fy, fx + fw, fy + fh], fill=PHOTO_FRAME + (255,))
+    img.paste(photo, (fx + ms, fy + mt))
+    if edge_w:
+        d.rectangle([fx, fy, fx + fw, fy + fh], outline=PHOTO_EDGE + (255,), width=edge_w)
+    return d
+
+def _draw_photos(img, spec, out_w, out_h, dpi, ctx=None, trim=None, sheet=None):
     """Pin user photos to their markers in the client's chosen frame style (classic
     mat / thin keyline / borderless / polaroid), each with a drop shadow and a short
     stem back to the anchor point. Tolerant of a missing/unreadable file (skip it)
     so one bad photo can't fail the render. Under the plan-oblique warp the anchor
     displaces with its ground; the frame itself stays sheet furniture (upright,
-    clamped in-sheet, never ghosted) -- the stem stretches to the moved anchor."""
-    if not any(hs.get("photo") for hs in spec.hotspots):
+    clamped in-sheet, never ghosted) -- the stem stretches to the moved anchor.
+
+    Order photos (B1): a hotspot with a `box` draws its box centred at the spot plus
+    the offset (inches, y down), clamped inside the trim and the panel that holds it,
+    with one straight leader from the spot to the box edge; a `crop` moves the
+    centre-crop window. A hotspot with neither is placed and fitted exactly as before
+    (invariant 7). Under `photo_layout == "band"` the photos hang in the gallery band
+    instead (_draw_photo_band). `trim` is the trim box, `sheet` the sheet spec when
+    `spec` is the bleed-grown paint spec; both default to the canvas and `spec`."""
+    if not any(isinstance(hs, dict) and hs.get("photo") for hs in spec.hotspots):
         return img
+    if _band_active(spec):
+        return _draw_photo_band(img, spec, out_w, out_h, dpi, trim=trim,
+                                sheet=sheet if sheet is not None else spec)
     box = max(24, round(spec.photo_box_in * dpi))
     ms, mt, mb, edge_w = _photo_frame_params(spec.photo_frame_style, box, dpi)
     stem = max(1, round(box * 0.02))
     shadow_r = max(1.0, box * 0.04)
+    tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
     for hs in spec.hotspots:
-        src = hs.get("photo")
+        src = hs.get("photo") if isinstance(hs, dict) else None
         if not src:
             continue
         try:
             photo = provenance.load_photo(src)     # embedded data URI or a session path
         except Exception:
             continue
-        photo.thumbnail((box, box))
+        offset, focus = _photo_box_offset(hs), _photo_crop_focus(hs)
+        if offset is None and focus is None:
+            photo.thumbnail((box, box))            # an old hotspot: fitted, as before
+        else:
+            photo = _crop_square(photo, box, focus)
         pw, ph = photo.size
         fw, fh = pw + 2 * ms, ph + mt + mb             # frame outer size
         ax, ay, _ = _place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)
-        # place the framed photo up-and-right of the anchor, clamped to the frame.
-        # A photo box never crosses a seam: it stays in the panel that holds its anchor
-        lo, hi = panel_geo.span_px_at(spec, ax, dpi, out_w)
-        fx = int(np.clip(ax + box * 0.35, lo, hi - fw - 1))
-        fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
-        # stem from anchor to the frame's near corner
-        d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
-               fill=PHOTO_EDGE + (255,), width=stem)
-        shadow = Image.new("RGBA", (out_w, out_h), (0, 0, 0, 0))
-        ImageDraw.Draw(shadow).rectangle([fx, fy, fx + fw, fy + fh], fill=(20, 16, 12, 110))
-        img.alpha_composite(shadow.filter(ImageFilter.GaussianBlur(shadow_r)))
-        d = ImageDraw.Draw(img, "RGBA")
-        if ms or mt or mb:
-            d.rectangle([fx, fy, fx + fw, fy + fh], fill=PHOTO_FRAME + (255,))
-        img.paste(photo, (fx + ms, fy + mt))
-        if edge_w:
-            d.rectangle([fx, fy, fx + fw, fy + fh],
-                        outline=PHOTO_EDGE + (255,), width=edge_w)
+        if offset is None:
+            # place the framed photo up-and-right of the anchor, clamped to the frame.
+            # A photo box never crosses a seam: it stays in the panel that holds its anchor
+            lo, hi = panel_geo.span_px_at(spec, ax, dpi, out_w)
+            fx = int(np.clip(ax + box * 0.35, lo, hi - fw - 1))
+            fy = int(np.clip(ay - fh - box * 0.35, 0, out_h - fh - 1))
+            # stem from anchor to the frame's near corner
+            d.line([(ax, ay), (fx + max(ms, 1), fy + fh - max(mb, 1))],
+                   fill=PHOTO_EDGE + (255,), width=stem)
+        else:
+            # the box where the layout (or Dom's drag) put it: centred on spot + offset,
+            # inside the trim and inside the panel that holds that centre
+            tcx, tcy = ax + offset[0] * dpi, ay + offset[1] * dpi
+            lo, hi = panel_geo.span_px_at(spec, min(max(tcx, -1.0), out_w + 1.0), dpi, out_w)
+            lo, hi = max(lo, tx0), min(hi, tx1)
+            fx = int(round(np.clip(tcx - pw / 2 - ms, lo, max(lo, hi - fw - 1))))
+            fy = int(round(np.clip(tcy - ph / 2 - mt, ty0, max(ty0, ty1 - fh - 1))))
+            end = _leader_end(ax, ay, (fx, fy, fx + fw, fy + fh))
+            if end is not None:
+                d.line([(ax, ay), end], fill=PHOTO_EDGE + (255,), width=stem)
+        d = _paste_framed(img, photo, fx, fy, ms, mt, mb, edge_w, shadow_r)
+    return img
+
+def _draw_photo_band(img, spec, out_w, out_h, dpi, trim=None, sheet=None):
+    """The gallery band (B2): the photos in one row across the map inside the trim, at
+    the top or the bottom (spec.photo_band_side), left to right in hotspot order, each
+    centre-cropped to its box with its number on the frame corner and its caption under
+    it. The spots get numbered marks (_draw_markers) instead of leaders. Every size is
+    from the spec in inches (_band_layout_in), so proof and final hang the same band."""
+    sheet = sheet if sheet is not None else spec
+    tx0, ty0 = (trim or (0, 0, out_w, out_h))[:2]
+    lay = _band_layout_in(sheet, float(sheet.print_w_in), float(sheet.print_h_in))
+    box = max(4, round(lay["box_in"] * dpi))
+    ms, mt, mb, edge_w = _photo_frame_params(spec.photo_frame_style, box, dpi)
+    shadow_r = max(1.0, box * 0.04)
+    _, ft, fb = _photo_frame_fracs(spec.photo_frame_style)
+    full_frame_in = spec.photo_box_in * (1 + ft + fb)
+    cap_font = _font(max(8, round(_pt_to_px(spec.label_pt, dpi))))
+    dia = max(5, round(spec.marker_diameter_in * dpi))
+    for k, (i, (cx_in, cy_in, slot_in)) in enumerate(zip(_photo_indices(spec), lay["slots"])):
+        hs = spec.hotspots[i]
+        try:
+            photo = provenance.load_photo(hs["photo"])
+        except Exception:
+            continue
+        photo = _crop_square(photo, box, _photo_crop_focus(hs))
+        px = tx0 + round(cx_in * dpi - box / 2)
+        py = ty0 + round(cy_in * dpi - box / 2)
+        fx, fy = px - ms, py - mt
+        d = _paste_framed(img, photo, fx, fy, ms, mt, mb, edge_w, shadow_r)
+        # the number on the frame's top-left corner: the key to the spot's mark
+        r = dia / 2
+        d.ellipse([fx - r, fy - r, fx + r, fy + r], fill=PHOTO_EDGE + (255,),
+                  outline=PHOTO_FRAME + (255,), width=max(1, round(dia * 0.08)))
+        _draw_number(d, str(k + 1), fx, fy, dia * 0.62, PHOTO_FRAME + (255,))
+        label = (hs.get("label") or "").strip()
+        if label:
+            # the caption under the full-size frame, shortened to its slot so
+            # neighbours never collide
+            text = label
+            l, t, rt, b = d.textbbox((0, 0), text, font=cap_font)
+            pad = max(2, round((b - t) * 0.3))
+            avail = (slot_in - BAND_PAD_IN) * dpi - 2 * pad
+            while len(text) > 1 and d.textlength(text, font=cap_font) > avail:
+                text = text[:-2].rstrip() + "\u2026"
+            l, t, rt, b = d.textbbox((0, 0), text, font=cap_font)
+            # every frame's top is the strip's top + the pad, so the captions line up
+            cap_top = (lay["strip"][1] + BAND_PAD_IN + full_frame_in) * dpi
+            ccy = ty0 + cap_top + max(1, round(0.04 * dpi)) + pad + (b - t) / 2
+            lo, hi = panel_geo.span_px_at(spec, px, dpi, out_w)
+            _draw_label(d, text, tx0 + cx_in * dpi - (rt - l) / 2 - pad, ccy, cap_font,
+                        out_w, out_h, x_lo=lo, x_hi=hi)
     return img
 
 # ---- finished-sheet furniture (V1-10 print-correctness): keyline + title block ----
@@ -1670,7 +1933,9 @@ def _draw_title_block(img, spec, out_w, out_h, dpi, trim=None):
     if m is None:
         return img
     inset = round(TITLE_INSET_IN * m["fdpi"])
-    x, y = tx0 + inset, ty1 - inset - m["bh"]
+    # lower left, or upper left when a bottom photo band takes the lower end (B2)
+    x = tx0 + inset
+    y = ty0 + inset if _furniture_on_top(spec) else ty1 - inset - m["bh"]
     bw, pad = m["bw"], m["pad"]
     cx = x + bw / 2
     d.rectangle([x, y, x + bw, y + m["bh"]], fill=LABEL_PLATE + (235,))
@@ -1810,24 +2075,39 @@ def _draw_contours(rgb_u8, elev_core, dpi, ground_m_per_in, range_m=None):
     img *= 255
     return img.astype(np.uint8)
 
+def _compass_geometry(spec, d, dpi, tx0, ty0, ty1, m):
+    """(cx, cy, R, fdpi) of the rose: the one placement the painter and the keep-out
+    read. Lower left above the cartouche; with a bottom photo band (B2) the stack is
+    mirrored into the upper left, the cartouche in the corner and the rose, its N on
+    top, just under it."""
+    fdpi = dpi * _furniture_scale(spec)   # the rose enlarges as one engraving
+    R = COMPASS_DIAMETER_IN * fdpi / 2.0
+    inset = round(TITLE_INSET_IN * fdpi)
+    if _furniture_on_top(spec):
+        top = ty0 + inset + ((m["bh"] + round(0.16 * fdpi)) if m else 0)
+        f = _font(max(10, round(_pt_to_px(11.5, fdpi))))
+        nl, nt, nr, nb = d.textbbox((0, 0), "N", font=f)
+        nh = nb - nt
+        pad = max(2, round(nh * 0.22))
+        return tx0 + inset + R, top + pad + nh + round(0.05 * fdpi) + R, R, fdpi
+    base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
+    return tx0 + inset + R, base_y - R, R, fdpi
+
 def _draw_compass(img, spec, out_w, out_h, dpi, trim=None):
     """An eight-point split-shaded compass rose above the cartouche, bottom-left,
     after the classic engraved roses: short intercardinal points under the long
     cardinals, a double ring, north point long, each point half umber / half paper,
     a small N above. Vector-only + physical sizes, so the same spec renders
     identically at any DPI and on any machine. Anchored to the TRIM box (the sheet
-    until bleed lands) so it survives the cut."""
+    until bleed lands) so it survives the cut. A bottom photo band mirrors the stack
+    into the upper left (_compass_geometry)."""
     if not spec.compass:
         return img
     import math as _m
     tx0, ty0, tx1, ty1 = trim or (0, 0, out_w, out_h)
     d = ImageDraw.Draw(img, "RGBA")
-    fdpi = dpi * _furniture_scale(spec)   # the rose enlarges as one engraving
-    R = COMPASS_DIAMETER_IN * fdpi / 2.0
-    inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
-    base_y = ty1 - inset - ((m["bh"] + round(0.16 * fdpi)) if m else 0)
-    cx, cy = tx0 + inset + R, base_y - R
+    cx, cy, R, fdpi = _compass_geometry(spec, d, dpi, tx0, ty0, ty1, m)
     # a soft paper ground, keyline-edged so it reads as a set medallion, not a blob
     d.ellipse([cx - R * 1.16, cy - R * 1.16, cx + R * 1.16, cy + R * 1.16],
               fill=LABEL_PLATE + (160,),
@@ -2223,7 +2503,7 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
     # boxes (_furniture_stack_rects), none when neither draws. This was a fixed
     # 3.4 x 2.5 in guess until 2026-09-27; a long title or credit line made the real
     # cartouche wider (about 5.9 in on the Tecopa sheet) and names ran under it.
-    keepout = _furniture_stack_rects(spec, d, fx0, fy1, dpi)
+    keepout = _furniture_stack_rects(spec, d, fx0, fy1, dpi, ty0=fy0)
     if spec.top_clear_frac > 0:
         # phone/tablet wallpapers: the OS draws the lock-screen clock across the top,
         # so auto-placed geography stays out of that band (user-placed markers don't).
@@ -2238,6 +2518,9 @@ def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
         # each seam acts as a sheet edge: no name is cut by one or hidden behind a gap
         keepout += panel_geo.seam_bands_px(spec, dpi, round(GEO_EDGE_IN * dpi))
         keepout += _panel_mark_rects(spec, d, panel_geo.panel_rects_px(spec, dpi), dpi)
+    if _band_active(spec):
+        # the gallery band's strip: a name under a photo is a name nobody reads
+        keepout.append(_band_strip_px(spec, out_w, out_h, dpi, (tx0, ty0, tx1, ty1)))
     return keepout
 
 
@@ -2913,18 +3196,30 @@ def _paint_journey(base_rgb, spec, out_w, out_h, dpi, groups=None, ctx=None,
     img = _draw_termini(img, spec, out_w, out_h, dpi, groups=groups, ctx=ctx)  # under markers
     return img
 
-def _furniture_stack_rects(spec, d, tx0, ty1, dpi):
+def _furniture_stack_rects(spec, d, tx0, ty1, dpi, ty0=0):
     """[(x0, y0, x1, y1)] boxes (x1, y1 exclusive) of the bottom-left furniture stack
     as painted: the cartouche plate, then the compass disc with the N label above the
     rose. Computed with the painters' OWN arithmetic (_draw_title_block /
     _draw_compass) so they can't drift from what they draw. Each box runs from the
     corner datum (tx0, ty1) -- the trim box's bottom-left once bleed lands, the
     sheet's until then -- so the inset margin beside the stack stays clear too. Empty
-    when there is no stack (no title, no compass)."""
+    when there is no stack (no title, no compass).
+
+    With a bottom photo band (B2) the stack is in the upper left, and each box runs
+    from the top corner datum (tx0, ty0) down to its painted bottom instead."""
     fdpi = dpi * _furniture_scale(spec)
     inset = round(TITLE_INSET_IN * fdpi)
     m = _title_block_metrics(spec, d, dpi)
     rects = []
+    if _furniture_on_top(spec):
+        if m:
+            rects.append((tx0, ty0, tx0 + inset + m["bw"] + 1, ty0 + inset + m["bh"] + 1))
+        if spec.compass:
+            cx, cy, R, _ = _compass_geometry(spec, d, dpi, tx0, ty0, ty1, m)
+            ring = max(1, round(_pt_to_px(0.35, fdpi)))
+            rects.append((tx0, ty0, _m.ceil(cx + R * 1.16) + ring + 1,
+                          _m.ceil(cy + R * 1.16) + ring + 1))
+        return rects
     if m:
         rects.append((tx0, ty1 - inset - m["bh"], tx0 + inset + m["bw"] + 1, ty1))
     if spec.compass:
@@ -2946,7 +3241,8 @@ def _furniture_stack_top(spec, d, ty1, dpi):
     (cartouche plate + compass disc + the N label above the rose), the top of
     _furniture_stack_rects. ty1 is the bottom of the furniture datum (the trim box's
     bottom once bleed lands; the sheet bottom until then). Returns ty1 when there is
-    no stack (no title, no compass)."""
+    no stack (no title, no compass). The lower-left stack only: with a bottom photo
+    band the stack is in the upper left and _profile_rect reads its bottom instead."""
     return min([ty1] + [r[1] for r in _furniture_stack_rects(spec, d, 0, ty1, dpi)])
 
 
@@ -2966,6 +3262,16 @@ def _profile_rect(spec, d, trim, dpi):
     fdpi = dpi * fs
     inset = round(PROFILE_INSET_IN * fdpi)
     gap = round(PROFILE_GAP_IN * fdpi)
+    if _furniture_on_top(spec):
+        # a bottom photo band: the strip hangs under the upper-left stack, the
+        # mirror of its place above the lower-left one
+        stack = _furniture_stack_rects(spec, d, tx0, ty1, dpi, ty0=ty0)
+        y0 = max([ty0 + inset] + [r[3] + gap for r in stack])
+        y_bot_max = ty1 - round(KEYLINE_INSET_IN * dpi) - max(1, round(0.05 * fdpi))
+        ph = max(1, min(ph, y_bot_max - y0))
+        x0 = tx0 + inset
+        pw = min(tw - 2 * inset, round(ph * 3.4))
+        return x0, y0, x0 + pw, y0 + ph
     y1 = min(ty1 - inset, _furniture_stack_top(spec, d, ty1, dpi) - gap)
     y_top_min = ty0 + round(KEYLINE_INSET_IN * dpi) + max(1, round(0.05 * fdpi))
     ph = max(1, min(ph, y1 - y_top_min))
@@ -3075,7 +3381,8 @@ def _paint_overlays(img, spec, lum, out_w, out_h, dpi, watermark=False, ctx=None
     ftrim = panel_geo.furniture_trim_px(spec, dpi, (tx0, ty0, tx1, ty1))
     frames = panel_geo.frame_rects_px(spec, dpi, (tx0, ty0, tx1, ty1))
     img = _draw_markers(img, paint, lum, out_w, out_h, dpi, ctx=ctx)
-    img = _draw_photos(img, paint, out_w, out_h, dpi, ctx=ctx)   # personal photos: the top layer
+    img = _draw_photos(img, paint, out_w, out_h, dpi, ctx=ctx,   # personal photos: the top layer
+                       trim=(tx0, ty0, tx1, ty1), sheet=spec)
     if spec.profile:
         img = _draw_profile(img, spec, out_w, out_h, dpi, profile, trim=ftrim)
     if spec.keyline:
@@ -3122,6 +3429,75 @@ def sheet_geometry(spec, dpi):
     bpx = round(spec.bleed_in * dpi)
     return paint, (bpx, bpx, out_w - bpx, out_h - bpx)
 
+
+
+# ---- what open ground is not: the occupancy the photo layout reads (Task 6) ----------
+
+@dataclass(frozen=True)
+class Occupancy:
+    """What a photo box in open ground must stay off, on the canvas at `dpi`.
+    size_px is the canvas (width, height); route is a bool (height, width) mask, True
+    where the drawn route is, grown by PHOTO_ROUTE_CLEARANCE_IN; rects are the label
+    keep-out boxes (x0, y0, x1, y1, right and bottom exclusive) -- the furniture stack
+    with the title block, the elevation strip, a set's seam bands and panel marks, the
+    wallpaper clear bands, and the gallery band when one is active. trim_px is the trim
+    box on the canvas (None for a hand-built Occupancy: the whole canvas)."""
+    size_px: tuple
+    route: np.ndarray
+    rects: list
+    dpi: float
+    trim_px: tuple | None = None
+
+def _oblique_ctx(spec, dpi, region_dir, cfg):
+    """The plan-oblique context `_paint_terrain` builds, without painting the relief:
+    the same window, shear and winner buffer (the warp's winner depends on elevation
+    alone, so it is swept over a one-channel blank). None on the classic path."""
+    shear = _oblique_shear(region_dir, cfg, spec)
+    if shear is None:
+        return None
+    s, z_floor = shear
+    out_w, out_h = spec.pixel_size(dpi)
+    band_m = oblique_band_m(spec)
+    gy = (spec.crop[3] - spec.crop[1]) / out_h
+    elev, pad_x, pad_top, pad_bot, _gpp = _read_window(
+        region_dir, cfg, spec.crop, out_w, out_h, extra_south_px=_m.ceil(band_m / gy))
+    elev_fill = _fill_nan(elev.astype("float32"))
+    band_px = band_m / gy
+    _, winner = _oblique_warp(np.zeros(elev_fill.shape + (1,), np.uint8), elev_fill,
+                              s, z_floor, gy, band_px)
+    return ObliqueCtx(s=s, z_floor=z_floor, band_px=band_px, gy=gy, elev=elev_fill,
+                      winner=winner, pad_x=pad_x, pad_top=pad_top, pad_bot=pad_bot,
+                      out_w=out_w, out_h=out_h)
+
+def occupancy(spec, region_dir, dpi, cfg=None) -> Occupancy:
+    """The occupied sheet at a working `dpi` for the open-ground photo layout: the
+    route mask and the keep-out rects, on the canvas `rasterize` would paint. It paints
+    no relief: the route is a coverage raster of the tracks, and under High relief the
+    warp's context is rebuilt from the elevation window alone (_oblique_ctx). The rects
+    are the spec as given: a spec whose band is active reports the band's strip and,
+    for a bottom band, the furniture in the upper left. Deterministic (invariant 3)."""
+    if cfg is None:
+        with open(os.path.join(region_dir, "region.json")) as f:
+            cfg = json.load(f)
+    paint, trim = sheet_geometry(spec, dpi)
+    out_w, out_h = paint.pixel_size(dpi)
+    route = np.zeros((out_h, out_w), bool)
+    if paint.tracks:
+        ctx = _oblique_ctx(paint, dpi, region_dir, cfg)
+        groups = _journey_groups(paint)
+        ink_w = max(1, round(_pt_to_px(paint.track_width_pt, dpi)))
+        if len(groups) >= 2:                       # repeat journeys widen the line
+            ink_w = max(ink_w + 2, round(ink_w * WORN_WIDTH_FACTOR))
+        cas_pad = max(1, round(_pt_to_px(CASING_PAD_PT, dpi)))
+        clear = round(PHOTO_ROUTE_CLEARANCE_IN * dpi)
+        every = [i for g in groups for i in g]
+        route = _coverage(paint, out_w, out_h, ink_w + 2 * cas_pad + 2 * clear,
+                          [every], ctx=ctx) > GEO_ROUTE_PRESENT
+    d = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
+    rects = [tuple(int(v) for v in r)
+             for r in _label_keepout(spec, d, out_w, out_h, dpi, trim=trim)]
+    return Occupancy(size_px=(out_w, out_h), route=route, rects=rects, dpi=float(dpi),
+                     trim_px=tuple(int(v) for v in trim))
 
 # ---- the base-layer cache (the store is app/basecache.py) ---------------------------
 
