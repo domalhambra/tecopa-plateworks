@@ -211,7 +211,7 @@ def test_a_band_grows_the_frame_upward(tmp_path, tools):
     pw, ph = state["print_in"]
     assert (frame[2] - frame[0]) / (frame[3] - frame[1]) == pytest.approx(pw / ph)
     assert all(p["box"] is None for p in state["photos"])
-    # the plate was planned round the frame grown at both ends: it holds either band
+    # the plate was planned round the frame and its top band frame: it holds both
     region = json.load(open(os.path.join(orderspec.plate_dir(state), "region.json")))
     w, s, e, n = region["bbox"]
     lon0, lat0, lon1, lat1 = opl.to_lonlat_bbox(frame, state["epsg"])
@@ -227,6 +227,81 @@ def test_a_bottom_band_grows_the_frame_downward(tmp_path, tools):
     open_, frame = state["open_frame"], state["frame"]
     assert state["photo_band_side"] == "bottom"
     assert frame[3] == pytest.approx(open_[3]) and frame[1] < open_[1]
+
+
+def _plate_lonlat(state):
+    return json.load(open(os.path.join(orderspec.plate_dir(state), "region.json")))["bbox"]
+
+
+def _in_box(box, frame, epsg):
+    w, s, e, n = box
+    lon0, lat0, lon1, lat1 = opl.to_lonlat_bbox(frame, epsg)
+    return w <= lon0 and s <= lat0 and lon1 <= e and lat1 <= n
+
+
+@pytest.mark.parametrize("side,other", [("top", "bottom"), ("bottom", "top")])
+def test_the_plate_is_planned_round_the_current_band_side_only(tmp_path, tools, side, other):
+    d = _order(tmp_path, extra=f'orientation = "landscape"\nband_side = "{side}"\n')
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)       # open ground: still planned
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "open" and state["photo_plan_side"] == side
+    _, ph = state["print_in"]
+    bh = orderspec.band_height_for(state["photo_box_in"])
+    box = _plate_lonlat(state)
+    open_ = state["open_frame"]
+    assert _in_box(box, open_, state["epsg"])
+    assert _in_box(box, opl.band_frame(open_, ph, bh, side), state["epsg"])
+    assert not _in_box(box, opl.band_frame(open_, ph, bh, other), state["epsg"])
+    # and no wider than the union: the plate is that frame plus its margin, nothing more
+    plan = opl.photo_plan_frame(open_, ph, bh, side)
+    want = opl.to_lonlat_bbox(opl.plate_bounds(plan), state["epsg"], pad_m=opl.PLATE_PAD_M)
+    assert box == pytest.approx(list(want), abs=1e-4)
+
+
+def test_a_photoless_order_plans_the_plate_round_the_frame(tmp_path, tools):
+    d = _order(tmp_path)
+    state = _prepare(d, tools)
+    assert state["photo_plan"] is False and state["photo_plan_side"] is None
+    want = opl.to_lonlat_bbox(opl.plate_bounds(tuple(state["frame"])), state["epsg"],
+                              pad_m=opl.PLATE_PAD_M)
+    assert _plate_lonlat(state) == pytest.approx(list(want), abs=1e-4)
+
+
+def test_a_band_side_switch_on_a_tight_plate_warns_then_prepare_replans(
+        tmp_path, tools, monkeypatch):
+    monkeypatch.setenv("STUB_DEM_HOLES", "none")             # a real DEM over the plate
+    d = _band_order(tmp_path, extra='orientation = "landscape"\n')   # top, a short print
+    state = _prepare(d, tools)
+    assert state["photo_plan_side"] == "top" and state["photo_layout"] == "band"
+    assert not any(w.startswith("HOLES IN THE PRINT") for w in state["warnings"])
+    assert len(_builds_of(d)) == 1
+    order = od.load(str(d))
+    # the studio switches the band to the bottom: the plate has no ground for it
+    od.set_manual(order, "band_side", "bottom")
+    state = op.place_photos(order, od.read_state(order), log=lambda s: None, tools=tools)
+    assert state["photo_band_side"] == "bottom"
+    assert state["warnings"][0].startswith("HOLES IN THE PRINT")
+    assert len(_builds_of(d)) == 1                           # place_photos never rebuilds
+    # Prepare again replans the plate round the bottom side's union
+    state = _prepare(d, tools)
+    assert len(_builds_of(d)) == 2
+    assert state["photo_plan_side"] == "bottom" and state["photo_band_side"] == "bottom"
+    assert _in_box(_plate_lonlat(state), state["frame"], state["epsg"])
+    assert not any(w.startswith("HOLES IN THE PRINT") for w in state["warnings"])
+    # and a third Prepare, nothing changed, builds nothing
+    _prepare(d, tools)
+    assert len(_builds_of(d)) == 2
+
+
+def test_a_plan_from_before_photo_plan_side_stays_current_on_either_side(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    _prepare(d, tools)
+    order = od.load(str(d))
+    od.write_state(order, {"photo_plan_side": None})         # planned for both ends
+    od.set_manual(order, "band_side", "bottom")
+    _prepare(d, tools)
+    assert len(_builds_of(d)) == 1
 
 
 def test_more_than_the_band_holds_is_warned(tmp_path, tools):
@@ -274,20 +349,72 @@ def opl_open_max():
     return OPEN_MAX
 
 
+def _area(f):
+    return (f[2] - f[0]) * (f[3] - f[1])
+
+
+def _holds(outer, inner):
+    return (outer[0] <= inner[0] + 1e-6 and outer[1] <= inner[1] + 1e-6
+            and inner[2] <= outer[2] + 1e-6 and inner[3] <= outer[3] + 1e-6)
+
+
 def test_band_frame_and_plan_frame_keep_the_aspect():
     f = (0.0, 0.0, 1100.0, 1700.0)                        # 11 x 17 at 100 m per inch
     bh = 3.0
     top = opl.band_frame(f, 17.0, bh, "top")
     bottom = opl.band_frame(f, 17.0, bh, "bottom")
-    plan = opl.photo_plan_frame(f, 17.0, bh)
-    for g in (top, bottom, plan):
-        assert (g[2] - g[0]) / (g[3] - g[1]) == pytest.approx(11 / 17)
     assert top[1] == f[1] and top[3] > f[3] and bottom[3] == f[3] and bottom[1] < f[1]
     # the band's ground is the band's inches at the band frame's scale
     gpi = (top[2] - top[0]) / 11.0
     assert top[3] - f[3] == pytest.approx(bh * gpi)
-    for g in (top, bottom, f):
-        assert plan[0] <= g[0] and plan[1] <= g[1] and g[2] <= plan[2] and g[3] <= plan[3]
+    for side, band in (("top", top), ("bottom", bottom)):
+        plan = opl.photo_plan_frame(f, 17.0, bh, side)
+        assert (plan[2] - plan[0]) / (plan[3] - plan[1]) == pytest.approx(11 / 17)
+        # the union of the open frame and the chosen side's band frame
+        assert _holds(plan, f) and _holds(plan, band)
+        assert _area(plan) == pytest.approx(_area(band))
+    # only the chosen side: the other side's band frame sticks out of the plan
+    assert not _holds(opl.photo_plan_frame(f, 17.0, bh, "top"), bottom)
+    assert not _holds(opl.photo_plan_frame(f, 17.0, bh, "bottom"), top)
+
+
+def test_the_plan_frame_grows_toward_the_chosen_side_only():
+    f = (0.0, 0.0, 1700.0, 1100.0)                        # 17 x 11 landscape
+    top = opl.photo_plan_frame(f, 11.0, 3.0, "top")
+    bottom = opl.photo_plan_frame(f, 11.0, 3.0, "bottom")
+    assert top[1] == f[1] and top[3] > f[3]               # grows upward only
+    assert bottom[3] == f[3] and bottom[1] < f[1]         # grows downward only
+    for g in (top, bottom):                               # and across, about the centre
+        assert g[0] < f[0] and g[2] > f[2]
+        assert (g[0] + g[2]) / 2 == pytest.approx((f[0] + f[2]) / 2)
+
+
+@pytest.mark.parametrize("ph,bh,most", [(11.0, 3.5, 2.5), (22.0, 4.045, 2.5),
+                                        (17.0, 3.088, 2.5)])
+def test_the_plan_frame_stays_small_on_a_short_print(ph, bh, most):
+    f = (0.0, 0.0, 1.5 * ph * 100, ph * 100)
+    for side in ("top", "bottom"):
+        ratio = _area(opl.photo_plan_frame(f, ph, bh, side)) / _area(f)
+        assert ratio <= most
+        # the both-ends plan it replaces: (ph / (ph - 2 bh)) squared, ~7.6x at 11 in
+        if ph > 2 * bh:
+            assert ratio < (ph / (ph - 2 * bh)) ** 2
+
+
+def test_the_plan_frame_factor_on_the_acceptance_print():
+    f = (0.0, 0.0, 1700.0, 1100.0)                        # a 17 x 11 landscape print
+    assert (_area(opl.photo_plan_frame(f, 11.0, 3.5, "top")) / _area(f)
+            == pytest.approx((11 / 7.5) ** 2))            # 2.15x; both ends was 7.56x
+
+
+def test_no_band_plans_the_frame_itself():
+    f = (0.0, 0.0, 1100.0, 1700.0)
+    assert opl.photo_plan_frame(f, 17.0, 0.0, "top") == f
+
+
+def test_a_band_taller_than_the_print_is_refused():
+    with pytest.raises(opl.PlateError):
+        opl.photo_plan_frame((0.0, 0.0, 1100.0, 1100.0), 11.0, 11.0, "top")
 
 
 def test_band_side_comes_from_order_toml(tmp_path, tools):

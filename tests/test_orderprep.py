@@ -707,6 +707,19 @@ def test_nan_shares_reads_the_plate_and_the_frame(tmp_path):
     assert frame == pytest.approx(0.04, abs=0.005)
 
 
+def test_nan_shares_counts_frame_ground_off_the_plate_as_no_data(tmp_path):
+    import numpy as np
+    path = str(tmp_path / "dem.tif")
+    _dem(path, np.full((400, 400), 500.0, "float32"), (0.0, 0.0, 4000.0, 4000.0))
+    # the south quarter of the frame (1,000 of 4,000 m) hangs off the plate (a band side it was not planned for)
+    _, frame = op.nan_shares(path, (1000.0, -1000.0, 3000.0, 3000.0))
+    assert frame == pytest.approx(0.25, abs=0.005)
+    _, frame = op.nan_shares(path, (1000.0, -3000.0, 3000.0, -1000.0))   # wholly off it
+    assert frame == 1.0
+    _, frame = op.nan_shares(path, (1000.0, 1000.0, 3000.0, 3000.0))     # on it: as before
+    assert frame == 0.0
+
+
 def test_a_failed_frame_coverage_check_still_warns_loudly(tmp_path, tools):
     import numpy as np
     arr = np.full((200, 200), 500.0, "float32")

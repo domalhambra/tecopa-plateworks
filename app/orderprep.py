@@ -239,7 +239,8 @@ def _plan_grid(tools, frame, epsg, print_w_in, env, grow=None):
     the layer that first forced a widening (None if none did): the warning names
     that one, since a finer layer can come back into cover on the larger plate.
     `grow` maps the frame to the larger one the plate must hold (an order with photos:
-    photo_plan_frame): coverage is read for that plate, the resolution for the frame."""
+    photo_plan_frame, on the current band side): coverage is read for that plate, the
+    resolution for the frame."""
     forced_by = None
     for _ in range(MAX_PLAN_PASSES):
         need = needed_resolution(frame, print_w_in)
@@ -360,9 +361,12 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     state = read_state(order)
     manual = state.get("manual", {})
     inputs = order.inputs_hash()
-    # An order with photos plans its plate round the frame grown by a band at both
-    # ends (B2): adding the first photo, or removing the last, plans the plate again.
+    # An order with photos plans its plate round the union of the frame and its band
+    # frame on the band's current side (B2): adding the first photo, or removing the
+    # last, or changing the band's side, plans the plate again. A plan from before
+    # photo_plan_side (planned for both ends) holds either side, so it stays current.
     with_photos = bool(order.photo_files())
+    side = _band_side(order, manual)
     old_plate = state.get("plate")
     landcover_rebuilds = state.get("landcover_rebuilds", 0)
     # A manual frame is current when it is the one the last plan started from. It is
@@ -370,7 +374,8 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     frame_current = ("frame" not in manual
                      or list(manual["frame"]) == state.get("frame_from_manual"))
     current = (state.get("inputs_hash") == inputs and frame_current
-               and bool(state.get("photo_plan")) == with_photos)
+               and bool(state.get("photo_plan")) == with_photos
+               and (not with_photos or state.get("photo_plan_side") in (None, side)))
     if current and _plate_present(old_plate, landcover_rebuilds):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
         state = place_photos(order, state, log, tools=tools)   # new photos, studio edits
@@ -388,7 +393,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
                              and not _has_landcover(old_plate["root"], old_plate["id"]))
 
     pw, ph = order.print_in()
-    grow = _photo_grow(order, pw, ph) if with_photos else None
+    grow = _photo_grow(order, pw, ph, side) if with_photos else None
     holes_env = None
     hole_notes = []           # what check_holes said of the frame in use (hole_notes)
     warnings = []
@@ -480,7 +485,8 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
         # manual.frame is always an open frame, so Prepare never grows a grown frame: a
         # studio save of the frame saves open_frame (from a band proof, its crop through
         # orderspec.crop_for_layout(crop, "band", side, "open", side, spec)).
-        "open_frame": list(frame), "photo_plan": with_photos, "hole_notes": hole_notes,
+        "open_frame": list(frame), "photo_plan": with_photos,
+        "photo_plan_side": side if with_photos else None, "hole_notes": hole_notes,
         "approval": None})            # a new plate is a new print: nothing approved stands
     state = place_photos(order, read_state(order), log, recheck_holes=False)
     if holes_env is not None:
@@ -517,11 +523,19 @@ def _route_ends_behind_gaps(order, payloads, epsg, frame) -> list:
     return [ROUTE_END_BEHIND_GAP.format(k=k) for k in gaps_hiding_ends(ends, frame, cand)]
 
 
-def _photo_grow(order, pw, ph):
-    """The frame -> plan frame map of an order with photos: the frame grown by the
-    photo band's height at the top and the bottom (B2), at the print's scale."""
+def _band_side(order, manual) -> str:
+    """The band's current end: Dom's choice in the studio (manual.band_side), else
+    order.toml's (default "top"). Prepare's plan and place_photos read it the same way."""
+    side = (manual or {}).get("band_side")
+    return side if side in BAND_SIDES else order.band_side
+
+
+def _photo_grow(order, pw, ph, side):
+    """The frame -> plan frame map of an order with photos: the union of the frame and
+    its band frame on the band's current `side` (B2), at the print's scale. One side
+    only: a switch to the other side replans (Prepare again)."""
     band_h = orderspec.band_height_for(orderspec.photo_box_in((pw, ph), order.panels))
-    return lambda frame: photo_plan_frame(frame, ph, band_h)
+    return lambda frame: photo_plan_frame(frame, ph, band_h, side)
 
 
 def _read_photos(order, files, region, tracks, labels, box_in, log, known=None) -> list:
@@ -759,8 +773,7 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True,
     manual = state.get("manual") or {}
     edits = manual.get("photos") if isinstance(manual.get("photos"), dict) else {}
     box_in = orderspec.photo_box_in((pw, ph), int(state.get("panels", 1)))
-    side = manual.get("band_side") if manual.get("band_side") in BAND_SIDES \
-        else order.band_side
+    side = _band_side(order, manual)
     plate = orderspec.plate_dir(state)
     with open(os.path.join(plate, "region.json")) as f:
         cfg = json.load(f)
@@ -951,9 +964,11 @@ def _build(order, tools, frame, epsg, grid, env, log, cwd=None, root=None, rid=N
 
 
 def nan_shares(dem_path, frame, decimate=HOLE_DECIMATE) -> tuple:
-    """(plate, frame): the share of dem.tif's cells, and of the cells inside `frame`
-    (metres, the plate's CRS), with no elevation. Both are decimated reads, every
-    `decimate`th cell each way, so a corridor-sized plate is never read whole."""
+    """(plate, frame): the share of dem.tif's cells, and of the ground inside `frame`
+    (metres, the plate's CRS), with no elevation. Ground of the frame that lies outside
+    dem.tif counts as no elevation: a band side the plate was not planned for (the studio
+    switched sides) has none there. Both are decimated reads, every `decimate`th cell
+    each way, so a corridor-sized plate is never read whole."""
     import math
 
     import numpy as np
@@ -966,10 +981,16 @@ def nan_shares(dem_path, frame, decimate=HOLE_DECIMATE) -> tuple:
         c0, r0 = max(0, math.floor(f.col_off)), max(0, math.floor(f.row_off))
         c1 = min(ds.width, math.ceil(f.col_off + f.width))
         r1 = min(ds.height, math.ceil(f.row_off + f.height))
+        covered = (max(0.0, min(f.col_off + f.width, ds.width) - max(f.col_off, 0.0))
+                   * max(0.0, min(f.row_off + f.height, ds.height) - max(f.row_off, 0.0)))
+        on_plate = min(1.0, covered / (f.width * f.height)) if f.width * f.height else 0.0
+        if c1 <= c0 or r1 <= r0:
+            return float(np.isnan(plate).mean()), 1.0
         win = Window(c0, r0, c1 - c0, r1 - r0)
         inside = ds.read(1, window=win, out_shape=(max(1, (r1 - r0) // decimate),
                                                    max(1, (c1 - c0) // decimate)))
-    return float(np.isnan(plate).mean()), float(np.isnan(inside).mean())
+    frame_nan = 1.0 - on_plate * (1.0 - float(np.isnan(inside).mean()))
+    return float(np.isnan(plate).mean()), frame_nan
 
 
 def hole_fill_record(plate_dir):

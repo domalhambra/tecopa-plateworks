@@ -300,16 +300,19 @@ def unband_frame(frame, print_h_in, band_h_in, side) -> tuple:
     return _anchored(frame, 1.0 / _band_factor(print_h_in, band_h_in), side)
 
 
-def photo_plan_frame(frame, print_h_in, band_h_in) -> tuple:
-    """The frame a plate is planned round when the order has photos: `frame` grown by a
-    band at both ends, so the plate holds the open layout's frame and the band's, on
-    either side, before the layout is known. It is `frame` scaled about its centre."""
+def photo_plan_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The frame a plate is planned round when the order has photos: the union of `frame`
+    (the open layout's) and the band frame on the band's current `side` ("top" or
+    "bottom"), so the plate holds either layout on that side. The band frame already
+    holds `frame`, so the union is that frame; it is taken as a union anyway, so the
+    promise does not rest on how band_frame is anchored. Only the one side is planned:
+    growing for both ends scaled a short landscape print about 7.5 times in area.
+    A switch to the other side is a Prepare again (check_holes warns first)."""
     if band_h_in <= 0:
         return tuple(frame)
-    if print_h_in <= 2 * band_h_in:
-        raise PlateError(f"Two {band_h_in:.2f} in photo bands do not fit a "
-                         f"{print_h_in:g} in tall print.")
-    return _scaled(frame, print_h_in / (print_h_in - 2 * band_h_in))
+    grown = band_frame(frame, print_h_in, band_h_in, side)
+    return (min(frame[0], grown[0]), min(frame[1], grown[1]),
+            max(frame[2], grown[2]), max(frame[3], grown[3]))
 
 
 def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions, grow=None):
@@ -319,7 +322,8 @@ def curated_fit(track_bbox_lonlat, aspect, print_w_in, regions, grow=None):
     changes, so a reused plate must hold it too, not just the bare frame. `regions`
     holds dicts with id, crs ("EPSG:n"), bounds (CRS metres) and native_resolution_m.
     `grow`, when given, maps the frame to the larger frame the plate must hold (an
-    order with photos: photo_plan_frame); the resolution is still the frame's own.
+    order with photos: photo_plan_frame on the current band side); the resolution is
+    still the frame's own.
     Returns {"region", "frame", "need_m", "epsg"} or None."""
     for r in regions:
         epsg = int(str(r["crs"]).split(":")[1])

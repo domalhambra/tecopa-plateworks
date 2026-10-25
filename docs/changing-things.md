@@ -587,11 +587,22 @@ The layout has two forms. They never mix on one poster.
   (the report says why). It holds 12 photos at most. The title, compass and credit
   take the other end of the sheet.
 
-A plate for an order with photos is planned around a frame grown by the band's height at
-both ends, so it holds either layout. That is about 5 times the area on a landscape
-11 × 17, so Prepare takes longer for an order with photos. When the band is used,
-Prepare grows the frame toward the band's end by the band's height, so the tracks keep
-their share of the map.
+A plate for an order with photos is planned around the open frame and the band frame on
+the band's current side (`manual.band_side`, else `band_side` in `order.toml`, else top),
+so it holds either layout on that side. That is about 1.9 times the area on a landscape
+11 × 17 (the band frame, since it holds the open frame), so Prepare takes a little longer
+for an order with photos. Planning for both ends took about 5 times the area there, and
+far more on a shorter print: a 3,000 km plate whose terrain fetch reached the Pacific
+(acceptance, 2026-10-24). When the band is used, Prepare grows the frame toward the
+band's end by the band's height, so the tracks keep their share of the map.
+
+If the studio switches the band to the other side, the new frame can need ground the plate
+does not have. `place_photos` measures the holes again on the new frame; ground of the
+frame outside `dem.tif` counts as no data, so the check warns "HOLES IN THE PRINT". Run
+Prepare again: it records the side it planned for (`photo_plan_side` in `state.json`),
+sees that the side changed and plans a new plate around the new side's frame. A new plate
+clears the approval. A plan from before `photo_plan_side` was planned for both ends, so it
+stays current on either side.
 
 The layout is computed on the crop that prints: the studio's live crop in the studio, the
 saved spec's crop in Prepare. A reframe followed by a proof lays out again the boxes you
