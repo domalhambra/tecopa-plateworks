@@ -1013,3 +1013,17 @@ def test_prepare_never_imports_the_app():
     code = ("import sys, app.orderprep; "
             "assert 'app.main' not in sys.modules")
     subprocess.run([sys.executable, "-c", code], check=True)
+
+
+# --- final fix M7: a missing prep venv never stops a hole check --------------------------
+
+def test_a_hole_check_with_no_prep_python_warns_and_goes_on(tmp_path, monkeypatch):
+    plate = {"id": "p", "root": str(tmp_path), "us_share": 1.0}
+    monkeypatch.setattr(op, "nan_shares", lambda path, frame: (0.05, 0.05))
+    tools = op.Tools(prep_python=str(tmp_path / "no-venv" / "python"), prep_script="-",
+                     labels_script="-", coverage_script="-", repo_root=str(tmp_path),
+                     curated_root=str(tmp_path))
+    notes = op.check_holes(tools, plate, (0, 0, 1, 1), 32611, 10.0, dict(os.environ),
+                           log=lambda s: None)
+    assert any(n.startswith("HOLES IN THE PRINT") and "could not be checked" in n
+               for n in notes)

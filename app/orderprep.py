@@ -179,12 +179,16 @@ def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
     """{layer metres: covered share}, for `layers` only when given. choose_grid
     reads a layer left out as uncovered. A query that fails, or prints no result,
     raises CoverageError: a PlateError that the preview does not take for a size
-    the terrain refuses."""
+    the terrain refuses, and so does a prep Python that cannot be started (OSError: a
+    missing .venv-prep)."""
     cmd = [tools.prep_python, tools.coverage_script, *map(str, bbox)]
     if layers:
         cmd += ["--layers", ",".join(str(r) for r in layers)]
-    run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
-                         env=env)
+    try:
+        run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
+                             env=env)
+    except OSError as ex:        # no prep venv (a studio edit reaching check_holes)
+        raise CoverageError(f"The 3DEP coverage check could not run: {ex}") from ex
     if run.returncode != 0:
         raise CoverageError("The 3DEP coverage check failed:\n" + run.stderr[-800:])
     try:
