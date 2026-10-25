@@ -1,0 +1,298 @@
+# tests/test_orderprep_photos.py
+# Prepare's photo step (order-photos Task 7): spots, captions, the layout, the warnings,
+# and a second Prepare after studio edits. The plate is the Plan A stub build (no
+# network); the proof is a fake, so nothing here renders a sheet.
+import calendar
+import json
+import os
+import sys
+
+import pytest
+
+from app import order as od
+from app import orderplate as opl
+from app import orderprep as op
+from app import orderspec
+from tests.test_orderprep import (LIDAR, SMALL, STUB_COVERAGE, STUB_LABELS, STUB_PREP,
+                                  _Fake, _make_order)
+from tests.test_photos import _make
+
+T0 = calendar.timegm((2026, 10, 3, 16, 0, 0))          # the track starts, UTC
+PEAK = ("Tecopa Peak", "summit", -116.208, 35.928)      # a named place in labels.json
+NEAR_PEAK = (35.927, "N", 116.207, "W")                 # ~140 m from it
+WEST = (35.915, "N", 116.200, "W")                      # ~1.3 km west of the track
+FAR_AWAY = (36.3, "N", 116.0, "W")                      # in the lower 48, off the frame
+BIG = (700, 500)                                        # past 2.25 in x 300 ppi
+
+# The Plan A stub, plus a labels.json from STUB_LABELS_LONLAT ([name, kind, lon, lat])
+STUB_PREP_LABELS = STUB_PREP + """
+if os.environ.get("STUB_LABELS_LONLAT"):
+    from pyproj import Transformer
+    fwd = Transformer.from_crs("EPSG:4326", "EPSG:" + a.epsg, always_xy=True)
+    feats = []
+    for name, kind, lon, lat in json.loads(os.environ["STUB_LABELS_LONLAT"]):
+        x, y = fwd.transform(lon, lat)
+        feats.append({"name": name, "kind": kind, "rank": 1, "coords": [[x, y]]})
+    json.dump({"crs": "EPSG:" + a.epsg, "features": feats},
+              open(os.path.join(out, "labels.json"), "w"))
+"""
+
+
+@pytest.fixture
+def tools(tmp_path, monkeypatch):
+    """Plan A's tools stub (tests/test_orderprep.py), its plate with a labels.json."""
+    stubs = tmp_path / "stubs"
+    stubs.mkdir()
+    for name, body in (("prep.py", STUB_PREP_LABELS), ("coverage.py", STUB_COVERAGE),
+                       ("labels.py", STUB_LABELS)):
+        (stubs / name).write_text(body)
+    (tmp_path / "curated").mkdir()
+    monkeypatch.setenv("TECOPA_ORDERS_DIR", str(tmp_path / "orders"))
+    monkeypatch.setenv("STUB_COVERAGE", json.dumps(LIDAR))
+    monkeypatch.setenv("STUB_LABELS_LONLAT", json.dumps([list(PEAK)]))
+    return op.Tools(prep_python=sys.executable, prep_script=str(stubs / "prep.py"),
+                    labels_script=str(stubs / "labels.py"),
+                    coverage_script=str(stubs / "coverage.py"),
+                    repo_root=str(tmp_path), curated_root=str(tmp_path / "curated"))
+
+
+def _timed_gpx(w, s, e, n):
+    """Two points an hour apart: south-west at T0, north-east at T0 + 3600."""
+    def iso(t):
+        import time
+        return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+    pts = "".join(f'<trkpt lat="{lat}" lon="{lon}"><time>{iso(t)}</time></trkpt>'
+                  for lon, lat, t in ((w, s, T0), (e, n, T0 + 3600)))
+    return ('<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            'xmlns="http://www.topografix.com/GPX/1/1"><trk><name>t</name>'
+            f"<trkseg>{pts}</trkseg></trk></gpx>")
+
+
+def _order(tmp_path, size="12x18", extra=""):
+    d = _make_order(tmp_path, size=size)
+    (d / "in" / "trip.gpx").write_text(_timed_gpx(*SMALL))
+    if extra:
+        (d / "order.toml").write_text((d / "order.toml").read_text() + extra)
+    return d
+
+
+def _prepare(d, tools):
+    return op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+
+
+def _by_file(state):
+    return {p["file"]: p for p in state["photos"]}
+
+
+def test_photo_files_are_the_photos_in_in_by_name(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "b.JPG")
+    _make(d / "in" / "a.heic.png")
+    (d / "in" / ".hidden.jpg").write_bytes(b"x")
+    names = [os.path.basename(p) for p in od.load(str(d)).photo_files()]
+    assert names == ["a.heic.png", "b.JPG"]
+
+
+def test_photos_get_spots_captions_and_boxes(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a_gps.jpg", size=BIG, gps=NEAR_PEAK)
+    _make(d / "in" / "b_time.jpg", size=BIG, taken="2026:10:03 09:30:00", offset="-07:00")
+    before = {p.name: p.read_bytes() for p in (d / "in").iterdir()}
+    state = _prepare(d, tools)
+    assert [p["file"] for p in state["photos"]] == ["a_gps.jpg", "b_time.jpg"]
+    a, b = state["photos"]
+    assert a["source"] == "gps" and a["caption"] == "Tecopa Peak"
+    assert b["source"] == "time" and b["caption"] == ""        # 2.6 km from the peak
+    # the time spot is halfway along the track, as the photo is halfway in time
+    from app.orderpreview import load_tracks_m
+    t = load_tracks_m(od.load(str(d)).payloads(), state["epsg"])[0].coords
+    assert b["spot"]["x"] == pytest.approx((t[0][0] + t[-1][0]) / 2, abs=0.5)
+    assert b["spot"]["y"] == pytest.approx((t[0][1] + t[-1][1]) / 2, abs=0.5)
+    assert state["photo_layout"] == "open" and state["band_frame"] is False
+    assert state["photo_box_in"] == 2.25                       # B6 on 12 x 18
+    for p in (a, b):
+        assert set(p["box"]) == {"dx_in", "dy_in"}
+        assert p["crop"] == {"cx": 0.5, "cy": 0.5}
+        assert p["dropped"] is False and p["warnings"] == []
+        assert os.path.isfile(os.path.join(str(d), p["work"]))
+        assert p["work"].startswith(os.path.join("work", "photos") + os.sep)
+    assert {p.name: p.read_bytes() for p in (d / "in").iterdir()} == before
+    report = (d / "work" / "report.txt").read_text()
+    assert ("Photos: 2 placed (1 by GPS, 1 by time, 0 by hand), 0 in the tray, "
+            "0 dropped; layout open") in report
+
+
+def test_a_photo_with_no_spot_goes_to_the_tray(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "nowhere.jpg", size=BIG)
+    state = _prepare(d, tools)
+    (p,) = state["photos"]
+    assert p["spot"] is None and p["source"] is None and p["box"] is None
+    assert p["caption"] == ""
+    assert "Photos: 0 placed (0 by GPS, 0 by time, 0 by hand), 1 in the tray, 0 dropped; " \
+           "layout open" in (d / "work" / "report.txt").read_text()
+
+
+def test_small_and_outside_photos_are_warned(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "c_small.jpg", size=(60, 40), gps=NEAR_PEAK)
+    _make(d / "in" / "d_far.jpg", size=BIG, gps=FAR_AWAY)
+    state = _prepare(d, tools)
+    small = "c_small.jpg: 60×40 px is small for a 2.25 in box at 300 ppi."
+    far = "d_far.jpg: its spot is outside the frame. Widen the frame or drop it."
+    photos = _by_file(state)
+    assert photos["c_small.jpg"]["warnings"] == [small]
+    assert photos["d_far.jpg"]["warnings"] == [far]
+    assert small in state["warnings"] and far in state["warnings"]
+    # the far photo is kept: its spot stays, it lays out no box, the small one still does
+    assert photos["d_far.jpg"]["spot"] is not None and photos["d_far.jpg"]["box"] is None
+    assert state["photo_layout"] == "open" and photos["c_small.jpg"]["box"] is not None
+    report = (d / "work" / "report.txt").read_text()
+    assert f"- {small}" in report and f"- {far}" in report
+
+
+def test_an_unreadable_photo_is_warned_and_skipped(tmp_path, tools):
+    d = _order(tmp_path)
+    (d / "in" / "broken.jpg").write_bytes(b"not a picture at all")
+    _make(d / "in" / "good.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    photos = _by_file(state)
+    bad = photos["broken.jpg"]
+    assert bad["work"] is None and bad["spot"] is None
+    assert len(bad["warnings"]) == 1 and bad["warnings"][0].startswith("broken.jpg: ")
+    assert bad["warnings"][0] in state["warnings"]
+    assert photos["good.jpg"]["source"] == "gps"
+    assert not os.path.exists(d / "work" / "photos" / "broken.jpg.jpg")
+
+
+def test_prepare_again_keeps_the_studio_edits_and_adds_new_photos(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    _make(d / "in" / "b.jpg", size=BIG, taken="2026:10:03 09:30:00", offset="-07:00")
+    _make(d / "in" / "c.jpg", size=BIG)                                  # the tray
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    b_spot = _by_file(state)["b.jpg"]["spot"]
+    hand = {"x": b_spot["x"] + 300.0, "y": b_spot["y"] - 400.0}
+    edits = {"a.jpg": {"box": {"dx_in": 1.25, "dy_in": -1.75}, "caption": "Home",
+                       "crop": {"cx": 0.2, "cy": 0.8}},
+             "b.jpg": {"dropped": True},
+             "c.jpg": {"spot": hand}}
+    od.set_manual(order, "photos", edits)
+    _make(d / "in" / "e.jpg", size=BIG, gps=WEST)                        # a new photo
+    _make(d / "in" / "f.jpg", size=BIG)                                  # a new tray one
+    state = _prepare(d, tools)
+    photos = _by_file(state)
+    assert list(photos) == ["a.jpg", "b.jpg", "c.jpg", "e.jpg", "f.jpg"]
+    a, b, c, e, f = (photos[k] for k in photos)
+    assert a["box"] == {"dx_in": 1.25, "dy_in": -1.75}                  # not moved
+    assert (a["caption"], a["crop"]) == ("Home", {"cx": 0.2, "cy": 0.8})
+    assert b["dropped"] is True and b["box"] is None
+    assert c["spot"] == hand and c["source"] == "manual" and c["box"] is not None
+    assert e["source"] == "gps" and e["box"] is not None
+    assert f["spot"] is None and f["box"] is None
+    assert od.read_state(order)["manual"]["photos"] == edits             # never erased
+    assert ("Photos: 3 placed (1 by GPS, 0 by time, 1 by hand)"
+            not in (d / "work" / "report.txt").read_text())
+    assert ("Photos: 3 placed (2 by GPS, 0 by time, 1 by hand), 1 in the tray, "
+            "1 dropped; layout open") in (d / "work" / "report.txt").read_text()
+
+
+def test_a_band_grows_the_frame_upward(tmp_path, tools):
+    d = _order(tmp_path)
+    for k in range(opl_open_max() + 1):                     # past open ground: the band
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    assert state["photo_layout"] == "band" and state["band_frame"] is True
+    assert state["photo_band_side"] == "top"
+    open_, frame = state["open_frame"], state["frame"]
+    assert frame[1] == pytest.approx(open_[1])              # the bottom stays
+    assert frame[3] > open_[3]                              # the top grows
+    pw, ph = state["print_in"]
+    assert (frame[2] - frame[0]) / (frame[3] - frame[1]) == pytest.approx(pw / ph)
+    assert all(p["box"] is None for p in state["photos"])
+    # the plate was planned round the frame grown at both ends: it holds either band
+    region = json.load(open(os.path.join(orderspec.plate_dir(state), "region.json")))
+    w, s, e, n = region["bbox"]
+    lon0, lat0, lon1, lat1 = opl.to_lonlat_bbox(frame, state["epsg"])
+    assert w <= lon0 and s <= lat0 and lon1 <= e and lat1 <= n
+    assert "layout band" in (d / "work" / "report.txt").read_text()
+
+
+def test_a_bottom_band_grows_the_frame_downward(tmp_path, tools):
+    d = _order(tmp_path, extra='band_side = "bottom"\n')
+    for k in range(opl_open_max() + 1):
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    open_, frame = state["open_frame"], state["frame"]
+    assert state["photo_band_side"] == "bottom"
+    assert frame[3] == pytest.approx(open_[3]) and frame[1] < open_[1]
+
+
+def test_more_than_the_band_holds_is_warned(tmp_path, tools):
+    d = _order(tmp_path)
+    for k in range(13):
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    assert "13 photos: the band holds 12. Drop some in the studio." in state["warnings"]
+
+
+def test_an_order_with_no_photos_plans_as_before(tmp_path, tools):
+    d = _order(tmp_path)
+    state = _prepare(d, tools)
+    assert state["photos"] == [] and state["band_frame"] is False
+    assert state["frame"] == state["open_frame"]
+    assert "Photos:" not in (d / "work" / "report.txt").read_text()
+    # adding a photo replans the plate round the grown frame: a new build
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    builds = (d / "work" / "plate" / "builds.log").read_text().split()
+    state = _prepare(d, tools)
+    assert len((d / "work" / "plate" / "builds.log").read_text().split()) == len(builds) + 1
+    assert state["photo_plan"] is True
+
+
+def test_a_photo_behind_a_gap_is_warned(tmp_path, tools):
+    from tests.test_orderprep import WIDE
+    d = _make_order(tmp_path, bbox=WIDE, size="two")
+    state = _prepare(d, tools)
+    # a spot on the frame's mid-line, inside the gap strip of a two-panel window set
+    f = state["frame"]
+    pw = state["print_in"][0]
+    gap_mid_in = pw / 2
+    x = f[0] + gap_mid_in / pw * (f[2] - f[0])
+    y = (f[1] + f[3]) / 2
+    from pyproj import Transformer
+    lon, lat = Transformer.from_crs(f"EPSG:{state['epsg']}", "EPSG:4326",
+                                    always_xy=True).transform(x, y)
+    _make(d / "in" / "gap.jpg", size=BIG, gps=(lat, "N", -lon, "W"))
+    state = _prepare(d, tools)
+    assert any(w.startswith("Photo gap.jpg is behind gap 1") for w in state["warnings"])
+
+
+def opl_open_max():
+    from app.photolayout import OPEN_MAX
+    return OPEN_MAX
+
+
+def test_band_frame_and_plan_frame_keep_the_aspect():
+    f = (0.0, 0.0, 1100.0, 1700.0)                        # 11 x 17 at 100 m per inch
+    bh = 3.0
+    top = opl.band_frame(f, 17.0, bh, "top")
+    bottom = opl.band_frame(f, 17.0, bh, "bottom")
+    plan = opl.photo_plan_frame(f, 17.0, bh)
+    for g in (top, bottom, plan):
+        assert (g[2] - g[0]) / (g[3] - g[1]) == pytest.approx(11 / 17)
+    assert top[1] == f[1] and top[3] > f[3] and bottom[3] == f[3] and bottom[1] < f[1]
+    # the band's ground is the band's inches at the band frame's scale
+    gpi = (top[2] - top[0]) / 11.0
+    assert top[3] - f[3] == pytest.approx(bh * gpi)
+    for g in (top, bottom, f):
+        assert plan[0] <= g[0] and plan[1] <= g[1] and g[2] <= plan[2] and g[3] <= plan[3]
+
+
+def test_band_side_comes_from_order_toml(tmp_path, tools):
+    d = _order(tmp_path)
+    assert od.load(str(d)).band_side == "top"
+    (d / "order.toml").write_text((d / "order.toml").read_text() + 'band_side = "left"\n')
+    with pytest.raises(od.OrderError, match='band_side must be "top" or "bottom"'):
+        od.load(str(d))
