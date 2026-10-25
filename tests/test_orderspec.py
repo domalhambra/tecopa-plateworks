@@ -336,3 +336,42 @@ def test_a_saved_open_crop_grows_when_the_photos_go_to_the_band(order):
     _with_photos(order, read_state(order)["photos"], layout="open")
     assert orderspec.order_spec(order, read_state(order)).crop == pytest.approx(
         tuple(saved["crop"]))
+
+
+# --- final fix I2: the hash covers an order photo's pixels, and nothing else changed ----
+
+def _fixed_spec(**kw):
+    from app.spec import CompositionSpec
+    return CompositionSpec(
+        region_id="lassen_ca", crs="EPSG:32610",
+        crop=(600000.0, 4480000.0, 611000.0, 4497000.0), print_w_in=11.0,
+        print_h_in=17.0, native_resolution_m=10.0,
+        tracks=[[(601000.0, 4481000.0), (610000.0, 4496000.0)]], track_days=[0], seed=7,
+        title_text="Smith home ground",
+        hotspots=[{"x": 605000.0, "y": 4490000.0, "weight": 1, "label": "a marker"}], **kw)
+
+
+# spec_hash of _fixed_spec() by main's code (136af61:app/orderspec.py, run against this
+# CompositionSpec): a spec with no order photo hashes as it always did
+MAIN_HASH_OF_FIXED_SPEC = "dc40681848f36bc805addd3e896e56fb924ee7948f211f7f006ccbe60c2205c0"
+
+
+def test_a_spec_with_no_order_photo_hashes_as_main_did():
+    import hashlib
+    s = _fixed_spec()
+    text = json.dumps(spec_to_json(s), sort_keys=True, separators=(",", ":"))
+    assert orderspec.spec_hash(s) == hashlib.sha256(text.encode()).hexdigest()
+    assert orderspec.spec_hash(s) == MAIN_HASH_OF_FIXED_SPEC
+
+
+def test_the_hash_follows_an_order_photos_pixels(order):
+    from PIL import Image
+    st = read_state(order)
+    st = _with_photos(order, [_photo(order, "a.jpg", _centre(st))])
+    s = orderspec.default_spec(order, st)
+    before = orderspec.spec_hash(s)
+    assert orderspec.spec_hash(s) == before                  # the same bytes, the same hash
+    work = s.hotspots[0]["photo"]
+    Image.new("RGB", (40, 30), (10, 200, 30)).save(work)      # same path, other pixels
+    assert orderspec.spec_hash(s) != before
+    assert s.hotspots[0]["photo"] == work and "photo_sha256" not in s.hotspots[0]

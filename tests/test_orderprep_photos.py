@@ -541,3 +541,60 @@ def test_photos_removed_from_in_leave_the_saved_spec(tmp_path, tools):
     assert s.photo_layout == "open"
     assert s.crop == pytest.approx(tuple(state["open_frame"]))
     assert s.crop == pytest.approx(tuple(state["frame"]))
+
+
+# --- final fix I2: the work JPEG follows the photo's bytes, and the approval does too ----
+
+def _replace_older(path, colour=(200, 30, 30)):
+    """The same-named photo with other pixels and the same EXIF, its mtime set back a day:
+    a newer work JPEG must not hide it."""
+    from PIL import Image
+    with Image.open(path) as im:
+        exif, size = im.getexif(), im.size
+    before = os.stat(path).st_mtime
+    Image.new("RGB", size, colour).save(path, exif=exif)
+    os.utime(path, (before - 86400, before - 86400))
+
+
+def test_a_replaced_photo_with_an_older_mtime_rewrites_its_work_jpeg(tmp_path, tools):
+    import hashlib
+    d = _order(tmp_path)
+    src = _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    (a,) = state["photos"]
+    assert a["sha256"] == hashlib.sha256(open(src, "rb").read()).hexdigest()
+    work = os.path.join(str(d), a["work"])
+    first = open(work, "rb").read()
+    _replace_older(src)
+    assert os.path.getmtime(work) > os.path.getmtime(src)
+    state = _prepare(d, tools)
+    (a,) = state["photos"]
+    assert a["sha256"] == hashlib.sha256(open(src, "rb").read()).hexdigest()
+    assert open(work, "rb").read() != first
+
+
+def test_a_photo_that_did_not_change_keeps_its_work_jpeg(tmp_path, tools):
+    d = _order(tmp_path)
+    _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    work = os.path.join(str(d), state["photos"][0]["work"])
+    stamp = os.stat(work).st_mtime_ns
+    _prepare(d, tools)
+    assert os.stat(work).st_mtime_ns == stamp
+
+
+def test_a_photo_replaced_after_approval_voids_it(tmp_path, tools):
+    from app import orderstudio
+    from app.serialize import spec_to_json
+    d = _order(tmp_path)
+    src = _make(d / "in" / "a.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    spec = orderspec.order_spec(order, state)
+    od.set_manual(order, "spec", spec_to_json(spec))
+    od.write_state(order, {"approval": {"at": "x", "hash": orderspec.spec_hash(spec)}})
+    assert orderstudio.approval_ok(order, od.read_state(order))
+    _replace_older(src)
+    state = _prepare(d, tools)
+    assert state["approval"] is not None                      # the same plate: kept
+    assert not orderstudio.approval_ok(order, state)          # but no longer this print

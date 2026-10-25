@@ -520,18 +520,17 @@ def _photo_grow(order, pw, ph):
     return lambda frame: photo_plan_frame(frame, ph, band_h)
 
 
-def _fresh(dst, src) -> bool:
-    try:
-        return os.path.getmtime(dst) >= os.path.getmtime(src)
-    except OSError:
-        return False
+def _read_photos(order, files, region, tracks, labels, box_in, log, known=None) -> list:
+    """Prepare's own entry for each photo file: the sha256 of its bytes, its work JPEG,
+    its spot and source, its caption, and the small-photo warning. One photo that cannot
+    be read (or written) is warned and kept with no work JPEG and no spot: it never fails
+    Prepare. A photo whose place or time cannot be read keeps its work JPEG and waits in
+    the tray, warned.
 
-
-def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
-    """Prepare's own entry for each photo file: its work JPEG, its spot and source, its
-    caption, and the small-photo warning. One photo that cannot be read (or written) is
-    warned and kept with no work JPEG and no spot: it never fails Prepare. A photo whose
-    place or time cannot be read keeps its work JPEG and waits in the tray, warned."""
+    The work JPEG is written again when the photo's sha256 is not the one the last run
+    recorded (`known`: {file: sha256}, from state.json), or when it is missing. Never by
+    mtime: a same-named photo copied in with an older date is still a new photo."""
+    known = known or {}
     from app.photocaption import nearest_name
     from app.photos import read_meta, write_work_jpeg
     from app.photospot import spot_for
@@ -539,14 +538,15 @@ def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
     out = []
     for path in files:
         name = os.path.basename(path)
+        digest = orderspec.file_sha256(path)
         entry = {"file": name, "work": None, "spot": None, "source": None, "caption": "",
                  "box": None, "crop": {"cx": 0.5, "cy": 0.5}, "dropped": False,
-                 "warnings": []}
+                 "warnings": [], "sha256": digest}
         work = os.path.join(PHOTO_WORK_DIR, name + ".jpg")
         dst = os.path.join(order.dir, work)
         try:
             meta = read_meta(path)
-            if not _fresh(dst, path):
+            if digest is None or known.get(name) != digest or not os.path.isfile(dst):
                 tmp = dst + ".tmp"
                 try:
                     write_work_jpeg(path, tmp)
@@ -715,8 +715,8 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True,
     Task 7). Reads every photo in in/ (file-name order), lays the boxes out, settles
     the frame in use and writes state.json:
 
-    - photos: one entry per file, {"file", "work" (the work JPEG, relative to the order
-      folder), "spot": {"x", "y"} | None, "source", "caption", "box": {"dx_in", "dy_in"}
+    - photos: one entry per file, {"file", "sha256" (of the file in in/), "work" (the
+      work JPEG, relative to the order folder), "spot": {"x", "y"} | None, "source", "caption", "box": {"dx_in", "dy_in"}
       | None, "crop": {"cx", "cy"}, "dropped", "warnings"}, with manual.photos (the
       studio's edits, never written here) over Prepare's values, field by field;
     - photo_layout ("open" | "band"), photo_box_in (B6), photo_band_side (manual's, else
@@ -768,7 +768,9 @@ def place_photos(order, state: dict, log=print, tools=None, recheck_holes=True,
     payloads = order.payloads()
     tracks = load_tracks_m(payloads, state["epsg"])
     region = RegionGeo(crs=cfg["crs"], bounds=(0.0, 0.0, 1.0, 1.0), overview_size=(1, 1))
-    found = _read_photos(order, files, region, tracks, labels, box_in, log)
+    known = {p.get("file"): p.get("sha256") for p in state.get("photos") or []
+             if isinstance(p, dict)}
+    found = _read_photos(order, files, region, tracks, labels, box_in, log, known)
     state = {**state, "photos": found, "photo_box_in": box_in, "photo_band_side": side,
              "photo_layout": "open"}
     photos = orderspec.effective_photos(state)

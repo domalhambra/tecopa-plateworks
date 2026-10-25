@@ -620,3 +620,15 @@ def test_a_stale_print_file_that_cannot_be_removed_stops_finish(approved, monkey
     with pytest.raises(od.OrderError, match="old-title-11x17.tif.*Permission denied"):
         orderfinish.finish(approved.dir, dpi=DPI)
     assert not _leftover_temps(approved)
+
+
+# --- final fix I2: a photo whose pixels changed after approval is a changed order --------
+
+def test_finish_refuses_when_a_work_jpeg_changed_after_approval(order, monkeypatch):
+    spec = _photo_state(order, placed=2)
+    Image.new("RGB", (60, 40), (200, 20, 20)).save(spec.hotspots[0]["photo"], "JPEG")
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == orderfinish.CHANGED
+    _no_print(order)

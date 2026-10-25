@@ -8,7 +8,8 @@ order) when there is one, else the default spec: the framing Prepare made, in th
 look of a new poster. Either way the spec is bound to the plate that is on disk now.
 
 The approval hash is always spec_hash(order_spec(order, state)), the hash of the spec
-after that rebind. spec_hash hashes the spec it is given and nothing else.
+after that rebind. spec_hash hashes the spec it is given and, for each order photo on
+it, the bytes of its work JPEG: a photo replaced after the approval voids it.
 
 An order's photos belong to its state, never to a saved spec (ruling RB1): state.json's
 "photos" (what Prepare found) with "manual.photos" (the studio's edits) over them, field
@@ -323,9 +324,49 @@ def matches_order(spec: CompositionSpec, state: dict) -> str | None:
     return f"the spec is {_size_words(*have)}; the order is {_size_words(*want)}"
 
 
+_DIGESTS: dict = {}          # (path, inode, mtime_ns, size) -> sha256 hex
+_DIGESTS_MAX = 4096
+
+
+def file_sha256(path) -> str | None:
+    """sha256 hex of a file's bytes, or None when it cannot be read. Remembered by the
+    file's path, inode, mtime and size, so asking again of an unchanged file reads
+    nothing (the order list asks for every order's approval)."""
+    try:
+        st = os.stat(path)
+        key = (os.path.abspath(path), st.st_ino, st.st_mtime_ns, st.st_size)
+        got = _DIGESTS.get(key)
+        if got is None:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            got = h.hexdigest()
+            if len(_DIGESTS) >= _DIGESTS_MAX:
+                _DIGESTS.clear()
+            _DIGESTS[key] = got
+        return got
+    except OSError:
+        return None
+
+
+def _hashed_hotspot(hs):
+    """A hotspot as the hash reads it: an order photo (is_order_photo) carries its work
+    JPEG's sha256 beside its path, so a photo whose pixels changed is a changed print."""
+    if not (isinstance(hs, dict) and is_order_photo(hs.get("photo"))):
+        return hs
+    return {**hs, "photo_sha256": file_sha256(hs["photo"])}
+
+
 def spec_hash(spec: CompositionSpec) -> str:
-    """sha256 hex of the spec's canonical JSON."""
-    text = json.dumps(spec_to_json(spec), sort_keys=True, separators=(",", ":"))
+    """sha256 hex of the spec's canonical JSON. A spec that carries order photos hashes
+    each one's work JPEG bytes too (its sha256, read from disk); a spec with none hashes
+    exactly as it always did."""
+    payload = spec_to_json(spec)
+    hotspots = payload.get("hotspots") or []
+    if any(isinstance(hs, dict) and is_order_photo(hs.get("photo")) for hs in hotspots):
+        payload = {**payload, "hotspots": [_hashed_hotspot(hs) for hs in hotspots]}
+    text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(text.encode()).hexdigest()
 
 
