@@ -30,6 +30,7 @@ let busy = false;
 let photoView = null;      // the engine's last photo answer for the open order
 let photoSerial = -1;      // the proof serial photoView was measured on (-1: Open's spec)
 let measuring = false;     // a read-only photo answer is on its way
+let photoGen = 0;          // bumped by every request: a late answer of an older one is dropped
 let armed = null;          // the photo a click on the proof will place, or null
 let bandSeg = null;
 const NUDGE_IN = 0.1, NUDGE_BIG_IN = 0.5, NUDGE_SEND_MS = 500;
@@ -230,38 +231,58 @@ const photoTag = (p) => (!p.readable ? 'Unreadable' : p.dropped ? 'Dropped'
 const byFile = (file) => (photoView ? photoView.photos.find((p) => p.file === file) : null);
 const round3 = (v) => Math.round(v * 1000) / 1000;
 
-// Send one photo change; the engine answers the new photo list. An edit re-proofs.
+// Send one photo change; the engine answers the new photo list. An edit re-proofs, and
+// the warning it earned (a box dropped on a route, say) shows once that proof is in, so
+// the proof's own toast does not hide it.
 async function editPhoto(file, change) {
-  if (!open || busy) return;
+  if (!open) return;
+  if (busy) {                // dropped: put the screen back to what the engine has
+    drawBoxes();
+    if (photoView) bandSeg.reflect(photoView.band_side);
+    toast('Still working on the last change: try again in a moment.', 'info');
+    return;
+  }
   busy = true; refresh();
+  const gen = ++photoGen;
+  let reproof = false, warned = [];
   try {
     const j = await api.orderPhoto(open.session, file, change);
-    if (!open || state.session !== open.session) return;
+    if (!open || state.session !== open.session || gen !== photoGen) return;
     photoView = j;
     photoSerial = proof.proofCount();
     if (j.edited) {
       open.approved = !!j.approved;
       open.dirty = true; open.current = null;
-      state.hotspots = j.hotspots;
-      markers.render($('markerList'), (msg) => toast(msg, 'info'));
-      if (j.reframed) { state.starterCrop = j.crop_px; canvas.resetFrame(); }
-      else canvas.draw();
-      state.proofStale = true;
-      proof.refreshProofUI();
-      // the warning this edit earned, if any (a box dropped on a route, say)
-      const warned = file ? (j.warnings || []).filter((w) => w.startsWith(file + ':')) : [];
-      toast(warned.length ? warned[0] : (file ? 'Photo changed' : 'Band moved') + ': re-proofing',
-        warned.length ? 'error' : 'info');
+      warned = file ? (j.warnings || []).filter((w) => w.startsWith(file + ':')) : [];
     }
+    reproof = landPhotoAnswer(j);
     renderPhotos();
-    if (j.edited) proof.renderProof({ auto: true });
   } catch (e) {
-    open.note = e.message; open.noteError = true; open.sig = sig();
+    if (open) { open.note = e.message; open.noteError = true; open.sig = sig(); }
     toast(e.message, 'error');
     renderPhotos();          // put a dragged box back where the engine has it
   } finally {
     busy = false; refresh();
   }
+  if (reproof) {
+    toast((file ? 'Photo changed' : 'Band moved') + ': re-proofing', 'working');
+    await proof.renderProof({ auto: true });
+    if (warned.length) toast(warned[0], 'error');
+  }
+}
+
+// An answer that changed the order's photos (an edit, or a layout laid again on a new
+// frame) changes the session's hotspots and unstamps the proof: show them, move the frame
+// when the engine moved it, and say a proof is due. True when a proof is due.
+function landPhotoAnswer(j) {
+  if (!j.edited && !j.relaid) return false;
+  state.hotspots = j.hotspots;
+  markers.render($('markerList'), (msg) => toast(msg, 'info'));
+  if (j.reframed) { state.starterCrop = j.crop_px; canvas.resetFrame(); }
+  else canvas.draw();
+  state.proofStale = true;
+  proof.refreshProofUI();
+  return true;
 }
 
 // A new proof was stamped: measure the boxes on it (its crop is the studio's frame now).
@@ -272,9 +293,17 @@ function refreshPhotos() {
   const serial = proof.proofCount();
   if (serial === photoSerial || !state.hasSpec || state.proofStale) return;
   photoSerial = serial; measuring = true;
-  const session = open.session;
+  const session = open.session, gen = ++photoGen;
   api.orderPhoto(session, '', {})
-    .then((j) => { if (open && open.session === session && !busy) { photoView = j; renderPhotos(); } })
+    .then((j) => {
+      // an edit sent since this measure left wins: its answer is newer
+      if (!open || open.session !== session || busy || gen !== photoGen) return;
+      photoView = j;
+      // a frame the layout was not computed on: the engine laid the boxes out again on
+      // it, so the proof on screen is stale and renders once more
+      if (landPhotoAnswer(j)) { renderPhotos(); proof.renderProof({ auto: true }); return; }
+      renderPhotos();
+    })
     .catch(() => { /* the boxes stay as they were measured */ })
     .finally(() => { measuring = false; });
 }

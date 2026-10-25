@@ -189,8 +189,10 @@ function localXY(e) {
           (e.clientY - rect.top) * (cv.height / rect.height)];
 }
 
+// An order photo's spot (order_photo) is placed in the Order panel, never dragged here.
 function hotspotAt(cx, cy) {
   for (let i = state.hotspots.length - 1; i >= 0; i--) {
+    if (state.hotspots[i].order_photo) continue;
     const [hx, hy] = toCanvas(...state.hotspots[i].px);
     if (Math.hypot(cx - hx, cy - hy) <= HIT_R) return i;
   }

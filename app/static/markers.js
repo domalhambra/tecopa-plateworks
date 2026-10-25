@@ -15,6 +15,21 @@ export function render(hostEl, editCb = () => {}) {
   state.hotspots.forEach((h, i) => {
     const row = document.createElement('div');
     row.className = 'marker-row';
+    if (h.order_photo) {
+      // an order's photo: the Order panel places, captions and drops it, so the saved
+      // spec stays the order's. Shown here, never edited here.
+      row.classList.add('is-locked');
+      const dot = document.createElement('span'); dot.className = 'dot'; dot.setAttribute('aria-hidden', 'true');
+      const name = document.createElement('span'); name.className = 'm-locked';
+      name.textContent = h.label || `Photo ${i + 1}`;
+      const note = document.createElement('span'); note.className = 'm-note';
+      note.textContent = 'order photo: edit it in the Order panel';
+      const off = document.createElement('span'); off.className = 'off-frame'; off.hidden = true;
+      off.textContent = 'outside frame';
+      row.append(dot, name, note, off);
+      host.appendChild(row);
+      return;
+    }
     const opts = ICONS.map((ic) =>
       `<option value="${ic}"${(h.icon || 'dot') === ic ? ' selected' : ''}>${ic}</option>`).join('');
     row.innerHTML =

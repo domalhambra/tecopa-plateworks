@@ -291,6 +291,9 @@
 .order-status { margin: 0; line-height: 1.4; }
 .order-status.is-error { color: var(--color-error); }
 #orderBandSide { margin: 12px 0 0; }
+.marker-row.is-locked { gap: 8px; }
+.marker-row .m-locked { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.marker-row .m-note { color: var(--text-2); white-space: nowrap; }
 .order-photos { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .order-photo { border: 1px solid var(--hairline); border-radius: var(--radius-sm); padding: 8px; }
 .order-photo.is-dropped { opacity: .6; }
