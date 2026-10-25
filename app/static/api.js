@@ -72,6 +72,15 @@ export async function approveOrder(sessionId) {
   const res = await postForm('/api/order/approve', { session_id: sessionId });
   return asJson(res);   // { approved: true, at }
 }
+// An opened order's photos: place (spot_px on the proof), move a box (box, inches), crop,
+// caption, drop or restore the photo named `file`; with `file` '' the band's end
+// (band_side). An empty change only answers. 404 for an unknown photo, 422 for a bad
+// change, 409 when the session is not an order's.
+export async function orderPhoto(sessionId, file, change) {
+  const res = await postForm('/api/order/photo', {
+    session_id: sessionId, file: file || '', change: JSON.stringify(change || {}) });
+  return asJson(res);   // orderstudio.photo_view + { edited, reframed, hotspots, crop_px }
+}
 
 export async function setMarkers(sessionId, markers) {
   const res = await postForm('/api/markers', { session_id: sessionId, markers: JSON.stringify(markers) });

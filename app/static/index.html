@@ -150,6 +150,16 @@
               <button id="orderApprove" class="primary" type="button" disabled>Approve</button>
             </div>
             <p id="orderStatus" class="insp-note order-status" role="status" aria-live="polite"></p>
+            <!-- the order's photos (order.js): place a tray photo by a click on the proof,
+                 caption, crop, drop or restore; boxes move on the proof (#orderBoxes) -->
+            <div class="field" id="orderBandSide" hidden>
+              <label>Photo band</label>
+              <div class="segmented" role="radiogroup" aria-label="Photo band">
+                <button type="button" role="radio" data-val="top">Top</button>
+                <button type="button" role="radio" data-val="bottom">Bottom</button>
+              </div>
+            </div>
+            <div id="orderPhotos" class="order-photos" aria-label="Order photos" hidden></div>
           </section>
 
           <section id="filesBlock" class="insp-group">
@@ -282,6 +292,7 @@
               <div class="poster-card" id="posterCard" hidden>
                 <img id="posterImg" alt="Poster proof">
                 <div class="poster-b-wrap" id="posterBWrap"><img id="posterImgB" alt="Pinned comparison proof B"></div>
+                <div class="order-boxes" id="orderBoxes" aria-label="Order photo boxes" hidden></div>
               </div>
             </div>
           </div>
