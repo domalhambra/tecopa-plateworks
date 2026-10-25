@@ -67,6 +67,28 @@ def band_height_for(box_in: float) -> float:
         label_pt=_SPEC_DEFAULTS["label_pt"]))
 
 
+def crop_for_layout(crop, from_layout, from_side, to_layout, to_side, spec) -> tuple:
+    """`crop`, framed for photos in `from_layout` (and `from_side` when that is the band),
+    moved to `to_layout` / `to_side` the way Prepare moves its frame (B2): open to band
+    grows toward the band's side, band to open shrinks back, a side swap moves the growth
+    to the other end, anything else is the crop as it is. The band's height is Prepare's
+    (band_height_for at spec.photo_box_in), and the math is orderplate's band_frame and
+    unband_frame, so a saved studio crop and Prepare's frame cannot drift apart. Keeps
+    Dom's framing, and the band never covers the map he framed."""
+    from app.orderplate import band_frame, unband_frame
+    crop = tuple(crop)
+    was = (from_layout, from_side) if from_layout == "band" else ("open", None)
+    now = (to_layout, to_side) if to_layout == "band" else ("open", None)
+    if was == now:
+        return crop
+    ph, bh = float(spec.print_h_in), band_height_for(float(spec.photo_box_in))
+    if was[0] == "band":
+        crop = unband_frame(crop, ph, bh, was[1])
+    if now[0] == "band":
+        crop = band_frame(crop, ph, bh, now[1])
+    return tuple(crop)
+
+
 def _sheet_geo(spec) -> geo.RegionGeo:
     """The spec's crop window as a geo.RegionGeo whose "overview" is the sheet in inches,
     so geo.py's crop window math is the one coordinate source (invariant 5)."""
@@ -219,7 +241,9 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
 
     An order with photos (RB1): the saved spec's photo hotspots, photo_layout,
     photo_band_side and photo_box_in are replaced with the ones the photo state gives
-    now; its hotspots that carry no photo (a plain marker) stay, ahead of the photos."""
+    now; its hotspots that carry no photo (a plain marker) stay, ahead of the photos.
+    When the layout or the band's side changed, its crop moves with them as Prepare's
+    frame does (crop_for_layout), so the band never covers the saved framing."""
     saved = (state.get("manual") or {}).get("spec")
     if saved:
         _, cfg = _region_config(state)
@@ -234,8 +258,11 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
             return spec
         plain = [hs for hs in spec.hotspots
                  if not (isinstance(hs, dict) and hs.get("photo"))]
+        was = (spec.photo_layout, spec.photo_band_side)
         spec = dataclasses.replace(spec, **{**photos,
                                             "hotspots": plain + photos["hotspots"]})
+        spec = dataclasses.replace(spec, crop=crop_for_layout(
+            spec.crop, *was, spec.photo_layout, spec.photo_band_side, spec))
         return provenance.bound_photo_keys(spec)
     return default_spec(order, state)
 

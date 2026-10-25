@@ -535,24 +535,27 @@ def _read_photos(order, files, region, tracks, labels, box_in, log) -> list:
     return out
 
 
-def _photo_spec(order, state, frame, layout, box_in, side):
-    """The spec the photos are laid out on, with no photo hotspots: order_spec at
-    `frame` (the saved spec keeps its own crop), in `layout`."""
-    spec = orderspec.order_spec(order, {**state, "frame": list(frame), "photos": []})
-    return dataclasses.replace(spec, hotspots=[], photo_layout=layout,
-                               photo_box_in=box_in, photo_band_side=side)
+def _photo_spec(order, state, open_frame, layout, box_in, side):
+    """The spec the photos are laid out on, with no photo hotspots: order_spec at the
+    open frame (a saved spec keeps its own crop), moved to `layout` and `side` by
+    orderspec.crop_for_layout, the one function Prepare's frame and a saved crop share."""
+    spec = orderspec.order_spec(order, {**state, "frame": list(open_frame), "photos": []})
+    target = dataclasses.replace(spec, hotspots=[], photo_layout=layout,
+                                 photo_box_in=box_in, photo_band_side=side)
+    return dataclasses.replace(target, crop=orderspec.crop_for_layout(
+        spec.crop, spec.photo_layout, spec.photo_band_side, layout, side, target))
 
 
 def _in_crop(spot, crop) -> bool:
     return crop[0] <= spot["x"] <= crop[2] and crop[1] <= spot["y"] <= crop[3]
 
 
-def _lay_out(order, state, photos, frame, box_in, side, plate, cfg):
+def _lay_out(order, state, photos, open_frame, box_in, side, plate, cfg):
     """Open ground for every placed photo whose spot is on the sheet, or the band.
     Returns (layout, {photo index: (dx_in, dy_in)}). A box Dom set in
     the studio (a photo's bounded box, here) is fixed: the layout keeps it as it is."""
     from app import photolayout, render
-    spec = _photo_spec(order, state, frame, "open", box_in, side)
+    spec = _photo_spec(order, state, open_frame, "open", box_in, side)
     todo = [i for i, p in enumerate(photos)
             if p["spot"] and not p["dropped"] and _in_crop(p["spot"], spec.crop)]
     if not todo:
@@ -642,7 +645,7 @@ def place_photos(order, state: dict, log=print) -> dict:
 
     state = {**state, "photo_layout": layout}
     try:
-        crop = _photo_spec(order, state, frame, layout, box_in, side).crop
+        crop = _photo_spec(order, state, open_frame, layout, box_in, side).crop
     except (SpecError, OrderError, OSError, ValueError, KeyError):
         crop = tuple(frame)
     from app.orderpreview import Candidate, gaps_hiding_ends

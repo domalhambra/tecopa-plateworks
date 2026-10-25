@@ -293,3 +293,46 @@ def test_ground_and_sheet_inches_round_trip(order):
                                                ((46.0, 17.0), 2, 2.96)])
 def test_the_photo_box_scales_with_the_sheet(size, panels, want):
     assert orderspec.photo_box_in(size, panels) == want
+
+
+# --- fix round 1, A: a saved crop follows the photo layout as Prepare's frame does -----
+
+def _layout_spec(order, box_in=2.09):
+    return dataclasses.replace(orderspec.default_spec(order, read_state(order)),
+                               photo_box_in=box_in)
+
+
+def test_crop_for_layout_keeps_a_crop_whose_layout_stands(order):
+    s = _layout_spec(order)
+    c = s.crop
+    assert orderspec.crop_for_layout(c, "open", "top", "open", "bottom", s) == c
+    assert orderspec.crop_for_layout(c, "band", "top", "band", "top", s) == c
+
+
+def test_crop_for_layout_grows_shrinks_and_swaps_as_prepare_frames(order):
+    from app import orderplate as opl
+    s = _layout_spec(order)
+    c, bh = s.crop, orderspec.band_height_for(2.09)
+    top = orderspec.crop_for_layout(c, "open", "top", "band", "top", s)
+    assert top == pytest.approx(opl.band_frame(c, 17.0, bh, "top"))
+    assert top[1] == pytest.approx(c[1]) and top[3] > c[3]           # grows upward
+    back = orderspec.crop_for_layout(top, "band", "top", "open", "top", s)
+    assert back == pytest.approx(c)                                    # band -> open
+    bottom = orderspec.crop_for_layout(top, "band", "top", "band", "bottom", s)
+    assert bottom == pytest.approx(opl.band_frame(c, 17.0, bh, "bottom"))
+    assert bottom[3] == pytest.approx(c[3]) and bottom[1] < c[1]      # the other end
+
+
+def test_a_saved_open_crop_grows_when_the_photos_go_to_the_band(order):
+    from app import orderplate as opl
+    st = read_state(order)
+    st = _with_photos(order, [_photo(order, "a.jpg", _centre(st))])
+    saved = spec_to_json(orderspec.default_spec(order, st))          # open, the frame
+    set_manual(order, "spec", saved)
+    _with_photos(order, read_state(order)["photos"], layout="band", side="bottom")
+    s = orderspec.order_spec(order, read_state(order))
+    bh = orderspec.band_height_for(2.09)
+    assert s.crop == pytest.approx(opl.band_frame(tuple(saved["crop"]), 17.0, bh, "bottom"))
+    _with_photos(order, read_state(order)["photos"], layout="open")
+    assert orderspec.order_spec(order, read_state(order)).crop == pytest.approx(
+        tuple(saved["crop"]))

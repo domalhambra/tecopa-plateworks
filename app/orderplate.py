@@ -264,22 +264,40 @@ def _scaled(frame, factor, cy=None) -> tuple:
     return _centred(cx, cy, (frame[2] - frame[0]) * factor, (frame[3] - frame[1]) * factor)
 
 
+def _band_factor(print_h_in, band_h_in) -> float:
+    """How much a frame grows when a band of `band_h_in` takes the top or the bottom of a
+    `print_h_in` tall print and the frame keeps its whole ground height beside it."""
+    if print_h_in <= band_h_in:
+        raise PlateError(f"A {band_h_in:.2f} in photo band does not fit a "
+                         f"{print_h_in:g} in tall print.")
+    return print_h_in / (print_h_in - band_h_in)
+
+
+def _anchored(frame, factor, side) -> tuple:
+    """`frame` scaled by `factor`, its edge away from the band (the bottom for a "top"
+    band, the top for a "bottom" one) held where it is, centred across."""
+    grown = (frame[3] - frame[1]) * factor
+    cy = frame[1] + grown / 2.0 if side != "bottom" else frame[3] - grown / 2.0
+    return _scaled(frame, factor, cy)
+
+
 def band_frame(frame, print_h_in, band_h_in, side) -> tuple:
     """The frame of a poster whose photos hang in a band across its `side` ("top" or
     "bottom") end (order photos, B2): `frame` keeps its ground height below (or above)
     the band, and the band adds `band_h_in` of ground at the new frame's scale. The
     width grows by the same factor, so the aspect stays the print's and the whole of
-    `frame` stays on the map, out of the band."""
+    `frame` stays on the map, out of the band. unband_frame is its inverse."""
     if band_h_in <= 0:
         return tuple(frame)
-    if print_h_in <= band_h_in:
-        raise PlateError(f"A {band_h_in:.2f} in photo band does not fit a "
-                         f"{print_h_in:g} in tall print.")
-    factor = print_h_in / (print_h_in - band_h_in)
-    h = frame[3] - frame[1]
-    grown = h * factor
-    cy = frame[1] + grown / 2.0 if side != "bottom" else frame[3] - grown / 2.0
-    return _scaled(frame, factor, cy)
+    return _anchored(frame, _band_factor(print_h_in, band_h_in), side)
+
+
+def unband_frame(frame, print_h_in, band_h_in, side) -> tuple:
+    """The open frame a band frame was grown from: band_frame undone, the edge away from
+    the band held, so band_frame(unband_frame(f)) is f."""
+    if band_h_in <= 0:
+        return tuple(frame)
+    return _anchored(frame, 1.0 / _band_factor(print_h_in, band_h_in), side)
 
 
 def photo_plan_frame(frame, print_h_in, band_h_in) -> tuple:
