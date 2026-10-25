@@ -709,3 +709,38 @@ def test_an_approved_photo_order_moved_to_another_folder_stays_approved(order, t
     spec = orderspec.order_spec(again, state)
     assert all(h["photo"].startswith(str(moved) + os.sep) for h in spec.hotspots)
     assert orderstudio.approval_ok(again, state)
+
+
+# --- final fix M3: a placed photo outside the frame is refused ---------------------------
+
+OUTSIDE = "{n} photos are outside the frame: widen the frame or drop them in the studio."
+
+
+def test_finish_refuses_a_placed_photo_outside_the_frame(order, monkeypatch):
+    f = od.read_state(order)["frame"]
+    cy = (f[1] + f[3]) / 2
+    _photo_state(order, placed=3, manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": cy}},
+                                          "p01": {"spot": {"x": f[2] + 5000.0, "y": cy}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == OUTSIDE.format(n=2)
+    _no_print(order)
+
+
+def test_the_tray_is_refused_before_a_photo_outside_the_frame(order, monkeypatch):
+    f = od.read_state(order)["frame"]
+    _photo_state(order, placed=1, tray=1,
+                 manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": f[1]}}})
+    _no_render(monkeypatch)
+    with pytest.raises(od.OrderError) as ex:
+        orderfinish.finish(order.dir, dpi=DPI)
+    assert str(ex.value) == TRAY.format(n=1)
+
+
+def test_a_dropped_photo_outside_the_frame_is_not_refused(order):
+    f = od.read_state(order)["frame"]
+    _photo_state(order, placed=2, manual={"p00": {"spot": {"x": f[0] - 5000.0, "y": f[1]},
+                                                  "dropped": True}})
+    orderfinish.finish(order.dir, dpi=DPI)
+    assert os.path.isdir(os.path.join(order.dir, "out", "print"))

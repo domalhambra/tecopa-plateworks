@@ -25,7 +25,7 @@ manifest is past the budget without any photo (huge tracks), the record keeps th
 photos as paths, is written even if it does not read back, and PRINT.txt says so.
 
 Every check that needs no picture runs before the render: the approval, the photos'
-state (a photo in the tray, a band over 12), the spec's size, panels and gap against
+state (a photo in the tray, a band over 12, a placed photo outside the frame), the spec's size, panels and gap against
 state.json (orderspec.matches_order), bleed, the roll, and every hotspot photo still
 readable. Then the files go in place in four steps, so a failed run
 keeps the files of the last run:
@@ -59,6 +59,8 @@ BLEED = ("The render is {have[0]} × {have[1]} px and the print is {want[0]} × 
 TRAY_PHOTOS = "{n} photos have no spot: place or drop them in the studio."
 UNREADABLE_PHOTOS = "{n} photos cannot be read: drop them in the studio."
 BAND_OVER = "{n} photos: the band holds 12. Drop some in the studio."
+OUTSIDE_FRAME = ("{n} photos are outside the frame: widen the frame or drop them in the "
+                 "studio.")
 PHOTOS_GONE = ("{n} photo(s) on the approved proof can no longer be read: open the order, "
                "attach them again, save and approve.")
 RECORD_TOO_BIG = ("The reprint record cannot hold the photos within its 1 MB limit: "
@@ -179,6 +181,18 @@ def _unreadable_photos(spec) -> int:
     return gone
 
 
+def _check_outside(spec) -> None:
+    """Refuse a spec with an order photo whose spot is off the map the poster shows
+    (outside the crop, or under the band's strip): it would print with a stem to an
+    anchor off the sheet. The test is Prepare's own (orderprep._visible)."""
+    from app.orderprep import _visible
+    outside = sum(1 for hs in spec.hotspots or []
+                  if isinstance(hs, dict) and orderspec.is_order_photo(hs.get("photo"))
+                  and not _visible({"x": hs["x"], "y": hs["y"]}, spec))
+    if outside:
+        raise OrderError(OUTSIDE_FRAME.format(n=outside))
+
+
 def print_note(order, spec, paper, pieces, approval, removed=(), record_reduced=False,
                record_over=False) -> str:
     """The text of PRINT.txt. `pieces` is one dict for each file, in hang order:
@@ -240,6 +254,7 @@ def finish(order_dir: str, log=print, dpi: float | None = None) -> dict:
     from app import render           # here, so importing this module needs no renderer
     paper = papers.enabled_paper()
     spec = orderspec.order_spec(order, state)
+    _check_outside(spec)             # the last photo refusal: it reads the spec that prints
     # every check that needs no picture comes before the render
     if orderspec.matches_order(spec, state):
         raise OrderError(SIZE_MISMATCH)
