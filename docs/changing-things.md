@@ -470,10 +470,12 @@ Traps already paid for:
   measures what is left.
 - A 3DEP tile can come back as bytes GDAL cannot read ("not recognized as being in a
   supported file format"), and py3dep re-raises it as a busy service or lets the
-  rasterio error through. `region_prep.with_retries` treats that error, in the
-  exception or its `__cause__` / `__context__` chain, as retryable, with the same
-  waits (60 s, then 180 s) and the same cap as a busy service. Any other error
-  raises at once.
+  rasterio error through. `region_prep.with_retries` treats that error, found by GDAL's
+  words in the exception or its `__cause__` / `__context__` chain, as retryable, with
+  the same waits (60 s, then 180 s) and the same cap as a busy service. The class does
+  not decide it: the same rasterio errors also say "No such file or directory",
+  "Permission denied" and a 404, which raise at once, as does a `PermissionError` or
+  `FileNotFoundError` whatever its cause. Any other error raises at once.
 - The index returns HTTP 500 for the full outline of a large lidar footprint.
   `layer_coverage` asks for outlines simplified to about 50 m.
 - A plate counts as complete only once `landcover.tif` lands. A plate missing just

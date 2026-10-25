@@ -479,6 +479,57 @@ def test_an_unrelated_error_is_not_retried(waits, make_err):
     assert len(calls) == 1 and waits == []
 
 
+@pytest.mark.parametrize("make_err", [
+    # real error shapes from rasterio/GDAL that are not an unreadable tile
+    lambda mod: RasterioIOError("/data/x.tif: No such file or directory"),
+    lambda mod: CPLE_OpenFailedError("'/data/x.tif' does not exist in the file system, "
+                                     "and is not recognised as a supported dataset name."),
+    lambda mod: CPLE_OpenFailedError("/data/x.tif: Permission denied"),
+    lambda mod: RasterioIOError("HTTP response code: 404"),
+    lambda mod: _wrapped_in_service_error(mod, CPLE_OpenFailedError("x.tif: Permission denied")),
+], ids=["no-such-file", "not-recognised-name", "permission", "http-404", "wrapped-permission"])
+def test_a_rasterio_open_error_that_is_not_a_bad_tile_is_not_retried(monkeypatch, waits,
+                                                                     make_err):
+    outcomes = []
+    mod, calls = _fake_py3dep(monkeypatch, outcomes)
+    err = make_err(mod)
+    if isinstance(err, mod.exceptions.ServiceUnavailableError):
+        # a busy service is retried whatever caused it; only the bare errors are lasting
+        outcomes += [err, "dem"]
+        assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
+        return
+    outcomes += [err, "dem"]
+    with pytest.raises(type(err)):
+        rp.fetch_dem((0, 0, 1, 1), 10)
+    assert len(calls) == 1 and waits == []
+
+
+def test_a_rasterio_network_error_is_still_retried(waits):
+    seen = []
+
+    def fetch():
+        seen.append(1)
+        if len(seen) < 2:
+            raise RasterioIOError("CURL error: Connection reset by peer")
+        return "ok"
+    assert rp.with_retries(fetch, "3DEP") == "ok" and waits == [60]
+
+
+@pytest.mark.parametrize("lasting", [PermissionError, FileNotFoundError])
+def test_a_lasting_os_error_is_never_retried_even_with_a_bad_tile_cause(waits, lasting):
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        try:
+            raise CPLE_OpenFailedError(_BAD_TILE)
+        except CPLE_OpenFailedError as cause:
+            raise lasting("cannot read the tile") from cause
+    with pytest.raises(lasting):
+        rp.with_retries(fetch, "3DEP")
+    assert len(calls) == 1 and waits == []
+
+
 def test_a_cyclic_exception_chain_does_not_hang_the_check():
     a, b = ValueError("a"), ValueError("b")
     a.__context__, b.__context__ = b, a
