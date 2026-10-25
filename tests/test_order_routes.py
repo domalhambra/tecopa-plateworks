@@ -18,6 +18,19 @@ SPEC_KEYS = {"session", "region", "name", "overview", "tracks", "hotspots", "sta
              "prefill", "proof_form", "edition", "files", "final_dpi"}
 
 
+@pytest.fixture(autouse=True)
+def _regions_restored():
+    """Opening an order registers its plate in app.main.REGIONS under the plate's id, and a
+    built plate that is a copy of the synthetic lassen_ca replaces the real entry. Put the
+    registry back exactly as it was, so a later test in the same worker still has the real
+    plate (a teardown that only popped the key took lassen_ca away for good)."""
+    from app.main import REGIONS
+    saved = dict(REGIONS)
+    yield
+    REGIONS.clear()
+    REGIONS.update(saved)
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
