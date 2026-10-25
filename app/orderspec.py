@@ -14,7 +14,8 @@ An order's photos belong to its state, never to a saved spec (ruling RB1): state
 "photos" (what Prepare found) with "manual.photos" (the studio's edits) over them, field
 by field. Both specs take their photo hotspots, photo_layout, photo_band_side and
 photo_box_in from there, so an edit reaches the proof, the approval hash and the print.
-An order with no photos keeps the spec it always had.
+An order with no photos keeps the spec it always had, less any order photos and band a
+save from before the photos were taken out of in/ still carries.
 
 This file never imports app.main (it starts queues, caches and region discovery). It
 imports app.orderpreview only inside default_spec: orderpreview takes ORDER_LOOK from
@@ -201,6 +202,32 @@ def _photo_fields(order: Order, state: dict) -> dict | None:
             "photo_band_side": photo_band_side(state), "photo_box_in": float(box)}
 
 
+def is_order_photo(value) -> bool:
+    """True for a hotspot photo that is an order's own work JPEG: a file path (never an
+    embedded JPEG) whose folder is <order>/work/photos. Read from the path alone, so an
+    order folder that moved is still recognised."""
+    if not isinstance(value, str) or provenance.is_embedded_photo(value):
+        return False
+    folder = os.path.dirname(os.path.normpath(value))
+    return (os.path.basename(folder) == "photos"
+            and os.path.basename(os.path.dirname(folder)) == "work")
+
+
+def _without_order_photos(spec: CompositionSpec) -> CompositionSpec:
+    """A saved spec of an order that has no photos now (they were taken out of in/): its
+    order-photo hotspots go, its layout goes back to open and a band-grown crop shrinks
+    back as Prepare's frame does (crop_for_layout). Plain markers stay. A spec with no
+    order photo and an open layout is returned as it is."""
+    hotspots = list(spec.hotspots or [])
+    plain = [hs for hs in hotspots
+             if not (isinstance(hs, dict) and is_order_photo(hs.get("photo")))]
+    if len(plain) == len(hotspots) and spec.photo_layout != "band":
+        return spec
+    crop = crop_for_layout(spec.crop, spec.photo_layout, spec.photo_band_side, "open",
+                           spec.photo_band_side, spec)
+    return dataclasses.replace(spec, hotspots=plain, photo_layout="open", crop=tuple(crop))
+
+
 def plate_dir(state: dict) -> str:
     """The folder of the plate that Prepare chose, from state.json."""
     plate = state.get("plate")
@@ -248,7 +275,11 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
     photo_band_side and photo_box_in are replaced with the ones the photo state gives
     now; its hotspots that carry no photo (a plain marker) stay, ahead of the photos.
     When the layout or the band's side changed, its crop moves with them as Prepare's
-    frame does (crop_for_layout), so the band never covers the saved framing."""
+    frame does (crop_for_layout), so the band never covers the saved framing.
+
+    An order with no photos now, whose saved spec still carries order photos or a band
+    (the photos were taken out of in/ after the save): those hotspots go, the layout is
+    open and the crop shrinks back to the open crop (_without_order_photos)."""
     saved = (state.get("manual") or {}).get("spec")
     if saved:
         _, cfg = _region_config(state)
@@ -260,7 +291,7 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
                                    native_resolution_m=cfg["native_resolution_m"])
         photos = _photo_fields(order, state)
         if photos is None:
-            return spec
+            return _without_order_photos(spec)
         plain = [hs for hs in spec.hotspots
                  if not (isinstance(hs, dict) and hs.get("photo"))]
         was = (spec.photo_layout, spec.photo_band_side)

@@ -516,3 +516,28 @@ def test_a_curated_plate_is_never_measured_again(tmp_path, tools, monkeypatch):
 
 def _builds_of(d):
     return (d / "work" / "plate" / "builds.log").read_text().split()
+
+
+# --- final fix I1: photos removed from in/ leave no trace on a saved spec ----------------
+
+def test_photos_removed_from_in_leave_the_saved_spec(tmp_path, tools):
+    from app.serialize import spec_to_json
+    d = _order(tmp_path)
+    for k in range(opl_open_max() + 1):                     # the band
+        _make(d / "in" / f"p{k:02d}.jpg", size=BIG, gps=NEAR_PEAK)
+    state = _prepare(d, tools)
+    order = od.load(str(d))
+    assert state["photo_layout"] == "band"
+    saved = spec_to_json(orderspec.order_spec(order, state))
+    saved["hotspots"].append({"x": 1.0, "y": 2.0, "weight": 1, "label": "a marker"})
+    od.update_manual(order, {"spec": saved, "spec_inputs_hash": state["inputs_hash"]})
+    for p in (d / "in").glob("p*.jpg"):
+        p.unlink()
+    state = _prepare(d, tools)
+    assert state["photos"] == [] and od.read_state(order)["manual"].get("spec")
+    s = orderspec.order_spec(order, state)
+    assert not [hs for hs in s.hotspots if hs.get("photo")]
+    assert [hs.get("label") for hs in s.hotspots] == ["a marker"]       # a plain marker stays
+    assert s.photo_layout == "open"
+    assert s.crop == pytest.approx(tuple(state["open_frame"]))
+    assert s.crop == pytest.approx(tuple(state["frame"]))
