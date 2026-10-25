@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import numpy as np
+import pytest
 from PIL import Image
 
 from app import provenance
@@ -709,17 +710,114 @@ def test_a_hotspot_without_box_or_crop_embeds_as_it_always_did(tmp_path):
     assert _embedded_size(old) == (675, 450)
 
 
-def test_a_square_cut_copy_too_big_for_the_byte_ceiling_falls_back_to_the_fitted_copy(
+def test_a_square_cut_copy_too_big_for_the_byte_ceiling_loses_quality_never_size(
         tmp_path, monkeypatch):
     rng = np.random.default_rng(3)
     noise = rng.integers(0, 256, (1200, 1800, 3), dtype=np.uint8)
     src = tmp_path / "n.jpg"
     Image.fromarray(noise, "RGB").save(src, "JPEG", quality=90)
     keys = {"crop": {"cx": 0.5, "cy": 0.5}}
-    square = _final_photo(str(src), 800, **keys)
-    fitted = _final_photo(str(src), 800)
-    assert _embedded_size(square) == (1200, 800) and _embedded_size(fitted) == (800, 533)
-    mid = (len(base64.b64decode(square.split(",", 1)[1]))
-           + len(base64.b64decode(fitted.split(",", 1)[1]))) // 2
-    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", mid)
-    assert _final_photo(str(src), 800, **keys) == fitted              # kept, not dropped
+    full = _final_photo(str(src), 800, **keys)
+    assert _embedded_size(full) == (1200, 800)
+    size82 = len(base64.b64decode(full.split(",", 1)[1]))
+    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", size82 - 1)
+    lower = _final_photo(str(src), 800, **keys)
+    assert lower is not None and lower != full
+    assert _embedded_size(lower) == (1200, 800)           # the size is kept; not the soft copy
+    monkeypatch.setattr(provenance, "MAX_PHOTO_EMBED_BYTES", 10)
+    assert "photo" not in provenance.build_final_spec(
+        _spec_with(str(src), crop={"cx": 0.5, "cy": 0.5}), 800).hotspots[0]   # still dropped
+
+
+def test_square_cut_means_the_renderers_own_reading_of_box_and_crop():
+    big = 10 ** 400                       # a huge int: not a finite real to the renderer
+    assert provenance._is_square_cut({"crop": {"cx": 0.5, "cy": 0.5}})
+    assert provenance._is_square_cut({"box": {"dx_in": 1, "dy_in": -1}})
+    assert not provenance._is_square_cut({"crop": {"cx": big, "cy": 0.5}})
+    assert not provenance._is_square_cut({"box": {"dx_in": True, "dy_in": 1}})
+    assert not provenance._is_square_cut({"label": "x"})
+
+
+# ---- the record's manifest stays under PIL's 1 MiB text chunk (Task 9, fix round 1) ----
+
+def _spec_with(*paths, **keys):
+    import dataclasses
+    spec, _ = _spec_from_fixture()
+    hs = [{"x": 690000.0 + 100 * i, "y": 4485000.0, "weight": 1, "photo": p, **keys}
+          for i, p in enumerate(paths)]
+    return dataclasses.replace(spec, hotspots=hs)
+
+
+def _noisy_jpegs(tmp_path, n, size=(3000, 2000)):
+    rng = np.random.default_rng(11)
+    paths = []
+    for k in range(n):
+        low = rng.integers(0, 256, (size[1] // 20, size[0] // 20, 3), dtype=np.uint8)
+        im = Image.fromarray(low, "RGB").resize(size, Image.BICUBIC)
+        arr = np.asarray(im).astype(np.int16) + rng.integers(-40, 40, (size[1], size[0], 3))
+        path = tmp_path / f"n{k}.jpg"
+        Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB").save(path, "JPEG",
+                                                                         quality=88)
+        paths.append(str(path))
+    return paths
+
+
+def _record_png(manifest):
+    buf = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(buf, "PNG", pnginfo=provenance.manifest_pnginfo(manifest))
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("n", [8, 12])
+def test_the_record_of_n_realistic_photos_stays_inside_the_budget_and_opens(tmp_path, n):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, n), crop={"cx": 0.5, "cy": 0.5})
+    record, manifest, reduced = provenance.build_record_manifest(spec, 675)
+    size = len(provenance._manifest_str(manifest))
+    assert size <= provenance.MAX_RECORD_MANIFEST_BYTES == 900_000
+    assert size < 1_048_576
+    got = provenance.extract(_record_png(manifest))        # plain PIL, no raised limit
+    assert got is not None
+    photos = [h["photo"] for h in got["spec"]["hotspots"]]
+    assert len(photos) == n and all(provenance.is_embedded_photo(p) for p in photos)
+    assert reduced is True                                 # 3000x2000 noise cannot fit whole
+    assert all(h["photo"].startswith("data:") for h in record.hotspots)
+    assert all(not h["photo"].startswith("data:") for h in spec.hotspots)   # spec untouched
+
+
+def test_a_photo_that_fits_its_share_is_embedded_at_the_print_resolution(tmp_path):
+    src = _gradient_jpeg(tmp_path / "g.jpg", (3000, 2000))
+    record, manifest, reduced = provenance.build_record_manifest(
+        _spec_with(src, crop={"cx": 0.5, "cy": 0.5}), 675)
+    assert reduced is False
+    assert _embedded_size(record.hotspots[0]["photo"]) == (1013, 675)
+
+
+def test_a_reduced_record_photo_is_smaller_than_the_print_box_and_follows_the_ladder(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 1), crop={"cx": 0.5, "cy": 0.5})
+    base = len(provenance._manifest_str(provenance.build_manifest(
+        __import__("dataclasses").replace(spec, hotspots=[]))))
+    record, _, reduced = provenance.build_record_manifest(spec, 675, budget=base + 40_000)
+    w, h = _embedded_size(record.hotspots[0]["photo"])
+    assert reduced and min(w, h) < 675 and abs(w / h - 1.5) < 0.02
+    # a step of the ladder: 675 * 0.85 ** k, at quality 62
+    ks = [k for k in range(1, 30) if abs(min(w, h) - round(675 * 0.85 ** k)) <= 1]
+    assert ks
+
+
+def test_the_record_is_deterministic(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 3), crop={"cx": 0.5, "cy": 0.5})
+    a = provenance.build_record_manifest(spec, 675, budget=300_000)[1]
+    b = provenance.build_record_manifest(spec, 675, budget=300_000)[1]
+    assert provenance._manifest_str(a) == provenance._manifest_str(b)
+
+
+def test_a_photo_that_cannot_fit_the_record_at_any_size_raises(tmp_path):
+    spec = _spec_with(*_noisy_jpegs(tmp_path, 1, (600, 400)), crop={"cx": 0.5, "cy": 0.5})
+    with pytest.raises(provenance.RecordBudgetError):
+        provenance.build_record_manifest(spec, 675, budget=1_000)
+
+
+def test_an_unreadable_photo_is_left_out_of_the_record(tmp_path):
+    spec = _spec_with(str(tmp_path / "gone.jpg"), crop={"cx": 0.5, "cy": 0.5})
+    record, _, reduced = provenance.build_record_manifest(spec, 675)
+    assert "photo" not in record.hotspots[0] and reduced is False
