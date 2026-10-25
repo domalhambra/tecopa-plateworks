@@ -468,6 +468,12 @@ Traps already paid for:
   every full-resolution cell: a full-resolution read was 7x slower. A fill that still
   fails after the retries keeps the plate and says so. Prepare's `check_holes` then
   measures what is left.
+- A 3DEP tile can come back as bytes GDAL cannot read ("not recognized as being in a
+  supported file format"), and py3dep re-raises it as a busy service or lets the
+  rasterio error through. `region_prep.with_retries` treats that error, in the
+  exception or its `__cause__` / `__context__` chain, as retryable, with the same
+  waits (60 s, then 180 s) and the same cap as a busy service. Any other error
+  raises at once.
 - The index returns HTTP 500 for the full outline of a large lidar footprint.
   `layer_coverage` asks for outlines simplified to about 50 m.
 - A plate counts as complete only once `landcover.tif` lands. A plate missing just

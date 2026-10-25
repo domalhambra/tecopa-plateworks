@@ -382,6 +382,109 @@ def test_fetch_dem_collapses_a_multiline_error_into_one_retry_line(monkeypatch, 
     assert "Service is currently not available please retry" in lines[0]
 
 
+# ---- a tile that comes back unreadable is retried like a busy service ----
+
+class RasterioIOError(OSError):
+    """Stands in for rasterio.errors.RasterioIOError (an OSError subclass)."""
+
+
+class CPLE_OpenFailedError(Exception):
+    """Stands in for rasterio._err.CPLE_OpenFailedError (not an OSError)."""
+
+
+_BAD_TILE = "'/vsimem/abc123.tif' not recognized as being in a supported file format."
+
+
+def _wrapped_in_service_error(mod, cause):
+    """What py3dep raises: ServiceUnavailableError, with the rasterio error as cause."""
+    try:
+        try:
+            raise cause
+        except Exception as inner:
+            raise mod.exceptions.ServiceUnavailableError("Service is currently not "
+                                                         "available") from inner
+    except Exception as outer:
+        return outer
+
+
+@pytest.mark.parametrize("make_err", [
+    lambda mod: CPLE_OpenFailedError(_BAD_TILE),
+    lambda mod: RasterioIOError(_BAD_TILE),
+    lambda mod: _wrapped_in_service_error(mod, CPLE_OpenFailedError(_BAD_TILE)),
+    lambda mod: _wrapped_in_service_error(mod, RasterioIOError(_BAD_TILE)),
+    # the rasterio error only in __context__ (raised while handling it, no "from")
+    lambda mod: _context_only(CPLE_OpenFailedError(_BAD_TILE)),
+    # unknown class, but GDAL's own words, wrapped
+    lambda mod: _wrapped_in_service_error(mod, RuntimeError(_BAD_TILE)),
+], ids=["cple", "rasterio", "wrapped-cple", "wrapped-rasterio", "context", "text-only"])
+def test_fetch_dem_retries_an_unreadable_tile(monkeypatch, waits, capsys, make_err):
+    outcomes = []
+    mod, calls = _fake_py3dep(monkeypatch, outcomes)
+    outcomes += [make_err(mod), "dem"]
+    assert rp.fetch_dem((0, 0, 1, 1), 10) == "dem"
+    assert len(calls) == 2 and waits == [60]
+    assert "retrying in 60 s" in capsys.readouterr().out
+
+
+def _context_only(cause):
+    try:
+        try:
+            raise cause
+        except Exception:
+            raise ValueError("could not open the tile")      # no "from": __context__ only
+    except ValueError as e:
+        return e
+
+
+def test_fetch_dem_gives_up_on_an_unreadable_tile_after_the_cap(monkeypatch, waits):
+    outcomes = []
+    mod, calls = _fake_py3dep(monkeypatch, outcomes)
+    errs = [_wrapped_in_service_error(mod, CPLE_OpenFailedError(_BAD_TILE))
+            for _ in range(3)]
+    outcomes += errs
+    with pytest.raises(mod.exceptions.ServiceUnavailableError) as e:
+        rp.fetch_dem((0, 0, 1, 1), 10)
+    assert e.value is errs[-1]                       # the original error, not a wrapper
+    assert isinstance(e.value.__cause__, CPLE_OpenFailedError)
+    assert len(calls) == 3 and waits == list(rp._RETRY_WAITS) == [60, 180]
+
+
+def test_an_unreadable_tile_retry_reads_the_service_fresh(monkeypatch, waits):
+    seen = []
+
+    def fetch():
+        seen.append(os.environ.get("HYRIVER_CACHE_DISABLE"))
+        if len(seen) < 2:
+            raise CPLE_OpenFailedError(_BAD_TILE)
+        return "ok"
+    assert rp.with_retries(fetch, "3DEP") == "ok"
+    assert seen == [None, "true"] and os.environ.get("HYRIVER_CACHE_DISABLE") is None
+
+
+@pytest.mark.parametrize("make_err", [
+    lambda: ValueError("bad bbox"),
+    lambda: KeyError("band"),
+    lambda: FileNotFoundError("no such cache file"),
+    lambda: RuntimeError("not a tile problem"),
+    lambda: _context_only(KeyError("band")),
+])
+def test_an_unrelated_error_is_not_retried(waits, make_err):
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        raise make_err()
+    with pytest.raises(Exception):
+        rp.with_retries(fetch, "3DEP")
+    assert len(calls) == 1 and waits == []
+
+
+def test_a_cyclic_exception_chain_does_not_hang_the_check():
+    a, b = ValueError("a"), ValueError("b")
+    a.__context__, b.__context__ = b, a
+    assert rp._is_unreadable_tile(a) is False
+
+
 def test_with_retries_disables_the_hyriver_cache_only_on_a_retry(monkeypatch, waits):
     seen = []
 
