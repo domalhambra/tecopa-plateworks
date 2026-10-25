@@ -10,6 +10,12 @@ look of a new poster. Either way the spec is bound to the plate that is on disk 
 The approval hash is always spec_hash(order_spec(order, state)), the hash of the spec
 after that rebind. spec_hash hashes the spec it is given and nothing else.
 
+An order's photos belong to its state, never to a saved spec (ruling RB1): state.json's
+"photos" (what Prepare found) with "manual.photos" (the studio's edits) over them, field
+by field. Both specs take their photo hotspots, photo_layout, photo_band_side and
+photo_box_in from there, so an edit reaches the proof, the approval hash and the print.
+An order with no photos keeps the spec it always had.
+
 This file never imports app.main (it starts queues, caches and region discovery). It
 imports app.orderpreview only inside default_spec: orderpreview takes ORDER_LOOK from
 here."""
@@ -18,14 +24,18 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import re
+from types import SimpleNamespace
 
+from app import geo, provenance
 from app.credit import credit_text
 from app.order import Order, OrderError
+from app.panels import PANEL_LONG_IN, PANEL_SHORT_IN
 from app.regionbuild import slugify
 from app.serialize import spec_from_json, spec_to_json
-from app.spec import CompositionSpec
+from app.spec import PHOTO_BAND_SIDES, PHOTO_LAYOUTS, CompositionSpec
 
 # the look of a new poster in the studio (the defaults in app/static/store.js)
 ORDER_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
@@ -33,6 +43,135 @@ ORDER_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
 SEED = 7                    # the same seed the size preview draws with
 NO_PLATE = "Run Prepare first: work/state.json has no plate."
 SIZE_TOL = 1e-6             # inches: a size read back from JSON is the same size
+# B6: a photo box's long edge is 2.25 in on a 12 x 18 (216 sq in) and scales with the
+# square root of the sheet's area, or one panel's for a set
+PHOTO_BOX_REF_IN = 2.25
+PHOTO_BOX_REF_AREA = 216.0
+_SPEC_DEFAULTS = {f.name: f.default for f in dataclasses.fields(CompositionSpec)}
+
+
+def photo_box_in(print_in, panels: int = 1) -> float:
+    """The photo box's long edge in inches for a print of `print_in` (width, height), or
+    for one panel of a set (B6): 2.09 on 11 x 17, 2.25 on 12 x 18, 2.96 on 17 x 22."""
+    area = (PANEL_SHORT_IN * PANEL_LONG_IN if panels > 1
+            else float(print_in[0]) * float(print_in[1]))
+    return round(PHOTO_BOX_REF_IN * math.sqrt(area / PHOTO_BOX_REF_AREA), 2)
+
+
+def band_height_for(box_in: float) -> float:
+    """The photo band's height in inches for a box of `box_in`, in the order look's frame
+    style and caption size (render.band_height_in): what Prepare grows a frame by (B2)."""
+    from app import render       # here: Prepare loads the renderer only when it has photos
+    return render.band_height_in(SimpleNamespace(
+        photo_frame_style=_SPEC_DEFAULTS["photo_frame_style"], photo_box_in=box_in,
+        label_pt=_SPEC_DEFAULTS["label_pt"]))
+
+
+def _sheet_geo(spec) -> geo.RegionGeo:
+    """The spec's crop window as a geo.RegionGeo whose "overview" is the sheet in inches,
+    so geo.py's crop window math is the one coordinate source (invariant 5)."""
+    return geo.RegionGeo(crs=spec.crs, bounds=tuple(spec.crop),
+                         overview_size=(float(spec.print_w_in), float(spec.print_h_in)))
+
+
+def ground_to_sheet_in(spec, x, y) -> tuple:
+    """Ground metres (the plate's CRS) to inches on the sheet, from its top-left corner
+    (the trim's corner), y down. The crop's corners are the sheet's corners."""
+    px, py = geo.crs_to_overview_px(_sheet_geo(spec), x, y)
+    return float(px), float(py)
+
+
+def sheet_in_to_ground(spec, x_in, y_in) -> tuple:
+    """Inches on the sheet (from its top-left corner, y down) to ground metres: the
+    inverse of ground_to_sheet_in."""
+    x, y = geo.overview_px_to_crs(_sheet_geo(spec), x_in, y_in)
+    return float(x), float(y)
+
+
+def _finite(v) -> bool:
+    return (not isinstance(v, bool) and isinstance(v, (int, float))
+            and math.isfinite(v))
+
+
+def effective_photos(state: dict) -> list:
+    """state.json's photos with the studio's edits (manual.photos, keyed by file name)
+    over them, field by field: spot (its source becomes "manual"), box, crop, caption and
+    dropped. The box, crop and source are then bounded as a manifest's are
+    (provenance.bound_photo_keys); a malformed one is None. A spot that is not two
+    finite numbers, a caption that is not text and a dropped that is not true or false
+    are ignored. Returns new dicts; the state is not changed."""
+    edits = ((state.get("manual") or {}).get("photos")) or {}
+    out = []
+    for entry in state.get("photos") or []:
+        if not isinstance(entry, dict):
+            continue
+        p = dict(entry)
+        edit = edits.get(p.get("file")) if isinstance(edits, dict) else None
+        if isinstance(edit, dict):
+            spot = edit.get("spot")
+            if (isinstance(spot, dict) and _finite(spot.get("x"))
+                    and _finite(spot.get("y"))):
+                p["spot"] = {"x": float(spot["x"]), "y": float(spot["y"])}
+                p["source"] = "manual"
+            if isinstance(edit.get("caption"), str):
+                p["caption"] = edit["caption"]
+            if isinstance(edit.get("dropped"), bool):
+                p["dropped"] = edit["dropped"]
+            for key in ("box", "crop"):
+                if key in edit:
+                    p[key] = edit[key]
+        out.append(p)
+    try:
+        pw, ph = (float(v) for v in state["print_in"])
+    except (KeyError, TypeError, ValueError):
+        pw = ph = 0.0                    # no sheet to bound against: every box goes
+    provenance.bound_photo_keys(SimpleNamespace(print_w_in=pw, print_h_in=ph, hotspots=out))
+    for p in out:
+        for key in ("box", "crop", "source"):
+            p.setdefault(key, None)
+    return out
+
+
+def photo_layout(state: dict) -> str:
+    v = state.get("photo_layout")
+    return v if v in PHOTO_LAYOUTS else "open"
+
+
+def photo_band_side(state: dict) -> str:
+    v = state.get("photo_band_side")
+    return v if v in PHOTO_BAND_SIDES else "top"
+
+
+def photo_hotspots(order: Order, state: dict) -> list:
+    """One hotspot per placed photo that is not dropped and has a work JPEG, in file-name
+    order: {"x", "y", "weight": 1, "label": caption, "photo": the work JPEG's absolute
+    path, "box", "crop", "source"}. The photo is always the order folder's own copy, never
+    the engine's uploads/. A band photo carries no box: the band places it."""
+    band = photo_layout(state) == "band"
+    out = []
+    for p in effective_photos(state):
+        spot = p.get("spot")
+        if p.get("dropped") or not isinstance(spot, dict) or not p.get("work"):
+            continue
+        hs = {"x": spot["x"], "y": spot["y"], "weight": 1, "label": p.get("caption") or "",
+              "photo": os.path.join(order.dir, p["work"])}
+        for key in ("box", "crop", "source"):
+            if p.get(key) is not None and not (key == "box" and band):
+                hs[key] = p[key]
+        out.append(hs)
+    return out
+
+
+def _photo_fields(order: Order, state: dict) -> dict | None:
+    """The spec fields an order's photos own, or None for an order with no photos (its
+    spec is then the one it always was)."""
+    if not state.get("photos"):
+        return None
+    box = state.get("photo_box_in")
+    if not _finite(box) or box <= 0:
+        box = photo_box_in(state["print_in"], int(state.get("panels", 1)))
+    return {"hotspots": photo_hotspots(order, state), "photo_layout": photo_layout(state),
+            "photo_band_side": photo_band_side(state), "photo_box_in": float(box)}
 
 
 def plate_dir(state: dict) -> str:
@@ -59,22 +198,28 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
     from app.orderpreview import load_tracks_m
     path, cfg = _region_config(state)
     tracks = load_tracks_m(order.payloads(), state["epsg"])
-    return CompositionSpec(
+    photos = _photo_fields(order, state) or {"hotspots": []}
+    spec = CompositionSpec(
         region_id=cfg["id"], crs=cfg["crs"], crop=tuple(state["frame"]),
         print_w_in=state["print_in"][0], print_h_in=state["print_in"][1],
         native_resolution_m=cfg["native_resolution_m"],
         tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
-        hotspots=[], seed=SEED, title_text=order.title,
+        seed=SEED, title_text=order.title,
         credit_text=credit_text(path),      # as the studio's proof derives it
         labels=os.path.isfile(os.path.join(path, "labels.json")),
-        panels=state["panels"], panel_gap_in=state["gap"], **ORDER_LOOK)
+        panels=state["panels"], panel_gap_in=state["gap"], **photos, **ORDER_LOOK)
+    return provenance.bound_photo_keys(spec)
 
 
 def order_spec(order: Order, state: dict) -> CompositionSpec:
     """The spec to paint: the saved one if the studio saved one, else the default.
     Its region_id and native_resolution_m follow the plate on disk now, so a plate
     Prepare rebuilt after the save is the plate that is painted. A saved spec in another
-    projection than that plate is refused: its crop is in the old metres."""
+    projection than that plate is refused: its crop is in the old metres.
+
+    An order with photos (RB1): the saved spec's photo hotspots, photo_layout,
+    photo_band_side and photo_box_in are replaced with the ones the photo state gives
+    now; its hotspots that carry no photo (a plain marker) stay, ahead of the photos."""
     saved = (state.get("manual") or {}).get("spec")
     if saved:
         _, cfg = _region_config(state)
@@ -82,8 +227,16 @@ def order_spec(order: Order, state: dict) -> CompositionSpec:
             raise OrderError("The plate's projection changed since the studio save: "
                              "run Prepare, then open the order and redo the edits.")
         spec = spec_from_json(saved)
-        return dataclasses.replace(spec, region_id=cfg["id"], crs=cfg["crs"],
+        spec = dataclasses.replace(spec, region_id=cfg["id"], crs=cfg["crs"],
                                    native_resolution_m=cfg["native_resolution_m"])
+        photos = _photo_fields(order, state)
+        if photos is None:
+            return spec
+        plain = [hs for hs in spec.hotspots
+                 if not (isinstance(hs, dict) and hs.get("photo"))]
+        spec = dataclasses.replace(spec, **{**photos,
+                                            "hotspots": plain + photos["hotspots"]})
+        return provenance.bound_photo_keys(spec)
     return default_spec(order, state)
 
 

@@ -148,3 +148,148 @@ def test_the_default_spec_carries_the_plates_credit(order):
     s = orderspec.default_spec(order, st)
     assert s.credit_text == credit.credit_text(orderspec.plate_dir(st))
     assert s.credit_text.startswith("Terrain USGS 3DEP")
+
+
+# --- order photos (Task 7): the photo state becomes the spec's photo hotspots ----------
+
+def _photo(order, name, spot, **kw):
+    """A state.json photo entry with its work JPEG on disk, as Prepare writes one."""
+    from PIL import Image
+    work = os.path.join("work", "photos", name + ".jpg")
+    os.makedirs(os.path.join(order.dir, "work", "photos"), exist_ok=True)
+    Image.new("RGB", (40, 30), (90, 60, 30)).save(os.path.join(order.dir, work))
+    entry = {"file": name, "work": work, "spot": spot, "source": "gps" if spot else None,
+             "caption": "", "box": None, "crop": {"cx": 0.5, "cy": 0.5},
+             "dropped": False, "warnings": []}
+    entry.update(kw)
+    return entry
+
+
+def _with_photos(order, photos, layout="open", box_in=2.09, side="top"):
+    write_state(order, {"photos": photos, "photo_layout": layout,
+                        "photo_box_in": box_in, "photo_band_side": side})
+    return read_state(order)
+
+
+def _centre(st):
+    f = st["frame"]
+    return {"x": (f[0] + f[2]) / 2, "y": (f[1] + f[3]) / 2}
+
+
+def test_default_spec_turns_placed_photos_into_hotspots(order):
+    st = read_state(order)
+    c = _centre(st)
+    st = _with_photos(order, [
+        _photo(order, "a.jpg", c, caption="Butte Lake", box={"dx_in": 1.5, "dy_in": -2.0}),
+        _photo(order, "b.jpg", {"x": c["x"] + 500, "y": c["y"]}, source="time",
+               crop={"cx": 0.25, "cy": 0.75}, box={"dx_in": -1.0, "dy_in": 1.0}),
+        _photo(order, "c.jpg", None),                                    # the tray
+        _photo(order, "d.jpg", c, dropped=True),                         # dropped
+    ])
+    s = orderspec.default_spec(order, st)
+    assert (s.photo_layout, s.photo_box_in, s.photo_band_side) == ("open", 2.09, "top")
+    assert [hs["label"] for hs in s.hotspots] == ["Butte Lake", ""]
+    a, b = s.hotspots
+    assert a == {"x": c["x"], "y": c["y"], "weight": 1, "label": "Butte Lake",
+                 "photo": os.path.join(order.dir, "work", "photos", "a.jpg.jpg"),
+                 "box": {"dx_in": 1.5, "dy_in": -2.0}, "crop": {"cx": 0.5, "cy": 0.5},
+                 "source": "gps"}
+    assert os.path.isabs(a["photo"]) and a["photo"].startswith(order.dir + os.sep)
+    assert b["source"] == "time" and b["crop"] == {"cx": 0.25, "cy": 0.75}
+    s.validate()
+
+
+def test_a_band_photo_carries_no_box(order):
+    st = read_state(order)
+    st = _with_photos(order, [_photo(order, "a.jpg", _centre(st))], layout="band",
+                      side="bottom")
+    s = orderspec.default_spec(order, st)
+    assert (s.photo_layout, s.photo_band_side) == ("band", "bottom")
+    assert "box" not in s.hotspots[0]
+
+
+def test_an_order_with_no_photos_keeps_the_spec_it_had(order):
+    st = read_state(order)
+    before = orderspec.spec_hash(orderspec.default_spec(order, st))
+    st = _with_photos(order, [], box_in=2.09)
+    s = orderspec.default_spec(order, st)
+    assert s.hotspots == [] and s.photo_box_in == 1.5 and s.photo_layout == "open"
+    assert orderspec.spec_hash(s) == before
+
+
+def test_the_studio_edits_win_field_by_field(order):
+    st = read_state(order)
+    c = _centre(st)
+    hand = {"x": c["x"] - 800.0, "y": c["y"] + 900.0}
+    st = _with_photos(order, [_photo(order, "a.jpg", c, caption="Prepare's"),
+                              _photo(order, "b.jpg", None),
+                              _photo(order, "c.jpg", c)])
+    set_manual(order, "photos", {"a.jpg": {"caption": "Dom's", "crop": {"cx": 0.1, "cy": 0.9}},
+                                 "b.jpg": {"spot": hand},
+                                 "c.jpg": {"dropped": True}})
+    s = orderspec.default_spec(order, read_state(order))
+    a, b = s.hotspots
+    assert (a["label"], a["crop"], a["source"]) == ("Dom's", {"cx": 0.1, "cy": 0.9}, "gps")
+    assert (b["x"], b["y"], b["source"]) == (hand["x"], hand["y"], "manual")
+
+
+def test_a_crafted_manual_photo_is_bounded(order):
+    st = read_state(order)
+    st = _with_photos(order, [_photo(order, "a.jpg", _centre(st))])
+    set_manual(order, "photos", {"a.jpg": {"box": {"dx_in": 1e9, "dy_in": 0.0, "evil": 1},
+                                           "crop": {"cx": float("nan"), "cy": 0.5},
+                                           "caption": {"not": "text"},
+                                           "spot": {"x": "here", "y": 1.0}}})
+    (hs,) = orderspec.default_spec(order, read_state(order)).hotspots
+    assert "box" not in hs and "crop" not in hs
+    assert hs["label"] == "" and hs["source"] == "gps"          # the bad spot is ignored
+
+
+def test_a_saved_spec_picks_up_a_photo_edit(order):
+    st = read_state(order)
+    st = _with_photos(order, [_photo(order, "a.jpg", _centre(st), caption="First")])
+    saved = spec_to_json(orderspec.default_spec(order, st))
+    saved["title_text"] = "Edited"
+    saved["hotspots"].append({"x": 1.0, "y": 2.0, "weight": 1, "label": "a marker"})
+    set_manual(order, "spec", saved)
+    set_manual(order, "photos", {"a.jpg": {"caption": "Second"}})
+    _with_photos(order, read_state(order)["photos"], layout="band", box_in=2.5, side="bottom")
+    s = orderspec.order_spec(order, read_state(order))
+    assert s.title_text == "Edited"                              # the save's own edit
+    assert (s.photo_layout, s.photo_box_in, s.photo_band_side) == ("band", 2.5, "bottom")
+    labels = [hs.get("label") for hs in s.hotspots]
+    assert labels == ["a marker", "Second"]                     # a plain marker stays
+
+
+def test_a_saved_spec_of_an_order_with_no_photos_is_as_saved(order):
+    st = read_state(order)
+    saved = spec_to_json(orderspec.default_spec(order, st))
+    saved["hotspots"] = [{"x": 1.0, "y": 2.0, "weight": 1, "label": "a marker"}]
+    saved["photo_box_in"] = 1.75
+    set_manual(order, "spec", saved)
+    from app.serialize import spec_from_json
+    want = orderspec.spec_hash(dataclasses.replace(
+        spec_from_json(saved), region_id=st["plate"]["id"]))
+    assert orderspec.spec_hash(orderspec.order_spec(order, read_state(order))) == want
+
+
+def test_ground_and_sheet_inches_round_trip(order):
+    s = orderspec.default_spec(order, read_state(order))
+    x0, y0, x1, y1 = s.crop
+    assert orderspec.ground_to_sheet_in(s, x0, y1) == pytest.approx((0.0, 0.0))
+    assert orderspec.ground_to_sheet_in(s, x1, y0) == pytest.approx((11.0, 17.0))
+    assert orderspec.sheet_in_to_ground(s, 0.0, 0.0) == pytest.approx((x0, y1))
+    for x, y in ((x0 + 1234.5, y0 + 6789.0), (x1 + 50.0, y1 + 10.0)):
+        xi, yi = orderspec.ground_to_sheet_in(s, x, y)
+        assert orderspec.sheet_in_to_ground(s, xi, yi) == pytest.approx((x, y))
+    # y runs down the sheet: a spot north of the centre is above the middle
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    assert orderspec.ground_to_sheet_in(s, cx, cy + 100.0)[1] < 8.5
+
+
+@pytest.mark.parametrize("size,panels,want", [((11.0, 17.0), 1, 2.09),
+                                               ((12.0, 18.0), 1, 2.25),
+                                               ((17.0, 22.0), 1, 2.96),
+                                               ((46.0, 17.0), 2, 2.96)])
+def test_the_photo_box_scales_with_the_sheet(size, panels, want):
+    assert orderspec.photo_box_in(size, panels) == want
