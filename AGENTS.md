@@ -10,8 +10,8 @@ Dev server: `.venv/bin/uvicorn app.main:app --reload`. Tests:
 the engine. The macOS launcher is `scripts/macos/build_app.sh --install`, and
 the landing page deploys by hand only, per `marketing/DEPLOY.md`.
 
-Two rules an agent breaks most easily: never size anything visual in pixels
-(physical units always, because a pixel-sized element looks bold in the proof
+Two rules an agent breaks most easily: never size anything on the poster in pixels
+(a spec, a render or plate furniture takes physical units, because a pixel-sized element looks bold in the proof
 and vanishes in the final), and never install the region-prep stack into
 `.venv` (it belongs in `.venv-prep`, and it pulls numpy, scipy, and rasterio
 past their pins).
