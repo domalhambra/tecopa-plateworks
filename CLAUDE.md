@@ -39,7 +39,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 ## Invariants
 
 1. **One spec, painted at many sizes.** Compose decides the picture once in ground coordinates; rasterize paints it at any size. Region data stays in the region dir, never on the spec.
-2. **Physical units, never pixels.** A pixel-sized element looks bold in the proof and vanishes in the final.
+2. **Physical units on the poster, never pixels.** A pixel-sized element looks bold in the proof and vanishes in the final. The studio's own CSS is ordinary web UI.
 3. **Determinism within a build.** Same spec, seed, and build give identical bytes, so the proof predicts the print.
 4. **One projection, the region CRS metres.** Tracks are reprojected on arrival.
 5. **`app/geo.py` is the only coordinate source.** Prove the chain before tuning looks.
@@ -51,7 +51,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 11. **Marketing honesty.** Every marketing image is an engine render of real country: the terrain guard in `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test in `tests/test_marketing_page.py`, run with `-m live` against the published pages. Plates are free.
 12. **Never re-stamp `sources.json`** to silence the drift gate. The mismatch is the only record that a plate was swapped.
 13. **Two venvs.** Never install the region-prep stack into `.venv`: it pulled numpy, scipy and rasterio past their pins for six weeks. `region_prep.py` runs in `.venv-prep`.
-14. **Words.** Tecopa Plateworks in full, never bare Plateworks. Plate, proof, edition, share copy, save file.
+14. **Words.** The product is Tecopa Plateworks in full, never bare Plateworks; Plateworks alone names the business, as in the byline "a Plateworks Prints line". Plate, proof, edition, share copy, save file.
 15. **License.** Code AGPL-3.0-or-later, plates and the manifest schema CC0-1.0, the name under neither. An outside contribution needs a DCO sign-off or a CLA.
 
 ## Working here
