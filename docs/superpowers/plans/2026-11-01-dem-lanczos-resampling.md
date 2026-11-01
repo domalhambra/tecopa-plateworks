@@ -224,7 +224,7 @@ Expected after the code: PASS.
 
 Run: `.venv-prep/bin/python scripts/dem_candidate.py rifle_aspen --out cache/dem_candidates`
 
-Expected on the candidate: at most 2 of 36 windows red, a median score below 8, `rms_m` under about 2, `mean_m` near 0, and `over_max_share` under 0.001.
+Expected on the candidate: at most 2 of 36 windows red, a median score below 8, `rms_m` under about 2, `mean_m` near 0, and `over_max_share` within 0.001 of the current plate's share. `elevation_max` already sits below a plate's true peak: Rifle–Aspen's current share is 0.00502.
 
 - [ ] **Step 4: Make the comparison for Dom**
 
@@ -307,6 +307,10 @@ Group the images into one plateworks-site merge, since a merge is a deploy. Foll
 
 Run: `.venv/bin/python -m pytest -m live tests/test_marketing_page.py`
 Expected: all pass.
+
+## Build record
+
+Rifle–Aspen candidate, 2026-11-01: striped windows 25 to 0, median 17.15 to 4.85, worst 37.1 to 11.4, RMS 0.90 m, mean -0.004 m, overshoot share 0.00502 to 0.00508. The 5 m dynamic probe scored 12.9 against the plan's line of 12, and stays open for Dom.
 
 ## Out of scope
 

@@ -419,6 +419,14 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 | Known limits, accepted: the box outlines and the layout ignore High relief (oblique) displacement, and the order look has oblique 0. On a panel set the studio holds a box outline inside the sheet, not the panel. A reframe made without a proof is lost when an edit flips the layout or the band's end. | — | `changing-things.md`, "An order's photos" |
 | A plate for an order with photos is planned around the union of the open frame and the band frame on the band's current side only (`orderplate.photo_plan_frame(frame, ph, bh, side)`), not both sides. Switching the band to the other side in the studio can need ground outside the plate: `place_photos` measures the holes again and warns, and Prepare again plans a new plate for the new side (`state.photo_plan_side`). `check_holes` counts frame ground outside `dem.tif` as no data. The grid resolution is still planned on the open frame. | Planning for both ends scaled a frame by `ph / (ph - 2 bh)` each way: about 2.75 times on the Reno to Salt Lake acceptance order, about 7.5 times the area, a 3,000 km plate whose terrain fetch reached the Pacific and failed. One side is about 1.9 times the area on a landscape 11×17. The hole check clipped the frame to the plate, so a frame hanging off the plate raised no warning. | Dom, 2026-10-24, acceptance fix 2; `app/orderplate.py`, `app/orderprep.py`, `tests/test_orderprep_photos.py` |
 
+## 2026-11-01 (the DEM stripes)
+
+| Decision | Why | Carried in |
+|---|---|---|
+| `region_prep` reads a static 3DEP layer natively and warps every grid onto the plate with Lanczos. `py3dep.get_dem` serves only the dynamic service. | `py3dep` reprojects a static layer to Albers with nearest-neighbour, and the build warped that with bilinear. Both leave a periodic diagonal pattern. On 36 windows of Rifle–Aspen, striped windows went from 25 to 0, and the median score from 17.2 to 4.9. The mean height moved under 1 cm. Cubic stayed striped. | `superpowers/plans/2026-11-01-dem-lanczos-resampling.md`; `region_prep.py`, `read_static_native`; `scripts/stripe_check.py` |
+| A 5 m dynamic grid stays open. Lanczos took it from 57.4 to 12.9, just over the line of 12. | The stripe there comes from the warp between a 4.5 m Albers grid and the plate. It is much better and not settled, and Dom decides whether to pursue it. | `scripts/stripe_probe_dynamic.py` |
+| The six curated plates are not rebuilt by this change. A candidate is built outside `regions/` for comparison, and a swap waits for Dom's yes. | A rebuilt plate has a new `pack_version`, so reprinting an older poster answers 422 until overridden, and its pixels move. | `scripts/dem_candidate.py`; the plan, Tasks 5 and 6 |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

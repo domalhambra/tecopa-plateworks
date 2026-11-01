@@ -86,6 +86,10 @@ Four of the five plates carry this known drift on purpose: `elko_bonneville`,
 `rifle_aspen`, `susanville_reno` and `tushar_beaver_ut` (commit `f518be8`, and
 `decisions.md` 2026-08-17). Do not "fix" it.
 
+To compare a rebuild first, `.venv-prep/bin/python scripts/dem_candidate.py <id> --out cache/dem_candidates`
+builds a DEM on the plate's committed grid outside `regions/` and writes `compare.json`.
+`.venv/bin/python scripts/stripe_check.py <dem.tif>` scores one window for resampling stripes.
+
 ## Build a new plate
 
 Read `superpowers/specs/2026-07-19-gpx-first-region-creation-design.md` first. The
