@@ -80,6 +80,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-10-24-order-photos.md` | Changing an order's photos: spots from GPS or time, captions, the open-ground layout, the gallery band and its side, the studio's photo drag, or Finish's photo refusals. The plan for sub-project 3 of the order pipeline, with its planning decisions B1 to B9. |
 | `superpowers/plans/2026-11-01-dem-lanczos-resampling.md` | Changing how a plate's elevation file is read or warped, or rebuilding a curated plate's DEM. The stripe diagnosis, its measurements, and the repair and rollout plan. |
 | `superpowers/plans/2026-11-01-pick-a-plate-phase-a.md` | Picking up the new Tecopa landing page. Phase A: the copy, the story config, and the page on an unmerged plateworks-site branch. |
+| `superpowers/plans/2026-11-01-pick-a-plate-phase-b.md` | Picking up the new Tecopa landing page. Phase B: the look, the five plates, the journeys, the renders and the ship. |
 
 ## Handoffs
 
