@@ -82,9 +82,11 @@ pull pairs a new `region.json` with the old local DEM. This recurs.
    writes the true disk hashes into the zip's copy and leaves the source folder alone.
    `tests/test_verify_regions.py` and `tests/test_plates.py` judge these paths.
 
-Four of the five plates carry this known drift on purpose: `elko_bonneville`,
-`rifle_aspen`, `susanville_reno` and `tushar_beaver_ut` (commit `f518be8`, and
-`decisions.md` 2026-08-17). Do not "fix" it.
+All six plates carry this known drift on purpose. They were rebuilt on 2026-11-01 to
+remove resampling stripes (`decisions.md` 2026-11-01), and four of them had drifted
+before that (commit `f518be8`, and `decisions.md` 2026-08-17). Do not "fix" it. The
+replaced elevation files are kept in an ignored backups folder on Dom's Mac, and they
+are the only route to an exact reprint of a poster painted before the rebuild.
 
 To compare a rebuild first, `.venv-prep/bin/python scripts/dem_candidate.py <id> --out cache/dem_candidates`
 builds a DEM on the plate's committed grid outside `regions/`, and writes a comparison

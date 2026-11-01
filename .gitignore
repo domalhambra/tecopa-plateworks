@@ -63,3 +63,6 @@ assets/
 tools/tecopa/.build/
 tools/tecopa/.swiftpm/
 tools/tecopa/Sources/TecopaKit/Baked.generated.swift
+
+# Originals kept when a plate DEM is replaced. A plate is the only route to an exact reprint.
+backups/
