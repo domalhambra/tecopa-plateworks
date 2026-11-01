@@ -972,7 +972,8 @@ def test_slices_match_one_slice_at_their_seams(tmp_path, native_tif):
     # whole grid and there is no seam. A slice's window is the projected bounding box of
     # a curved lon/lat box, so a read that follows the lon/lat box stops short of it, and
     # the later slice writes values with a cut-off kernel over good ones. The tolerance
-    # is GDAL's approximate transformer, about 0.07 m between chunkings.
+    # is GDAL's approximate transformer: reproject always samples within an eighth of a
+    # cell, and that differs between chunkings by about 0.07 m on this smooth ground.
     one, _, _ = _build(tmp_path, native_tif, n_slices=1, name="one.tif")
     three, _, _ = _build(tmp_path, native_tif, n_slices=3, name="three.tif")
     with rasterio.open(one) as a, rasterio.open(three) as b:

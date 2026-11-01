@@ -310,7 +310,11 @@ Expected: all pass.
 
 ## Build record
 
-Rifle–Aspen candidate, 2026-11-01: striped windows 25 to 0, median 17.15 to 4.85, worst 37.1 to 11.4, RMS 0.90 m, mean -0.004 m, overshoot share 0.00502 to 0.00508. The 5 m dynamic probe scored 12.9 against the plan's line of 12, and stays open for Dom.
+Rifle–Aspen candidate, 2026-11-01: striped windows 25 to 0, median 17.15 to 4.85, worst 37.1 to 11.4, RMS 0.90 m, mean -0.004 m, overshoot share 0.00502 to 0.00503. The 5 m dynamic probe scored 12.9 against the plan's line of 12, and stays open for Dom.
+
+The whole-branch review found a step of up to 1.75 m along each slice seam: the read followed the slice's lon/lat box, not its projected window. It is fixed, and the test now has a real seam. The numbers above are from the rebuild after that fix, with an overshoot share of 0.00503.
+
+A real one-slice build and a real two-slice build differ by a median of 0.022 m and an RMS of 0.085 m, and by up to 17 m on cliffs. That is GDAL's approximate transformer, which `rasterio.warp.reproject` fixes at 0.125 pixel. No cell is outside a quarter-cell sideways bound, and the height step across the seam matches its neighbours. It is left as is.
 
 ## Out of scope
 
