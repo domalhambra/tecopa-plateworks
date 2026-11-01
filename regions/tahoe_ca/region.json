@@ -1,0 +1,24 @@
+{
+  "id": "tahoe_ca",
+  "name": "Lake Tahoe and Desolation",
+  "crs": "EPSG:32610",
+  "bounds": [
+    728520.0,
+    4287320.0,
+    786490.0,
+    4371410.0
+  ],
+  "overview_size": [
+    965,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1368.3240966796875,
+  "elevation_max": 2942.83984375,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}
