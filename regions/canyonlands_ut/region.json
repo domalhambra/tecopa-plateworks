@@ -1,0 +1,24 @@
+{
+  "id": "canyonlands_ut",
+  "name": "Canyonlands and Moab",
+  "crs": "EPSG:32612",
+  "bounds": [
+    565670.0,
+    4201030.0,
+    644460.0,
+    4289820.0
+  ],
+  "overview_size": [
+    1242,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1194.7542724609375,
+  "elevation_max": 2243.4345703125,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}
