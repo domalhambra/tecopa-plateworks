@@ -7,6 +7,9 @@ import os
 import numpy as np
 import pytest
 rp = pytest.importorskip("region_prep")
+from scipy.ndimage import gaussian_filter  # noqa: E402
+
+from scripts import stripe_check  # noqa: E402
 
 LASSEN = (-120.90, 40.33, -120.50, 40.78)          # county-scale (~34 x 50 km)
 CORRIDOR = (-116.95, 39.20, -111.35, 42.05)        # elko_bonneville (~483 x 331 km)
@@ -807,7 +810,8 @@ def test_fill_sampling_decimates_to_the_tiles_overviews_but_stays_finer(
 def test_static_layer_urls_are_the_ones_py3dep_reads():
     base = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation"
     assert rp.STATIC_LAYER_URLS == {10: f"{base}/13/TIFF/USGS_Seamless_DEM_13.vrt",
-                                    30: f"{base}/1/TIFF/USGS_Seamless_DEM_1.vrt"}
+                                    30: f"{base}/1/TIFF/USGS_Seamless_DEM_1.vrt",
+                                    60: f"{base}/2/TIFF/USGS_Seamless_DEM_2.vrt"}
 
 
 # build_dem_cog end to end, with a fake dynamic fetch that leaves a hole
@@ -842,20 +846,6 @@ def test_build_dem_cog_fills_a_dynamic_grid(tmp_path, monkeypatch, static_src):
         assert ds.overviews(1) == [2, 4, 8, 16, 32], "overviews see the filled grid"
 
 
-def test_build_dem_cog_leaves_a_static_grid_alone(tmp_path, monkeypatch):
-    monkeypatch.setattr(rp, "fetch_dem", lambda sb, res: _FakeDA(sb))
-
-    def never(layer_m):
-        raise AssertionError("a static grid is never filled")
-    plan = rp.plan_build(DYN_BBOX, GRID_CRS, 30)
-    assert not plan["dynamic"]
-    out = str(tmp_path / "dem.tif")
-    path, fill = rp.build_dem_cog(DYN_BBOX, GRID_CRS, out, plan, open_static=never)
-    assert fill is None
-    with rasterio.open(out) as ds:
-        assert np.isnan(ds.read(1)).any(), "the hole stays: static tiles are the source"
-
-
 def test_sources_manifest_records_a_hole_fill(tmp_path):
     fill = {"layer_m": 30, "filled_px": 64, "filled_share": 0.06413, "stopped": None}
     m = rp.write_sources_manifest(str(tmp_path), "order_y", (-116.3, 35.8, -116.2, 35.9),
@@ -880,3 +870,169 @@ def test_sources_manifest_records_no_fill_when_nothing_was_filled(tmp_path, fill
                                   fill=fill)
     assert len(m["sources"]) == 3
     assert not any(s.get("role") == "hole fill" for s in m["sources"])
+
+
+# The static layers are read natively and warped with Lanczos: going through py3dep's
+# nearest-neighbour Albers grid, or warping with bilinear, leaves stripes
+# (docs/superpowers/plans/2026-11-01-dem-lanczos-resampling.md).
+NAT_BBOX = (-106.85, 39.10, -106.79, 39.15)
+NAT_CRS = "EPSG:32613"
+NAT_RES = 1 / 10800                                  # 1/3 arc-second
+NAT_MARGIN = 0.04
+NAT_HOLE = (slice(800, 1000), slice(800, 1000))      # rows, cols of the source
+
+
+def _native_terrain(rows, cols):
+    """Steep, smooth ground with a noise floor like real 3DEP (a median slope near the
+    plates', fine detail of about 3 m, sensor noise of about 0.2 m). A resampling
+    pattern scales with the slope, so white noise alone would hide it, and the score
+    reads against the floor, so ground with no noise would flag any faint residual."""
+    r = np.random.default_rng(3)
+    y, x = np.indices((rows, cols), dtype="float32")
+    a = 0.35 * 8 * x + 0.35 * 10 * y
+    for s, amp in ((12, 600.0), (24, 1800.0), (48, 6000.0), (2, 3.0)):
+        a += gaussian_filter(r.standard_normal((rows, cols)), s) * amp
+    return (2800.0 + a + r.standard_normal((rows, cols)) * 0.2).astype("float32")
+
+
+def _native_source(path, hole=False):
+    w, s, e, n = NAT_BBOX
+    w, s, e, n = w - NAT_MARGIN, s - NAT_MARGIN, e + NAT_MARGIN, n + NAT_MARGIN
+    cols, rows = int((e - w) / NAT_RES), int((n - s) / NAT_RES)
+    arr = _native_terrain(rows, cols)
+    if hole:
+        arr[NAT_HOLE] = -999999.0
+    with rasterio.open(path, "w", driver="GTiff", dtype="float32", count=1, width=cols,
+                       height=rows, crs="EPSG:4269",
+                       transform=from_origin(w, n, NAT_RES, NAT_RES),
+                       nodata=-999999.0) as ds:
+        ds.write(arr, 1)
+    return path
+
+
+@pytest.fixture(scope="module")
+def native_tif(tmp_path_factory):
+    return _native_source(str(tmp_path_factory.mktemp("native") / "src.tif"))
+
+
+@pytest.fixture(scope="module")
+def holed_tif(tmp_path_factory):
+    return _native_source(str(tmp_path_factory.mktemp("holed") / "src.tif"), hole=True)
+
+
+def _opener(path):
+    return lambda layer_m: rasterio.open(path)
+
+
+def _build(tmp_path, tif, res=10, n_slices=None, name="dem.tif"):
+    plan = dict(rp.plan_build(NAT_BBOX, NAT_CRS, res))
+    if n_slices:
+        plan["n_slices"] = n_slices
+    out = str(tmp_path / name)
+    return (*rp.build_dem_cog(NAT_BBOX, NAT_CRS, out, plan, open_static=_opener(tif)), plan)
+
+
+def test_the_static_chain_control_goes_red(native_tif):
+    # py3dep's chain, by hand: this is the proof the fixture can catch the bug.
+    from rasterio.warp import reproject
+    plan = rp.plan_build(NAT_BBOX, NAT_CRS, 10)
+    with rasterio.open(native_tif) as src:
+        arr = src.read(1)
+        from rasterio.warp import transform_bounds
+        l, b, r, t = transform_bounds(src.crs, "EPSG:5070", *src.bounds)
+        albers_t = from_origin(l, t, 8.84, 8.84)
+        albers = np.full((int((t - b) / 8.84), int((r - l) / 8.84)), np.nan, "float32")
+        reproject(arr, albers, src_transform=src.transform, src_crs=src.crs,
+                  dst_transform=albers_t, dst_crs="EPSG:5070", dst_nodata=np.nan,
+                  resampling=rp.Resampling.nearest)
+    w, h = plan["grid"]
+    out = np.full((h, w), np.nan, "float32")
+    reproject(albers, out, src_transform=albers_t, src_crs="EPSG:5070", src_nodata=np.nan,
+              dst_transform=plan["transform"], dst_crs=NAT_CRS, dst_nodata=np.nan,
+              resampling=rp.Resampling.bilinear)
+    assert stripe_check.peaks(out, 10, 10)[0]["score"] >= stripe_check.STRIPE_RED_SCORE
+
+
+def test_build_dem_cog_static_grid_has_no_stripes(tmp_path, native_tif):
+    path, _, _ = _build(tmp_path, native_tif)
+    with rasterio.open(path) as ds:
+        top = stripe_check.peaks(ds.read(1), 10, 10)[0]
+    assert top["score"] < stripe_check.STRIPE_RED_SCORE
+
+
+def test_build_dem_cog_static_never_calls_py3dep(tmp_path, monkeypatch, native_tif):
+    def boom(*a):
+        raise AssertionError("a static grid does not go through py3dep")
+    monkeypatch.setattr(rp, "fetch_dem", boom)
+    assert _build(tmp_path, native_tif)[1] is None
+
+
+def test_two_slices_match_one_slice(tmp_path, native_tif):
+    one, _, _ = _build(tmp_path, native_tif, n_slices=1, name="one.tif")
+    two, _, _ = _build(tmp_path, native_tif, n_slices=2, name="two.tif")
+    with rasterio.open(one) as a, rasterio.open(two) as b:
+        assert np.nanmax(np.abs(a.read(1) - b.read(1))) <= 0.05
+
+
+def test_native_read_keeps_nodata_as_nan_without_a_spike(tmp_path, holed_tif):
+    path, _, _ = _build(tmp_path, holed_tif)
+    with rasterio.open(holed_tif) as src:
+        arr = src.read(1)
+        lo, hi = arr[arr > -1000].min(), arr[arr > -1000].max()
+        # the middle of the source hole, in the grid's coordinates
+        lon, lat = src.xy(900, 900)
+    from pyproj import Transformer
+    x, y = Transformer.from_crs("EPSG:4269", NAT_CRS, always_xy=True).transform(lon, lat)
+    with rasterio.open(path) as ds:
+        out = ds.read(1)
+        row, col = ds.index(x, y)
+    assert np.isnan(out[row - 20:row + 20, col - 20:col + 20]).all()
+    assert np.nanmin(out) >= lo - 5 and np.nanmax(out) <= hi + 5
+
+
+def test_a_static_grid_keeps_its_hole(tmp_path, monkeypatch, holed_tif):
+    def never(*a, **k):
+        raise AssertionError("a static grid is never filled")
+    monkeypatch.setattr(rp, "fill_dem_holes", never)
+    path, fill, _ = _build(tmp_path, holed_tif, res=30)
+    assert fill is None
+    with rasterio.open(path) as ds:
+        assert np.isnan(ds.read(1)).any(), "the hole stays: static tiles are the source"
+
+
+def test_native_read_retries_a_dropped_connection(waits, native_tif):
+    calls = []
+
+    def flaky(layer_m):
+        calls.append(layer_m)
+        if len(calls) == 1:
+            raise TimeoutError("timed out")
+        return rasterio.open(native_tif)
+    arr, _, crs = rp.read_static_native(NAT_BBOX, 10, open_static=flaky)
+    assert waits == [60] and calls == [10, 10]
+    assert arr.dtype == np.float32 and crs.to_epsg() == 4269
+
+
+def test_native_read_raises_a_lasting_error_at_once(waits):
+    def missing(layer_m):
+        raise rasterio.errors.RasterioIOError("x.vrt: No such file or directory")
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        rp.read_static_native(NAT_BBOX, 10, open_static=missing)
+    assert waits == []
+
+
+def test_native_read_pads_past_the_lanczos_kernel(native_tif):
+    arr, t, _ = rp.read_static_native(NAT_BBOX, 10, open_static=_opener(native_tif))
+    assert t.c <= NAT_BBOX[0] - 3 * NAT_RES and t.f >= NAT_BBOX[3] + 3 * NAT_RES
+
+
+@pytest.mark.parametrize("res,via", [
+    (10, "rasterio, USGS_Seamless_DEM_13.vrt"),
+    (30, "rasterio, USGS_Seamless_DEM_1.vrt"),
+    (35, "py3dep.get_dem"),
+])
+def test_sources_manifest_names_the_read(tmp_path, res, via):
+    rp.write_sources_manifest(str(tmp_path), "x", DYN_BBOX, GRID_CRS, built="2026-11-01",
+                              resolution_m=res)
+    with open(tmp_path / "sources.json") as f:
+        assert json.load(f)["sources"][0]["via"] == via
