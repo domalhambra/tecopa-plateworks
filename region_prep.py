@@ -911,14 +911,12 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
                       f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
             if _is_static(res):
                 src, src_t, src_crs = read_static_native(sb, res, open_static)
-                resampling = DEM_WARP_RESAMPLING
             else:
                 da = fetch_dem(sb, res)
                 src = np.asarray(da.values, dtype="float32")
                 if src.ndim == 3:
                     src = src[0]
                 src_t, src_crs = da.rio.transform(), da.rio.crs
-                resampling = Resampling.bilinear
             # destination window on the shared grid = this slice's projected extent
             win = _slice_window(*extent, T, w_px, h_px)
             dst_arr = np.full((int(win.height), int(win.width)), np.nan, "float32")
@@ -927,7 +925,7 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
                       src_nodata=np.nan,
                       dst_transform=rasterio.windows.transform(win, T),
                       dst_crs=dst_crs, dst_nodata=np.nan,
-                      resampling=resampling)
+                      resampling=DEM_WARP_RESAMPLING)
             existing = dst.read(1, window=win)
             dst.write(np.where(np.isnan(dst_arr), existing, dst_arr), 1, window=win)
             del src, dst_arr, existing

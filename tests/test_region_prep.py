@@ -1036,3 +1036,21 @@ def test_sources_manifest_names_the_read(tmp_path, res, via):
                               resolution_m=res)
     with open(tmp_path / "sources.json") as f:
         assert json.load(f)["sources"][0]["via"] == via
+
+
+def test_build_dem_cog_warps_every_path_with_the_same_resampling(tmp_path, monkeypatch,
+                                                                 static_src):
+    # On a 5 m dynamic grid py3dep is clean (7.1) and a bilinear warp scores 57.
+    import rasterio.warp as warp
+    seen, real = [], warp.reproject
+
+    def spy(*a, **k):
+        seen.append(k["resampling"])
+        return real(*a, **k)
+    monkeypatch.setattr(warp, "reproject", spy)
+    monkeypatch.setattr(rp, "fetch_dem", lambda sb, res: _FakeDA(sb))
+    plan = rp.plan_build(DYN_BBOX, GRID_CRS, 250.0)
+    rp.build_dem_cog(DYN_BBOX, GRID_CRS, str(tmp_path / "dem.tif"), plan,
+                     open_static=static_src)
+    assert seen[0] == rp.DEM_WARP_RESAMPLING
+
