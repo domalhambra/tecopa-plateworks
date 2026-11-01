@@ -1,7 +1,7 @@
 # The viewshed wash — Design
 
 **Date:** 2026-11-01
-**Status:** Ready for Dom's approval. A builder check is done, and Dom has answered its questions. Nothing is built.
+**Status:** Approved by Dom, 2026-11-01. Nothing is built.
 **Prototype:** the private page "Tecopa Feature Prototypes". It computed real viewsheds from six named summits on the Rifle–Aspen plate, outside the engine.
 **Relates to:** `2026-08-16-target-customer-profile-design.md`, `2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` (Phase B renders the page's images, so this lands before it or waits for a later render), `../../relief-passes.md`.
 
