@@ -1727,3 +1727,13 @@ def test_story_is_accepted_and_changes_nothing_yet(tmp_path):
     told, _ = network_tracks(r, _ways(), seed=7, story=None)
     for a, b in zip(plain, told):
         assert np.array_equal(a.coords, b.coords)
+
+
+def test_plate_straightness_pools_every_trips_changes(tmp_path):
+    from scripts.track_straightness import plate_straightness
+    r = _region(tmp_path)
+    raw = []
+    network_tracks(r, _ways(), seed=7, raw_out=raw)
+    trips, straight, total = plate_straightness(r, _ways())
+    assert trips == len(raw) and 0 < straight <= total
+    assert total == sum(track_network.straight_counts(p)[1] for p in raw)

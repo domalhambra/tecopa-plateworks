@@ -434,6 +434,12 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 |---|---|---|
 | Every new poster carries the biome coloring, the geography names, the dry-lake stipple and the elevation profile strip by default: `ORDER_LOOK` gains `biome`, `labels`, `dry_lakes` and `profile`, and the studio's `store.js` and `controls.js` defaults match. The marketing farm renders with the same look (`_base_spec(..., look=None)` merges a per-plate override over it). `default_spec` and the order preview still set `labels` from the plate's `labels.json`. The Archival preset also turns the profile strip off, as it already does the other layers. | The Pick-a-plate page shows what an order ships, and a customer should not have to find four toggles to get it. A layer a plate lacks (no landcover, no labels, no playa) paints nothing, and a test renders a plate with none of them. A saved or continued poster restores its own stored values, so no old print changes. | `app/orderspec.py` `ORDER_LOOK`; `scripts/render_asset_farm.py` `_base_spec`; `tests/test_asset_farm_look.py` |
 
+## 2026-11-01 (the straightness measure)
+
+| Decision | Why | Carried in |
+|---|---|---|
+| A plate's straight share is read on the routed paths before densify and jitter, resampled every 100 m: the share of heading changes under 3 degrees, pooled over every trip. The baseline of the six old plates: `tecopa_ca` 60.0 percent, `elko_bonneville` 45.4, `lassen_ca` 35.7, `susanville_reno` 35.3, `tushar_beaver_ut` 17.4, `rifle_aspen` 14.6. These numbers replace the 37 percent (Tecopa) and 23 percent (Lassen) in section 1 of the showcase spec. | The old figures were read from the densified, jittered output, where the 3 m jitter blurs a straight run into small wobbles. They understated the problem. Tuning is judged by this measure, with each showcase plate to land under 10 percent. | `scripts/track_network.py`, `straight_share`; `scripts/track_straightness.py`; `superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, section 7 |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |
