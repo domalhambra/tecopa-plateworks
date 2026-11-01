@@ -1,0 +1,149 @@
+# The five showcase plates and their stories, one table per plate, in page order
+# (spec docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md,
+# section 8). Headings match the copy document, and tests/test_stories_config.py holds
+# them together.
+#
+# status = "plan": nothing reads this file yet. Phase B adds each section's
+# crop_center_m (CRS metres) and crop_in (printed inches), each plate's look and the
+# trail-first weights, then the farm and the exporter read it. A destination name is
+# looked up in the plate's labels.json or hydro.json in Phase B, and a name that does
+# not resolve fails that run.
+
+status = "plan"
+
+[canyonlands_ut]
+anchor = "canyonlands"
+name = "Canyonlands and Moab"
+eyebrow = "Cliffs and canyons"
+destinations = ["Island in the Sky", "The Needles", "The Confluence"]
+trips = [
+    { shape = "drive", road = "White Rim Road" },
+    { shape = "out_and_back" },
+    { shape = "loop" },
+]
+look = {}
+
+[[canyonlands_ut.sections]]
+heading = "Every wall throws its shadow"
+feature = "Shading"
+variant = "poster"
+crop_place = "Island in the Sky down to the White Rim, for the coin and its relief"
+
+[[canyonlands_ut.sections]]
+heading = "The river stays down in its canyon"
+feature = "Rivers"
+variant = "poster"
+crop_place = "the Confluence, looking into the inner gorge"
+
+[[canyonlands_ut.sections]]
+heading = "A slow drive bends with every side canyon"
+feature = "Your track"
+variant = "poster"
+crop_place = "a stretch of the White Rim Road around the heads of side canyons"
+
+[tahoe_ca]
+anchor = "tahoe"
+name = "Lake Tahoe and Desolation"
+eyebrow = "Water"
+destinations = ["Freel Peak", "Mount Tallac", "Mount Rose", "Pyramid Peak"]
+trips = [{ shape = "out_and_back" }, { shape = "loop" }]
+look = {}
+
+[[tahoe_ca.sections]]
+heading = "The lake shades deeper away from shore"
+feature = "Water"
+variant = "poster"
+crop_place = "the south shore of Tahoe with Fallen Leaf Lake, shallows to deep water"
+
+[[tahoe_ca.sections]]
+heading = "Every creek finds its way down"
+feature = "Creeks and small lakes"
+variant = "poster"
+crop_place = "Desolation Wilderness, lakes strung along their outlets"
+
+[[tahoe_ca.sections]]
+heading = "Your summits, marked"
+feature = "Marks and photos"
+variant = "poster"
+crop_place = "centred on the summit that carries the pinned photo, Mount Tallac to start"
+
+[eastern_sierra_ca]
+anchor = "sierra"
+name = "Eastern Sierra"
+eyebrow = "Desert floor to alpine"
+destinations = ["Mount Whitney", "The Palisades"]
+trips = [{ shape = "out_and_back" }, { shape = "4wd" }]
+look = {}
+
+[[eastern_sierra_ca.sections]]
+heading = "Sage, pinyon, forest, granite, each in its own color"
+feature = "Coloring"
+variant = "poster"
+crop_place = "from the Owens Valley floor at Lone Pine up to the Whitney crest"
+
+[[eastern_sierra_ca.sections]]
+heading = "The climb runs along the foot of the sheet"
+feature = "Elevation"
+variant = "poster"
+crop_place = "the foot of the sheet, the whole elevation strip"
+
+[[eastern_sierra_ca.sections]]
+heading = "A season draws itself"
+feature = "The film"
+variant = "film"
+crop_place = "the whole poster"
+
+[ruby_mountains_nv]
+anchor = "rubies"
+name = "Ruby Mountains"
+eyebrow = "A range alone in the basin"
+destinations = ["Lamoille Lake", "Island Lake", "Liberty Pass", "Ruby Dome"]
+trips = [
+    { shape = "drive", road = "Lamoille Canyon Road" },
+    { shape = "out_and_back" },
+]
+look = {}
+
+[[ruby_mountains_nv.sections]]
+heading = "Far ridges fade"
+feature = "Distance"
+variant = "poster"
+crop_place = "the range seen across its width, near ridges against far ones"
+
+[[ruby_mountains_nv.sections]]
+heading = "A dry lake prints as a dry lake"
+feature = "Dry lakes"
+variant = "poster"
+crop_place = "Franklin Lake on the valley floor, with the water of Ruby Lake if the window holds it"
+
+[[ruby_mountains_nv.sections]]
+heading = "The road you drive every time wears in"
+feature = "Worn paths"
+variant = "poster"
+crop_place = "Lamoille Canyon Road up to its end, where the trails branch"
+
+[zion_ut]
+anchor = "zion"
+name = "Zion"
+eyebrow = "Lit by your own day"
+destinations = ["Angels Landing", "Observation Point"]
+trips = [{ shape = "out_and_back" }, { shape = "loop" }]
+look = {}
+
+[[zion_ut.sections]]
+heading = "The light from your own day"
+feature = "Journey Light"
+variant = "poster_journey"
+crop_place = "Zion Canyon, the same window from the plain poster and the lit one"
+
+[[zion_ut.sections]]
+heading = "Walter's Wiggles keeps every switchback"
+feature = "Your track"
+variant = "poster"
+crop_place = "the switchbacks below Angels Landing, with the pinned photo if the window holds it"
+
+[[zion_ut.sections]]
+heading = "This year's trips, then next year's"
+feature = "Editions"
+variant = "editions"
+crop_place = "the whole poster, Editions 1, 2 and 3 at wall size"

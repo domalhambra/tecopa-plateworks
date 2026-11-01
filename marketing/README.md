@@ -11,6 +11,10 @@ ghost-tecopa-pages script. The single-file `landing.html` and `privacy.html` tha
 here are at tag `landing-final-2026-09-26`. The farm below still feeds the pages,
 through `scripts/export_relief.py`.
 
+## `stories.toml`
+
+The five showcase plates of the Pick-a-plate landing page and their stories: names, pinned destinations, trip shapes, and each section's heading and crop in words. Its status is `plan`, so nothing reads it yet. In Phase B of `docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, the farm and the exporter read it. The sentences live in `docs/superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md`, and `tests/test_stories_config.py` holds the headings in step with them.
+
 ## `scripts/render_asset_farm.py`
 
 Turns each curated region into the full deliverable spread (poster, wallpapers, time-lapse

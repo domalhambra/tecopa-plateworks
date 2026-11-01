@@ -42,6 +42,8 @@ Undated documents that still govern something. Each is path-checked.
 | `superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md` | Working on the `tecopa` tool: the Swift CLI and MCP server, the debug routes behind `TECOPA_DEBUG`, the studio's report module, the four build phases. All four phases are built. |
 | `superpowers/specs/2026-10-11-print-sizes-panel-sets-and-size-preview-design.md` | Working on print sizes: a set of two or three 17 × 22 panels, the gap, the furniture retune for 11 × 17 and 17 × 22, or the size preview a client sees before payment. Built on 2026-10-11 and 2026-10-12, and merged to `main` on 2026-10-12. Its two sections at the end list what the plan and the build changed. `order finish` was built on 2026-10-24, and three print checks wait for paper. |
 | `superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md` | Working on how a client sends tracks and pays: `order new` from the intake's Dropbox job folder, the preview email with a Payment Link for each offered size, the set and next-year prices, shipping and links in `config/sizes.toml`. It spans four repos. Being built: this repo's part, section 5, is built, and the section at the end lists what the build chose. |
+| `superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` | Changing the Tecopa landing page, the five showcase plates, or trail-first demo journeys. The design: one story per plate, and Phases A and B. |
+| `superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md` | Changing a sentence on the Tecopa landing page. Every sentence, in page order. |
 | `superpowers/prototypes/2026-09-24-ghost-landing-preview.html` | Porting the landing page's shader, poster wall or relief viewer into the theme. The working prototype the spec approves. Its media files are not committed: the relief exporter makes them. |
 
 ## Plans
@@ -77,6 +79,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-10-24-order-proof-approval-and-print.md` | Changing an order's proof, the paper table, the studio's Open / Save / Approve for an order, or `order finish`. The plan for sub-projects 2 and 4 of the order pipeline, with its planning decisions. |
 | `superpowers/plans/2026-10-24-order-photos.md` | Changing an order's photos: spots from GPS or time, captions, the open-ground layout, the gallery band and its side, the studio's photo drag, or Finish's photo refusals. The plan for sub-project 3 of the order pipeline, with its planning decisions B1 to B9. |
 | `superpowers/plans/2026-11-01-dem-lanczos-resampling.md` | Changing how a plate's elevation file is read or warped, or rebuilding a curated plate's DEM. The stripe diagnosis, its measurements, and the repair and rollout plan. |
+| `superpowers/plans/2026-11-01-pick-a-plate-phase-a.md` | Picking up the new Tecopa landing page. Phase A: the copy, the story config, and the page on an unmerged plateworks-site branch. |
 
 ## Handoffs
 
