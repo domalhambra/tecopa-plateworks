@@ -184,7 +184,7 @@ trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 2.0
 photo_at = "Angels Landing"
 look = {}
-journey = { sun_azimuth_deg = 250.0, sun_altitude_deg = 15.0, golden_strength = 0.7 }
+journey = { sun_azimuth_deg = 250.0, sun_altitude_deg = 10.0, golden_strength = 1.0 }
 
 [[zion_ut.sections]]
 heading = "The light from your own day"

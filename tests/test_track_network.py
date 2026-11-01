@@ -2120,7 +2120,7 @@ def test_story_config_loads_the_five_plates_and_only_them():
     stories = load_stories()
     assert set(stories) == {"canyonlands_ut", "tahoe_ca", "eastern_sierra_ca",
                             "ruby_mountains_nv", "zion_ut"}
-    assert story_for("zion_ut")["destinations"][:2] == ["Angels Landing", "Observation Point"]
+    assert story_for("zion_ut")["destinations"][:2] == ["Angels Landing", "Northgate Peaks"]
     for old in ("tecopa_ca", "elko_bonneville", "lassen_ca", "susanville_reno",
                 "tushar_beaver_ut", "rifle_aspen", "status"):
         assert story_for(old) is None
