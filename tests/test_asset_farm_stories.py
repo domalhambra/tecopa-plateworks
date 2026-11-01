@@ -11,6 +11,7 @@
 # ship-check naming the plates that still carry the demo photo.
 import dataclasses
 import os
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -82,12 +83,35 @@ def test_a_centre_off_the_sheet_refuses():
         farm.crop_window((9000.0, 6000.0), (2.0, 2.0), CROP, SIZE, 100)
 
 
-def test_foot_anchor_takes_the_bottom_of_the_sheet():
-    # the elevation strip sits in the lower left of the sheet
-    x0, y0, x1, y1 = farm.crop_window(None, (4.0, 2.0), CROP, SIZE, 100, anchor="foot")
+STRIP = (20, 650, 320, 780)       # x0, y0, x1, y1 on the 600 x 800 sheet, in pixels
+
+
+def test_profile_anchor_centres_on_the_strip_and_keeps_its_size():
+    # a 4 x 2 in window at 100 dpi is 400 x 200 px; centred on the strip it would pass
+    # the sheet's left and bottom edges, so it slides in and keeps its size
+    x0, y0, x1, y1 = farm.crop_window(None, (4.0, 2.0), CROP, SIZE, 100,
+                                      anchor="profile", strip=STRIP)
     assert (x0, y0, x1, y1) == (0, 600, 400, 800)
-    with pytest.raises(StoryError, match="anchor"):
-        farm.crop_window(None, (4.0, 2.0), CROP, SIZE, 100, anchor="roof")
+    # a window with room all round is centred on the strip's middle (170, 715)
+    x0, y0, x1, y1 = farm.crop_window(None, (3.4, 1.6), CROP, (900, 900), 100,
+                                      anchor="profile", strip=(200, 700, 500, 800))
+    assert (x0, y0, x1, y1) == (180, 670, 520, 830)
+
+
+def test_profile_anchor_refuses_a_window_that_misses_part_of_the_strip():
+    with pytest.raises(StoryError, match="strip"):
+        farm.crop_window(None, (2.0, 1.0), CROP, SIZE, 100, anchor="profile", strip=STRIP)
+    # wide enough, too short
+    with pytest.raises(StoryError, match="strip"):
+        farm.crop_window(None, (5.0, 1.0), CROP, SIZE, 100, anchor="profile", strip=STRIP)
+
+
+def test_profile_anchor_needs_the_strip_and_no_other_anchor_exists():
+    with pytest.raises(StoryError, match="strip"):
+        farm.crop_window(None, (4.0, 2.0), CROP, SIZE, 100, anchor="profile")
+    for old in ("foot", "roof"):
+        with pytest.raises(StoryError, match="anchor"):
+            farm.crop_window(None, (4.0, 2.0), CROP, SIZE, 100, anchor=old, strip=STRIP)
 
 
 def test_a_ground_point_lands_on_its_pixel_in_a_real_render(tmp_path):
@@ -191,7 +215,8 @@ def test_stories_cuts_each_window_from_the_sheet_pixels(tmp_path):
     cy = crop[1] + 0.6 * (crop[3] - crop[1])
     story = _story([
         {"heading": "A", "variant": "poster", "crop_center_m": [cx, cy], "crop_in": [3, 2]},
-        {"heading": "B", "variant": "poster", "crop_anchor": "foot", "crop_in": [4, 1.5]},
+        {"heading": "B", "variant": "poster", "crop_center_m": [crop[0] + 1.0, crop[1] + 1.0],
+         "crop_in": [4, 1.5]},
         {"heading": "C", "variant": "film"},
     ])
     made = farm._stories(str(tmp_path), region, story, DPI)
@@ -201,7 +226,7 @@ def test_stories_cuts_each_window_from_the_sheet_pixels(tmp_path):
     assert one.shape == (200, 300, 3)                          # print pixels, exactly
     assert np.array_equal(one, arr[y0:y1, x0:x1])
     two = np.asarray(Image.open(made[1]))
-    assert np.array_equal(two, arr[size[1] - 150:, 0:400])
+    assert np.array_equal(two, arr[size[1] - 150:, 0:400])     # the corner, slid in
 
 
 def test_a_journey_section_writes_the_before_and_the_after(tmp_path):
@@ -233,10 +258,111 @@ def test_the_window_reads_the_crop_the_sheet_was_rendered_with(tmp_path):
     # a restage-only run opens no DEM, so the sheet's own manifest carries its frame
     region = _region()
     path, size = farm._poster(region, [], [], str(tmp_path), 24)
-    assert farm._sheet_crop(path, region) == tuple(farm._frame(region)[0])
+    assert tuple(farm._sheet_spec(path, region).crop) == tuple(farm._frame(region)[0])
     bare = tmp_path / "bare.png"
     Image.new("RGB", (10, 10)).save(bare)               # no manifest: fall back to the frame
-    assert farm._sheet_crop(str(bare), region) == tuple(farm._frame(region)[0])
+    assert tuple(farm._sheet_spec(str(bare), region).crop) == tuple(farm._frame(region)[0])
+
+
+def test_the_window_is_cut_at_the_dpi_the_sheet_was_rendered_at(tmp_path, capsys):
+    # a --quick poster (24 dpi here) cut by a run that still says 300 dpi gets the
+    # window of the sheet's own pixels, not a 300 dpi window that would not fit
+    region = _region()
+    path, size = farm._poster(region, [], [], str(tmp_path), 24)
+    crop = farm._frame(region)[0]
+    story = _story([{"heading": "A", "variant": "poster", "crop_in": [3, 2],
+                     "crop_center_m": [(crop[0] + crop[2]) / 2, (crop[1] + crop[3]) / 2]}])
+    made = farm._stories(str(tmp_path), region, story, 300.0)
+    assert Image.open(made[0]).size == (72, 48)
+    assert "24" in capsys.readouterr().out                # and it says which dpi it used
+
+
+def test_a_sheet_with_no_manifest_still_gives_its_dpi(tmp_path):
+    region = _region()
+    crop, pw, ph = farm._frame(region)
+    Image.new("RGB", (round(pw * 48), round(ph * 48)), (9, 9, 9)).save(tmp_path / "poster.png")
+    story = _story([{"heading": "A", "variant": "poster", "crop_in": [2, 1],
+                     "crop_center_m": [(crop[0] + crop[2]) / 2, (crop[1] + crop[3]) / 2]}])
+    made = farm._stories(str(tmp_path), region, story, 300.0)
+    assert Image.open(made[0]).size == (96, 48)
+
+
+def test_a_poster_with_bleed_is_refused(tmp_path):
+    # the farm never bleeds a sheet; a window placed on one would sit off by the bleed
+    from app import provenance
+    region = _region()
+    spec = replace(farm._plate_spec(region, [], []), bleed_in=0.125)
+    manifest = provenance.build_manifest(spec)
+    Image.new("RGB", (60, 60)).save(tmp_path / "poster.png", "PNG",
+                                    pnginfo=provenance.manifest_pnginfo(manifest))
+    story = _story([{"heading": "Bled", "variant": "poster", "crop_in": [0.5, 0.5],
+                     "crop_center_m": [(spec.crop[0] + spec.crop[2]) / 2,
+                                       (spec.crop[1] + spec.crop[3]) / 2]}])
+    with pytest.raises(StoryError, match="Bled"):
+        farm._stories(str(tmp_path), region, story, 24)
+
+
+def _render_with_and_without_the_strip(tmp_path):
+    """The same poster twice, with and without the elevation strip, labels off so the
+    strip's keep-out moves nothing else. The pixels that differ are the strip."""
+    region = _region()
+    crop, _pw, _ph = farm._frame(region)
+    cx = crop[0] + 0.5 * (crop[2] - crop[0])
+    cy = crop[1] + 0.5 * (crop[3] - crop[1])
+    track = Track(track_id="probe", coords=np.array([[cx - 9000, cy], [cx + 9000, cy + 4000]]),
+                  day="2024-07-01")
+    on = replace(farm._base_spec(region, [track], [], look={"labels": False}), profile=True)
+    off = replace(on, profile=False)
+    farm._write_final(on, region, 40, str(tmp_path / "poster.png"))
+    farm._write_final(off, region, 40, str(tmp_path / "off.png"))
+    a = np.asarray(Image.open(tmp_path / "poster.png").convert("RGB"), np.int16)
+    b = np.asarray(Image.open(tmp_path / "off.png").convert("RGB"), np.int16)
+    ys, xs = np.nonzero(np.abs(a - b).max(axis=2) > 12)
+    return region, crop, (xs.min(), ys.min(), xs.max() + 1, ys.max() + 1), a.shape
+
+
+def test_the_profile_strip_rect_is_where_the_painter_draws_the_strip(tmp_path):
+    region, _crop, drawn, _shape = _render_with_and_without_the_strip(tmp_path)
+    spec = farm._sheet_spec(str(tmp_path / "poster.png"), region)
+    x0, y0, x1, y1 = farm._profile_strip(spec, Image.open(tmp_path / "poster.png").size, 40)
+    assert all(abs(a - b) <= 3 for a, b in zip((x0, y0, x1, y1), drawn)), ((x0, y0, x1, y1), drawn)
+    # the strip does not sit in the sheet's corner: the cartouche and compass are below it
+    assert y1 < drawn[3] + 3 and y1 < _shape[0] - 10
+
+
+def test_a_profile_section_holds_the_whole_strip_in_a_real_render(tmp_path):
+    region, crop, drawn, shape = _render_with_and_without_the_strip(tmp_path)
+    story = _story([{"heading": "The climb", "variant": "poster",
+                     "crop_anchor": "profile", "crop_in": [4.0, 2.0]}])
+    made = farm._stories(str(tmp_path), region, story, 40)
+    out = np.asarray(Image.open(made[0]).convert("RGB"), np.int16)
+    sheet = np.asarray(Image.open(tmp_path / "poster.png").convert("RGB"), np.int16)
+    assert out.shape == (80, 160, 3)
+    # find the window in the sheet, then check it holds every drawn strip pixel
+    h, w = out.shape[:2]
+    cand = np.argwhere((sheet[: sheet.shape[0] - h + 1, : sheet.shape[1] - w + 1]
+                        == out[0, 0]).all(axis=2))
+    spots = [(int(x), int(y)) for y, x in cand if np.array_equal(sheet[y:y + h, x:x + w], out)]
+    assert spots
+    x, y = spots[0]
+    assert x <= drawn[0] and drawn[2] <= x + w and y <= drawn[1] and drawn[3] <= y + h
+
+
+def test_a_profile_window_too_small_for_the_strip_fails_with_its_heading(tmp_path):
+    region, _crop, _drawn, _shape = _render_with_and_without_the_strip(tmp_path)
+    story = _story([{"heading": "Too tight", "variant": "poster",
+                     "crop_anchor": "profile", "crop_in": [1.0, 0.5]}])
+    with pytest.raises(StoryError, match="Too tight"):
+        farm._stories(str(tmp_path), region, story, 40)
+
+
+def test_an_unknown_anchor_fails_the_check_with_its_heading():
+    story = _story([{"heading": "Bottom left", "variant": "poster", "crop_anchor": "foot",
+                     "crop_in": [4, 2]}])
+    with pytest.raises(StoryError, match="Bottom left"):
+        farm.check_story_windows(story)
+    farm.check_story_windows(_story([{"heading": "Strip", "variant": "poster",
+                                      "crop_anchor": "profile", "crop_in": [4, 2]}]))
 
 
 # ---- the journey pair ---------------------------------------------------------------

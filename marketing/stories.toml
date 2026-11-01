@@ -12,8 +12,9 @@
 #
 # A section that crops (variant "poster" or "poster_journey") gives its window as
 # crop_in = [width, height] in printed inches plus crop_center_m = [x, y] in CRS metres,
-# or crop_anchor = "foot" (the bottom left of the sheet, for the elevation strip) in
-# place of the centre. A `film` or `editions` section needs none. The farm's `stories`
+# or crop_anchor = "profile" (centred on the elevation strip, which sits above the
+# cartouche and compass, not in the corner; crop_in must hold the whole strip) in place
+# of the centre. A `film` or `editions` section needs none. The farm's `stories`
 # tier fails a plate, naming the section's heading, while a window is missing. `look`
 # holds spec fields that tune the plate's look over the customer's (ORDER_LOOK). A
 # plate that shows a Journey Light pair adds journey = { sun_azimuth_deg = ...,

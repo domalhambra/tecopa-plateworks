@@ -36,8 +36,9 @@ produces, per region:
                         table only (Zion)
   story_<n>.png         (stories tier) a 1:1 crop of print pixels for section n of the
                         plate's story, at the window marketing/stories.toml gives
-                        (crop_center_m + crop_in, or crop_anchor "foot" + crop_in);
-                        never resized. A poster_journey section writes story_<n>.png
+                        (crop_center_m + crop_in, or crop_anchor "profile" + crop_in,
+                        centred on the elevation strip); cut at the dpi the sheet
+                        was rendered at, never resized. A poster_journey section writes story_<n>.png
                         from poster_journey.png and story_<n>_before.png from
                         poster.png, the same window. A section with no window fails
                         the plate, naming its heading, before anything renders. A
@@ -659,7 +660,7 @@ def _detail(out_dir):
     return [out]
 
 
-def crop_window(center_m, size_in, crop, image_size, dpi, anchor=None):
+def crop_window(center_m, size_in, crop, image_size, dpi, anchor=None, strip=None):
     """The pixel window (x0, y0, x1, y1) of a story crop: `size_in` printed inches at
     `dpi`, centred on the ground point `center_m` (region CRS metres), cut from a sheet
     of `image_size` pixels that was rendered from the ground window `crop`.
@@ -672,17 +673,31 @@ def crop_window(center_m, size_in, crop, image_size, dpi, anchor=None):
     are never resampled: what the page shows is what prints. A window that would cross
     the sheet's edge slides inward and keeps its size. A window bigger than the sheet,
     or a centre off the sheet, raises StoryError (a window that quietly slid would show
-    the wrong country). `anchor="foot"` takes the bottom-left of the sheet, where the
-    elevation strip sits, and ignores `center_m`."""
+    the wrong country).
+
+    `anchor="profile"` centres the window on the elevation-profile strip instead,
+    `strip` being its pixel rectangle (`_profile_strip`), and ignores `center_m`. The
+    strip sits above the cartouche and compass stack, not in the sheet's corner, so no
+    corner window finds it. A window that does not hold the whole strip raises
+    StoryError."""
     wpx, hpx = round(size_in[0] * dpi), round(size_in[1] * dpi)
     W, H = image_size
     if wpx > W or hpx > H:
         raise StoryError(f"a {size_in[0]} x {size_in[1]} in window is {wpx} x {hpx} px at "
                          f"{dpi:g} dpi, bigger than the {W} x {H} px sheet")
     if anchor is not None:
-        if anchor != "foot":
-            raise StoryError(f"crop_anchor {anchor!r} is not one the farm knows (foot)")
-        return (0, H - hpx, wpx, H)
+        if anchor != "profile":
+            raise StoryError(f"crop_anchor {anchor!r} is not one the farm knows (profile)")
+        if strip is None:
+            raise StoryError("crop_anchor 'profile' needs the strip's rectangle, and this "
+                             "sheet's spec draws none")
+        sx0, sy0, sx1, sy1 = strip
+        x0 = min(max(round((sx0 + sx1) / 2 - wpx / 2), 0), W - wpx)
+        y0 = min(max(round((sy0 + sy1) / 2 - hpx / 2), 0), H - hpx)
+        if not (x0 <= sx0 and sx1 <= x0 + wpx and y0 <= sy0 and sy1 <= y0 + hpx):
+            raise StoryError(f"a {wpx} x {hpx} px window does not hold the whole "
+                             f"{sx1 - sx0} x {sy1 - sy0} px elevation strip -- widen crop_in")
+        return (x0, y0, x0 + wpx, y0 + hpx)
     geo = RegionGeo(crs="", bounds=tuple(crop), overview_size=(W, H))
     px, py = crs_to_overview_px(geo, center_m[0], center_m[1])
     if not (0 <= px <= W and 0 <= py <= H):
@@ -714,39 +729,66 @@ def check_story_windows(story: dict | None) -> None:
         size = section.get("crop_in")
         if not (isinstance(size, (list, tuple)) and len(size) == 2):
             raise StoryError(f"{label} has no crop_in = [width, height] in inches")
-        if "crop_anchor" not in section and not (
-                isinstance(section.get("crop_center_m"), (list, tuple))
-                and len(section["crop_center_m"]) == 2):
+        if "crop_anchor" in section:
+            if section["crop_anchor"] != "profile":
+                raise StoryError(f"{label} has crop_anchor {section['crop_anchor']!r}; the "
+                                 f"farm knows \"profile\"")
+        elif not (isinstance(section.get("crop_center_m"), (list, tuple))
+                  and len(section["crop_center_m"]) == 2):
             raise StoryError(f"{label} has no crop window: give crop_center_m = [x, y] "
-                             f"(CRS metres), or crop_anchor = \"foot\"")
+                             f"(CRS metres), or crop_anchor = \"profile\"")
 
 
-def _sheet_crop(path: str, region) -> tuple:
-    """The ground window a sheet was rendered from: the crop its own manifest records,
-    else the frame the farm would give it now. The manifest comes first because a
-    restage-only run opens no DEM, and `_frame` trims the bounds to the DEM's finite
-    envelope only when it can read one."""
+def _sheet_spec(path: str, region) -> CompositionSpec:
+    """The spec a sheet was rendered from: its own manifest, through the one untrusted
+    door (provenance.spec_from_manifest), else the plate's spec as the farm would build
+    it now. The manifest comes first because a restage-only run opens no DEM, and
+    `_frame` trims the bounds to the DEM's finite envelope only when it can read one."""
     from app import provenance
+    from app.spec import SpecError
     try:
         with open(path, "rb") as f:
             manifest = provenance.extract(f.read())
-        crop = manifest["spec"]["crop"]
-        if len(crop) == 4:
-            return tuple(float(v) for v in crop)
-    except (OSError, KeyError, TypeError, ValueError):
+        if manifest:
+            return provenance.spec_from_manifest(manifest)
+    except (OSError, SpecError):
         pass
-    return tuple(_frame(region)[0])
+    return _plate_spec(region, [], [])
 
 
-def _stories(out_dir, region, story, dpi):
+def _sheet_dpi(spec: CompositionSpec, image_size: tuple) -> float:
+    """The dpi a sheet was rendered at, read from the sheet: its pixel width over the
+    spec's printed width. A whole-number dpi that reproduces the width exactly wins over
+    the raw quotient, which wobbles by the pixel rounding. A window cut at the wrong dpi
+    would show other pixels than the ones named, so `--dpi` is never trusted."""
+    est = image_size[0] / spec.print_w_in
+    clean = float(round(est))
+    return clean if clean > 0 and round(spec.print_w_in * clean) == image_size[0] else est
+
+
+def _profile_strip(spec: CompositionSpec, image_size: tuple, dpi: float) -> tuple | None:
+    """(x0, y0, x1, y1) in sheet pixels of the elevation-profile strip, from the
+    painter's own geometry (render._profile_rect, never a copy), or None when the spec
+    draws no strip."""
+    from PIL import ImageDraw
+    if not spec.profile:
+        return None
+    return tuple(render._profile_rect(spec, ImageDraw.Draw(Image.new("RGB", (1, 1))),
+                                      (0, 0, image_size[0], image_size[1]), dpi))
+
+
+def _stories(out_dir, region, story, dpi=None):
     """story_<n>.png for each cropping section of the plate's story: a 1:1 window of
     print pixels from the poster, at the window the config gives. A `poster_journey`
     section writes two, story_<n>_before.png from the plain poster and story_<n>.png
     from the lit one, the same window from both. Nothing is resized.
 
-    Restages poster.png and poster_journey.png, so no DEM is needed. A section with no
-    window raises StoryError naming its heading, before anything is read or written. A
-    plate with no story writes nothing; the `detail` tier still serves it."""
+    Restages poster.png and poster_journey.png, so no DEM is needed. The window's pixel
+    size and place come from the sheet itself (its manifest's spec and its own width),
+    not from `dpi`, which is only the run's expectation: a sheet at another dpi (a
+    --quick poster cut by a default-dpi run) says so and is cut at its own. A section
+    with no window raises StoryError naming its heading, before anything is read or
+    written. A plate with no story writes nothing; the `detail` tier still serves it."""
     if not story:
         return []
     check_story_windows(story)
@@ -763,17 +805,29 @@ def _stories(out_dir, region, story, dpi):
         return []
     sheets, windows = {}, []
     for n, section, out_name, src_name in jobs:     # judge every window before any write
+        label = _section_label(story, n, section)
         if src_name not in sheets:
             path = os.path.join(out_dir, src_name)
             with Image.open(path) as im:
-                sheets[src_name] = (path, im.size)
-        path, size = sheets[src_name]
+                size = im.size
+            spec = _sheet_spec(path, region)
+            if spec.bleed_in:
+                raise StoryError(f"{label}: {src_name} was rendered with bleed, and a "
+                                 f"story window is placed on a sheet with none")
+            sheet_dpi = _sheet_dpi(spec, size)
+            if dpi and abs(sheet_dpi - dpi) > 0.01 * dpi:
+                print(f"  · {src_name} was rendered at {sheet_dpi:g} dpi, not {dpi:g}: "
+                      f"cutting its windows at {sheet_dpi:g}")
+            sheets[src_name] = (path, size, spec, sheet_dpi)
+        path, size, spec, sheet_dpi = sheets[src_name]
+        anchor = section.get("crop_anchor")
         try:
-            box = crop_window(section.get("crop_center_m"), section["crop_in"],
-                              _sheet_crop(path, region), size, dpi,
-                              anchor=section.get("crop_anchor"))
+            box = crop_window(section.get("crop_center_m"), section["crop_in"], spec.crop,
+                              size, sheet_dpi, anchor=anchor,
+                              strip=_profile_strip(spec, size, sheet_dpi)
+                              if anchor == "profile" else None)
         except StoryError as ex:
-            raise StoryError(f"{_section_label(story, n, section)}: {ex}") from None
+            raise StoryError(f"{label}: {ex}") from None
         windows.append((out_name, src_name, box))
     made = []
     for out_name, src_name, box in windows:
@@ -816,11 +870,16 @@ def _relief(out_dir, rid, index):
     `index` is what the terrain gate reads: this run's stamp merged over the prior
     index (_gate_index). A refusal skips the tier with a message rather than failing
     the region: a --synthetic-dem preview renders everything else and is correctly
-    denied marketing images."""
-    from scripts.export_relief import ReliefError, export_region
+    denied marketing images. A story image the exporter cannot make (a missing
+    story_<n>.png, edition or film, or a crop too small to export without upscaling)
+    raises instead, and main() counts the region as failed."""
+    from scripts.export_relief import ReliefError, StorySourceError, export_region
     try:
         return export_region(out_dir, os.path.join(out_dir, "relief"), rid, index,
                              story=story_for(rid))
+    except StorySourceError:
+        raise                       # the page shows every story image: a run that cannot
+                                    # export them all failed, as the exporter CLI says
     except ReliefError as ex:
         print(f"  ! relief skipped: {ex}")
         return []

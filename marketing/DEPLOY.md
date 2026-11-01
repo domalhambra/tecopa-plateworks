@@ -91,8 +91,12 @@ section. The farm cuts and renders them, and the exporter reads them, in this or
 | `film` | `film.mp4` | `film.mp4`, copied |
 
 `stories` fails a plate, naming the section's heading, when a section has no window
-(`crop_center_m` and `crop_in`, or `crop_anchor = "foot"` and `crop_in`). It checks before
-anything renders. A plate with no story exports the six images above and nothing more. The
+(`crop_center_m` and `crop_in`, or `crop_anchor = "profile"` and `crop_in`, which centres the
+window on the elevation strip and fails the section if the window does not hold all of it).
+It checks before anything renders. The window is cut at the dpi the sheet was rendered at,
+read from the sheet. The exporter refuses a story image whose source is smaller than the
+image made from it (it never upscales), and the farm counts a missing story source or film
+as a failed run, as the exporter CLI does; only a terrain refusal skips `relief`. A plate with no story exports the six images above and nothing more. The
 guard is unchanged: it runs first, and nothing is written until every output has encoded.
 `--ship-check` lists the plates whose pinned photo is still the farm's painted gradient
 (`photo_at` with no `photo_file`); the page must not ship while it lists any.

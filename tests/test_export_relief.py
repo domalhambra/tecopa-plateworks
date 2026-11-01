@@ -456,3 +456,68 @@ def test_the_farm_hands_the_relief_tier_the_plates_story(tmp_path, monkeypatch):
     made = farm._relief(str(assets / RID), RID, er.load_index(str(assets)))
     names = {os.path.basename(p) for p in made}
     assert {"story-1.webp", "journey-after.webp", "edition-3.webp", "film.mp4"} <= names
+
+
+# ---- a story crop is never upscaled; a missing source fails the farm run ----------------
+
+@pytest.mark.parametrize("name,size", [
+    ("story_1.png", (600, 450)),                  # a 2 x 1.5 in window at 300 dpi
+    ("story_3_before.png", (1100, 900)),          # the journey pair's before
+    ("story_3.png", (1000, 1199)),                # and its after, one pixel short
+    ("edition_2.png", (700, 839)),                # an edition under its 840 px
+])
+def test_a_story_source_smaller_than_its_output_is_refused_not_upscaled(tmp_path, name, size):
+    assets = _story_region(tmp_path)
+    _terrain(*size, seed=99).save(assets / RID / name, "PNG")
+    out = tmp_path / "out"
+    with pytest.raises(er.ReliefError, match=name):
+        _export_story(assets, out)
+    assert not out.exists()
+
+
+def test_a_story_source_exactly_the_output_size_is_taken_as_it_is(tmp_path):
+    assets = _story_region(tmp_path)
+    _terrain(1200, 800, seed=98).save(assets / RID / "story_1.png", "PNG")
+    out = tmp_path / "out"
+    _export_story(assets, out)
+    assert Image.open(out / "story-1.webp").size == (1200, 800)
+
+
+def test_the_six_old_outputs_still_resize_either_way(tmp_path):
+    # the poster and the detail crop keep their old behaviour: a small sheet is scaled
+    assets = _region(tmp_path)
+    _terrain(500, 600, seed=4).save(assets / RID / "poster.png", "PNG")
+    out = tmp_path / "out"
+    _export(assets, out)
+    assert Image.open(out / "poster-relief.webp").size == _long_edge_size(500, 600, 1400)
+
+
+def _farm_main(monkeypatch, assets, *args):
+    monkeypatch.setattr("sys.argv", ["render_asset_farm", "--regions", RID,
+                                     "--out", str(assets), *args])
+    return farm.main()
+
+
+@pytest.mark.parametrize("gone", ["edition_2.png", "film.mp4", "story_2.png"])
+def test_a_missing_story_source_fails_the_farm_run(tmp_path, monkeypatch, capsys, gone):
+    assets = _story_region(tmp_path)
+    (assets / RID / gone).unlink()
+    monkeypatch.setattr(farm, "story_for", lambda rid: STORY)
+    assert _farm_main(monkeypatch, assets, "--only", "relief") == 1
+    assert gone in capsys.readouterr().out
+    assert not (assets / RID / "relief").exists()          # as the exporter CLI leaves it
+
+
+def test_a_refused_terrain_still_only_skips_the_relief_tier(tmp_path, monkeypatch):
+    assets = _story_region(tmp_path, terrain={"synthetic": True, "sha256": "0" * 64,
+                                              "bytes": 1})
+    monkeypatch.setattr(farm, "story_for", lambda rid: STORY)
+    assert _farm_main(monkeypatch, assets, "--only", "relief") == 0
+    assert not (assets / RID / "relief").exists()
+
+
+def test_the_exporter_cli_and_the_farm_agree_on_a_missing_source(tmp_path, monkeypatch):
+    assets = _story_region(tmp_path)
+    (assets / RID / "film.mp4").unlink()
+    monkeypatch.setattr(er, "story_for", lambda rid: STORY)
+    assert er.main(["--assets", str(assets), "--out", str(tmp_path / "o"), RID]) == 1

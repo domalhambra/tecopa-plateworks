@@ -88,6 +88,12 @@ class ReliefError(ValueError):
     """The region cannot be exported: a source render is missing or unreadable."""
 
 
+class StorySourceError(ReliefError):
+    """A plate's story cannot export: a section's source image or the film is missing, or
+    is smaller than the image made from it. The farm counts it as a failure of the run
+    (a story the page shows must export whole), not a skipped tier."""
+
+
 class ReliefRefused(ReliefError):
     """The terrain gate refused the region: no real terrain record in the index."""
 
@@ -148,8 +154,8 @@ def relief_images(poster: Image.Image, detail: Image.Image) -> dict[str, bytes]:
 def _story_source(src_dir: str, name: str, region_id: str) -> str:
     path = os.path.join(src_dir, name)
     if not os.path.isfile(path):
-        raise ReliefError(f"{region_id}: no {name} in {src_dir} -- render the farm's "
-                          f"stories, journey, editions and film tiers first")
+        raise StorySourceError(f"{region_id}: no {name} in {src_dir} -- render the farm's "
+                               f"stories, journey, editions and film tiers first")
     return path
 
 
@@ -164,13 +170,21 @@ def story_images(src_dir: str, story: dict | None, region_id: str = "") -> dict[
       a `film` section            film.mp4                         -> film.mp4, as is
 
     A missing source raises ReliefError naming it: the page shows every one of these,
-    so a story that cannot export all of them exports none."""
+    so a story that cannot export all of them exports none. So does a source whose long
+    edge is under its output's size: the images are print pixels, never upscaled. (The
+    six images above keep their old resize either way.)"""
     if not story:
         return {}
     out: dict[str, bytes] = {}
 
     def crop(src_name: str, out_name: str, px: int, quality: int) -> None:
         img = Image.open(_story_source(src_dir, src_name, region_id)).convert("RGB")
+        if max(img.size) < px:
+            # a story image is print pixels, scaled down or taken as they are, never up
+            raise StorySourceError(
+                f"{region_id}: {src_name} is {img.size[0]} x {img.size[1]} px, under the "
+                f"{px} px {out_name} needs -- widen the section's crop_in or render the "
+                f"farm at full dpi, not --quick")
         out[out_name] = _webp(_long_edge(img, px), quality)
 
     for n, section in enumerate(story.get("sections", []), start=1):
