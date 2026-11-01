@@ -687,10 +687,12 @@ STATIC_LAYER_URLS = {
 # source and the plate grid differ in spacing or rotation, and Lanczos does not
 # (docs/superpowers/plans/2026-11-01-dem-lanczos-resampling.md, Diagnosis).
 DEM_WARP_RESAMPLING = Resampling.lanczos
-# Source cells read past each side of a slice, so the Lanczos kernel (3 cells each way)
-# is never cut off at the edge of what was read.
-NATIVE_READ_PAD_CELLS = 4
-FILL_GDAL_ENV = {
+# Source cells read past each side of a slice's window, so the Lanczos kernel is never
+# cut off at the edge of what was read. The kernel reaches 3 grid cells, which is about
+# 3.9 source cells at 10 and 30 m and about 9.5 at 60 m in Alaska, where a degree of
+# longitude is short.
+NATIVE_READ_PAD_CELLS = 12
+STATIC_GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # no S3 directory listing per tile
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.vrt",
     "GDAL_HTTP_MAX_RETRY": "4",                     # GDAL's own, under with_retries
@@ -770,20 +772,22 @@ def _read_static(src, bounds, dst_crs, dst_transform, shape, grid_m):
     return out
 
 
-def read_static_native(bbox_4326, resolution_m, open_static=None):
-    """A static 3DEP layer's own cells over a lon/lat bbox: (float32 array with nodata
-    as NaN, transform, crs). This replaces py3dep.get_dem for a static layer: that call
-    reprojects to Albers with nearest-neighbour before anything here can warp it, and
-    that step alone leaves stripes in the plate. `open_static(layer_m)` opens the layer
-    (a test passes a local raster)."""
+def read_static_native(bounds, bounds_crs, resolution_m, open_static=None):
+    """A static 3DEP layer's own cells over `bounds` in `bounds_crs`: (float32 array with
+    nodata as NaN, transform, crs). This replaces py3dep.get_dem for a static layer: that
+    call reprojects to Albers with nearest-neighbour before anything here can warp it,
+    and that step alone leaves stripes in the plate. Pass the destination window's bounds:
+    it is the projected box of a curved lon/lat box, so a read that follows the lon/lat
+    box stops short of it and cuts the Lanczos kernel inside the window. `open_static`
+    opens the layer (a test passes a local raster)."""
     from rasterio.warp import transform_bounds
     from rasterio.windows import Window
     open_static = open_static or _open_static_layer
     layer = int(round(resolution_m))
 
     def read():
-        with open_static(layer) as src:
-            g = transform_bounds("EPSG:4326", src.crs, *bbox_4326, densify_pts=21)
+        with rasterio.Env(**STATIC_GDAL_ENV), open_static(layer) as src:
+            g = transform_bounds(bounds_crs, src.crs, *bounds, densify_pts=21)
             win = src.window(*g)
             c0 = max(0, math.floor(win.col_off) - NATIVE_READ_PAD_CELLS)
             r0 = max(0, math.floor(win.row_off) - NATIVE_READ_PAD_CELLS)
@@ -832,7 +836,7 @@ def fill_dem_holes(dst, grid_m, open_static=None):
             raise
 
     try:
-        with rasterio.Env(**FILL_GDAL_ENV):
+        with rasterio.Env(**STATIC_GDAL_ENV):
             for _, block in dst.block_windows(1):
                 arr = dst.read(1, window=block)
                 nan = np.isnan(arr)
@@ -909,16 +913,17 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
             if n > 1:
                 print(f"  slice {i + 1}/{n}: fetching 3DEP "
                       f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
+            # destination window on the shared grid = this slice's projected extent
+            win = _slice_window(*extent, T, w_px, h_px)
             if _is_static(res):
-                src, src_t, src_crs = read_static_native(sb, res, open_static)
+                src, src_t, src_crs = read_static_native(
+                    rasterio.windows.bounds(win, T), dst_crs, res, open_static)
             else:
                 da = fetch_dem(sb, res)
                 src = np.asarray(da.values, dtype="float32")
                 if src.ndim == 3:
                     src = src[0]
                 src_t, src_crs = da.rio.transform(), da.rio.crs
-            # destination window on the shared grid = this slice's projected extent
-            win = _slice_window(*extent, T, w_px, h_px)
             dst_arr = np.full((int(win.height), int(win.width)), np.nan, "float32")
             reproject(source=src, destination=dst_arr,
                       src_transform=src_t, src_crs=src_crs,

@@ -967,11 +967,27 @@ def test_build_dem_cog_static_never_calls_py3dep(tmp_path, monkeypatch, native_t
     assert _build(tmp_path, native_tif)[1] is None
 
 
-def test_two_slices_match_one_slice(tmp_path, native_tif):
+def test_slices_match_one_slice_at_their_seams(tmp_path, native_tif):
+    # Three slices: with two on a bbox this narrow, the second one's overlap spans the
+    # whole grid and there is no seam. A slice's window is the projected bounding box of
+    # a curved lon/lat box, so a read that follows the lon/lat box stops short of it, and
+    # the later slice writes values with a cut-off kernel over good ones. The tolerance
+    # is GDAL's approximate transformer, about 0.07 m between chunkings.
     one, _, _ = _build(tmp_path, native_tif, n_slices=1, name="one.tif")
-    two, _, _ = _build(tmp_path, native_tif, n_slices=2, name="two.tif")
-    with rasterio.open(one) as a, rasterio.open(two) as b:
-        assert np.nanmax(np.abs(a.read(1) - b.read(1))) <= 0.05
+    three, _, _ = _build(tmp_path, native_tif, n_slices=3, name="three.tif")
+    with rasterio.open(one) as a, rasterio.open(three) as b:
+        assert np.nanmax(np.abs(a.read(1) - b.read(1))) <= 0.1
+
+
+def test_native_read_runs_with_the_gdal_http_settings(waits, native_tif):
+    seen = []
+
+    def spy(layer_m):
+        seen.append(rasterio.env.getenv())
+        return rasterio.open(native_tif)
+    rp.read_static_native(NAT_BBOX, "EPSG:4326", 10, open_static=spy)
+    for key, value in rp.STATIC_GDAL_ENV.items():
+        assert str(seen[0][key]) == str(value)
 
 
 def test_native_read_keeps_nodata_as_nan_without_a_spike(tmp_path, holed_tif):
@@ -1008,7 +1024,7 @@ def test_native_read_retries_a_dropped_connection(waits, native_tif):
         if len(calls) == 1:
             raise TimeoutError("timed out")
         return rasterio.open(native_tif)
-    arr, _, crs = rp.read_static_native(NAT_BBOX, 10, open_static=flaky)
+    arr, _, crs = rp.read_static_native(NAT_BBOX, "EPSG:4326", 10, open_static=flaky)
     assert waits == [60] and calls == [10, 10]
     assert arr.dtype == np.float32 and crs.to_epsg() == 4269
 
@@ -1017,13 +1033,25 @@ def test_native_read_raises_a_lasting_error_at_once(waits):
     def missing(layer_m):
         raise rasterio.errors.RasterioIOError("x.vrt: No such file or directory")
     with pytest.raises(rasterio.errors.RasterioIOError):
-        rp.read_static_native(NAT_BBOX, 10, open_static=missing)
+        rp.read_static_native(NAT_BBOX, "EPSG:4326", 10, open_static=missing)
     assert waits == []
 
 
 def test_native_read_pads_past_the_lanczos_kernel(native_tif):
-    arr, t, _ = rp.read_static_native(NAT_BBOX, 10, open_static=_opener(native_tif))
+    arr, t, _ = rp.read_static_native(NAT_BBOX, "EPSG:4326", 10, open_static=_opener(native_tif))
     assert t.c <= NAT_BBOX[0] - 3 * NAT_RES and t.f >= NAT_BBOX[3] + 3 * NAT_RES
+
+
+def test_native_read_covers_a_projected_window(native_tif):
+    # The corners of a UTM window lie outside the lon/lat box of its edges' midlines.
+    plan = rp.plan_build(NAT_BBOX, NAT_CRS, 10)
+    w, h = plan["grid"]
+    t = plan["transform"]
+    bounds = (t.c, t.f - h * 10, t.c + w * 10, t.f)
+    _, st, _ = rp.read_static_native(bounds, NAT_CRS, 10, open_static=_opener(native_tif))
+    corners = Transformer.from_crs(NAT_CRS, "EPSG:4326", always_xy=True).transform(
+        [bounds[0], bounds[0]], [bounds[1], bounds[3]])
+    assert st.c <= min(corners[0]) - 3 * NAT_RES
 
 
 @pytest.mark.parametrize("res,via", [
