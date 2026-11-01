@@ -87,7 +87,8 @@ Four of the five plates carry this known drift on purpose: `elko_bonneville`,
 `decisions.md` 2026-08-17). Do not "fix" it.
 
 To compare a rebuild first, `.venv-prep/bin/python scripts/dem_candidate.py <id> --out cache/dem_candidates`
-builds a DEM on the plate's committed grid outside `regions/` and writes `compare.json`.
+builds a DEM on the plate's committed grid outside `regions/`, and writes a comparison
+with the current DEM beside it.
 `.venv/bin/python scripts/stripe_check.py <dem.tif>` scores one window for resampling stripes.
 
 ## Build a new plate
