@@ -50,6 +50,11 @@ def test_config_lists_the_five_plates_in_page_order():
         "canyonlands", "tahoe", "sierra", "rubies", "zion"]
 
 
+def test_every_plate_sets_a_road_cost():
+    cfg = tomllib.loads(STORIES.read_text())
+    assert all(cfg[p]["road_cost"] > 0 for p in PLATES)
+
+
 def test_every_section_heading_is_in_the_copy_document():
     cfg, text = tomllib.loads(STORIES.read_text()), COPY.read_text()
     for plate in PLATES:

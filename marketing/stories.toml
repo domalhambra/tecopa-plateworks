@@ -26,7 +26,7 @@ trips = [
     { shape = "out_and_back" },
     { shape = "loop" },
 ]
-road_cost = 3.0
+road_cost = 7.0
 look = {}
 
 [[canyonlands_ut.sections]]
@@ -53,7 +53,7 @@ name = "Lake Tahoe and Desolation"
 eyebrow = "Water"
 destinations = ["Freel Peak", "Mount Tallac", "Mount Rose", "Pyramid Peak"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
-road_cost = 3.0
+road_cost = 4.0
 look = {}
 
 [[tahoe_ca.sections]]
@@ -138,7 +138,7 @@ name = "Zion"
 eyebrow = "Lit by your own day"
 destinations = ["Angels Landing", "Observation Point"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
-road_cost = 3.0
+road_cost = 2.0
 look = {}
 
 [[zion_ut.sections]]
