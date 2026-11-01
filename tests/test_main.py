@@ -565,3 +565,55 @@ def test_a_huge_integer_is_not_a_finite_coordinate():
     for bad in (True, None, "3", float("nan"), float("inf"), [1]):
         assert main._finite_num(bad) is False
 
+
+
+# ---- waypoints: left out and off the plate are counted, never silent (viewshed wash) ----
+
+def _gpx_with_waypoints(wpts):
+    """The sample track's neighbourhood plus <wpt>s, each (lon, lat, name)."""
+    track = _gpx_lonlat([(-120.65, 40.42), (-120.64, 40.43)])
+    rows = "".join(f'<wpt lat="{lat}" lon="{lon}"><name>{n}</name></wpt>' for lon, lat, n in wpts)
+    return track.replace(b"<trk>", rows.encode() + b"<trk>")
+
+def test_upload_counts_waypoints_over_the_cap():
+    c = _client()
+    wpts = [(-120.70 + (i % 40) * 0.001, 40.40 + (i // 40) * 0.001, f"W{i}")
+            for i in range(1005)]
+    r = c.post("/api/upload", files=[("files", ("w.gpx", _gpx_with_waypoints(wpts),
+                                               "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["waypoints_left_out"] == 5
+    assert j["waypoints_off_plate"] == 0
+    assert sum(1 for h in j["hotspots"] if h["label"].startswith("W")) == 1000
+
+def test_upload_counts_waypoints_off_the_plate():
+    # one waypoint past the plate's west edge (still finite in UTM 10N), one inside
+    c = _client()
+    wpts = [(-120.65, 40.42, "Inside"), (-121.6, 40.5, "Beyond")]
+    r = c.post("/api/upload", files=[("files", ("w.gpx", _gpx_with_waypoints(wpts),
+                                               "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["waypoints_off_plate"] == 1
+    assert j["waypoints_left_out"] == 0
+    # off the plate is reported, not dropped: the mark is still on the session
+    assert {h["label"] for h in j["hotspots"]} >= {"Inside", "Beyond"}
+
+def test_upload_waypoint_fields_default_to_zero():
+    j = _upload(_client())
+    assert j["waypoints_left_out"] == 0
+    assert j["waypoints_off_plate"] == 0
+
+def test_adding_a_file_keeps_the_first_files_waypoints_in_place():
+    c = _client()
+    first = _gpx_with_waypoints([(-120.65, 40.42, "Camp")])
+    j1 = c.post("/api/upload", files=[("files", ("a.gpx", first, "application/gpx+xml"))],
+                data={"region_id": "lassen_ca"}).json()
+    camp1 = next(h for h in j1["hotspots"] if h["label"] == "Camp")
+    j2 = c.post("/api/upload", files=[_file2("b.gpx")],
+                data={"session_id": j1["session"]}).json()
+    camp2 = [h for h in j2["hotspots"] if h["label"] == "Camp"]
+    assert len(camp2) == 1 and camp2[0]["px"] == camp1["px"]

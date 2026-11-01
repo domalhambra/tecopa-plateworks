@@ -11,8 +11,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
-from app.ingest import load_tracks, load_waypoints, Track
+from app.ingest import load_tracks, scan_waypoints, Track
 from app.density import hotspots
+from app.marks import is_mark
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       TITLE_MAX_CHARS, year_span)
 # the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
@@ -552,17 +553,28 @@ TRACK_BATCH_MAX_BYTES = 256 * 1024 * 1024
 # nearest-hotspot radius when carrying annotations across a recompute; matches
 # density.hotspots' min_spacing_m, so "nearest" is unambiguous within one spacing.
 ANNOTATION_CARRY_M = 6000.0
+# a waypoint within this of a density spot replaces it; within the second, of another
+# waypoint, it is the same waypoint twice (a re-export carries last year's pins again).
+WAYPOINT_DEDUP_M = 400.0
+WAYPOINT_SAME_M = 1.0
 
 def _carry_annotations(old_spots, new_spots):
     """Recomputing hotspots must never destroy operator work: transfer each annotated
     old hotspot's label/icon/photo onto the nearest recomputed hotspot (within one
     hotspot spacing); if none is near or the near one is already annotated, keep the
     old annotated spot itself. Before this, adding one more day's GPX to a session
-    silently wiped every label, icon, and pinned photo (red-team, high)."""
+    silently wiped every label, icon, and pinned photo (red-team, high).
+
+    A waypoint (`mark: true`) is never carried by transfer: it stays exactly where it
+    was, label or not, so a new track cannot move it or hand its name to a density spot.
+    A recomputed density spot within WAYPOINT_DEDUP_M of one is dropped, as the waypoint
+    replaced it when it arrived (the same density peak comes back on every recompute)."""
     keys = ("label", "icon", "photo")
-    out = [dict(s) for s in new_spots]
+    old_marks = [o for o in old_spots if o.get("mark") is True]
+    out = [dict(s) for s in new_spots
+           if is_mark(s) or not any(_within(s, m, WAYPOINT_DEDUP_M) for m in old_marks)]
     for old in old_spots:
-        if not any(old.get(k) for k in keys):
+        if old.get("mark") is True or not any(old.get(k) for k in keys):
             continue
         best, best_d = None, None
         for s in out:
@@ -576,6 +588,7 @@ def _carry_annotations(old_spots, new_spots):
                     best[k] = old[k]
         else:
             out.append(dict(old))          # keep the annotated spot verbatim
+    out.extend(dict(m) for m in old_marks)
     return out
 
 def _track_key(t) -> str:
@@ -671,12 +684,14 @@ async def upload(files: List[UploadFile] = File(...),
                                hotspots(tracks, region_bounds=region.cfg["bounds"]))
     # GPX <wpt> / KML placemark POIs (v1.9): explicit named pins, merged into the marker
     # layer beside the visit-density hotspots. A parse failure never fails the upload.
-    wpts = []
+    wpts, waypoints_left_out = [], 0
     for data, fn in payloads:
         try:
-            wpts.extend(load_waypoints(data, region.geo, fn))
+            scan = scan_waypoints(data, region.geo, fn)
         except Exception:
-            pass
+            continue
+        wpts.extend(scan.spots)
+        waypoints_left_out += scan.over_cap
     spots = _merge_waypoints(spots, wpts)
     sources = old_sources + new_sources
     if sid is None:
@@ -717,6 +732,10 @@ async def upload(files: List[UploadFile] = File(...),
             # past the plate's bounds -- named and counted, never silent.
             "dropped_points": int(stats.get("dropped_points", 0)),
             "journeys_outside_plate": _journeys_outside_plate(tracks, region),
+            # waypoints are real marks: the ones a file carried past MAX_WAYPOINTS (this
+            # request) and the ones now on the session outside the plate, both counted.
+            "waypoints_left_out": waypoints_left_out,
+            "waypoints_off_plate": _waypoints_off_plate(spots, region),
             # Journey Light availability (v1.9): the wizard enables the toggle + defaults
             # the time-of-day scrubber from this. None when no track carries a timestamp.
             "journey_light": _journey_light_meta(tracks),
@@ -725,17 +744,30 @@ async def upload(files: List[UploadFile] = File(...),
             # (red-team 2026-07-17 -- the one dpi the client used to assume).
             "final_dpi": FINAL_DPI}
 
-WAYPOINT_DEDUP_M = 400.0
+def _within(a, b, metres):
+    return ((a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2) ** 0.5 < metres
 
 def _merge_waypoints(spots, waypoints):
-    """Append explicit waypoints not already covered by a nearby (density or waypoint)
-    hotspot, so a marked point and the auto visit-density peak on it don't double up."""
+    """Add every waypoint to the marker layer. A waypoint is a real mark, so it is never
+    dropped for a machine-made one: it replaces any density spot within WAYPOINT_DEDUP_M
+    (so a marked point and the visit-density peak on it don't double up), and keeps a
+    named or photo spot there. Two waypoints close together both stay, except one within
+    WAYPOINT_SAME_M of another, which is the same waypoint arriving twice."""
     out = list(spots)
     for w in waypoints:
-        if all(((w["x"] - s["x"]) ** 2 + (w["y"] - s["y"]) ** 2) ** 0.5 >= WAYPOINT_DEDUP_M
-               for s in out):
-            out.append(w)
+        if any(s.get("mark") is True and _within(w, s, WAYPOINT_SAME_M) for s in out):
+            continue
+        out = [s for s in out if is_mark(s) or not _within(w, s, WAYPOINT_DEDUP_M)]
+        out.append(w)
     return out
+
+def _waypoints_off_plate(spots, region):
+    """How many waypoints sit outside the plate's bounds rect. They stay on the session
+    (the wash and the poster decide what to do with them) but are counted, never silent;
+    the same compare as _journeys_outside_plate."""
+    b = region.cfg["bounds"]
+    return sum(1 for s in spots if s.get("mark") is True
+               and not (b[0] <= s["x"] <= b[2] and b[1] <= s["y"] <= b[3]))
 
 def _journey_light_meta(tracks):
     """The upload/continue response's journey_light block, or None when no track is

@@ -262,6 +262,11 @@ export async function doUpload(fileList) {
     const boundary = [];
     if (j.dropped_points) boundary.push(`${j.dropped_points} point${j.dropped_points === 1 ? '' : 's'} outside the plate's map projection — dropped`);
     if (j.journeys_outside_plate) boundary.push(`${j.journeys_outside_plate} of ${j.tracks.length} journeys extend beyond the plate and won't fully appear`);
+    // waypoints are real marks: say how many a file carried past the per-file limit, and how
+    // many sit outside the plate (kept on the poster's marker list, but off the map)
+    const wl = j.waypoints_left_out || 0, wo = j.waypoints_off_plate || 0;
+    if (wl) boundary.push(`${wl} waypoint${wl === 1 ? '' : 's'} left out — over the per-file limit`);
+    if (wo) boundary.push(`${wo} waypoint${wo === 1 ? ' is' : 's are'} outside the plate and won't appear on the poster`);
     if (j.recovered) {
       const note = boundary.length ? ` (${boundary.join('; ')})` : '';
       showHint(`These tracks are in ${j.name} — switched to that region`);
