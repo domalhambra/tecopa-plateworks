@@ -172,6 +172,14 @@ def test_bound_geometry_rejects_too_many_hotspots():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(hotspots=spots))
 
+def test_a_manifest_of_1000_hotspots_is_accepted():
+    # a real collector can hold a thousand marks (the viewshed-wash design, decision 14);
+    # the cap stays, so one past it is still refused.
+    spot = {"x": 0.0, "y": 0.0, "weight": 1}
+    provenance.bound_geometry(_spec(hotspots=[dict(spot) for _ in range(1000)]))
+    with pytest.raises(SpecError):
+        provenance.bound_geometry(_spec(hotspots=[dict(spot) for _ in range(1001)]))
+
 def test_bound_geometry_rejects_non_n2_track_shape():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(tracks=[np.zeros((3, 3))], track_days=None))

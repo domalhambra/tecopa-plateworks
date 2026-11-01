@@ -103,7 +103,7 @@ LINEAGE_MAX = 100
 # before validate()/rasterize even runs -- the geometry-bomb guard.
 MAX_MANIFEST_TRACKS = 4096
 MAX_MANIFEST_POINTS = 5_000_000
-MAX_MANIFEST_HOTSPOTS = 64
+MAX_MANIFEST_HOTSPOTS = 1000
 
 
 def source_entry(data: bytes, filename: str | None) -> dict:
