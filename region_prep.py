@@ -393,7 +393,9 @@ def with_retries(fetch, service):
 def fetch_dem(bbox, resolution_m=10):
     # bbox is (west, south, east, north) in lon/lat. 10 m = 3DEP standard; 30 m
     # for corridor-scale regions where 10 m would be a multi-GB build. py3dep serves
-    # 10/30/60 from static tiles and any other cell size from the dynamic service.
+    # 10/30/60 from static tiles and any other cell size from the dynamic service. A
+    # build reads a static layer through read_static_native, so this serves the
+    # dynamic service; see that function for why.
     import py3dep
     # xarray DataArray, EPSG:4326
     return with_retries(lambda: py3dep.get_dem(bbox, resolution=resolution_m), "3DEP")
@@ -678,8 +680,19 @@ STATIC_LAYER_URLS = {
         "USGS_Seamless_DEM_13.vrt",
     30: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/1/TIFF/"
         "USGS_Seamless_DEM_1.vrt",
+    60: "https://prd-tnm.s3.amazonaws.com/StagedProducts/Elevation/2/TIFF/"
+        "USGS_Seamless_DEM_2.vrt",
 }
-FILL_GDAL_ENV = {
+# Every warp onto a plate grid. Bilinear and cubic leave a periodic pattern when the
+# source and the plate grid differ in spacing or rotation, and Lanczos does not
+# (docs/superpowers/plans/2026-11-01-dem-lanczos-resampling.md, Diagnosis).
+DEM_WARP_RESAMPLING = Resampling.lanczos
+# Source cells read past each side of a slice's window, so the Lanczos kernel is never
+# cut off at the edge of what was read. The kernel reaches 3 grid cells, which is about
+# 3.9 source cells at 10 and 30 m and about 9.5 at 60 m in Alaska, where a degree of
+# longitude is short.
+NATIVE_READ_PAD_CELLS = 12
+STATIC_GDAL_ENV = {
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # no S3 directory listing per tile
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.vrt",
     "GDAL_HTTP_MAX_RETRY": "4",                     # GDAL's own, under with_retries
@@ -759,6 +772,37 @@ def _read_static(src, bounds, dst_crs, dst_transform, shape, grid_m):
     return out
 
 
+def read_static_native(bounds, bounds_crs, resolution_m, open_static=None):
+    """A static 3DEP layer's own cells over `bounds` in `bounds_crs`: (float32 array with
+    nodata as NaN, transform, crs). This replaces py3dep.get_dem for a static layer: that
+    call reprojects to Albers with nearest-neighbour before anything here can warp it,
+    and that step alone leaves stripes in the plate. Pass the destination window's bounds:
+    it is the projected box of a curved lon/lat box, so a read that follows the lon/lat
+    box stops short of it and cuts the Lanczos kernel inside the window. `open_static`
+    opens the layer (a test passes a local raster)."""
+    from rasterio.warp import transform_bounds
+    from rasterio.windows import Window
+    open_static = open_static or _open_static_layer
+    layer = int(round(resolution_m))
+
+    def read():
+        with rasterio.Env(**STATIC_GDAL_ENV), open_static(layer) as src:
+            g = transform_bounds(bounds_crs, src.crs, *bounds, densify_pts=21)
+            win = src.window(*g)
+            c0 = max(0, math.floor(win.col_off) - NATIVE_READ_PAD_CELLS)
+            r0 = max(0, math.floor(win.row_off) - NATIVE_READ_PAD_CELLS)
+            c1 = min(src.width, math.ceil(win.col_off + win.width) + NATIVE_READ_PAD_CELLS)
+            r1 = min(src.height, math.ceil(win.row_off + win.height) + NATIVE_READ_PAD_CELLS)
+            win = Window(c0, r0, c1 - c0, r1 - r0)
+            arr = src.read(1, window=win).astype("float32", copy=False)
+            bad = arr < FILL_FLOOR_M
+            if src.nodata is not None and not np.isnan(src.nodata):
+                bad |= arr == src.nodata
+            arr[bad] = np.nan
+            return arr, src.window_transform(win), src.crs
+    return with_retries(read, "3DEP")
+
+
 def fill_dem_holes(dst, grid_m, open_static=None):
     """Fill the NaN cells of an open dem.tif (`dst`, mode r+) from the static 3DEP
     tiles, one block at a time so memory stays bounded: a block with no NaN costs
@@ -792,7 +836,7 @@ def fill_dem_holes(dst, grid_m, open_static=None):
             raise
 
     try:
-        with rasterio.Env(**FILL_GDAL_ENV):
+        with rasterio.Env(**STATIC_GDAL_ENV):
             for _, block in dst.block_windows(1):
                 arr = dst.read(1, window=block)
                 nan = np.isnan(arr)
@@ -844,7 +888,8 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
     with the slice_overlap_deg buffer, and released before the next. Replaces the old
     whole-bbox to_cog, which held source + destination + reprojection scratch for the
     entire region simultaneously and OOM'd at corridor scale. py3dep returns CONUS
-    Albers (EPSG:5070); each slice is warped straight onto the region grid, and the
+    Albers (EPSG:5070) on the dynamic path, and a static layer is read natively
+    (read_static_native); each slice is warped straight onto the region grid, and the
     GRID_INSET_M inset (see projected_grid) replaces the old NaN-edge trimming.
 
     A dynamic grid's holes are then filled from the static tiles (fill_dem_holes),
@@ -868,22 +913,27 @@ def build_dem_cog(bbox_4326, dst_crs, out_path, plan, open_static=None):
             if n > 1:
                 print(f"  slice {i + 1}/{n}: fetching 3DEP "
                       f"lon [{sb[0]:.3f}, {sb[2]:.3f}]", flush=True)
-            da = fetch_dem(sb, res)
-            src = np.asarray(da.values, dtype="float32")
-            if src.ndim == 3:
-                src = src[0]
             # destination window on the shared grid = this slice's projected extent
             win = _slice_window(*extent, T, w_px, h_px)
+            if _is_static(res):
+                src, src_t, src_crs = read_static_native(
+                    rasterio.windows.bounds(win, T), dst_crs, res, open_static)
+            else:
+                da = fetch_dem(sb, res)
+                src = np.asarray(da.values, dtype="float32")
+                if src.ndim == 3:
+                    src = src[0]
+                src_t, src_crs = da.rio.transform(), da.rio.crs
             dst_arr = np.full((int(win.height), int(win.width)), np.nan, "float32")
             reproject(source=src, destination=dst_arr,
-                      src_transform=da.rio.transform(), src_crs=da.rio.crs,
+                      src_transform=src_t, src_crs=src_crs,
                       src_nodata=np.nan,
                       dst_transform=rasterio.windows.transform(win, T),
                       dst_crs=dst_crs, dst_nodata=np.nan,
-                      resampling=Resampling.bilinear)
+                      resampling=DEM_WARP_RESAMPLING)
             existing = dst.read(1, window=win)
             dst.write(np.where(np.isnan(dst_arr), existing, dst_arr), 1, window=win)
-            del da, src, dst_arr, existing
+            del src, dst_arr, existing
         fill = None
         if not _is_static(res):
             print("  Checking the dynamic grid for holes...", flush=True)
@@ -903,7 +953,7 @@ def overview_png(cog_path, out_png, long_edge=1400):
     valid = np.isfinite(elev)
     lo, hi = np.nanpercentile(elev[valid], [1, 99])
     norm = np.clip((elev - lo) / (hi - lo + 1e-9), 0, 1)
-    # Reprojecting Albers -> UTM leaves NaN corners; render those as clean black
+    # Reprojecting onto the grid can leave NaN corners; render those as clean black
     # (casting NaN -> uint8 is otherwise undefined) so the aim view has no garbage.
     img = np.nan_to_num(norm * 255.0, nan=0.0).astype("uint8")
     Image.fromarray(img, "L").convert("RGB").save(out_png)
@@ -944,7 +994,9 @@ def write_sources_manifest(out_dir, region_id, bbox_4326, dst_crs, built=None,
             {"dataset": (f"USGS 3DEP {resolution_m:g} m DEM"
                          if _is_static(resolution_m)
                          else f"USGS 3DEP dynamic service, {resolution_m:g} m"),
-             "via": "py3dep.get_dem", "license": "Public domain (USGS)"},
+             "via": (f"rasterio, {STATIC_LAYER_URLS[int(round(resolution_m))].rsplit('/', 1)[1]}"
+                     if _is_static(resolution_m) else "py3dep.get_dem"),
+             "license": "Public domain (USGS)"},
             {"dataset": "USGS NHD waterbodies + network flowlines",
              "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
              "license": "Public domain (USGS)"},
