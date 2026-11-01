@@ -295,9 +295,10 @@ Record the strength Dom settles on in `docs/decisions.md`.
 
 ## Build record
 
-2026-11-01, Task 2 (the mark cap): `MAX_MANIFEST_HOTSPOTS` is 1,000. `bound_geometry` passes 1,000 hotspots and refuses 1,001 (`test_a_manifest_of_1000_hotspots_is_accepted`).
+2026-11-01, Task 2 (the mark cap): `MAX_MANIFEST_HOTSPOTS` is 1,000. `bound_geometry` passes 1,000 hotspots and refuses 1,001 (`test_a_manifest_of_1000_hotspots_is_accepted`). Photo-bearing hotspots keep their own cap, `MAX_MANIFEST_PHOTOS = 64`, because each photo is decoded and drawn with a framed paste that costs real time (review, fix round 1). `spec_from_manifest` now runs `bound_geometry` before `drop_unembedded_photos`, so the count covers every photo a file declares and a crafted file is refused before any photo is touched.
 
 - Record size: 1,000 realistic waypoint hotspots (label, icon, `mark: true`) add 93,843 bytes to the manifest (2,077 B with none, 95,920 B with 1,000). That is about 94 KB of the 900,000 B record budget, as decision 14 says. The record builds, fits and reads back.
-- Proof time, Rifle-Aspen (`rifle_aspen`), 9 x 12 in at the proof's 96 dpi, labels on, wash off, marks scattered with a fixed seed inside the plate, one warm-up render first: 7 marks 0.43 s and 0.45 s; 1,000 marks 1.14 s and 1.09 s. The 1,000 marks add about 0.7 s, far under the 30 s limit. At 300 dpi (final): 7 marks 3.7 s, 1,000 marks 4.3 s.
+- Proof time, with photo-less marks only, Rifle-Aspen (`rifle_aspen`), 9 x 12 in at the proof's 96 dpi, labels on, wash off, marks scattered with a fixed seed inside the plate, one warm-up render first: 7 marks 0.43 s and 0.45 s; 1,000 marks 1.14 s and 1.09 s. The 1,000 marks add about 0.7 s, far under the 30 s limit. At 300 dpi (final): 7 marks 3.7 s, 1,000 marks 4.3 s.
+- Photos (the 64 cap): 64 embedded photo spots on Rifle-Aspen, 9 x 12 in at 300 dpi, took 10.5 s alone and 13.1 s beside 936 photo-less marks (about 1 s at the 96 dpi proof). Without the cap, 1,000 photos measured about 12 s at proof and an estimated 2 minutes at 300 dpi (reviewer's measurement).
 - Drawing at that count: 1,000 marks over one 9 x 12 sheet draw every marker and label, and the labels pile onto each other. Nothing is dropped, and nothing separates them. The speed target holds; whether the sheet reads at that count is a design question, not a time one.
 - The script is not in the repo (session scratchpad, `measure_marks.py`).

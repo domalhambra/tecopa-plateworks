@@ -180,6 +180,30 @@ def test_a_manifest_of_1000_hotspots_is_accepted():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(hotspots=[dict(spot) for _ in range(1001)]))
 
+def test_a_manifest_of_64_photo_hotspots_is_accepted_and_65_is_refused():
+    # each photo costs real drawing work (decode, framed and blurred paste) that the
+    # wash's budget does not cover, so photos keep the old total cap of 64.
+    def spots(n):
+        return [{"x": 0.0, "y": 0.0, "weight": 1, "photo": "data:image/jpeg;base64,AAAA"}
+                for _ in range(n)]
+    provenance.bound_geometry(_spec(hotspots=spots(provenance.MAX_MANIFEST_PHOTOS)))
+    with pytest.raises(SpecError):
+        provenance.bound_geometry(_spec(hotspots=spots(provenance.MAX_MANIFEST_PHOTOS + 1)))
+
+def test_1000_photo_less_marks_still_pass_beside_the_photo_cap():
+    marks = [{"x": 0.0, "y": 0.0, "weight": 3, "label": f"Camp {i}", "icon": "flag",
+              "mark": True} for i in range(1000)]
+    provenance.bound_geometry(_spec(hotspots=marks))
+
+def test_the_photo_cap_refuses_a_crafted_file_before_any_photo_is_decoded():
+    # 65 photo spots, none a valid embedded photo: drop_unembedded_photos would strip
+    # them all, so only a count that runs first refuses the file.
+    m = provenance.build_manifest(_spec(), [])
+    m["spec"]["hotspots"] = [{"x": 690000.0, "y": 4485000.0, "weight": 1,
+                              "photo": "/etc/hosts"}] * (provenance.MAX_MANIFEST_PHOTOS + 1)
+    with pytest.raises(SpecError):
+        provenance.spec_from_manifest(m)
+
 def test_bound_geometry_rejects_non_n2_track_shape():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(tracks=[np.zeros((3, 3))], track_days=None))
