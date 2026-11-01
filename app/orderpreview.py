@@ -351,8 +351,9 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
                 print_w_in=e["print_in"][0], print_h_in=e["print_in"][1],
                 native_resolution_m=cfg["native_resolution_m"],
                 tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
-                hotspots=[], seed=7, title_text=title, labels=labels,
-                panels=e["panels"], panel_gap_in=e["gap"], **PREVIEW_LOOK)
+                hotspots=[], seed=7, title_text=title,
+                panels=e["panels"], panel_gap_in=e["gap"],
+                **{**PREVIEW_LOOK, "labels": labels})   # the file check wins
             img = render.rasterize(spec, dpi=dpi, region_dir=plate_dir, watermark=True,
                                    watermark_text="PREVIEW", cfg=cfg)
         except SpecError as ex:

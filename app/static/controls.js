@@ -178,7 +178,7 @@ export const CONTROLS = [
     help: 'Grades each lake from a pale shallow shore to deeper open water; 0 keeps the flat fill.',
     keywords: ['water', 'lake', 'depth', 'shore', 'littoral', 'imhof', 'vignette'] },
   { id: 'dryLakes', path: 'style.dryLakes', section: 'layers', panel: 'Cartography', label: 'Dry lakes',
-    hint: 'stipple playas as salt ground', type: 'toggle', default: false, affectsProof: true,
+    hint: 'stipple playas as salt ground', type: 'toggle', default: true, affectsProof: true,
     // Hidden on a plate with no playa sidecar: there the toggle is a control that
     // correctly does nothing, which reads exactly like a broken one. Bake pans onto a
     // plate with scripts/bake_playa.py and it appears.
@@ -195,11 +195,11 @@ export const CONTROLS = [
     help: 'A compass rose above the title block.',
     keywords: ['compass', 'rose', 'north'] },
   { id: 'biome', path: 'biome', section: 'layers', panel: 'Cartography', label: 'Biome color',
-    type: 'toggle', default: false, affectsProof: true,
+    type: 'toggle', default: true, affectsProof: true,
     help: 'Tint the land by what grows there (USGS land cover): forest green, desert sage.',
     keywords: ['biome', 'land cover', 'nlcd', 'vegetation', 'color'] },
   { id: 'labels', path: 'labels', section: 'layers', panel: 'Cartography', label: 'Place names',
-    type: 'toggle', default: false, affectsProof: true,
+    type: 'toggle', default: true, affectsProof: true,
     help: 'Peak, lake, and place names from the USGS names gazetteer.',
     keywords: ['labels', 'place names', 'gnis', 'peaks', 'water'] },
   { id: 'labelPlace', path: 'style.labelPlace', section: 'layers', panel: 'Cartography', label: 'Smart labels',
@@ -208,7 +208,7 @@ export const CONTROLS = [
     help: 'Smart placement dodges the route and adds leader lines; off pins names in place.',
     keywords: ['smart labels', 'placement', 'leader lines', 'dodge'] },
   { id: 'profile', path: 'style.profile', section: 'layers', panel: 'Elevation profile', label: 'Elevation profile',
-    type: 'toggle', default: false, affectsProof: true,
+    type: 'toggle', default: true, affectsProof: true,
     help: 'A strip graph of elevation along your journeys, drawn beneath the map.',
     keywords: ['profile', 'elevation strip', 'graph'] },
   { id: 'profileHeight', path: 'style.profileHeight', section: 'layers', panel: 'Elevation profile',

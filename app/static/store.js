@@ -55,8 +55,8 @@ export const state = {
   title: '',              // poster title ('' -> region name; '-' -> no title block)
   contours: false,        // elevation contour lines
   compass: true,          // compass rose above the title block
-  biome: false,           // NLCD land-cover tint (forests green, desert sage-tan)
-  labels: false,          // named geography (GNIS terrain + water names)
+  biome: true,            // NLCD land-cover tint (forests green, desert sage-tan); on for new posters
+  labels: true,           // named geography (GNIS terrain + water names); on for new posters
   style: {                // the Style panel's knobs (server defaults mirrored here)
     width: 2.6, halo: 0.7, color: '', marker: 0.24, ring: 0.09, photoStyle: 'mat',
     furniture: 1.0,       // multiplier on the automatic sheet-size furniture scale
@@ -68,17 +68,17 @@ export const state = {
     // continued poster restores its own stored values (the labelPlace precedent).
     softLight: 0.35,      // flanking-light blend weight around the principal azimuth
     haze: 0.15,           // how far the low ground sinks into the cool atmosphere
-    // Water (v1.14). waterDepth is subtle-on for NEW posters like the Looks knobs;
-    // dryLakes stays OFF by default because it needs a plate that has been baked with
-    // scripts/bake_playa.py, and most plates carry no playa at all.
+    // Water (v1.14). waterDepth is subtle-on for NEW posters like the Looks knobs.
+    // dryLakes is on too: a plate with no playa.json (scripts/bake_playa.py) paints
+    // nothing, so the default costs a plate without playa nothing.
     waterDepth: 0.5,      // pale littoral shelf -> deeper open water (Imhof)
-    dryLakes: false,      // stipple the plate's playa as salt ground, never as water
+    dryLakes: true,       // stipple the plate's playa as salt ground, never as water
     // Journey Light (v1.9): the poster lit by the hike's own sun.
     lightMode: 'archival', // 'archival' (region light) | 'journey' (the journey's sun)
     sunHour: null,        // time-of-day scrubber (local solar hour); null = summit light
     sunAzimuth: null, sunAltitude: null,  // explicit resolved sun (continue-restore path)
     golden: 0.7,          // warm/cool golden-hour grade amount (journey mode)
-    profile: false,       // DEM-sampled elevation-profile furniture
+    profile: true,        // DEM-sampled elevation-profile furniture; on for new posters
     profileHeight: 0.9,
     bleedIn: 0,           // print-shop bleed (inches); 0 = none. Print-only; a continued
                           // poster restores its own value.

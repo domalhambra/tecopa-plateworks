@@ -85,6 +85,7 @@ from app.ingest import Track
 from app.density import hotspots
 from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
+from app.orderspec import ORDER_LOOK
 from scripts.track_network import load_network, network_tracks
 
 NATIVE_FLOOR_DPI = 300          # the zoom cap is judged at print dpi: 10 m/px at 300 dpi
@@ -326,14 +327,17 @@ def _edition_spots(sub: list, spots: list, region, out_dir: str) -> list:
     return _annotate(hotspots(sub, tuple(region.cfg["bounds"])), out_dir)
 
 
-def _base_spec(region: Region, tracks: list, spots: list, edition: int = 1) -> CompositionSpec:
+def _base_spec(region: Region, tracks: list, spots: list, edition: int = 1,
+               look: dict | None = None) -> CompositionSpec:
+    """The farm's spec: the customer's look (orderspec.ORDER_LOOK), so the marketing
+    images show what an order ships. `look` overrides single fields of it for one plate."""
     crop, pw, ph = _frame(region)
     return CompositionSpec(
         region_id=region.id, crs=region.cfg["crs"], crop=crop,
         print_w_in=pw, print_h_in=ph, native_resolution_m=region.cfg["native_resolution_m"],
         tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
         hotspots=spots, seed=7, title_text=region.name.upper(),
-        contours=True, edition=edition)
+        contours=True, edition=edition, **{**ORDER_LOOK, **(look or {})})
 
 
 def _write_final(spec: CompositionSpec, region: Region, dpi: float, out_path: str,

@@ -428,6 +428,12 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 | The six curated plates are not rebuilt by this change. A candidate is built outside `regions/` for comparison, and a swap waits for Dom's yes. | A rebuilt plate has a new `pack_version`, so reprinting an older poster answers 422 until overridden, and its pixels move. | `scripts/dem_candidate.py`; the plan, Tasks 5 and 6 |
 | On Dom's yes, the six curated plates were swapped to Lanczos DEMs the same day. Only `dem.tif` changed, each on its committed grid, and `sources.json` stays as it was. Striped windows of 36: `lassen_ca` 31 to 0, `tecopa_ca` 30 to 0, `susanville_reno` 29 to 1, `rifle_aspen` 25 to 0, `tushar_beaver_ut` 25 to 0, `elko_bonneville` 11 to 0. | The stripes showed on prints. The cost is accepted: reprinting an older poster answers the plate-mismatch 422 until overridden, and checked on the real Rifle–Aspen poster, that reply and the override both work. The originals are backed up for an exact reprint. Published images are not yet re-rendered. | the plan, Task 5 and its build record; `changing-things.md`, Repair an orphaned DEM |
 
+## 2026-11-01 (the customer look)
+
+| Decision | Why | Carried in |
+|---|---|---|
+| Every new poster carries the biome coloring, the geography names, the dry-lake stipple and the elevation profile strip by default: `ORDER_LOOK` gains `biome`, `labels`, `dry_lakes` and `profile`, and the studio's `store.js` and `controls.js` defaults match. The marketing farm renders with the same look (`_base_spec(..., look=None)` merges a per-plate override over it). `default_spec` and the order preview still set `labels` from the plate's `labels.json`. The Archival preset also turns the profile strip off, as it already does the other layers. | The Pick-a-plate page shows what an order ships, and a customer should not have to find four toggles to get it. A layer a plate lacks (no landcover, no labels, no playa) paints nothing, and a test renders a plate with none of them. A saved or continued poster restores its own stored values, so no old print changes. | `app/orderspec.py` `ORDER_LOOK`; `scripts/render_asset_farm.py` `_base_spec`; `tests/test_asset_farm_look.py` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |

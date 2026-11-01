@@ -39,9 +39,14 @@ from app.regionbuild import slugify
 from app.serialize import spec_from_json, spec_to_json
 from app.spec import PHOTO_BAND_SIDES, PHOTO_LAYOUTS, CompositionSpec
 
-# the look of a new poster in the studio (the defaults in app/static/store.js)
+# the look of a new poster in the studio (the defaults in app/static/store.js): the
+# relief blend and haze, the water depth, smart labels and the weave, then the four
+# layers a customer's poster carries by default (NLCD coloring, geography names, dry-lake
+# stipple, the elevation profile strip). The marketing farm renders with the same look
+# (scripts/render_asset_farm._base_spec). A layer a plate lacks paints nothing.
 ORDER_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
-                  label_place="smart", track_weave=True)
+                  label_place="smart", track_weave=True,
+                  biome=True, labels=True, dry_lakes=True, profile=True)
 SEED = 7                    # the same seed the size preview draws with
 NO_PLATE = "Run Prepare first: work/state.json has no plate."
 SIZE_TOL = 1e-6             # inches: a size read back from JSON is the same size
@@ -261,8 +266,9 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
         tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
         seed=SEED, title_text=order.title,
         credit_text=credit_text(path),      # as the studio's proof derives it
-        labels=os.path.isfile(os.path.join(path, "labels.json")),
-        panels=state["panels"], panel_gap_in=state["gap"], **photos, **ORDER_LOOK)
+        panels=state["panels"], panel_gap_in=state["gap"], **photos,
+        # the file check still wins over the look's labels=True
+        **{**ORDER_LOOK, "labels": os.path.isfile(os.path.join(path, "labels.json"))})
     return provenance.bound_photo_keys(spec)
 
 

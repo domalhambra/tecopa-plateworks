@@ -38,6 +38,11 @@ def test_default_spec_is_the_one_the_proof_draws(order):
     s.validate()
 
 
+def test_order_look_is_the_full_customer_look():
+    for k in ("biome", "labels", "dry_lakes", "profile"):
+        assert orderspec.ORDER_LOOK[k] is True
+
+
 def test_default_spec_has_no_labels_without_labels_json(order):
     st = read_state(order)
     # the mirror's files are symlinks into the shared plate: copy the plate aside

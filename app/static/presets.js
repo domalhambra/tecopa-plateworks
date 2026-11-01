@@ -17,7 +17,7 @@ export const CURATED = [
     // own no-op — the plain sheet every pre-feature poster prints as.
     'style.softLight': 0, 'style.haze': 0,
     // Same for the water knobs: the flat lake fill and no playa stipple.
-    'style.waterDepth': 0, 'style.dryLakes': false,
+    'style.waterDepth': 0, 'style.dryLakes': false, 'style.profile': false,
     'biome': false, 'contours': false, 'labels': false } },
   { id: 'golden', name: 'Golden Hour', snap: {
     'style.lightMode': 'journey', 'style.golden': 0.9, 'style.shadow': 0.7, 'style.terrain': 1.1,
