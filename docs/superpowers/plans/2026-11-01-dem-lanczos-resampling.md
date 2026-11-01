@@ -316,6 +316,19 @@ The whole-branch review found a step of up to 1.75 m along each slice seam: the 
 
 A real one-slice build and a real two-slice build differ by a median of 0.022 m and an RMS of 0.085 m, and by up to 17 m on cliffs. That is GDAL's approximate transformer, which `rasterio.warp.reproject` fixes at 0.125 pixel. No cell is outside a quarter-cell sideways bound, and the height step across the seam matches its neighbours. It is left as is.
 
+Task 5, 2026-11-01, on Dom's yes. All six plates were swapped, and the originals are backed up with matching sha256.
+
+| Plate | Striped windows of 36 | Median score | Worst score | RMS m | Mean m |
+|---|---|---|---|---|---|
+| `lassen_ca` | 31 to 0 | 19.6 to 4.4 | 58.7 to 11.0 | 0.31 | 0.001 |
+| `tecopa_ca` | 30 to 0 | 21.6 to 4.3 | 137.2 to 9.9 | 0.55 | -0.003 |
+| `susanville_reno` | 29 to 1 | 19.4 to 4.3 | 44.6 to 14.0 | 0.36 | -0.002 |
+| `rifle_aspen` | 25 to 0 | 17.1 to 4.8 | 37.1 to 11.4 | 0.90 | -0.004 |
+| `tushar_beaver_ut` | 25 to 0 | 16.2 to 4.4 | 37.6 to 8.0 | 0.64 | 0.000 |
+| `elko_bonneville` | 11 to 0 | 11.0 to 4.0 | 40.5 to 6.0 | 1.33 | 0.001 |
+
+The old Rifle–Aspen poster matched its plate before the swap (`559da148de4b`). After it, the plate is `44e765879803`, the reprint answers 422 naming the terrain change, and the override renders. The stripe score on the same crop of the printed image goes from 17.7 to 4.1. The full suite passed 3,040 with none failed. Task 6 waits for Dom's yes.
+
 ## Out of scope
 
 - Plates printed before this change. They stay as printed.
