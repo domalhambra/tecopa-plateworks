@@ -1,0 +1,60 @@
+{
+  "id": "zion_ut",
+  "built": "2026-11-01",
+  "fetch_bbox_4326": [
+    -113.3,
+    37.0,
+    -112.7,
+    37.6
+  ],
+  "crs": "EPSG:32612",
+  "rebuild": "python region_prep.py --id zion_ut --name <name> --bbox -113.3 37.0 -112.7 37.6 --epsg 32612 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "2f1bfb4e1b3ae6cfde07fe7fd94e8581155a6621e1c384226ec7f3ddfbd7220b",
+      "bytes": 153197027
+    },
+    "hydro.json": {
+      "sha256": "28859ef86d84c4fb7a027de2d7369278bbb94c51bf88f10db5be92c0ac3ea8e2",
+      "bytes": 107939
+    },
+    "region.json": {
+      "sha256": "ce6233989aed253bd0ccaf03d822a531af1dd4cb9e55b7cc97bae9b04e1ba38e",
+      "bytes": 446
+    },
+    "overview.png": {
+      "sha256": "8e5b1a41b159c4ef8f9b9a3aaa5013d72fe9ce28553ec8e82f0e450a1c921be2",
+      "bytes": 603856
+    },
+    "landcover.tif": {
+      "sha256": "3ed7f397885b735019949b9ba8b7cc81a00ca1efab1a0cfbde0ca86892ab9552",
+      "bytes": 523174
+    },
+    "labels.json": {
+      "sha256": "ab388f862a1db509c35ad22672a714c6e405e0def54848ce54295a9dc664ef94",
+      "bytes": 33881
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "rasterio, USGS_Seamless_DEM_13.vrt",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}
