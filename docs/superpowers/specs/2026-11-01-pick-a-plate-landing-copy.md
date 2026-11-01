@@ -145,7 +145,7 @@ Image alt, after: The same view of Zion Canyon lit by a low autumn sun.
 ### Section 2: Walter's Wiggles keeps every switchback
 
 Feature eyebrow: Your track
-Body: The trail climbs the wall below Angels Landing in tight turns, shown here at the size it prints. Your photo from the top hangs right beside them.
+Body: The trail climbs the wall below Angels Landing in tight turns, shown here at the size it prints. Your photo from the top hangs right beside them. (check against the crop, the heading too: every turn must show in the render)
 Image alt: Close view of the Zion poster: a gold track doubling back up a canyon wall, with a photo pinned beside it.
 
 ### Section 3: This year's trips, then next year's
