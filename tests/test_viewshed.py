@@ -132,6 +132,52 @@ def test_a_mark_that_sees_everything_paints_every_cell(shape, at):
     assert mask.all(), f"{(~mask).sum()} cells missing"
 
 
+def _truly_seen(dem, res_m, x0, y0, x, y) -> bool:
+    """Brute force: one line of sight to one cell, at half-cell steps."""
+    span = math.hypot(x - x0, y - y0)
+    if span < 1.0:
+        return True
+    t = np.append(np.arange(0.5, span, 0.5), span)
+    px, py = x0 + (x - x0) * t / span, y0 + (y - y0) * t / span
+    ix = np.minimum(px.astype(np.int64), dem.shape[1] - 2)
+    iy = np.minimum(py.astype(np.int64), dem.shape[0] - 2)
+    fx, fy = px - ix, py - iy
+    top = dem[iy, ix] * (1 - fx) + dem[iy, ix + 1] * fx
+    bottom = dem[iy + 1, ix] * (1 - fx) + dem[iy + 1, ix + 1] * fx
+    z = top * (1 - fy) + bottom * fy
+    metres = t * res_m
+    eye = dem[int(y0), int(x0)] + EYE_M
+    slope = (z - eye - REFRACTION * metres * metres / (2 * EARTH_R_M)) / metres
+    return bool(slope[-1] >= slope.max())
+
+
+def test_the_mask_claims_about_what_brute_force_finds():
+    """The wash must not claim more than it knows: far from the mark, where painting is
+    coarse, seen ground stays close to the truth in area and in place."""
+    n, res = 600, 100.0
+    dem = _rough(n, relief_m=2_000.0).astype(np.float64)
+    y0, x0 = np.unravel_index(np.argmax(dem), dem.shape)
+    x0, y0 = float(x0), float(y0)
+    mask = seen_mask(dem, res, [(x0, y0)])
+    rng = np.random.default_rng(23)
+    xs, ys = rng.integers(0, n, 8_000), rng.integers(0, n, 8_000)
+    truth = np.array([_truly_seen(dem, res, x0, y0, x, y) for x, y in zip(xs, ys)])
+    fan = mask[ys, xs]
+    far = np.hypot(xs - x0, ys - y0) > 250        # where painting has gone coarse
+    assert truth[far].sum() > 150                  # enough seen ground to judge
+    assert abs(fan.sum() - truth.sum()) <= 0.25 * truth.sum(), (fan.sum(), truth.sum())
+    assert abs(fan[far].sum() - truth[far].sum()) <= 0.25 * truth[far].sum(), \
+        (fan[far].sum(), truth[far].sum())
+    seen_y, seen_x = np.nonzero(mask)
+    pick = rng.integers(0, len(seen_y), 400)
+    near = 0
+    for y, x in zip(seen_y[pick], seen_x[pick]):
+        window = ((a, b) for b in range(max(0, y - 3), min(n, y + 4))
+                  for a in range(max(0, x - 3), min(n, x + 4)))
+        near += any(_truly_seen(dem, res, x0, y0, a, b) for a, b in window)
+    assert near >= 0.97 * len(pick), f"{near} of {len(pick)} within 3 cells"
+
+
 def test_a_far_ridge_one_cell_wide_is_not_stepped_over():
     """Ray samples grow apart with distance. A thin far ridge still blocks."""
     n, res = 2000, 100.0
@@ -214,6 +260,23 @@ def test_a_mark_on_the_plate_s_last_cell_counts():
     assert seen_mask(dem, 30.0, [(59.0, 49.0)]).any()
 
 
+@pytest.mark.parametrize("at", [(59.4, 20.0), (-0.3, 20.0), (59.5, 20.0), (-0.5, 20.0),
+                                (20.0, 49.5), (20.0, -0.5)])
+def test_a_mark_inside_a_rim_cell_counts(at):
+    """A cell reaches half a cell past its centre. A mark there is on the plate."""
+    dem = np.zeros((50, 60), dtype=np.float32)
+    mask = seen_mask(dem, 30.0, [at])
+    clamped = (min(max(at[0], 0.0), 59.0), min(max(at[1], 0.0), 49.0))
+    assert mask.any()
+    assert (mask == seen_mask(dem, 30.0, [clamped])).all()
+
+
+@pytest.mark.parametrize("at", [(60.5, 20.0), (61.0, 20.0), (59.6, 20.0), (-0.6, 20.0),
+                                (20.0, 49.6), (20.0, -0.6)])
+def test_a_mark_past_the_rim_is_ignored(at):
+    assert not seen_mask(np.zeros((50, 60), dtype=np.float32), 30.0, [at]).any()
+
+
 def test_the_input_is_left_alone():
     dem = _rough(100)
     dem[3, 3] = np.nan
@@ -261,6 +324,14 @@ def test_the_sample_budget_covers_1000_marks_on_a_full_grid():
     assert viewshed.RAYS * reach * 1_000 <= SAMPLE_BUDGET
 
 
+def test_the_shared_fan_cannot_be_written():
+    """A fan is cached across calls: one stray write would change every later mask."""
+    fan = viewshed._fan(64, 64)
+    arrays = [a for a in fan if isinstance(a, np.ndarray)]
+    arrays += [a for band in fan.bands for a in band if isinstance(a, np.ndarray)]
+    assert arrays and not any(a.flags.writeable for a in arrays)
+
+
 def test_a_mark_s_rays_do_not_depend_on_how_many_marks_there_are():
     assert viewshed._fan(500, 500) is viewshed._fan(500, 500)      # no count in the key
     dem = _rough(200)
@@ -285,11 +356,14 @@ def test_the_budget_holds_at_1000_marks():
 
 def test_no_mark_is_ever_dropped_by_count():
     """The 1,000th mark paints as surely as the first."""
-    n = 400
+    n = 120
     dem = np.zeros((n, n), dtype=np.float32)
-    marks = [(5.0, 5.0)] * 999 + [(390.0, 390.0)]
+    dem[:, 60:] = 500.0                            # neither mark sees the other's side
+    marks = [(5.0, 5.0)] * 999 + [(110.0, 110.0)]
     mask = seen_mask(dem, 30.0, marks)
-    assert mask[390, 390] and mask[5, 5]
+    assert mask[110, 110] and mask[5, 5]
+    assert (mask == (seen_mask(dem, 30.0, [(5.0, 5.0)])
+                     | seen_mask(dem, 30.0, [(110.0, 110.0)]))).all()
 
 
 def test_eye_height_is_part_of_the_answer():
