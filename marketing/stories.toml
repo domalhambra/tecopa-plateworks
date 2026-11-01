@@ -56,6 +56,9 @@ eyebrow = "Water"
 destinations = ["Freel Peak", "Mount Tallac", "Mount Rose", "Pyramid Peak"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 4.0
+# The spot that carries the pinned photo. photo_file, a path under the gitignored
+# marketing/photos/, makes it a real photograph; without it the farm pins a gradient.
+photo_at = "Mount Tallac"
 look = {}
 
 [[tahoe_ca.sections]]
@@ -149,6 +152,7 @@ destinations = [
 ]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 2.0
+photo_at = "Angels Landing"
 look = {}
 
 [[zion_ut.sections]]

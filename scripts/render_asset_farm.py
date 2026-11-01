@@ -87,7 +87,7 @@ from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
 from app.orderspec import ORDER_LOOK
 from scripts.story_config import story_for
-from scripts.track_network import load_network, network_tracks
+from scripts.track_network import PinError, load_network, network_tracks
 
 NATIVE_FLOOR_DPI = 300          # the zoom cap is judged at print dpi: 10 m/px at 300 dpi
 HOTSPOT_LABELS = ["Base Camp", "The Notch", "North Shore", "South Fork", "The Marina",
@@ -237,9 +237,16 @@ def _finite_envelope(region: Region, bounds: tuple) -> tuple:
     return crop
 
 
-def _annotate(spots: list, out_dir: str) -> list:
-    """Name + icon each hotspot and pin one synthetic photo, so the poster shows the
+def _annotate(spots: list, out_dir: str, story: dict | None = None) -> list:
+    """Name + icon each hotspot and pin one photo, so the poster shows the
     marker/photo furniture the product is about (the photo embeds into the manifest).
+
+    With no story the pin is a synthetic gradient on spots[0], as it always was. A
+    story decides instead: its `photo_at` names the spot that carries the photo (a
+    label that matches no spot is a PinError), and no `photo_at` pins nothing. Its
+    `photo_file`, a path under the gitignored marketing/photos/, makes that photo a
+    real photograph; without one the gradient stays as the fallback (Task 6's gate
+    stops a gradient shipping). A `photo_file` that does not exist is a PinError too.
 
     A spot that ALREADY carries a label or icon keeps both: network journeys arrive
     named after the real summit/lake they reached, and carrying the glyph that matches
@@ -257,7 +264,21 @@ def _annotate(spots: list, out_dir: str) -> list:
             s["label"] = HOTSPOT_LABELS[k % len(HOTSPOT_LABELS)]
         if "icon" not in s:
             s["icon"] = HOTSPOT_ICONS[k % len(HOTSPOT_ICONS)]
-    if spots:
+    if story is None:
+        target = spots[0] if spots else None
+    elif story.get("photo_at"):
+        target = next((s for s in spots if s["label"] == story["photo_at"]), None)
+        if target is None:
+            raise PinError(f"story photo_at is not a spot on this plate: {story['photo_at']}")
+    else:
+        target = None
+    if target is not None:
+        real = story.get("photo_file") if story else None
+        if real:
+            if not os.path.isfile(real):
+                raise PinError(f"story photo_file not found: {real}")
+            target["photo"] = real
+            return spots
         demo = Image.new("RGB", (240, 180)); px = demo.load()
         for yy in range(180):
             for xx in range(240):
@@ -265,7 +286,7 @@ def _annotate(spots: list, out_dir: str) -> list:
                 px[xx, yy] = (int(150 + 60 * t), int(170 - 40 * t), int(190 - 120 * t))
         os.makedirs(out_dir, exist_ok=True)
         photo = os.path.join(out_dir, "_demo_photo.png"); demo.save(photo)
-        spots[0]["photo"] = photo
+        target["photo"] = photo
     return spots
 
 
@@ -296,7 +317,7 @@ def _demo_journeys(region, out_dir: str, force_synthetic: bool = False):
                   f"({type(ex).__name__}: {ex})")
         else:
             print(f"  tracks: routed over {cache} (OSM, ODbL)")
-            return tracks, _annotate(spots, out_dir)
+            return tracks, _annotate(spots, out_dir, story)
     else:
         why = "forced by --synthetic-tracks" if force_synthetic else f"no cache at {cache}"
         print(f"  tracks: synthetic ({why})")
@@ -304,22 +325,23 @@ def _demo_journeys(region, out_dir: str, force_synthetic: bool = False):
     return tracks, _annotate(hotspots(tracks, tuple(region.cfg["bounds"])), out_dir)
 
 
-def _edition_spots(sub: list, spots: list, region, out_dir: str) -> list:
+def _edition_spots(sub: list, spots: list, region, out_dir: str,
+                   story: dict | None = None) -> list:
     """Spots for an edition's track subset. Network journeys carry their
     destination in track_id ("<kind>:<name>"): the edition shows the real
     destinations its ink has reached, weights recounted for the subset.
-    Synthetic tracks (ids like "day-1") keep the density-hotspot path."""
+    Synthetic tracks (ids like "day-1") keep the density-hotspot path.
+
+    The story's pin rule carries through. An edition that has not yet reached the
+    `photo_at` spot pins nothing and does not raise: only the full poster raises
+    PinError for a `photo_at` that matches no spot."""
     names = [t.track_id.split(":", 1)[1] for t in sub if ":" in t.track_id]
     if names:
-        # drop any inherited "photo" pin -- _annotate re-pins on eds[0], and an
-        # edition must carry ONE pinned photo like the poster, not two.
-        # Defensive rather than load-bearing under today's caller, and
-        # deliberately left in: _annotate pins only spots[0] and the filter
-        # below preserves order, so the carrier is either eds[0] (re-pinned,
-        # still one) or filtered out (none inherited, _annotate pins eds[0]).
-        # A double pin needs a caller that annotates a non-first spot; the
-        # strip costs nothing and makes that caller safe instead of subtly
-        # wrong. Not tested, because no reachable state produces it.
+        # drop any inherited "photo" pin -- _annotate re-pins by the same rule as the
+        # poster (spots[0] with no story, the `photo_at` spot with one), so an
+        # edition carries ONE pinned photo like the poster, not two. The strip is
+        # defensive rather than load-bearing under today's caller, and costs
+        # nothing. Not tested, because no reachable state produces a double pin.
         #
         # `names.count` likewise always returns 1 today: destination_pool dedupes
         # by name and select_destinations removes each pick, so one trip per
@@ -329,7 +351,10 @@ def _edition_spots(sub: list, spots: list, region, out_dir: str) -> list:
         eds = [{k: v for k, v in dict(s, weight=names.count(s["label"])).items()
                 if k != "photo"}
                for s in spots if s.get("label") in names]
-        return _annotate(eds, out_dir)
+        if story and story.get("photo_at") and not any(
+                s["label"] == story["photo_at"] for s in eds):
+            story = {k: v for k, v in story.items() if k != "photo_at"}
+        return _annotate(eds, out_dir, story)
     return _annotate(hotspots(sub, tuple(region.cfg["bounds"])), out_dir)
 
 
@@ -433,10 +458,12 @@ def _editions(region, tracks, spots, out_dir, dpi):
     """The lineage set: the same frame rendered as three growing editions (add journeys
     each year), the cartouche climbing Edition 1 -> 3, lineage chained in the manifest."""
     made, lineage = [], []
+    # the story only governs network journeys; synthetic tracks keep today's pin
+    story = story_for(region.id) if any(":" in t.track_id for t in tracks) else None
     steps = [max(1, len(tracks) // 3), max(2, 2 * len(tracks) // 3), len(tracks)]
     for ed, upto in enumerate(steps, start=1):
         sub = tracks[:upto]
-        subspots = _edition_spots(sub, spots, region, out_dir)
+        subspots = _edition_spots(sub, spots, region, out_dir, story)
         spec = _base_spec(region, sub, subspots, edition=ed)
         out = os.path.join(out_dir, f"edition_{ed}.png")
         made.append(_write_final(spec, region, dpi, out, lineage=list(lineage)))

@@ -32,6 +32,10 @@ blobs/
 # generated marketing asset farm (scripts/render_asset_farm.py)
 assets/
 
+# real photographs the farm pins on a showcase poster (a story's photo_file). Not the
+# repo's to hold: Dom's own files, put in place by hand.
+marketing/photos/
+
 # built macOS launcher app (scripts/macos/build_app.sh)
 /dist/
 
