@@ -1,0 +1,64 @@
+{
+  "id": "ruby_mountains_nv",
+  "built": "2026-11-01",
+  "fetch_bbox_4326": [
+    -115.75,
+    40.05,
+    -115.05,
+    40.85
+  ],
+  "crs": "EPSG:32611",
+  "rebuild": "python region_prep.py --id ruby_mountains_nv --name <name> --bbox -115.75 40.05 -115.05 40.85 --epsg 32611 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "bbfef30fa4123e8665179d25d6c98a69306ced5d0a5b80a66c653493371f3228",
+      "bytes": 216320913
+    },
+    "hydro.json": {
+      "sha256": "0a08a98d5cf6e20c479db6bfaae592d758aab47b932b1327f5bec9a0a77e0aab",
+      "bytes": 245752
+    },
+    "region.json": {
+      "sha256": "91d42d5ae09892626e1cd8e6eeda801dc8660e655cca20dce1dc878efcb9e593",
+      "bytes": 464
+    },
+    "overview.png": {
+      "sha256": "18e1e9ded4616970177cb2d9e3e194d444d5f1709eb57c30dd94968b9e3434c6",
+      "bytes": 422583
+    },
+    "landcover.tif": {
+      "sha256": "b7d5f863d38999d432a931c005f8600a8ab8a796d1f0f3a1b9c4e4827896e1b1",
+      "bytes": 591162
+    },
+    "labels.json": {
+      "sha256": "ac4dc0b85b7f5e04cbc01a8195c0d710fbacb52882a8b70912f6ec159eb0dc92",
+      "bytes": 11372
+    },
+    "playa.json": {
+      "sha256": "d0585a26cda1462c9df945d6037d5804fb83dd13844317da020a125473eb81f6",
+      "bytes": 7909
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "rasterio, USGS_Seamless_DEM_13.vrt",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}
