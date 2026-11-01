@@ -170,7 +170,7 @@ def test_a_story_cycles_its_trip_shapes(): ...
   - `_stories(out_dir, region, story, dpi) -> [path]`, writing `story_<n>.png`, and for a `poster_journey` section both `story_<n>.png` and `story_<n>_before.png`
   - `story_images(src_dir, story) -> dict[str, bytes]`, writing `story-<n>.webp`, `journey-before.webp`, `journey-after.webp`, `edition-<n>.webp` and copying `film.mp4`
   - `demo_photo_plates() -> list[str]`, the plate ids with `photo_at` and no `photo_file`
-- Config: a section gives `crop_center_m = [x, y]` and `crop_in = [w, h]`, or `crop_anchor = "foot"` for the elevation strip. `film` and `editions` sections have no crop.
+- Config: a section gives `crop_center_m = [x, y]` and `crop_in = [w, h]`, or `crop_anchor = "profile"` for the elevation strip. `film` and `editions` sections have no crop.
 
 - [ ] **Step 1: Write the failing tests.**
 

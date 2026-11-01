@@ -78,6 +78,8 @@ def test_the_drives_run_as_the_stories_need():
     assert drives("ruby_mountains_nv", "Lamoille Canyon Road") == 4
 
 
-def test_a_heading_a_render_could_contradict_carries_the_mark():
-    section = COPY.read_text().split("Walter's Wiggles keeps every switchback")[1].split("###")[0]
-    assert "(check against the crop)" in section
+def test_the_copy_holds_no_claim_still_waiting_on_a_render():
+    # Every section's sentences were read against its crop, 2026-11-01 (spec section 10).
+    # A blank in braces is a caption filled from the render. A new mark means an unread claim.
+    body = COPY.read_text().split("## Canyonlands and Moab")[1]
+    assert "(check against the crop)" not in body

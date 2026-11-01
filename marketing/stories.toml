@@ -41,18 +41,24 @@ look = {}
 
 [[canyonlands_ut.sections]]
 heading = "Every wall throws its shadow"
+crop_center_m = [601913, 4254304]
+crop_in = [6, 4.5]
 feature = "Shading"
 variant = "poster"
 crop_place = "Island in the Sky down to the White Rim, for the coin and its relief"
 
 [[canyonlands_ut.sections]]
 heading = "The river stays down in its canyon"
+crop_center_m = [600901, 4229820]
+crop_in = [6, 4.5]
 feature = "Rivers"
 variant = "poster"
 crop_place = "the Confluence, looking into the inner gorge"
 
 [[canyonlands_ut.sections]]
 heading = "A slow drive bends with every side canyon"
+crop_center_m = [589307, 4248977]
+crop_in = [6, 4.5]
 feature = "Your track"
 variant = "poster"
 crop_place = "a stretch of the White Rim Road around the heads of side canyons"
@@ -71,18 +77,24 @@ look = {}
 
 [[tahoe_ca.sections]]
 heading = "The lake shades deeper away from shore"
+crop_center_m = [757310, 4317644]
+crop_in = [9, 6.75]
 feature = "Water"
 variant = "poster"
 crop_place = "the south shore of Tahoe with Fallen Leaf Lake, shallows to deep water"
 
 [[tahoe_ca.sections]]
 heading = "Every creek finds its way down"
+crop_center_m = [745507, 4306712]
+crop_in = [6, 4.5]
 feature = "Creeks and small lakes"
 variant = "poster"
 crop_place = "Desolation Wilderness, lakes strung along their outlets"
 
 [[tahoe_ca.sections]]
 heading = "Your summits, marked"
+crop_center_m = [751508, 4311901]
+crop_in = [5, 3.75]
 feature = "Marks and photos"
 variant = "poster"
 crop_place = "centred on the summit that carries the pinned photo, Mount Tallac to start"
@@ -99,15 +111,19 @@ look = {}
 
 [[eastern_sierra_ca.sections]]
 heading = "Sage, pinyon, forest, granite, each in its own color"
+crop_center_m = [376862, 4069651]
+crop_in = [9, 6.75]
 feature = "Coloring"
 variant = "poster"
 crop_place = "from the Owens Valley floor at Lone Pine up to the Whitney crest"
 
 [[eastern_sierra_ca.sections]]
-heading = "The climb runs along the foot of the sheet"
+heading = "Every climb is drawn in a strip beside the title"
+crop_anchor = "profile"
+crop_in = [6, 2]
 feature = "Elevation"
 variant = "poster"
-crop_place = "the foot of the sheet, the whole elevation strip"
+crop_place = "the whole elevation strip, above the cartouche and compass"
 
 [[eastern_sierra_ca.sections]]
 heading = "A season draws itself"
@@ -128,22 +144,28 @@ trips = [
     { shape = "out_and_back" },
 ]
 road_cost = 3.0
-look = {}
+look = { track_weave = false, haze_strength = 0.35 }
 
 [[ruby_mountains_nv.sections]]
-heading = "Far ridges fade"
+heading = "Low ground sinks into the haze"
+crop_center_m = [637292, 4483405]
+crop_in = [9, 6.75]
 feature = "Distance"
 variant = "poster"
-crop_place = "the range seen across its width, near ridges against far ones"
+crop_place = "the east face of the range above the hazy floor of Ruby Valley"
 
 [[ruby_mountains_nv.sections]]
 heading = "A dry lake prints as a dry lake"
+crop_center_m = [658635, 4478995]
+crop_in = [6, 4.5]
 feature = "Dry lakes"
 variant = "poster"
-crop_place = "Franklin Lake on the valley floor, with the water of Ruby Lake if the window holds it"
+crop_place = "Dry Lake Flat, the playa with the pool at its low end"
 
 [[ruby_mountains_nv.sections]]
 heading = "The road you drive every time wears in"
+crop_center_m = [634145, 4495509]
+crop_in = [5, 3.75]
 feature = "Worn paths"
 variant = "poster"
 crop_place = "Lamoille Canyon Road up to its end, where the trails branch"
@@ -155,25 +177,30 @@ eyebrow = "Lit by your own day"
 # The two the copy names, then six real hikes across the plate, pinned because the seeded
 # fill took road stops (Paria Point, 79 percent road) that read straighter.
 destinations = [
-    "Angels Landing", "Observation Point", "The Narrows", "Northgate Peaks",
-    "Gooseberry Mesa", "Eagle Crags", "Cable Mountain", "Navajo Lake",
+    "Angels Landing", "Northgate Peaks", "Gooseberry Mesa", "Eagle Crags",
+    "Navajo Lake", "Burnt Mountain", "Buck Pasture Mountain", "Gregory Butte",
 ]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 2.0
 photo_at = "Angels Landing"
 look = {}
+journey = { sun_azimuth_deg = 250.0, sun_altitude_deg = 15.0, golden_strength = 0.7 }
 
 [[zion_ut.sections]]
 heading = "The light from your own day"
+crop_center_m = [327103, 4126607]
+crop_in = [6, 4.5]
 feature = "Journey Light"
 variant = "poster_journey"
 crop_place = "Zion Canyon, the same window from the plain poster and the lit one"
 
 [[zion_ut.sections]]
-heading = "Walter's Wiggles keeps every switchback"
+heading = "The hike to Angels Landing, at the size it prints"
+crop_center_m = [327109, 4126885]
+crop_in = [4.67, 3.5]
 feature = "Your track"
 variant = "poster"
-crop_place = "the switchbacks below Angels Landing, with the pinned photo if the window holds it"
+crop_place = "the trail up to Angels Landing, with the pinned photo"
 
 [[zion_ut.sections]]
 heading = "This year's trips, then next year's"
