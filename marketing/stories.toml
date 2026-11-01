@@ -3,13 +3,14 @@
 # section 8). Headings match the copy document, and tests/test_stories_config.py holds
 # them together.
 #
-# status = "plan": nothing reads this file yet. Phase B adds each section's
-# crop_center_m (CRS metres) and crop_in (printed inches), each plate's look and the
-# trail-first weights, then the farm and the exporter read it. A destination name is
-# looked up in the plate's labels.json or hydro.json in Phase B, and a name that does
-# not resolve fails that run.
+# status = "ready": scripts/story_config.py reads this file for the asset farm's
+# _demo_journeys and for scripts/track_straightness.py. Each plate's destinations,
+# trips and road_cost set its demo trips (scripts/track_network.py). A destination or
+# road name is looked up in the plate's labels.json, hydro.json or network cache, and a
+# name that does not resolve fails that run. Phase B still adds each section's
+# crop_center_m (CRS metres) and crop_in (printed inches) and each plate's look.
 
-status = "plan"
+status = "ready"
 
 [canyonlands_ut]
 anchor = "canyonlands"
@@ -25,6 +26,7 @@ trips = [
     { shape = "out_and_back" },
     { shape = "loop" },
 ]
+road_cost = 3.0
 look = {}
 
 [[canyonlands_ut.sections]]
@@ -51,6 +53,7 @@ name = "Lake Tahoe and Desolation"
 eyebrow = "Water"
 destinations = ["Freel Peak", "Mount Tallac", "Mount Rose", "Pyramid Peak"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
+road_cost = 3.0
 look = {}
 
 [[tahoe_ca.sections]]
@@ -78,6 +81,7 @@ eyebrow = "Desert floor to alpine"
 # labels.json holds no "The Palisades"; North Palisade is its highest summit.
 destinations = ["Mount Whitney", "North Palisade"]
 trips = [{ shape = "out_and_back" }, { shape = "4wd" }]
+road_cost = 3.0
 look = {}
 
 [[eastern_sierra_ca.sections]]
@@ -107,6 +111,7 @@ trips = [
     { shape = "drive", road = "Lamoille Canyon Road" },
     { shape = "out_and_back" },
 ]
+road_cost = 3.0
 look = {}
 
 [[ruby_mountains_nv.sections]]
@@ -133,6 +138,7 @@ name = "Zion"
 eyebrow = "Lit by your own day"
 destinations = ["Angels Landing", "Observation Point"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
+road_cost = 3.0
 look = {}
 
 [[zion_ut.sections]]

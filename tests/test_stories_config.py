@@ -43,7 +43,7 @@ def test_copy_says_real_trails_and_stays_in_register():
 
 def test_config_lists_the_five_plates_in_page_order():
     cfg = tomllib.loads(STORIES.read_text())
-    assert cfg["status"] == "plan"
+    assert cfg["status"] == "ready"
     plates = [k for k in cfg if k != "status"]
     assert plates == PLATES
     assert [cfg[p]["anchor"] for p in plates] == [

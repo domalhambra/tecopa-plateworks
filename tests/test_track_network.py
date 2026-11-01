@@ -8,9 +8,10 @@ import math
 from unittest import mock
 
 from scripts import track_network
-from scripts.track_network import (build_graph, destination_pool, dijkstra,
-                                    dijkstra_edges, network_tracks,
-                                    path_edge_ids, road_vertex_index,
+from scripts.track_network import (PinError, build_graph, destination_pool, dijkstra,
+                                    dijkstra_edges, drive_path, network_tracks,
+                                    outing_weights, path_edge_ids,
+                                    pinned_destinations, road_vertex_index,
                                     select_destinations, straight_share, trip_count,
                                     trip_target_m, densify_spacing_m,
                                     CORRIDOR_SHORT_SIDE_M, CORRIDOR_SPAN_FRAC,
@@ -1721,14 +1722,6 @@ def test_raw_out_paths_are_the_routed_paths_before_densify(tmp_path):
     assert all(len(p) < len(t.coords) for p, t in zip(raw, tracks))
 
 
-def test_story_is_accepted_and_changes_nothing_yet(tmp_path):
-    r = _region(tmp_path)
-    plain, _ = network_tracks(r, _ways(), seed=7)
-    told, _ = network_tracks(r, _ways(), seed=7, story=None)
-    for a, b in zip(plain, told):
-        assert np.array_equal(a.coords, b.coords)
-
-
 def test_plate_straightness_pools_every_trips_changes(tmp_path):
     from scripts.track_straightness import plate_straightness
     r = _region(tmp_path)
@@ -1737,3 +1730,267 @@ def test_plate_straightness_pools_every_trips_changes(tmp_path):
     trips, straight, total = plate_straightness(r, _ways())
     assert trips == len(raw) and 0 < straight <= total
     assert total == sum(track_network.straight_counts(p)[1] for p in raw)
+
+
+# --- Stories: pinned destinations, trail-first outings, the drive shape.
+# Spec: docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md, section 7.
+
+def _story(**over):
+    story = {"destinations": [], "trips": [{"shape": "out_and_back"}], "road_cost": 1.5}
+    story.update(over)
+    return story
+
+
+def _named_ways():
+    """The fixture plus a named road in three ways, with a 200 m gap in its middle
+    that only the unnamed fixture road crosses."""
+    return _ways() + [
+        {"class": "4wd", "name": "Rim Road",
+         "coords": [[512_000, 4_402_000], [512_000, 4_406_000]]},
+        {"class": "4wd", "name": "Rim Road",
+         "coords": [[512_000, 4_406_000], [512_000, 4_409_900]]},
+        {"class": "road", "coords": [[512_000, 4_409_900], [512_000, 4_410_000]]},
+        {"class": "road", "coords": [[510_000, 4_410_000], [512_000, 4_410_000],
+                                     [515_000, 4_410_000]]},
+        {"class": "road", "name": "Rim Road",
+         "coords": [[512_000, 4_410_000], [512_000, 4_418_000]]},
+    ]
+
+
+def _digest(tracks, spots):
+    import hashlib
+    import json
+    h = hashlib.sha256()
+    for t in tracks:
+        h.update(t.track_id.encode())
+        h.update(t.day.encode())
+        h.update(np.round(t.coords, 6).tobytes())
+    h.update(json.dumps(spots, sort_keys=True).encode())
+    return h.hexdigest()
+
+
+@pytest.mark.parametrize("seed,digest", [
+    # Taken from the code at f1cb6a0, BEFORE stories did anything. If these move,
+    # the six older plates' trips have moved, and their posters with them.
+    (7, "eb0fca526e52d7f8d7de746c9e6943f5a7ec0d8a324de5a7559979718d271906"),
+    (11, "e39de17f5d43794254006c2f496c58a78929002a8aee85f906697ddc8cc7d8a5"),
+])
+def test_a_plate_with_no_story_composes_byte_identical_trips(tmp_path, seed, digest):
+    assert _digest(*network_tracks(_region(tmp_path), _ways(), seed=seed)) == digest
+    assert _digest(*network_tracks(_region(tmp_path), _ways(), seed=seed, story=None)) == digest
+
+
+def test_a_pinned_name_is_used_in_place_of_the_selection(tmp_path):
+    r = _region(tmp_path)
+    for seed in range(6):
+        tracks, spots = network_tracks(r, _ways(), seed=seed, n_trips=1,
+                                       story=_story(destinations=["Near Summit"]))
+        assert [t.track_id for t in tracks] == ["summit:Near Summit"]
+        assert [s["label"] for s in spots] == ["Near Summit"]
+
+
+def test_pinned_destinations_keep_config_order():
+    pool = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+    assert [d["name"] for d in pinned_destinations(pool, ["C", "A"])] == ["C", "A"]
+
+
+def test_a_pinned_name_that_does_not_resolve_names_itself():
+    with pytest.raises(PinError, match="Nowhere Peak"):
+        pinned_destinations([{"name": "A"}], ["A", "Nowhere Peak"])
+
+
+def test_a_pin_error_fails_the_compose(tmp_path):
+    with pytest.raises(PinError, match="Nowhere Peak"):
+        network_tracks(_region(tmp_path), _ways(), story=_story(destinations=["Nowhere Peak"]))
+
+
+def test_a_pin_no_road_reaches_fails_instead_of_dropping_out(tmp_path):
+    """The captions name these places, so a pin never gives way to the next pick."""
+    ways = [{"class": "road", "coords": [[500_000, 4_410_000], [510_000, 4_410_000]]},
+            {"class": "trail", "coords": [[519_000, 4_414_000], [519_500, 4_414_000]]}]
+    with pytest.raises(PinError, match="Near Summit"):
+        network_tracks(_region(tmp_path), ways, story=_story(destinations=["Near Summit"]))
+
+
+def test_more_pins_than_outings_fails_instead_of_dropping_a_pin(tmp_path):
+    story = _story(destinations=["Near Summit", "Road Lake"])
+    with pytest.raises(PinError, match="Road Lake"):
+        network_tracks(_region(tmp_path), _ways(), n_trips=1, story=story)
+
+
+def test_farm_does_not_fall_back_to_synthetic_on_a_pin_error(tmp_path, monkeypatch):
+    import json
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cache" / "networks").mkdir(parents=True)
+    (tmp_path / "cache" / "networks" / "stub.json").write_text(
+        json.dumps({"region_id": "stub", "crs": "x", "ways": _ways()}))
+    monkeypatch.setattr(farm, "story_for",
+                        lambda rid: _story(destinations=["Nowhere Peak"]))
+    with pytest.raises(PinError, match="Nowhere Peak"):
+        farm._demo_journeys(_region(tmp_path), str(tmp_path / "out"))
+
+
+def test_farm_passes_the_plates_story_to_the_router(tmp_path, monkeypatch):
+    import json
+    import scripts.render_asset_farm as farm
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "cache" / "networks").mkdir(parents=True)
+    (tmp_path / "cache" / "networks" / "stub.json").write_text(
+        json.dumps({"region_id": "stub", "crs": "x", "ways": _ways()}))
+    story = _story(destinations=["Near Summit"])
+    monkeypatch.setattr(farm, "story_for", lambda rid: story if rid == "stub" else None)
+    told = []
+    real = farm.network_tracks
+    monkeypatch.setattr(farm, "network_tracks",
+                        lambda *a, **k: told.append(k.get("story")) or real(*a, **k))
+    farm._demo_journeys(_region(tmp_path), str(tmp_path / "out"))
+    assert told == [story]
+
+
+def test_a_broken_story_is_a_pin_error_not_a_silent_synthetic_plate(tmp_path):
+    """KeyError and ValueError are what _demo_journeys catches, so a bad story must
+    not raise either of them."""
+    r = _region(tmp_path)
+    no_cost = _story()
+    del no_cost["road_cost"]
+    with pytest.raises(PinError, match="road_cost"):
+        network_tracks(r, _ways(), story=no_cost)
+    with pytest.raises(PinError, match="zigzag"):
+        network_tracks(r, _ways(), story=_story(trips=[{"shape": "zigzag"}]))
+    with pytest.raises(PinError, match="road"):
+        network_tracks(r, _named_ways(), story=_story(trips=[{"shape": "drive"}]))
+
+
+def test_outing_weights_replace_only_the_road_cost():
+    w = outing_weights({"road_cost": 3.0})
+    assert w == {**WEIGHTS["outing"], "road": 3.0}
+    assert WEIGHTS["outing"]["road"] == 1.5                 # the shared table is untouched
+
+
+def test_a_higher_road_cost_keeps_an_outing_on_the_trail(tmp_path, monkeypatch):
+    """A 5 km road against a 13 km trail to the same place: 7.5 beats 7.8 at the
+    default cost of 1.5, and the trail wins once the road costs 3.0."""
+    th = (515_000.0, 4_409_000.0)
+    ways = [{"class": "road", "coords": [[515_000, 4_409_000], [519_000, 4_414_000]]},
+            {"class": "trail", "coords": [[515_000, 4_409_000], [525_000, 4_409_000],
+                                          [519_000, 4_414_000]]}]
+    r = _region(tmp_path)
+    monkeypatch.setattr(track_network, "_trailhead_for", lambda *a, **k: th)
+
+    def route(cost):
+        raw = []
+        network_tracks(r, ways, n_trips=1, raw_out=raw,
+                       story=_story(destinations=["Near Summit"], road_cost=cost))
+        return raw[0]
+
+    assert [525_000.0, 4_409_000.0] not in route(1.5).tolist()
+    assert [525_000.0, 4_409_000.0] in route(3.0).tolist()
+
+
+def test_a_drive_follows_its_named_road():
+    """End to end along the name, across the gap, by the two named vertices farthest
+    apart. The unnamed road to the same place costs more per metre, so it loses."""
+    g = build_graph(_named_ways())
+    path = drive_path(g, "Rim Road")
+    assert {tuple(path[0]), tuple(path[-1])} == {(512_000.0, 4_402_000.0),
+                                                 (512_000.0, 4_418_000.0)}
+    for pt in ([512_000.0, 4_406_000.0], [512_000.0, 4_409_900.0], [512_000.0, 4_410_000.0]):
+        assert pt in path
+
+
+def test_a_drive_on_a_cache_with_no_names_raises_pin_error():
+    with pytest.raises(PinError, match="Rim Road"):
+        drive_path(build_graph(_ways()), "Rim Road")
+
+
+def test_a_drive_whose_road_cannot_join_raises_pin_error():
+    ways = [{"class": "road", "name": "Rim Road", "coords": [[0, 0], [100, 0]]},
+            {"class": "road", "name": "Rim Road", "coords": [[900, 0], [1_000, 0]]}]
+    with pytest.raises(PinError, match="Rim Road"):
+        drive_path(build_graph(ways), "Rim Road")
+
+
+def test_a_drive_makes_a_track_and_a_spot_named_for_its_road(tmp_path):
+    r = _region(tmp_path)
+    raw = []
+    story = _story(trips=[{"shape": "drive", "road": "Rim Road"}])
+    tracks, spots = network_tracks(r, _named_ways(), n_trips=1, raw_out=raw, story=story)
+    assert [t.track_id for t in tracks] == ["drive:Rim Road"]
+    lo, hi = SEASONS["summit"]
+    from datetime import date
+    assert lo <= date.fromisoformat(tracks[0].day).timetuple().tm_yday <= hi
+    assert len(spots) == 1 and spots[0]["label"] == "Rim Road"
+    assert [spots[0]["x"], spots[0]["y"]] == raw[0][-1].tolist()      # the far end
+    # one way along the road, not out and back
+    assert len(raw[0]) == len(drive_path(build_graph(_named_ways()), "Rim Road"))
+
+
+def test_a_road_driven_twice_is_one_spot_of_weight_two(tmp_path):
+    r = _region(tmp_path)
+    story = _story(trips=[{"shape": "drive", "road": "Rim Road"}])
+    tracks, spots = network_tracks(r, _named_ways(), n_trips=2, story=story)
+    assert [t.track_id for t in tracks] == ["drive:Rim Road"] * 2
+    assert [(s["label"], s["weight"]) for s in spots] == [("Rim Road", 2)]
+
+
+def test_unnamed_slots_fill_from_the_seeded_selection(tmp_path):
+    r = _region(tmp_path)
+    story = _story(destinations=["Road Lake"])
+    tracks, _ = network_tracks(r, _ways(), seed=7, n_trips=2, story=story)
+    assert {t.track_id for t in tracks} == {"lake:Road Lake", "summit:Near Summit"}
+    # the pinned stop composes first: it survives when only one trip is asked for
+    for seed in range(6):
+        one, _ = network_tracks(r, _ways(), seed=seed, n_trips=1, story=story)
+        assert [t.track_id for t in one] == ["lake:Road Lake"]
+
+
+def test_a_story_is_deterministic(tmp_path):
+    r = _region(tmp_path)
+    story = _story(destinations=["Near Summit"],
+                   trips=[{"shape": "drive", "road": "Rim Road"}, {"shape": "loop"}])
+    assert (_digest(*network_tracks(r, _named_ways(), seed=3, n_trips=3, story=story))
+            == _digest(*network_tracks(r, _named_ways(), seed=3, n_trips=3, story=story)))
+
+
+def test_a_story_cycles_its_trip_shapes(tmp_path, monkeypatch):
+    """Slots take shapes in config order and wrap. Asserted on the shapes handed to the
+    path builder, because a loop falling back to out and back is a matter of ground."""
+    r = _region(tmp_path)
+    seen = []
+    real = track_network._shape_path
+
+    def spy(g, shape, *a, **k):
+        seen.append(shape)
+        return real(g, shape, *a, **k)
+
+    monkeypatch.setattr(track_network, "_shape_path", spy)
+    story = _story(destinations=["Near Summit", "Road Lake"],
+                   trips=[{"shape": "drive", "road": "Rim Road"},
+                          {"shape": "out_and_back"}, {"shape": "loop"}])
+    tracks, _ = network_tracks(r, _named_ways(), seed=7, n_trips=4, story=story)
+    assert seen == ["out_and_back", "loop"]
+    assert sorted(t.track_id for t in tracks) == sorted(
+        ["drive:Rim Road", "drive:Rim Road", "summit:Near Summit", "lake:Road Lake"])
+
+
+def test_story_config_loads_the_five_plates_and_only_them():
+    from scripts.story_config import load_stories, story_for
+    stories = load_stories()
+    assert set(stories) == {"canyonlands_ut", "tahoe_ca", "eastern_sierra_ca",
+                            "ruby_mountains_nv", "zion_ut"}
+    assert story_for("zion_ut")["destinations"] == ["Angels Landing", "Observation Point"]
+    for old in ("tecopa_ca", "elko_bonneville", "lassen_ca", "susanville_reno",
+                "tushar_beaver_ut", "rifle_aspen", "status"):
+        assert story_for(old) is None
+
+
+def test_straightness_reads_the_plate_with_its_story(tmp_path, monkeypatch):
+    import scripts.track_straightness as ts
+    monkeypatch.setattr(ts, "story_for", lambda rid: _story(destinations=["Near Summit"]))
+    trips, _, _ = ts.plate_straightness(_region(tmp_path), _ways())
+    assert trips == 2
+    monkeypatch.setattr(ts, "story_for",
+                        lambda rid: _story(destinations=["Nowhere Peak"]))
+    with pytest.raises(PinError):
+        ts.plate_straightness(_region(tmp_path), _ways())

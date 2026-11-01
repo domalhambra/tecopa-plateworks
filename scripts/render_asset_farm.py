@@ -86,6 +86,7 @@ from app.density import hotspots
 from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
 from app.orderspec import ORDER_LOOK
+from scripts.story_config import story_for
 from scripts.track_network import load_network, network_tracks
 
 NATIVE_FLOOR_DPI = 300          # the zoom cap is judged at print dpi: 10 m/px at 300 dpi
@@ -280,11 +281,16 @@ def _demo_journeys(region, out_dir: str, force_synthetic: bool = False):
     would have rendered fine. A truncated half-written JSON is exactly what an
     interrupted Overpass fetch leaves on disk, so this is the expected failure,
     not an exotic one. The catch is deliberately narrow (read/parse/shape
-    errors); anything else is a real bug and should still surface."""
+    errors); anything else is a real bug and should still surface.
+
+    That includes a plate's story. A PinError, or a broken marketing/stories.toml,
+    fails the run: the story's captions name these places, and a plate that quietly
+    drew synthetic squiggles under them would be worse than no plate."""
     cache = os.path.join(NETWORK_CACHE, f"{region.id}.json")
     if not force_synthetic and os.path.exists(cache):
+        story = story_for(region.id)
         try:
-            tracks, spots = network_tracks(region, load_network(cache))
+            tracks, spots = network_tracks(region, load_network(cache), story=story)
         except (OSError, ValueError, KeyError) as ex:
             print(f"  ! cache unreadable, falling back to synthetic tracks "
                   f"({type(ex).__name__}: {ex})")

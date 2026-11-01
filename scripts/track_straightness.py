@@ -17,6 +17,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.regions import discover                                   # noqa: E402
+from scripts.story_config import story_for                         # noqa: E402
 from scripts.track_network import (load_network, network_tracks,   # noqa: E402
                                    straight_counts)
 
@@ -26,7 +27,7 @@ NETWORK_CACHE = os.path.join("cache", "networks")
 def plate_straightness(region, ways: list[dict]) -> tuple[int, int, int]:
     """(trips, straight changes, all changes) for one plate's seeded year."""
     raw: list = []
-    network_tracks(region, ways, raw_out=raw)
+    network_tracks(region, ways, story=story_for(region.id), raw_out=raw)
     counts = [straight_counts(p) for p in raw]
     return (len(raw), sum(s for s, _ in counts), sum(t for _, t in counts))
 
