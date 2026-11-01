@@ -11,7 +11,7 @@ from scripts import track_network
 from scripts.track_network import (build_graph, destination_pool, dijkstra,
                                     dijkstra_edges, network_tracks,
                                     path_edge_ids, road_vertex_index,
-                                    select_destinations, trip_count,
+                                    select_destinations, straight_share, trip_count,
                                     trip_target_m, densify_spacing_m,
                                     CORRIDOR_SHORT_SIDE_M, CORRIDOR_SPAN_FRAC,
                                     CORRIDOR_SPAN_MAX_M, CORRIDOR_TRIPS,
@@ -1660,3 +1660,70 @@ def test_network_tracks_defaults_to_the_plate_trip_count(tmp_path, monkeypatch):
     monkeypatch.setattr(track_network, "trip_count", lambda b: 3)
     tracks, _ = network_tracks(r, ways, seed=7)
     assert len(tracks) == 3
+
+
+# ---------------------------------------------------------------- straight_share
+# Spec: docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md, section 7.
+
+def test_straight_share_of_a_straight_line_is_one():
+    line = np.array([[0.0, 0.0], [5_000.0, 2_000.0]])
+    assert straight_share(line) == 1.0
+
+
+def test_straight_share_of_a_fine_sine_wave_is_under_a_tenth():
+    """A 200 m wavelength with 100 m amplitude turns hard at every 100 m sample."""
+    x = np.arange(0.0, 10_000.0, 5.0)
+    wave = np.column_stack([x, 100.0 * np.sin(2 * np.pi * x / 200.0)])
+    assert straight_share(wave) < 0.1
+
+
+def test_straight_share_of_a_path_under_three_samples_is_zero():
+    assert straight_share(np.array([[0.0, 0.0], [150.0, 0.0]])) == 0.0   # 2 samples
+    assert straight_share(np.array([[0.0, 0.0], [50.0, 0.0]])) == 0.0    # 1 sample
+    assert straight_share(np.zeros((1, 2))) == 0.0
+    assert straight_share(np.zeros((0, 2))) == 0.0
+
+
+def test_straight_share_counts_a_right_angle_as_a_turn():
+    """1,200 m in 13 samples is 11 heading changes. The corner sits on a sample,
+    so 1 of the 11 is a turn and 10 are straight."""
+    path = np.array([[0.0, 0.0], [600.0, 0.0], [600.0, 600.0]])
+    assert straight_share(path, step_m=100.0) == pytest.approx(10 / 11)
+
+
+# ---------------------------------------------------------------- raw_out
+
+def test_raw_out_receives_one_path_per_track(tmp_path):
+    r = _region(tmp_path)
+    raw = []
+    tracks, _ = network_tracks(r, _ways(), seed=7, raw_out=raw)
+    assert len(raw) == len(tracks) > 0
+    assert all(isinstance(p, np.ndarray) and p.ndim == 2 and p.shape[1] == 2
+               for p in raw)
+
+
+def test_raw_out_changes_no_track(tmp_path):
+    r = _region(tmp_path)
+    plain, plain_spots = network_tracks(r, _ways(), seed=7)
+    with_raw, with_spots = network_tracks(r, _ways(), seed=7, raw_out=[])
+    assert [t.track_id for t in plain] == [t.track_id for t in with_raw]
+    assert [t.day for t in plain] == [t.day for t in with_raw]
+    for a, b in zip(plain, with_raw):
+        assert np.array_equal(a.coords, b.coords)
+    assert plain_spots == with_spots
+
+
+def test_raw_out_paths_are_the_routed_paths_before_densify(tmp_path):
+    """The raw path is the router's vertices: far fewer points than the densified track."""
+    r = _region(tmp_path)
+    raw = []
+    tracks, _ = network_tracks(r, _ways(), seed=7, raw_out=raw)
+    assert all(len(p) < len(t.coords) for p, t in zip(raw, tracks))
+
+
+def test_story_is_accepted_and_changes_nothing_yet(tmp_path):
+    r = _region(tmp_path)
+    plain, _ = network_tracks(r, _ways(), seed=7)
+    told, _ = network_tracks(r, _ways(), seed=7, story=None)
+    for a, b in zip(plain, told):
+        assert np.array_equal(a.coords, b.coords)

@@ -470,10 +470,52 @@ def _trailhead_for(index, dest_node: tuple, target: float, rng, centre=None):
     return keys[int(rng.choice(cand))]
 
 
-def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None = None):
+def straight_counts(path, step_m: float = 100.0, tol_deg: float = 3.0) -> tuple[int, int]:
+    """(straight, total) heading changes of one path, resampled every `step_m`
+    along its length. A change is straight when the heading turns by less than
+    `tol_deg`. Fewer than three samples have no heading change: (0, 0).
+
+    Read the ROUTED path, before densify and jitter. The 3 m jitter blurs a
+    straight run into small wobbles and reads as curvy, so the measure taken
+    after it understates how straight the trips are."""
+    pts = np.asarray(path, dtype=float).reshape(-1, 2)
+    if len(pts) < 2:
+        return 0, 0
+    seg = np.hypot(*np.diff(pts, axis=0).T)
+    keep = np.concatenate([[True], seg > 0.0])         # drop repeated vertices
+    pts = pts[keep]
+    if len(pts) < 2:
+        return 0, 0
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+    at = np.arange(0.0, cum[-1] + 1e-9, step_m)
+    if len(at) < 3:
+        return 0, 0
+    xy = np.column_stack([np.interp(at, cum, pts[:, 0]),
+                          np.interp(at, cum, pts[:, 1])])
+    d = np.diff(xy, axis=0)
+    heading = np.degrees(np.arctan2(d[:, 1], d[:, 0]))
+    turn = np.abs((np.diff(heading) + 180.0) % 360.0 - 180.0)
+    return int(np.sum(turn < tol_deg)), int(len(turn))
+
+
+def straight_share(path, step_m: float = 100.0, tol_deg: float = 3.0) -> float:
+    """Share of a path's `step_m` heading changes under `tol_deg`: 1.0 dead
+    straight, near 0 winding. A path under three samples gives 0.0.
+    Spec: docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md, section 7."""
+    straight, total = straight_counts(path, step_m, tol_deg)
+    return straight / total if total else 0.0
+
+
+def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None = None,
+                   story=None, raw_out: list | None = None):
     """The year of trips: seeded, deterministic from (ways, plate files, seed)
     alone. Returns (tracks, spots) ready for the farm. `n_trips` defaults to
-    the plate's own count (see trip_count)."""
+    the plate's own count (see trip_count).
+
+    `raw_out`, a list, receives each trip's routed path (an (N, 2) array, before
+    densify and jitter) in the order of the returned tracks, for straight_share.
+    It draws no RNG and changes no track. `story` is reserved for the showcase
+    story trips and does nothing yet."""
     from app.ingest import Track          # local: the graph half of this module
                                           # must stay importable without the engine
     rng = np.random.default_rng(seed)
@@ -579,6 +621,8 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None 
     tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
                     day=day.isoformat())
               for day, _seq, d, coords, _raw in trips]
+    if raw_out is not None:
+        raw_out.extend(raw for _day, _seq, _d, _coords, raw in trips)
     # One spot per trip, weight 1, stated outright rather than accumulated:
     # `destination_pool` dedupes by name and `select_destinations` removes each
     # pick from its pool, so a destination can never be visited twice and the
