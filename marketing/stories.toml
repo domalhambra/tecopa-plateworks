@@ -15,7 +15,11 @@ status = "plan"
 anchor = "canyonlands"
 name = "Canyonlands and Moab"
 eyebrow = "Cliffs and canyons"
-destinations = ["Island in the Sky", "The Needles", "The Confluence"]
+# Checked against the fetched network 2026-11-01: labels.json holds no "Island in the Sky"
+# or "The Confluence", and its "The Needles" summit sits 50 km north of the Needles district.
+# The Neck is the gap at the mesa's gate, Elephant Hill the Needles district trailhead and
+# Lizard Rock the nearest named summit to the Confluence.
+destinations = ["The Neck", "Elephant Hill", "Lizard Rock"]
 trips = [
     { shape = "drive", road = "White Rim Road" },
     { shape = "out_and_back" },
@@ -71,7 +75,8 @@ crop_place = "centred on the summit that carries the pinned photo, Mount Tallac 
 anchor = "sierra"
 name = "Eastern Sierra"
 eyebrow = "Desert floor to alpine"
-destinations = ["Mount Whitney", "The Palisades"]
+# labels.json holds no "The Palisades"; North Palisade is its highest summit.
+destinations = ["Mount Whitney", "North Palisade"]
 trips = [{ shape = "out_and_back" }, { shape = "4wd" }]
 look = {}
 
