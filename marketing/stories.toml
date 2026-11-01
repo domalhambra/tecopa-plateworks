@@ -8,9 +8,16 @@
 # trips and road_cost set its demo trips (scripts/track_network.py). A destination or
 # road name is looked up in the plate's labels.json, hydro.json or network cache, and a
 # name that does not resolve fails that run. In `trips`, a drive runs exactly as many
-# times as it is listed, and the other shapes cycle over the slots left. Phase B still
-# adds each section's crop_center_m (CRS metres) and crop_in (printed inches) and each
-# plate's look.
+# times as it is listed, and the other shapes cycle over the slots left.
+#
+# A section that crops (variant "poster" or "poster_journey") gives its window as
+# crop_in = [width, height] in printed inches plus crop_center_m = [x, y] in CRS metres,
+# or crop_anchor = "foot" (the bottom left of the sheet, for the elevation strip) in
+# place of the centre. A `film` or `editions` section needs none. The farm's `stories`
+# tier fails a plate, naming the section's heading, while a window is missing. `look`
+# holds spec fields that tune the plate's look over the customer's (ORDER_LOOK). A
+# plate that shows a Journey Light pair adds journey = { sun_azimuth_deg = ...,
+# sun_altitude_deg = ..., golden_strength = ... }.
 
 status = "ready"
 

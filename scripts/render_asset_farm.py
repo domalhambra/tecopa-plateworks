@@ -30,13 +30,32 @@ produces, per region:
   coin.webp / coin.mp4  the coin spin: the GLB's own plate mesh turning once under a
                         spotlight, as a looping social video (mp4 needs the share
                         extra) -- the feed-postable twin of the orbitable plate
+  poster_journey.png    (journey tier) the poster again, lit by the sun the plate's
+                        story names (light_mode "journey"); only the four light fields
+                        differ from poster.png. Plates whose story has a `journey`
+                        table only (Zion)
+  story_<n>.png         (stories tier) a 1:1 crop of print pixels for section n of the
+                        plate's story, at the window marketing/stories.toml gives
+                        (crop_center_m + crop_in, or crop_anchor "foot" + crop_in);
+                        never resized. A poster_journey section writes story_<n>.png
+                        from poster_journey.png and story_<n>_before.png from
+                        poster.png, the same window. A section with no window fails
+                        the plate, naming its heading, before anything renders. A
+                        plate with no story writes none (`detail` serves it)
   relief/               the Ghost landing page's relief-viewer images, from
                         scripts/export_relief.py: coin.webp + coin-h.png, the poster
-                        pair, wall.webp, detail.webp. Refused, and skipped, for a
-                        region with no real terrain record (invariant 11)
+                        pair, wall.webp, detail.webp -- and, for a plate with a story,
+                        story-<n>.webp, journey-before/after.webp, edition-<n>.webp
+                        and film.mp4. Refused, and skipped, for a region with no real
+                        terrain record (invariant 11)
   lightsweep.mp4        (--only lightsweep; slow) the turntable: the sun walks the
                         azimuth circle and only the land relights -- the terrain itself
                         reads as 3D
+
+A plate with a story in marketing/stories.toml renders every image with the plate's own
+`look` over the customer's (`_plate_spec`), so the page shows one look per plate. The
+`stories` tier restages sheets, so it runs with `--only` on any machine holding them; it
+runs after `poster`, `journey` and `editions` and before `relief`, which reads its crops.
 
 The rendered deliverables (poster, wallpapers, film, editions) go through the real final
 path (`provenance.build_final_spec` -> `render.rasterize` -> embedded manifest), so a
@@ -44,6 +63,12 @@ full run doubles as an end-to-end smoke test of the engine's own outputs. The mo
 model, and lightsweep tiers are share-class and exercise none of that path: the mockups
 and the GLB restage an already-rendered final's pixels, and the lightsweep re-renders
 but carries no manifest.
+
+One plate's whole story, in the order the exporter needs it (the real plates need their
+windows in marketing/stories.toml first; Task 7 of the Pick-a-plate plan sets them):
+    ./.venv/bin/python scripts/render_asset_farm.py --regions zion_ut \
+        --only poster journey editions stories relief
+`film` joins the list for a plate whose story has a film section (Eastern Sierra).
 
 Usage (run from the REPO ROOT -- `regions/`, `cache/networks/` and the default
 `assets/` output root all resolve relative to the current directory):
@@ -74,19 +99,21 @@ import hashlib
 import json
 import os
 import sys
+from dataclasses import replace
 from datetime import date, timedelta
 
 import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from app.geo import RegionGeo, crs_to_overview_px
 from app.regions import discover, Region
 from app.ingest import Track
 from app.density import hotspots
 from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
 from app.orderspec import ORDER_LOOK
-from scripts.story_config import story_for
+from scripts.story_config import StoryError, story_for
 from scripts.track_network import PinError, load_network, network_tracks
 
 NATIVE_FLOOR_DPI = 300          # the zoom cap is judged at print dpi: 10 m/px at 300 dpi
@@ -103,10 +130,18 @@ INK_BLOCK = 32
 # What a plain run renders. lightsweep re-renders ~60 frames per region (minutes on
 # real DEMs), so it is opt-in via --only.
 DEFAULT_TIERS = frozenset({"poster", "wallpapers", "film", "editions", "mockups",
-                           "model", "detail", "coin", "relief"})
+                           "model", "detail", "coin", "relief", "stories", "journey"})
 # Tiers that restage already-rendered finals: no DEM, no tracks, so --only <these>
-# works on any machine holding yesterday's assets.
-RESTAGE_TIERS = frozenset({"mockups", "model", "detail", "coin", "relief"})
+# works on any machine holding yesterday's assets. `stories` is one (it cuts crops from
+# poster.png and poster_journey.png); `journey` is not (it renders the poster again).
+RESTAGE_TIERS = frozenset({"mockups", "model", "detail", "coin", "relief", "stories"})
+# The story sections that cut a crop, and the sheets each cuts it from: (output, source)
+# pairs in write order. `film` and `editions` sections show whole files and need no window.
+CROP_VARIANTS = {
+    "poster": (("story_{n}.png", "poster.png"),),
+    "poster_journey": (("story_{n}_before.png", "poster.png"),
+                       ("story_{n}.png", "poster_journey.png")),
+}
 
 
 # ---- synthetic-but-plausible tracks, generated per region in its own CRS ----
@@ -371,6 +406,17 @@ def _base_spec(region: Region, tracks: list, spots: list, edition: int = 1,
         contours=True, edition=edition, **{**ORDER_LOOK, **(look or {})})
 
 
+def _plate_spec(region: Region, tracks: list, spots: list,
+                edition: int = 1) -> CompositionSpec:
+    """_base_spec with the plate's own look. A plate with a story tunes the look the way
+    Dom would tune a customer's poster on that ground (more haze on a basin plate, say),
+    and every image of the plate renders with it, so the page shows one look per plate.
+    A plate with no story gets the plain order look."""
+    story = story_for(region.id)
+    return _base_spec(region, tracks, spots, edition=edition,
+                      look=(story or {}).get("look"))
+
+
 def _write_final(spec: CompositionSpec, region: Region, dpi: float, out_path: str,
                  sources=None, lineage=None) -> tuple:
     """The real final path: embed photos, rasterize, embed the provenance manifest, save."""
@@ -387,8 +433,28 @@ def _write_final(spec: CompositionSpec, region: Region, dpi: float, out_path: st
 # ---- deliverables ----
 
 def _poster(region, tracks, spots, out_dir, dpi):
-    spec = _base_spec(region, tracks, spots)
+    spec = _plate_spec(region, tracks, spots)
     return _write_final(spec, region, dpi, os.path.join(out_dir, "poster.png"))
+
+
+def _journey(region, tracks, spots, out_dir, dpi, story):
+    """poster_journey.png: the poster again, same spec, lit by the sun the story's
+    `journey` table names (`sun_azimuth_deg`, `sun_altitude_deg`, `golden_strength`)
+    instead of the archival light. The pair differs in those four fields and nothing
+    else, so a crop of the same window from each shows only what the light does. A
+    plate with no story, or a story with no `journey` table, has no pair: returns []."""
+    sun = (story or {}).get("journey")
+    if not sun:
+        return []
+    for key in ("sun_azimuth_deg", "sun_altitude_deg", "golden_strength"):
+        if key not in sun:
+            raise StoryError(f"{story.get('name', region.id)}: the journey table has no {key}")
+    spec = replace(_plate_spec(region, tracks, spots), light_mode="journey",
+                   sun_azimuth_deg=float(sun["sun_azimuth_deg"]),
+                   sun_altitude_deg=float(sun["sun_altitude_deg"]),
+                   golden_strength=float(sun["golden_strength"]))
+    path, _size = _write_final(spec, region, dpi, os.path.join(out_dir, "poster_journey.png"))
+    return [path]
 
 
 def _wallpapers(region, tracks, spots, out_dir, preset_ids):
@@ -410,7 +476,7 @@ def _wallpapers(region, tracks, spots, out_dir, preset_ids):
     here used to kill the whole region *after* its poster was written, and main()
     then discarded a correct 132 MB file and left the terrain record unstamped."""
     made = []
-    base = _base_spec(region, tracks, spots)
+    base = _plate_spec(region, tracks, spots)
     roam = tuple(base.crop)
     for pid in preset_ids:
         preset = wallpaper.PRESETS.get(pid)
@@ -430,7 +496,7 @@ def _film(region, tracks, spots, out_dir, dpi, max_frames):
     thrice -- film.png (the archival APNG, manifest aboard), film.webp (always), and
     film.mp4 (when the share extra is installed). The twins carry no manifest, by
     construction (their encoders take none)."""
-    spec = _base_spec(region, tracks, spots)
+    spec = _plate_spec(region, tracks, spots)
     spec = provenance.build_final_spec(spec, max(24, round(spec.photo_box_in * dpi)))  # embed photo, as the real worker does
     plan = timelapse.frame_plan(spec, max_frames)
     frames = list(timelapse.render_frames(spec, dpi=dpi, region_dir=region.dir, plan=plan))
@@ -464,7 +530,7 @@ def _editions(region, tracks, spots, out_dir, dpi):
     for ed, upto in enumerate(steps, start=1):
         sub = tracks[:upto]
         subspots = _edition_spots(sub, spots, region, out_dir, story)
-        spec = _base_spec(region, sub, subspots, edition=ed)
+        spec = _plate_spec(region, sub, subspots, edition=ed)
         out = os.path.join(out_dir, f"edition_{ed}.png")
         made.append(_write_final(spec, region, dpi, out, lineage=list(lineage)))
         # next edition's lineage points at this one (a plausible ancestor hash)
@@ -501,7 +567,7 @@ def _mockups(region, tracks, spots, out_dir):
     if not timelapse.MP4_AVAILABLE:
         print("  ! mockup MP4s need the share extra (pip install -r requirements-share.txt) — skipped")
         return made
-    spec = _base_spec(region, tracks, spots)
+    spec = _plate_spec(region, tracks, spots)
     mdpi = MOCKUP_MOTION_PX / min(spec.print_w_in, spec.print_h_in)
     n_frames = int(os.environ.get("TECOPA_MOCKUP_FRAMES", MOCKUP_FRAMES))
     frames = list(timelapse.progressive_frames(spec, mdpi, region.dir, region.cfg,
@@ -593,6 +659,131 @@ def _detail(out_dir):
     return [out]
 
 
+def crop_window(center_m, size_in, crop, image_size, dpi, anchor=None):
+    """The pixel window (x0, y0, x1, y1) of a story crop: `size_in` printed inches at
+    `dpi`, centred on the ground point `center_m` (region CRS metres), cut from a sheet
+    of `image_size` pixels that was rendered from the ground window `crop`.
+
+    The ground to pixel step is app/geo.py's (invariant 5), the same linear map the
+    painter uses: the farm's sheet has no bleed and no margin, so its canvas IS the
+    crop, and a point's pixel is `crs_to_overview_px` over (crop, image_size).
+
+    The window is exactly round(size_in * dpi) pixels per side, and the sheet's pixels
+    are never resampled: what the page shows is what prints. A window that would cross
+    the sheet's edge slides inward and keeps its size. A window bigger than the sheet,
+    or a centre off the sheet, raises StoryError (a window that quietly slid would show
+    the wrong country). `anchor="foot"` takes the bottom-left of the sheet, where the
+    elevation strip sits, and ignores `center_m`."""
+    wpx, hpx = round(size_in[0] * dpi), round(size_in[1] * dpi)
+    W, H = image_size
+    if wpx > W or hpx > H:
+        raise StoryError(f"a {size_in[0]} x {size_in[1]} in window is {wpx} x {hpx} px at "
+                         f"{dpi:g} dpi, bigger than the {W} x {H} px sheet")
+    if anchor is not None:
+        if anchor != "foot":
+            raise StoryError(f"crop_anchor {anchor!r} is not one the farm knows (foot)")
+        return (0, H - hpx, wpx, H)
+    geo = RegionGeo(crs="", bounds=tuple(crop), overview_size=(W, H))
+    px, py = crs_to_overview_px(geo, center_m[0], center_m[1])
+    if not (0 <= px <= W and 0 <= py <= H):
+        raise StoryError(f"the window's centre {tuple(center_m)} is off the sheet "
+                         f"(pixel {px:.0f}, {py:.0f} on {W} x {H})")
+    x0 = min(max(round(px - wpx / 2), 0), W - wpx)
+    y0 = min(max(round(py - hpx / 2), 0), H - hpx)
+    return (x0, y0, x0 + wpx, y0 + hpx)
+
+
+def _section_label(story: dict, n: int, section: dict) -> str:
+    return f'{story.get("name", "story")}: section {n} "{section.get("heading", "?")}"'
+
+
+def check_story_windows(story: dict | None) -> None:
+    """Raise StoryError, naming the section's heading, for any section that crops and
+    has no usable window: `crop_in` plus `crop_center_m` (or `crop_anchor`), and a
+    variant the farm knows. `film` and `editions` sections need no window. Config only,
+    no files: main() runs it before any render, so a plate whose windows are not set
+    yet costs no poster."""
+    for n, section in enumerate((story or {}).get("sections", []), start=1):
+        variant = section.get("variant")
+        if variant in ("film", "editions"):
+            continue
+        label = _section_label(story, n, section)
+        if variant not in CROP_VARIANTS:
+            raise StoryError(f"{label} has variant {variant!r}; the farm crops "
+                             f"{', '.join(CROP_VARIANTS)}")
+        size = section.get("crop_in")
+        if not (isinstance(size, (list, tuple)) and len(size) == 2):
+            raise StoryError(f"{label} has no crop_in = [width, height] in inches")
+        if "crop_anchor" not in section and not (
+                isinstance(section.get("crop_center_m"), (list, tuple))
+                and len(section["crop_center_m"]) == 2):
+            raise StoryError(f"{label} has no crop window: give crop_center_m = [x, y] "
+                             f"(CRS metres), or crop_anchor = \"foot\"")
+
+
+def _sheet_crop(path: str, region) -> tuple:
+    """The ground window a sheet was rendered from: the crop its own manifest records,
+    else the frame the farm would give it now. The manifest comes first because a
+    restage-only run opens no DEM, and `_frame` trims the bounds to the DEM's finite
+    envelope only when it can read one."""
+    from app import provenance
+    try:
+        with open(path, "rb") as f:
+            manifest = provenance.extract(f.read())
+        crop = manifest["spec"]["crop"]
+        if len(crop) == 4:
+            return tuple(float(v) for v in crop)
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    return tuple(_frame(region)[0])
+
+
+def _stories(out_dir, region, story, dpi):
+    """story_<n>.png for each cropping section of the plate's story: a 1:1 window of
+    print pixels from the poster, at the window the config gives. A `poster_journey`
+    section writes two, story_<n>_before.png from the plain poster and story_<n>.png
+    from the lit one, the same window from both. Nothing is resized.
+
+    Restages poster.png and poster_journey.png, so no DEM is needed. A section with no
+    window raises StoryError naming its heading, before anything is read or written. A
+    plate with no story writes nothing; the `detail` tier still serves it."""
+    if not story:
+        return []
+    check_story_windows(story)
+    jobs = []
+    for n, section in enumerate(story.get("sections", []), start=1):
+        for out_name, src_name in CROP_VARIANTS.get(section.get("variant"), ()):
+            jobs.append((n, section, out_name.format(n=n), src_name))
+    missing = sorted({src for *_, src in jobs
+                      if not os.path.exists(os.path.join(out_dir, src))})
+    if missing:
+        print(f"  ! no {', '.join(missing)} in {out_dir} — render the poster"
+              f"{' and the journey' if 'poster_journey.png' in missing else ''} first "
+              f"(stories skipped)")
+        return []
+    sheets, windows = {}, []
+    for n, section, out_name, src_name in jobs:     # judge every window before any write
+        if src_name not in sheets:
+            path = os.path.join(out_dir, src_name)
+            with Image.open(path) as im:
+                sheets[src_name] = (path, im.size)
+        path, size = sheets[src_name]
+        try:
+            box = crop_window(section.get("crop_center_m"), section["crop_in"],
+                              _sheet_crop(path, region), size, dpi,
+                              anchor=section.get("crop_anchor"))
+        except StoryError as ex:
+            raise StoryError(f"{_section_label(story, n, section)}: {ex}") from None
+        windows.append((out_name, src_name, box))
+    made = []
+    for out_name, src_name, box in windows:
+        with Image.open(sheets[src_name][0]) as img:
+            out = os.path.join(out_dir, out_name)
+            img.crop(box).save(out, "PNG")
+            made.append(out)
+    return made
+
+
 def _coin(out_dir):
     """The coin spin: the plate (the GLB's own mesh) turning once under a spotlight,
     as a looping social video. Restages poster.png like the model tier -- no DEM
@@ -628,7 +819,8 @@ def _relief(out_dir, rid, index):
     denied marketing images."""
     from scripts.export_relief import ReliefError, export_region
     try:
-        return export_region(out_dir, os.path.join(out_dir, "relief"), rid, index)
+        return export_region(out_dir, os.path.join(out_dir, "relief"), rid, index,
+                             story=story_for(rid))
     except ReliefError as ex:
         print(f"  ! relief skipped: {ex}")
         return []
@@ -653,7 +845,7 @@ def _lightsweep(region, tracks, spots, out_dir):
         print("  ! lightsweep needs the share extra (pip install -r requirements-share.txt) — skipped")
         return []
     from scripts.render_lightsweep import TARGET_PX, sweep_mp4
-    spec = _base_spec(region, tracks, spots)
+    spec = _plate_spec(region, tracks, spots)
     dpi = TARGET_PX / max(spec.print_w_in, spec.print_h_in)
     out = os.path.join(out_dir, "lightsweep.mp4")
     data = sweep_mp4(spec, dpi, region.dir, region.cfg)  # encode fully first: the
@@ -773,7 +965,7 @@ def main():
     ap.add_argument("--only", nargs="*",
                     choices=["poster", "wallpapers", "film", "editions",
                              "mockups", "lightsweep", "model", "detail", "coin",
-                             "relief"],
+                             "relief", "stories", "journey"],
                     help="render only these deliverables (default: all but lightsweep)")
     ap.add_argument("--quick", action="store_true",
                     help="fast smoke: low dpi, no film (wiring check, not final quality)")
@@ -820,6 +1012,14 @@ def main():
             print(f"! unknown region {rid!r} (built: {', '.join(regions)})")
             failed.append((rid, "unknown region")); continue
         print(f"\n=== {rid} — {region.name} ===")
+        story = story_for(rid)
+        if "stories" in want:
+            try:
+                check_story_windows(story)      # before any render, so a bare story costs none
+            except StoryError as ex:
+                print(f"  ! {rid} failed: {ex}")
+                failed.append((rid, str(ex)))
+                continue
         needs_render = bool(want - RESTAGE_TIERS)
         terrain = None
         if needs_render:
@@ -843,6 +1043,9 @@ def main():
             if "poster" in want:
                 p, sz = _poster(region, tracks, spots, out_dir, args.dpi)
                 print(f"  poster      {sz[0]}x{sz[1]}  {p}"); made.append(p)
+            if "journey" in want:
+                for p in _journey(region, tracks, spots, out_dir, args.dpi, story):
+                    print(f"  journey     lit poster  {p}"); made.append(p)
             if "wallpapers" in want:
                 for p, sz in _wallpapers(region, tracks, spots, out_dir, args.wallpapers):
                     print(f"  wallpaper   {sz[0]}x{sz[1]}  {p}"); made.append(p)
@@ -850,6 +1053,9 @@ def main():
                 ps, nf = _film(region, tracks, spots, out_dir, args.film_dpi, args.film_frames)
                 for p in ps:
                     print(f"  film        {nf} frames  {p}"); made.append(p)
+            if "editions" in want:
+                for p, sz in _editions(region, tracks, spots, out_dir, args.dpi):
+                    print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)
             if "mockups" in want:
                 for p, sz in _mockups(region, tracks, spots, out_dir):
                     print(f"  mockup      {sz[0]}x{sz[1]}  {p}"); made.append(p)
@@ -862,15 +1068,15 @@ def main():
             if "coin" in want:
                 for p in _coin(out_dir):
                     print(f"  coin        turntable  {p}"); made.append(p)
+            if "stories" in want:
+                for p in _stories(out_dir, region, story, args.dpi):
+                    print(f"  story       1:1 crop   {p}"); made.append(p)
             if "relief" in want:
                 for p in _relief(out_dir, rid, _gate_index(prior, rid, terrain)):
                     print(f"  relief      web image  {p}"); made.append(p)
             if "lightsweep" in want:
                 for p in _lightsweep(region, tracks, spots, out_dir):
                     print(f"  lightsweep  {p}"); made.append(p)
-            if "editions" in want:
-                for p, sz in _editions(region, tracks, spots, out_dir, args.dpi):
-                    print(f"  {os.path.basename(p):11s} {sz[0]}x{sz[1]}  {p}"); made.append(p)
         except Exception as ex:
             print(f"  ! {rid} failed: {type(ex).__name__}: {ex}")
             failed.append((rid, f"{type(ex).__name__}: {ex}"))

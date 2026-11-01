@@ -40,7 +40,7 @@ nothing for a region the guard refuses. Two refusals:
 - **`synthetic: true`** → refused. The plate must be rebuilt from real 3DEP terrain and
   the farm re-run. Override: `allow_synthetic=True`.
 - **no usable `terrain` record** → refused. What the assets were rendered from is
-  unrecorded. A restage-only run (`--only detail/model/mockups/coin/relief`) opens no
+  unrecorded. A restage-only run (`--only detail/model/mockups/coin/relief/stories`) opens no
   DEM and so stamps nothing — it deliberately preserves any prior record rather than
   clobbering it, but it cannot create one. A DEM that was opened and could not be read
   is stamped `"synthetic": null`, which lands here too and *replaces* any prior record
@@ -70,6 +70,32 @@ cd "<repo>"
 ```
 
 Then upload through the blog folder's ghost-tecopa-pages script, as the runbook says.
+
+### A showcase plate's story
+
+The five showcase plates (`stories.toml`) also export one web image per story
+section. The farm cuts and renders them, and the exporter reads them, in this order:
+
+```bash
+./.venv/bin/python scripts/render_asset_farm.py --regions zion_ut \
+    --only poster journey editions stories relief     # add `film` for eastern_sierra_ca
+./.venv/bin/python scripts/export_relief.py zion_ut                     # the guard runs first
+./.venv/bin/python -m scripts.story_config --ship-check                 # exits 1 while a demo photo remains
+```
+
+| Farm tier | Writes | Exporter output |
+|---|---|---|
+| `stories` | `story_<n>.png`, a 1:1 crop of print pixels | `story-<n>.webp`, 1200 px long edge, q84 |
+| `journey` + `stories` | `poster_journey.png`; `story_<n>_before.png` and `story_<n>.png` | `journey-before.webp`, `journey-after.webp`, 1200 px |
+| `editions` | `edition_1..3.png` | `edition-<n>.webp`, 840 px |
+| `film` | `film.mp4` | `film.mp4`, copied |
+
+`stories` fails a plate, naming the section's heading, when a section has no window
+(`crop_center_m` and `crop_in`, or `crop_anchor = "foot"` and `crop_in`). It checks before
+anything renders. A plate with no story exports the six images above and nothing more. The
+guard is unchanged: it runs first, and nothing is written until every output has encoded.
+`--ship-check` lists the plates whose pinned photo is still the farm's painted gradient
+(`photo_at` with no `photo_file`); the page must not ship while it lists any.
 
 ## Gotchas paid for
 
