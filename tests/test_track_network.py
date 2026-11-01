@@ -1990,7 +1990,7 @@ def test_a_drive_makes_a_track_and_a_spot_named_for_its_road(tmp_path):
 
 def test_a_road_driven_twice_is_one_spot_of_weight_two(tmp_path):
     r = _region(tmp_path)
-    story = _story(trips=[{"shape": "drive", "road": "Rim Road"}])
+    story = _story(trips=[{"shape": "drive", "road": "Rim Road"}] * 2)
     tracks, spots = network_tracks(r, _named_ways(), n_trips=2, story=story)
     assert [t.track_id for t in tracks] == ["drive:Rim Road"] * 2
     assert [(s["label"], s["weight"]) for s in spots] == [("Rim Road", 2)]
@@ -2015,10 +2015,26 @@ def test_a_story_is_deterministic(tmp_path):
             == _digest(*network_tracks(r, _named_ways(), seed=3, n_trips=3, story=story)))
 
 
-def test_a_story_cycles_its_trip_shapes(tmp_path, monkeypatch):
-    """Slots take shapes in config order and wrap. Asserted on the shapes handed to the
-    path builder, because a loop falling back to out and back is a matter of ground."""
+def _region_with_two_more_stops(tmp_path):
+    """The fixture plate plus two summits on trails of their own, so a story has
+    enough stops to show its shapes wrapping."""
+    import json
     r = _region(tmp_path)
+    labels = json.loads((tmp_path / "labels.json").read_text())
+    labels["features"] += [
+        {"name": "West Knob", "kind": "summit", "rank": 70, "coords": [[505_000, 4_417_000]]},
+        {"name": "East Knob", "kind": "summit", "rank": 70, "coords": [[526_000, 4_414_000]]}]
+    (tmp_path / "labels.json").write_text(json.dumps(labels))
+    return r, _named_ways() + [
+        {"class": "trail", "coords": [[505_000, 4_415_000], [505_000, 4_417_000]]},
+        {"class": "trail", "coords": [[524_000, 4_414_000], [526_000, 4_414_000]]}]
+
+
+def test_a_story_cycles_its_trip_shapes(tmp_path, monkeypatch):
+    """Only the outing shapes wrap: config order, then round again without the drive.
+    Asserted on the shapes handed to the path builder, because a loop falling back to
+    out and back is a matter of ground."""
+    r, ways = _region_with_two_more_stops(tmp_path)
     seen = []
     real = track_network._shape_path
 
@@ -2030,10 +2046,73 @@ def test_a_story_cycles_its_trip_shapes(tmp_path, monkeypatch):
     story = _story(destinations=["Near Summit", "Road Lake"],
                    trips=[{"shape": "drive", "road": "Rim Road"},
                           {"shape": "out_and_back"}, {"shape": "loop"}])
-    tracks, _ = network_tracks(r, _named_ways(), seed=7, n_trips=4, story=story)
-    assert seen == ["out_and_back", "loop"]
-    assert sorted(t.track_id for t in tracks) == sorted(
-        ["drive:Rim Road", "drive:Rim Road", "summit:Near Summit", "lake:Road Lake"])
+    tracks, _ = network_tracks(r, ways, seed=7, n_trips=5, story=story)
+    assert seen == ["out_and_back", "loop", "out_and_back", "loop"]
+    assert [t.track_id for t in tracks].count("drive:Rim Road") == 1
+
+
+def test_a_drive_listed_once_runs_once(tmp_path):
+    r, ways = _region_with_two_more_stops(tmp_path)
+    story = _story(trips=[{"shape": "drive", "road": "Rim Road"}, {"shape": "out_and_back"}])
+    tracks, spots = network_tracks(r, ways, seed=7, n_trips=4, story=story)
+    assert len(tracks) == 4
+    assert [t.track_id for t in tracks].count("drive:Rim Road") == 1
+    assert [s["weight"] for s in spots if s["label"] == "Rim Road"] == [1]
+
+
+def test_a_drive_runs_as_often_as_the_story_lists_it(tmp_path):
+    r, ways = _region_with_two_more_stops(tmp_path)
+    drive = {"shape": "drive", "road": "Rim Road"}
+    story = _story(trips=[drive, {"shape": "out_and_back"}, drive, drive])
+    tracks, spots = network_tracks(r, ways, seed=7, n_trips=5, story=story)
+    assert len(tracks) == 5
+    assert [t.track_id for t in tracks].count("drive:Rim Road") == 3
+    assert [s["weight"] for s in spots if s["label"] == "Rim Road"] == [3]
+
+
+def test_more_drives_than_trips_fails_instead_of_dropping_a_drive(tmp_path):
+    drive = {"shape": "drive", "road": "Rim Road"}
+    with pytest.raises(PinError, match="Rim Road"):
+        network_tracks(_region(tmp_path), _named_ways(), n_trips=1,
+                       story=_story(trips=[drive, drive]))
+
+
+def test_repeat_drives_of_one_road_never_share_a_day(tmp_path):
+    """The journey groups merge same-day tracks, so a shared day would make the visit
+    count disagree with the road's spot. Forty drives in a 123-day bucket would collide
+    on most seeds if they were drawn independently."""
+    from datetime import date
+    r = _region(tmp_path)
+    drive = {"shape": "drive", "road": "Rim Road"}
+    lo, hi = SEASONS["summit"]
+    for seed in range(4):
+        tracks, _ = network_tracks(r, _named_ways(), seed=seed, n_trips=40,
+                                   story=_story(trips=[drive] * 40))
+        days = [t.day for t in tracks]
+        assert len(days) == 40 and len(set(days)) == 40
+        assert all(lo <= date.fromisoformat(d).timetuple().tm_yday <= hi for d in days)
+
+
+def test_no_two_trips_of_a_story_share_a_day(tmp_path, monkeypatch):
+    """Same-day tracks merge whatever their names, so an outing on a drive's day would
+    cost the road a visit too. Three trips in a three-day bucket have to take one each."""
+    monkeypatch.setattr(track_network, "SEASONS",
+                        {"summit": (182, 184), "lake": (182, 184), "gap": (182, 184),
+                         "drive": (182, 184)})
+    story = _story(destinations=["Near Summit", "Road Lake"],
+                   trips=[{"shape": "drive", "road": "Rim Road"}, {"shape": "out_and_back"}])
+    for seed in range(6):
+        tracks, _ = network_tracks(_region(tmp_path), _named_ways(), seed=seed, n_trips=3,
+                                   story=story)
+        assert len({t.day for t in tracks}) == 3
+
+
+def test_a_full_season_bucket_fails_instead_of_doubling_a_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(track_network, "SEASONS", {"drive": (182, 183)})
+    drive = {"shape": "drive", "road": "Rim Road"}
+    with pytest.raises(PinError, match="drive"):
+        network_tracks(_region(tmp_path), _named_ways(), n_trips=3,
+                       story=_story(trips=[drive] * 3))
 
 
 def test_story_config_loads_the_five_plates_and_only_them():
@@ -2041,7 +2120,7 @@ def test_story_config_loads_the_five_plates_and_only_them():
     stories = load_stories()
     assert set(stories) == {"canyonlands_ut", "tahoe_ca", "eastern_sierra_ca",
                             "ruby_mountains_nv", "zion_ut"}
-    assert story_for("zion_ut")["destinations"] == ["Angels Landing", "Observation Point"]
+    assert story_for("zion_ut")["destinations"][:2] == ["Angels Landing", "Observation Point"]
     for old in ("tecopa_ca", "elko_bonneville", "lassen_ca", "susanville_reno",
                 "tushar_beaver_ut", "rifle_aspen", "status"):
         assert story_for(old) is None
@@ -2056,3 +2135,21 @@ def test_straightness_reads_the_plate_with_its_story(tmp_path, monkeypatch):
                         lambda rid: _story(destinations=["Nowhere Peak"]))
     with pytest.raises(PinError):
         ts.plate_straightness(_region(tmp_path), _ways())
+
+
+def test_straightness_can_read_the_outings_alone(tmp_path, monkeypatch):
+    """The drive is left out of the count and the trip total. The whole-plate read
+    is unchanged by the option existing."""
+    import scripts.track_straightness as ts
+    r, ways = _region_with_two_more_stops(tmp_path)
+    story = _story(destinations=["Near Summit"],
+                   trips=[{"shape": "drive", "road": "Rim Road"}, {"shape": "out_and_back"}])
+    monkeypatch.setattr(ts, "story_for", lambda rid: story)
+    raw = []
+    tracks, _ = network_tracks(r, ways, story=story, raw_out=raw)
+    counts = [track_network.straight_counts(p)
+              for t, p in zip(tracks, raw) if not t.track_id.startswith("drive:")]
+    assert len(counts) == len(tracks) - 1
+    assert ts.plate_straightness(r, ways, outings_only=True) == (
+        len(counts), sum(a for a, _ in counts), sum(b for _, b in counts))
+    assert ts.plate_straightness(r, ways)[0] == len(tracks)

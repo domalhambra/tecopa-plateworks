@@ -7,8 +7,10 @@
 # _demo_journeys and for scripts/track_straightness.py. Each plate's destinations,
 # trips and road_cost set its demo trips (scripts/track_network.py). A destination or
 # road name is looked up in the plate's labels.json, hydro.json or network cache, and a
-# name that does not resolve fails that run. Phase B still adds each section's
-# crop_center_m (CRS metres) and crop_in (printed inches) and each plate's look.
+# name that does not resolve fails that run. In `trips`, a drive runs exactly as many
+# times as it is listed, and the other shapes cycle over the slots left. Phase B still
+# adds each section's crop_center_m (CRS metres) and crop_in (printed inches) and each
+# plate's look.
 
 status = "ready"
 
@@ -109,6 +111,9 @@ eyebrow = "A range alone in the basin"
 destinations = ["Lamoille Lake", "Island Lake", "Liberty Pass", "Ruby Dome"]
 trips = [
     { shape = "drive", road = "Lamoille Canyon Road" },
+    { shape = "drive", road = "Lamoille Canyon Road" },
+    { shape = "drive", road = "Lamoille Canyon Road" },
+    { shape = "drive", road = "Lamoille Canyon Road" },
     { shape = "out_and_back" },
 ]
 road_cost = 3.0
@@ -136,7 +141,12 @@ crop_place = "Lamoille Canyon Road up to its end, where the trails branch"
 anchor = "zion"
 name = "Zion"
 eyebrow = "Lit by your own day"
-destinations = ["Angels Landing", "Observation Point"]
+# The two the copy names, then six real hikes across the plate, pinned because the seeded
+# fill took road stops (Paria Point, 79 percent road) that read straighter.
+destinations = [
+    "Angels Landing", "Observation Point", "The Narrows", "Northgate Peaks",
+    "Gooseberry Mesa", "Eagle Crags", "Cable Mountain", "Navajo Lake",
+]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 2.0
 look = {}

@@ -635,9 +635,18 @@ def _route_trailhead(g: Graph, index, node: tuple, target: float, weights: dict,
     return (float(x), float(y))
 
 
+def _trip_slots(shapes: list[dict], n_trips: int) -> list[dict]:
+    """The story's list once, in order, then its outing shapes round again up to
+    `n_trips`. A drive runs exactly as often as the list names it: three of a 115 km
+    road once took 48 percent of a plate's manifest for one visible line."""
+    outings = [t for t in shapes if t["shape"] != "drive"]
+    extra = max(0, n_trips - len(shapes)) if outings else 0
+    return (shapes + [outings[i % len(outings)] for i in range(extra)])[:n_trips]
+
+
 def _story_plan(story: dict, pool: list[dict], n_trips: int) -> tuple[list[dict], list[dict]]:
-    """Check a story before any trip is routed: (the shapes it cycles, its pins).
-    Every failure is a PinError, for the reason on PinError."""
+    """Check a story before any trip is routed: (its trip slots, its pins). Every
+    failure is a PinError, for the reason on PinError."""
     shapes = story.get("trips") or []
     if not shapes:
         raise PinError("story lists no trips")
@@ -647,22 +656,27 @@ def _story_plan(story: dict, pool: list[dict], n_trips: int) -> tuple[list[dict]
         if t["shape"] == "drive" and not t.get("road"):
             raise PinError("story drive names no road")
     pins = pinned_destinations(pool, story.get("destinations") or [])
-    outings = sum(shapes[i % len(shapes)]["shape"] != "drive" for i in range(n_trips))
+    slots = _trip_slots(shapes, n_trips)
+    cut = [t["road"] for t in shapes[n_trips:] if t["shape"] == "drive"]
+    if cut:
+        raise PinError(f"story lists more trips than the plate holds, dropping: {', '.join(cut)}")
+    outings = sum(t["shape"] != "drive" for t in slots)
     if len(pins) > outings:
         dropped = ", ".join(d["name"] for d in pins[outings:])
         raise PinError(f"story has {outings} outings and no room for: {dropped}")
-    return shapes, pins
+    return slots, pins
 
 
 def _story_trips(g: Graph, story: dict, pool: list[dict], bounds: tuple, n_trips: int,
                  index, centre: tuple, spacing: float, rng, year: int) -> tuple[list, int]:
-    """A story's trips, as (trips, skipped). Slots take their shape from the story's
-    list, wrapping. An outing slot takes the next destination: the pins in config
+    """A story's trips, as (trips, skipped). Slots come from `_trip_slots`, and no two
+    trips share a day, because `render._journey_groups` merges same-day tracks into one
+    visit. An outing slot takes the next destination: the pins in config
     order, then the seeded selection over the rest of the pool. A drive slot takes
     its named road and no destination. A pin that no road joins raises; an unpinned
     pick that none joins gives way to the next, as it does with no story."""
     weights = outing_weights(story)
-    shapes, pins = _story_plan(story, pool, n_trips)
+    slots, pins = _story_plan(story, pool, n_trips)
     pinned = {d["name"] for d in pins}
     rest = [d for d in pool if d["name"] not in pinned]
     # An outing leaves the road, so an unpinned stop has to be somewhere off it.
@@ -672,15 +686,22 @@ def _story_trips(g: Graph, story: dict, pool: list[dict], bounds: tuple, n_trips
     stops = iter(pins + select_destinations(rest, bounds, len(rest), rng))
     trips, skipped = [], 0
     drives: dict[str, list] = {}
+    taken: set[int] = set()                # days of the year already holding a trip
 
     def add(d: dict, path: list) -> None:
         lo, hi = SEASONS[d["kind"]]
-        day = date(year, 1, 1) + timedelta(days=int(rng.integers(lo, hi + 1)) - 1)
+        if taken.issuperset(range(lo, hi + 1)):
+            raise PinError(f"story has more trips than days in the {d['kind']} season: {d['name']}")
+        doy = int(rng.integers(lo, hi + 1))
+        while doy in taken:
+            doy = int(rng.integers(lo, hi + 1))
+        taken.add(doy)
+        day = date(year, 1, 1) + timedelta(days=doy - 1)
         raw = np.asarray(path, dtype=float)
         trips.append((day, len(trips), d, _densify(raw, rng, spacing), raw))
 
-    while len(trips) < n_trips:
-        trip = shapes[len(trips) % len(shapes)]
+    while len(trips) < len(slots):
+        trip = slots[len(trips)]
         if trip["shape"] == "drive":
             road = trip["road"]
             if road not in drives:

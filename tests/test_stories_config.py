@@ -70,6 +70,14 @@ def test_drive_trips_name_their_road():
     assert {"shape": "drive", "road": "Lamoille Canyon Road"} in cfg["ruby_mountains_nv"]["trips"]
 
 
+def test_the_drives_run_as_the_stories_need():
+    def drives(plate, road):
+        return tomllib.loads(STORIES.read_text())[plate]["trips"].count(
+            {"shape": "drive", "road": road})
+    assert drives("canyonlands_ut", "White Rim Road") == 1
+    assert drives("ruby_mountains_nv", "Lamoille Canyon Road") == 4
+
+
 def test_a_heading_a_render_could_contradict_carries_the_mark():
     section = COPY.read_text().split("Walter's Wiggles keeps every switchback")[1].split("###")[0]
     assert "(check against the crop)" in section
