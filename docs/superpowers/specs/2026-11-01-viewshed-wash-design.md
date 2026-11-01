@@ -1,7 +1,7 @@
 # The viewshed wash — Design
 
 **Date:** 2026-11-01
-**Status:** Draft for Dom's read. Nothing is built.
+**Status:** Draft for Dom's read, after a builder check. Two questions are open. Nothing is built.
 **Prototype:** the private page "Tecopa Feature Prototypes". It computed real viewsheds from six named summits on the Rifle–Aspen plate, outside the engine.
 **Relates to:** `2026-08-16-target-customer-profile-design.md`, `2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` (Phase B renders the page's images, so this lands before it or waits for a later render), `../../relief-passes.md`.
 
@@ -23,7 +23,7 @@ Dom asked for features that take the poster further and show well on the landing
 - A percentage or tally of ground seen. A number invites a claim the bare-ground calculation cannot back.
 - A viewshed from every point along a track. Only marks count in this version. A track has thousands of points, and the profile says the marks are what people point at.
 - A wash that grows frame by frame in the film. Marks carry no date. The film shows the finished wash from its first frame.
-- Trees, buildings, haze or the curve of the earth.
+- Trees, buildings or haze.
 
 ## Anti-goals
 
@@ -43,23 +43,27 @@ Each is Claude's call unless it says Dom's. Dom can overrule any of them on read
 | # | Decision | Why |
 |---|---|---|
 | 1 | The knob is `viewshed`, a float from 0.0 to 1.0, default 0.0, in `STYLE_BOUNDS`, with one `CONTROLS` entry in the studio. | The relief seam's rule: a field, a reader, a pass and a control. |
-| 2 | Every hotspot on the spec is an observer, photo spots included, wherever it falls on the plate. A hotspot off the sheet but on the plate still counts. A hotspot off the plate is reported, as hotspots already are. | The customer marked it. Choosing some marks over others would be a hidden rule. |
+| 2 | OPEN for Dom, see Open questions: which hotspots are observers. Whichever count, a hotspot off the sheet but on the plate still counts, and one off the plate is reported, as hotspots already are. | `density.hotspots` makes spots at the centres of busy 1 km cells, and nobody stood there on purpose. |
 | 3 | The eye stands 1.7 m above the ground at the mark. The mark's own location is used as given. | The prototype snapped to the nearest high cell because its marks were named summits, and a customer's mark is where they stood. |
 | 4 | The calculation reads the plate's DEM, out past the sheet edge to the plate's bounds, on a fixed ground grid. It belongs in `render`, and the result reaches the pass through `frame.extras`. | A ridge just off the sheet blocks the view, so the frame alone would overstate what is seen. Rule 4 of the seam says region data is `render`'s business and a pass stays pure. A fixed ground grid keeps proof and final identical (invariant 1), the way `_shadow_res_m` does for the cast shadow. |
-| 5 | The grid is fixed by the plate's width, at about 30 m on a county plate and never finer than the plate's own cell. | The prototype ran on 30 m and read well. The wash's edge is a feathered band, not a line a print shows at 1:1. |
+| 5 | The grid is about 30 m on a county plate; decision 13 sets the rule. | The prototype ran on 30 m and read well. The wash's edge is a feathered band, not a line a print shows at 1:1. |
 | 6 | Rays sample the DEM with bilinear interpolation. | The prototype's first version truncated to cells and drew false edges due east through each pin. A test holds this. |
 | 7 | The look: seen ground stays as the terrain already is. Unseen ground loses saturation and falls in value by up to 15% at knob 1.0. The edge feathers over about 100 ground metres. | The prototype tinted seen ground warm, and that read as a mask and fought the hypsometric colour. Quieting the unseen ground keeps the terrain as the subject. Dom judges the final strength on a real proof. |
 | 8 | The pass runs at the `finish` stage, before the tonal curve. | The latest stage that lets the curve and grain sit over it evenly. |
 | 9 | `hotspots` leaves the terrain cache's mask when `viewshed` > 0. Below that it stays masked. Only the observers' coordinates enter the key: a change to a mark's label, icon or photo must still hit the cache. | `BASE_KEY_MASK_ALWAYS` lists `hotspots` as inert. With the wash on, it no longer is, and moving a mark would show a stale wash. With it off, the terrain cache's hit rate stays as it is. |
-| 10 | The order look stays off, so `ORDER_LOOK` does not gain the knob. A customer asks for it, or Dom offers it. | It changes how a poster reads, and it is a first version. |
+| 10 | `ORDER_LOOK` does not gain the knob. An order uses the wash only when the customer asks for it or Dom offers it. | It changes how a poster reads, and it is a first version. |
 | 11 | Editions carry the knob on the spec as any other. Marks added in the next edition widen the wash. No new manifest field. | The edition promise needs nothing more. An old manifest reads as 0 through `spec_from_json`. |
+| 12 | Rays stop at 40 km, and the calculation includes the curve of the earth with normal refraction (the standard 0.87 factor on the drop). | Without a limit, a flat plate is seen edge to edge and comes out rectangular, and the claim is false: an eye at 1.7 m on a flat playa sees about 5 km. 40 km holds the cost on a corridor plate. |
+| 13 | The grid is the plate's width over a fixed cell count, never finer than the plate's cell. A corridor plate gets a coarser grid than a county plate. | `elko_bonneville` at 30 m is 177 million cells, and the time limit cannot hold there. The wash is a soft band at that scale. |
+| 14 | The limit is the existing `MAX_MANIFEST_HOTSPOTS`, 64. It does not rise. The time limit is 64 marks. | That cap guards the untrusted-manifest door (invariant 8), and the wash makes each hotspot costlier for a crafted file. A customer with more marks needs a separate decision on that door. |
+| 15 | The wash quiets the terrain only. Lakes and rivers stay at full colour. | They paint after the `finish` stage, and reaching them needs a change outside the relief seam. Water reads as water either way. Dom judges this on the first proof. |
 
 ## What it must do at the edges
 
 - **No marks, knob above 0:** the sheet paints as if the knob were 0.
 - **A mark in a NaN hole or over a lake:** it still calculates from its point, using the nearest finite ground. It never fails the render.
 - **A panel set:** painted once across the whole sheet, so seams need nothing special.
-- **Many marks:** the shed hunter may have hundreds. A sheet with 200 marks must add under 30 seconds to a proof on Dom's Mac. How to reach it, such as caching one mark's result or a coarser ray set, is the builder's choice, as long as no mark is dropped.
+- **Many marks:** a sheet with 64 marks must add under 30 seconds to a proof on Dom's Mac. How to reach it, such as caching one mark's result or a coarser ray set, is the builder's choice, as long as no mark is dropped.
 - **Plate mismatch on reprint:** the seen ground moves with the plate. The existing 422 covers it.
 
 ## Constraints
@@ -74,7 +78,7 @@ Each is Claude's call unless it says Dom's. Dom can overrule any of them on read
 - At knob 0, byte-identity against a build without the pass.
 - A proof-versus-final check on the seen mask.
 - A synthetic ridge between two points blocks the view. Moving the ridge off the sheet still blocks it.
-- A flat plain shows a full, round viewshed with no false edge along the axes.
+- A flat plain shows a round viewshed of about 5 km, set by the curve of the earth, with no false edge along the axes.
 - Moving a mark changes the sheet, and changing only its label hits the cache.
 - Dom reads a real proof on Rifle–Aspen, and on one plate where marks sit low in valleys.
 
@@ -84,6 +88,11 @@ Each is Claude's call unless it says Dom's. Dom can overrule any of them on read
 - How the plate grid is read and how the mask upsamples.
 - The control's label and help text in the studio, within the profile's register.
 - The name of the module. `app/looks.py` is the pattern to follow.
+
+## Open questions for Dom
+
+1. **Which hotspots count as marks?** A hotspot today is a density spot, a GPX waypoint or a photo spot. The recommendation is waypoints and photo spots only. Density spots move when a track is added, which can shrink the wash, and nobody stood there on purpose. This needs a provenance flag on each hotspot and a rule for old manifests. `_merge_waypoints` also drops a waypoint within 400 m of an existing spot, so it must stop dropping real marks.
+2. **Do orders get the wash?** An order's hotspots come from photos only, so a customer's GPX waypoints never reach the spec. The page cannot show a thing a customer cannot buy, and orders are how customers buy. The recommendation is to carry waypoints into orders in this build. It is new work in the order pipeline.
 
 ## Not decided here
 
