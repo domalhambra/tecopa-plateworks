@@ -22,6 +22,7 @@ from app.geo import RegionGeo, crs_to_overview_px
 from app.ingest import Track
 from app.orderspec import ORDER_LOOK
 from app.regions import Region
+from app import render
 from app.render import TRACK_INK
 import scripts.render_asset_farm as farm
 from scripts import story_config
@@ -505,3 +506,59 @@ def test_ship_check_exits_0_when_every_photo_is_real(tmp_path, capsys):
     cfg.write_text('status = "ready"\n[a_plate]\nphoto_at = "Peak"\nphoto_file = "p.jpg"\n')
     assert story_config.main(["--ship-check", "--config", str(cfg)]) == 0
     assert capsys.readouterr().out.strip() == "ok: no plate ships the demo photo"
+
+
+# ---- the editions read as years -----------------------------------------------------
+# Every demo trip is dated 2024, so the three editions would all print 2024. A plate with
+# a story dates the trips each edition adds one year later per edition, on copies.
+
+def _dated_tracks(days):
+    return [Track(track_id=f"summit:Peak {i}", coords=np.zeros((4, 2)), day=day)
+            for i, day in enumerate(days)]
+
+
+def _edition_specs(monkeypatch, tmp_path, tracks, story):
+    monkeypatch.setattr(farm, "story_for", lambda rid: story)
+    seen = _capture(monkeypatch)
+    farm._editions(_region(), tracks, [], str(tmp_path), DPI)
+    assert [os.path.basename(out) for out, _ in seen] == [
+        "edition_1.png", "edition_2.png", "edition_3.png"]
+    return [spec for _, spec in seen]
+
+
+def test_a_story_plates_editions_span_three_calendar_years(tmp_path, monkeypatch):
+    days = ["2024-03-10", "2024-04-11", "2024-05-12", "2024-06-13", "2024-07-14", "2024-08-15"]
+    ed1, ed2, ed3 = _edition_specs(monkeypatch, tmp_path, _dated_tracks(days), _story([]))
+    # six trips, two added per edition: trips 3-4 first appear in Edition 2, 5-6 in Edition 3
+    assert ed1.track_days == days[:2]                                  # Edition 1 as it was
+    assert ed2.track_days == days[:2] + ["2025-05-12", "2025-06-13"]
+    assert ed3.track_days == days[:2] + ["2025-05-12", "2025-06-13",
+                                         "2026-07-14", "2026-08-15"]
+    assert {d[:4] for d in ed3.track_days} == {"2024", "2025", "2026"}
+    # what the cartouche prints: no edition line on Edition 1, then the edition and its years
+    assert "EDITION" not in render._stats_line(ed1, DPI)
+    assert render._stats_line(ed2, DPI).startswith("EDITION 2 · 2024–2025")
+    assert render._stats_line(ed3, DPI).startswith("EDITION 3 · 2024–2026")
+
+
+def test_a_plate_with_no_story_keeps_every_day_in_every_edition(tmp_path, monkeypatch):
+    days = ["2024-03-10", "2024-04-11", "2024-05-12", "2024-06-13", "2024-07-14", "2024-08-15"]
+    specs = _edition_specs(monkeypatch, tmp_path, _dated_tracks(days), None)
+    assert [s.track_days for s in specs] == [days[:2], days[:4], days]
+
+
+def test_a_leap_day_moves_to_the_28th_when_the_year_has_none(tmp_path, monkeypatch):
+    days = ["2024-01-05", "2024-02-29", "2024-02-29"]    # the 2nd and 3rd trips: Editions 2 and 3
+    ed1, ed2, ed3 = _edition_specs(monkeypatch, tmp_path, _dated_tracks(days), _story([]))
+    assert ed1.track_days == ["2024-01-05"]
+    assert ed2.track_days == ["2024-01-05", "2025-02-28"]
+    assert ed3.track_days == ["2024-01-05", "2025-02-28", "2026-02-28"]
+
+
+def test_dating_the_editions_leaves_the_callers_tracks_alone(tmp_path, monkeypatch):
+    days = ["2024-03-10", "2024-04-11", "2024-05-12", "2024-06-13", "2024-07-14", "2024-08-15"]
+    tracks = _dated_tracks(days)
+    before = list(tracks)
+    _edition_specs(monkeypatch, tmp_path, tracks, _story([]))
+    assert tracks == before and all(a is b for a, b in zip(tracks, before))
+    assert [t.day for t in tracks] == days

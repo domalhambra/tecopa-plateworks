@@ -96,6 +96,7 @@ betray itself and the record is the only thing that can. See marketing/DEPLOY.md
 """
 from __future__ import annotations
 import argparse
+import calendar
 import hashlib
 import json
 import os
@@ -521,13 +522,48 @@ def _film(region, tracks, spots, out_dir, dpi, max_frames):
     return [out for out, _ in outs], len(plan)
 
 
+def _years_later(day: str | None, years: int) -> str | None:
+    """An ISO date `years` years on, month and day kept. 29 February lands on 28 February
+    in a year with no leap day. Anything that does not start with a year comes back as
+    it was: the farm's demo days are ISO dates, but a missing one is None."""
+    if not years or not day or not (day[:4].isascii() and day[:4].isdigit()):
+        return day
+    year = int(day[:4]) + years
+    rest = day[4:]
+    if rest[:6] == "-02-29" and not calendar.isleap(year):
+        rest = "-02-28" + rest[6:]
+    return f"{year:04d}{rest}"
+
+
+def _dated_by_edition(tracks: list, steps: list) -> list:
+    """Copies of the tracks for the editions path, dated so the editions read as years.
+    A trip first added in Edition 2 is a year later than the demo date, one first added
+    in Edition 3 two years later; Edition 1's trips keep theirs. `steps` are the editions'
+    track counts. The caller's tracks are not touched: the poster, the film and every
+    other tier read them with their own dates."""
+    firsts = [0] + list(steps[:-1])
+    out = []
+    for i, t in enumerate(tracks):
+        ed = sum(1 for first in firsts if first <= i)          # the edition that adds it
+        out.append(replace(t, day=_years_later(t.day, ed - 1)))
+    return out
+
+
 def _editions(region, tracks, spots, out_dir, dpi):
     """The lineage set: the same frame rendered as three growing editions (add journeys
-    each year), the cartouche climbing Edition 1 -> 3, lineage chained in the manifest."""
+    each year), the cartouche climbing Edition 1 -> 3, lineage chained in the manifest.
+
+    A plate with a story dates each edition's new trips a year after the last (the demo
+    trips are all one year, and the page says "the same ground three years running"), so
+    the cartouche reads Edition 2 as 2024-2025 and Edition 3 as 2024-2026. A plate with
+    no story keeps its days."""
     made, lineage = [], []
     # the story only governs network journeys; synthetic tracks keep today's pin
-    story = story_for(region.id) if any(":" in t.track_id for t in tracks) else None
+    plate_story = story_for(region.id)
+    story = plate_story if any(":" in t.track_id for t in tracks) else None
     steps = [max(1, len(tracks) // 3), max(2, 2 * len(tracks) // 3), len(tracks)]
+    if plate_story is not None:
+        tracks = _dated_by_edition(tracks, steps)
     for ed, upto in enumerate(steps, start=1):
         sub = tracks[:upto]
         subspots = _edition_spots(sub, spots, region, out_dir, story)
