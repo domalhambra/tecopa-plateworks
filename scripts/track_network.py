@@ -108,7 +108,7 @@ KIND_ICON_DEFAULT = "dot"
 class Graph:
     def __init__(self):
         self.adj: dict[tuple, list[tuple]] = {}   # key -> [(other_key, edge_idx)]
-        self.edges: list[dict] = []               # {"class", "coords", "len_m"}
+        self.edges: list[dict] = []               # {"class", "coords", "len_m", "name"}
 
     @staticmethod
     def key(pt) -> tuple:
@@ -135,7 +135,8 @@ def build_graph(ways: list[dict]) -> Graph:
             idx = len(g.edges)
             g.edges.append({"class": w["class"],
                             "coords": [list(map(float, a)), list(map(float, b))],
-                            "len_m": length})
+                            "len_m": length,
+                            "name": w.get("name")})   # None: nameless, or an old cache
             g.adj.setdefault(ka, []).append((kb, idx))
             g.adj.setdefault(kb, []).append((ka, idx))
     return g

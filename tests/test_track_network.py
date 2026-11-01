@@ -1414,6 +1414,41 @@ def test_collect_ways_dedupes_across_overlapping_tiles():
     assert into[7][0] == "trail"
 
 
+def test_collect_ways_keeps_the_osm_name():
+    """The journeys name a road or a path in their story ("White Rim Road"), so
+    the cache has to carry the OSM `name` tag."""
+    el = {"type": "way", "id": 7, "tags": {"highway": "track", "name": "White Rim Road"},
+          "geometry": [{"lon": -121.0, "lat": 40.5}, {"lon": -120.9, "lat": 40.6}]}
+    into = {}
+    fetch_net.collect_ways([el], into)
+    assert into[7][3] == "White Rim Road"
+    ways = fetch_net.project_ways(into, "EPSG:32610")
+    assert ways[0]["name"] == "White Rim Road"
+
+
+def test_a_way_with_no_name_has_no_name_key():
+    """An unnamed way writes no key at all, so a re-fetch of an unnamed network is
+    no bigger than before and the file never holds a null name."""
+    el = {"type": "way", "id": 8, "tags": {"highway": "path"},
+          "geometry": [{"lon": -121.0, "lat": 40.5}, {"lon": -120.9, "lat": 40.6}]}
+    blank = {"type": "way", "id": 9, "tags": {"highway": "path", "name": "  "},
+             "geometry": [{"lon": -121.0, "lat": 40.5}, {"lon": -120.9, "lat": 40.6}]}
+    into = {}
+    fetch_net.collect_ways([el, blank], into)
+    assert into[8][3] is None and into[9][3] is None
+    for w in fetch_net.project_ways(into, "EPSG:32610"):
+        assert "name" not in w
+
+
+def test_build_graph_carries_the_name_and_reads_an_old_cache():
+    """g.edges[i]["name"] is the way's name, and None for a nameless way or a cache
+    written before names were kept."""
+    g = build_graph([{"class": "4wd", "coords": [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0]],
+                      "name": "White Rim Road"},
+                     {"class": "trail", "coords": [[0.0, 5.0], [10.0, 5.0]]}])
+    assert [e["name"] for e in g.edges] == ["White Rim Road", "White Rim Road", None]
+
+
 def test_collect_ways_skips_degenerate_and_non_way_elements():
     into = {}
     assert fetch_net.collect_ways([
@@ -1430,8 +1465,8 @@ def test_collect_ways_skips_degenerate_and_non_way_elements():
 def test_project_ways_is_sorted_by_id_and_rounded_to_the_graph_grid():
     """Sorted output is what makes a re-fetch byte-identical; 0.1 m is exactly
     what Graph.key rounds to, so no precision is thrown away and none is faked."""
-    by_id = {99: ("road", [-121.0, -120.99], [40.5, 40.51]),
-             11: ("trail", [-121.0, -120.98], [40.5, 40.52])}
+    by_id = {99: ("road", [-121.0, -120.99], [40.5, 40.51], None),
+             11: ("trail", [-121.0, -120.98], [40.5, 40.52], None)}
     ways = fetch_net.project_ways(by_id, "EPSG:32610")
     assert [w["class"] for w in ways] == ["trail", "road"]      # id 11 before 99
     for w in ways:
@@ -1443,13 +1478,13 @@ def test_project_ways_is_sorted_by_id_and_rounded_to_the_graph_grid():
 def test_project_ways_collapses_points_that_round_together():
     """Two OSM nodes under 0.1 m apart are one graph vertex; keeping both would
     only bloat the file with a segment build_graph already discards."""
-    by_id = {1: ("road", [-121.0, -121.0 + 1e-7, -120.99], [40.5, 40.5, 40.51])}
+    by_id = {1: ("road", [-121.0, -121.0 + 1e-7, -120.99], [40.5, 40.5, 40.51], None)}
     ways = fetch_net.project_ways(by_id, "EPSG:32610")
     assert len(ways[0]["coords"]) == 2
 
 
 def test_project_ways_drops_a_way_that_collapses_to_a_point():
-    by_id = {1: ("road", [-121.0, -121.0 + 1e-9], [40.5, 40.5])}
+    by_id = {1: ("road", [-121.0, -121.0 + 1e-9], [40.5, 40.5], None)}
     assert fetch_net.project_ways(by_id, "EPSG:32610") == []
 
 
@@ -1503,7 +1538,7 @@ def test_the_manifest_the_farm_reads_is_the_manifest_this_writes(tmp_path):
     between the fetcher and everything downstream."""
     manifest = {"region_id": "x", "crs": "EPSG:32610", "counts": {}, "ways":
                 fetch_net.project_ways({1: ("trail", [-121.0, -120.99],
-                                            [40.5, 40.51])}, "EPSG:32610")}
+                                            [40.5, 40.51], None)}, "EPSG:32610")}
     path = fetch_net.write_cache(manifest, str(tmp_path))
     ways = track_network.load_network(path)
     assert build_graph(ways).edges[0]["class"] == "trail"

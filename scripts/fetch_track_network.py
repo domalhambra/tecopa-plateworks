@@ -141,7 +141,8 @@ def overpass_query(bbox_swne, timeout: int = QUERY_TIMEOUT_S) -> str:
 
 
 def collect_ways(elements, into: dict) -> int:
-    """Fold one payload's elements into `into` (osm id -> (class, lons, lats)).
+    """Fold one payload's elements into `into` (osm id -> (class, lons, lats, name);
+    `name` is the trimmed OSM `name` tag, None when the way has none).
     Returns how many ids were new. Ways under two points are dropped; a repeat
     id from an overlapping tile is identical geometry and is skipped."""
     added = 0
@@ -159,15 +160,17 @@ def collect_ways(elements, into: dict) -> int:
                and p.get("lat") is not None]
         if len(pts) < 2:
             continue
+        name = ((el.get("tags") or {}).get("name") or "").strip() or None
         into[wid] = (way_class(el.get("tags")),
                      [float(p["lon"]) for p in pts],
-                     [float(p["lat"]) for p in pts])
+                     [float(p["lat"]) for p in pts],
+                     name)
         added += 1
     return added
 
 
 def project_ways(by_id: dict, crs: str) -> list:
-    """(osm id -> (class, lons, lats)) -> the manifest's `ways` list, in region
+    """(osm id -> (class, lons, lats, name)) -> the manifest's `ways` list, in region
     CRS metres, sorted by OSM id so the file is reproducible.
 
     Consecutive duplicate points after rounding are collapsed: `build_graph`
@@ -180,7 +183,7 @@ def project_ways(by_id: dict, crs: str) -> list:
         return []
     flat_lon, flat_lat, spans = [], [], []
     for wid in ids:
-        _cls, lons, lats = by_id[wid]
+        _cls, lons, lats, _name = by_id[wid]
         spans.append(len(lons))
         flat_lon.extend(lons)
         flat_lat.extend(lats)
@@ -197,7 +200,10 @@ def project_ways(by_id: dict, crs: str) -> list:
             coords.append(pt)
         cursor += span
         if len(coords) >= 2:
-            ways.append({"class": by_id[wid][0], "coords": coords})
+            way = {"class": by_id[wid][0], "coords": coords}
+            if by_id[wid][3]:
+                way["name"] = by_id[wid][3]          # left out when the way has none
+            ways.append(way)
     return ways
 
 
