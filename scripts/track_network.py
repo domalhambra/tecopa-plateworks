@@ -97,7 +97,8 @@ SEASONS = {                   # kind -> (first day-of-year, last), spec §3 date
 }
 # kind -> marker glyph (spec §3). Total over the kinds `destination_pool` can
 # produce -- it emits exactly summit/gap from labels.json and lake from
-# hydro.json -- and every value is a glyph `render._draw_glyph` already knows.
+# hydro.json -- plus a story's drive, and every value is a glyph
+# `render._draw_glyph` already knows.
 # The farm's positional icon cycle is fine for invented density hotspots but
 # libellous next to a real name: it put a tent on "Road Lake" and a camera on a
 # summit. KIND_ICONS is the fix; the `.get` fallback keeps a future kind from
@@ -107,9 +108,8 @@ KIND_ICON_DEFAULT = "dot"
 # A story's trip shapes. `drive` is the one that takes a road, not a destination.
 STORY_SHAPES = ("out_and_back", "loop", "4wd", "drive")
 DRIVE_NAMED_COST = 0.1        # a named road's edges, whatever their class
-PIN_TRAILHEAD_TRIES = 8       # a pinned place may not drop out on one bad draw: a
-                              # trailhead can land in a pocket of road the clipped
-                              # extract leaves unjoined to the rest
+FILL_CLASSES = ("trail",)     # what an unpinned story stop's vertex must touch
+ROUTE_SEARCH_FACTOR = 1.5     # how far past its target a story trailhead search runs
 
 
 class PinError(RuntimeError):
@@ -588,6 +588,53 @@ def _shape_path(g: Graph, shape: str, th: tuple, node: tuple, out_path: list,
     return out_path + out_path[-2::-1]             # default / fallbacks
 
 
+def _route_trailhead(g: Graph, index, node: tuple, target: float, weights: dict, rng,
+                     centre: tuple) -> tuple | None:
+    """A story trip's road vertex to start from, chosen by how far the ROUTE runs.
+
+    `_trailhead_for` matches the straight-line distance, and on real plates that sends
+    a story trip the long way round: a trailhead 6 km from Observation Point across
+    Zion Canyon is an 84 km route, and raising the road cost makes it longer. So this
+    walks out from the destination at the trip's own weights and takes the road
+    vertices whose route length is nearest `target`, then narrows and draws the way
+    `_trailhead_for` does. Only vertices joined to the destination can come back,
+    which is also what lets a pin in a pocket of the network find its own road.
+    None when no road vertex is joined to it."""
+    roads = set(index[0])
+    dist, metres, on_road, found = {node: 0.0}, {node: 0.0}, {node: False}, []
+    pq = [(0.0, node)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist[u]:
+            continue
+        if metres[u] > ROUTE_SEARCH_FACTOR * target and any(
+                c[1] > TRAILHEAD_MIN_M for c in found):
+            break
+        if u in roads and u != node:
+            found.append((u, metres[u], on_road[u]))
+        for v, ei in g.adj[u]:
+            e = g.edges[ei]
+            nd = d + e["len_m"] * weights[e["class"]]
+            if nd < dist.get(v, float("inf")):
+                dist[v], metres[v] = nd, metres[u] + e["len_m"]
+                on_road[v] = on_road[u] or e["class"] == "road"
+                heapq.heappush(pq, (nd, v))
+    if not found:
+        return None
+    far = [c for c in found if c[1] > TRAILHEAD_MIN_M]
+    if not far:
+        return max(found, key=lambda c: c[1])[0]       # all of them inside the floor
+    # A trailhead proper: where the route first meets a road, not a point further along it.
+    far = [c for c in far if not c[2]] or far
+    far.sort(key=lambda c: (abs(c[1] - target), c[0]))
+    cand = np.array([c[0] for c in far[:TRAILHEAD_SHORTLIST]], dtype=float)
+    mid = (cand + np.asarray(node, dtype=float)) / 2.0
+    inward = np.hypot(mid[:, 0] - centre[0], mid[:, 1] - centre[1])
+    cand = cand[np.argsort(inward, kind="stable")[:TRAILHEAD_CANDIDATES]]
+    x, y = cand[int(rng.integers(len(cand)))]
+    return (float(x), float(y))
+
+
 def _story_plan(story: dict, pool: list[dict], n_trips: int) -> tuple[list[dict], list[dict]]:
     """Check a story before any trip is routed: (the shapes it cycles, its pins).
     Every failure is a PinError, for the reason on PinError."""
@@ -612,12 +659,16 @@ def _story_trips(g: Graph, story: dict, pool: list[dict], bounds: tuple, n_trips
     """A story's trips, as (trips, skipped). Slots take their shape from the story's
     list, wrapping. An outing slot takes the next destination: the pins in config
     order, then the seeded selection over the rest of the pool. A drive slot takes
-    its named road and no destination. A pin that no trailhead reaches raises; an
-    unpinned pick that none reaches gives way to the next, as it does with no story."""
+    its named road and no destination. A pin that no road joins raises; an unpinned
+    pick that none joins gives way to the next, as it does with no story."""
     weights = outing_weights(story)
     shapes, pins = _story_plan(story, pool, n_trips)
     pinned = {d["name"] for d in pins}
     rest = [d for d in pool if d["name"] not in pinned]
+    # An outing leaves the road, so an unpinned stop has to be somewhere off it.
+    off_road = [d for d in rest
+                if any(g.edges[ei]["class"] in FILL_CLASSES for _v, ei in g.adj[d["node"]])]
+    rest = off_road or rest
     stops = iter(pins + select_destinations(rest, bounds, len(rest), rng))
     trips, skipped = [], 0
     drives: dict[str, list] = {}
@@ -640,12 +691,9 @@ def _story_trips(g: Graph, story: dict, pool: list[dict], bounds: tuple, n_trips
         d = next(stops, None)
         if d is None:
             break
-        got = th = None
-        for _ in range(PIN_TRAILHEAD_TRIES if d["name"] in pinned else 1):
-            th = _trailhead_for(index, d["node"], trip_target_m(bounds, rng), rng, centre=centre)
-            got = None if th is None else dijkstra_edges(g, th, d["node"], weights)
-            if got is not None:
-                break
+        th = _route_trailhead(g, index, d["node"], trip_target_m(bounds, rng), weights,
+                              rng, centre)
+        got = None if th is None else dijkstra_edges(g, th, d["node"], weights)
         if got is None:
             if d["name"] in pinned:
                 raise PinError(f"no road on this plate reaches story destination: {d['name']}")

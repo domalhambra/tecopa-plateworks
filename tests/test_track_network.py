@@ -1812,6 +1812,20 @@ def test_a_pin_no_road_reaches_fails_instead_of_dropping_out(tmp_path):
         network_tracks(_region(tmp_path), ways, story=_story(destinations=["Near Summit"]))
 
 
+def test_a_pin_in_a_pocket_of_the_network_starts_from_its_own_pockets_road(tmp_path):
+    """Lizard Rock on canyonlands_ut: the cache joins it to a road, but not to the
+    plate's main network. The main road sits at the distance a trailhead is matched
+    to, so a draw over every road vertex never leaves it."""
+    main = {"class": "road", "coords": [[518_000 + 50 * i, 4_411_000] for i in range(41)]}
+    pocket = [{"class": "road", "coords": [[519_000, 4_415_200], [519_100, 4_415_200]]},
+              {"class": "trail", "coords": [[519_100, 4_415_200], [519_000, 4_414_000]]}]
+    raw = []
+    tracks, _ = network_tracks(_region(tmp_path), [main] + pocket, n_trips=1, raw_out=raw,
+                               story=_story(destinations=["Near Summit"]))
+    assert [t.track_id for t in tracks] == ["summit:Near Summit"]
+    assert raw[0][:, 1].min() >= 4_414_000.0            # never on the main road's side
+
+
 def test_more_pins_than_outings_fails_instead_of_dropping_a_pin(tmp_path):
     story = _story(destinations=["Near Summit", "Road Lake"])
     with pytest.raises(PinError, match="Road Lake"):
@@ -1868,15 +1882,13 @@ def test_outing_weights_replace_only_the_road_cost():
     assert WEIGHTS["outing"]["road"] == 1.5                 # the shared table is untouched
 
 
-def test_a_higher_road_cost_keeps_an_outing_on_the_trail(tmp_path, monkeypatch):
-    """A 5 km road against a 13 km trail to the same place: 7.5 beats 7.8 at the
-    default cost of 1.5, and the trail wins once the road costs 3.0."""
-    th = (515_000.0, 4_409_000.0)
+def test_a_higher_road_cost_keeps_an_outing_on_the_trail(tmp_path):
+    """A 6.4 km road against a 17.8 km trail to the same place: 9.6 beats 10.7 at
+    the default cost of 1.5, and the trail wins once the road costs 3.0."""
     ways = [{"class": "road", "coords": [[515_000, 4_409_000], [519_000, 4_414_000]]},
             {"class": "trail", "coords": [[515_000, 4_409_000], [525_000, 4_409_000],
                                           [519_000, 4_414_000]]}]
     r = _region(tmp_path)
-    monkeypatch.setattr(track_network, "_trailhead_for", lambda *a, **k: th)
 
     def route(cost):
         raw = []
@@ -1886,6 +1898,56 @@ def test_a_higher_road_cost_keeps_an_outing_on_the_trail(tmp_path, monkeypatch):
 
     assert [525_000.0, 4_409_000.0] not in route(1.5).tolist()
     assert [525_000.0, 4_409_000.0] in route(3.0).tolist()
+
+
+def test_a_story_trailhead_is_matched_by_route_not_by_straight_line(tmp_path):
+    """Two road vertices 3 km from the summit. One is a 3 km trail away. The other is
+    across a canyon, a 29 km route away, and must never be the start."""
+    ways = [{"class": "trail", "coords": [[519_000, 4_414_000], [519_000, 4_417_000]]},
+            {"class": "road", "coords": [[519_000, 4_417_000], [529_000, 4_417_000],
+                                         [529_000, 4_411_000], [519_000, 4_411_000]]}]
+    for seed in range(8):
+        raw = []
+        network_tracks(_region(tmp_path), ways, seed=seed, n_trips=1, raw_out=raw,
+                       story=_story(destinations=["Near Summit"]))
+        assert np.hypot(*np.diff(raw[0], axis=0).T).sum() == pytest.approx(6_000.0)
+
+
+def test_a_story_trailhead_is_where_the_route_first_meets_a_road(tmp_path):
+    """The trail is 1.2 km and the trip's target at least 2 km. Making up the distance
+    along the road would be a road walk, so the hike starts at the road's edge."""
+    road = {"class": "road", "coords": [[519_000 + 100 * i, 4_415_200] for i in range(80)]}
+    ways = [{"class": "trail", "coords": [[519_000, 4_414_000], [519_000, 4_415_200]]}, road]
+    for seed in range(4):
+        raw = []
+        network_tracks(_region(tmp_path), ways, seed=seed, n_trips=1, raw_out=raw,
+                       story=_story(destinations=["Near Summit"]))
+        assert raw[0][:, 0].max() == 519_000.0
+
+
+def test_a_destination_only_a_road_reaches_still_gets_its_trip(tmp_path):
+    ways = [{"class": "road", "coords": [[510_000 + 200 * i, 4_414_000] for i in range(60)]}]
+    tracks, _ = network_tracks(_region(tmp_path), ways, n_trips=1,
+                               story=_story(destinations=["Near Summit"]))
+    assert [t.track_id for t in tracks] == ["summit:Near Summit"]
+
+
+def test_an_unpinned_stop_has_to_touch_a_trail(tmp_path):
+    """Road Lake snaps to a road and nothing else, so an outing could not leave the road
+    to reach it. It is not picked while somewhere on a trail is, and no story pins it."""
+    ways = [{"class": "road", "coords": [[500_000, 4_410_000], [515_000, 4_410_000],
+                                         [524_000, 4_410_000]]},
+            {"class": "trail", "coords": [[524_000, 4_410_000], [519_000, 4_414_000]]}]
+    tracks, _ = network_tracks(_region(tmp_path), ways, n_trips=2, story=_story())
+    assert [t.track_id for t in tracks] == ["summit:Near Summit"]
+
+
+def test_a_pin_may_sit_on_a_road_alone(tmp_path):
+    ways = [{"class": "road", "coords": [[500_000, 4_410_000], [515_000, 4_410_000],
+                                         [524_000, 4_410_000]]}]
+    tracks, _ = network_tracks(_region(tmp_path), ways, n_trips=1,
+                               story=_story(destinations=["Road Lake"]))
+    assert [t.track_id for t in tracks] == ["lake:Road Lake"]
 
 
 def test_a_drive_follows_its_named_road():
