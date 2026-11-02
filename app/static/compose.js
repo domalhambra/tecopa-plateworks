@@ -364,6 +364,9 @@ function applyPrefill(p) {
     // Looks: `?? 0`, NOT the store default — a pre-feature poster restores the plain
     // look it was actually printed with, not the subtle-on look a new poster starts at.
     softLight: s.softLight ?? 0, haze: s.haze ?? 0,
+    // The wash: a spec at 0 (or a pre-feature file) restores off, with the strength back
+    // at its start; a spec above 0 restores on, at the strength it was printed with.
+    viewshedOn: (s.viewshed ?? 0) > 0, viewshed: (s.viewshed ?? 0) > 0 ? s.viewshed : 0.6,
     waterDepth: s.waterDepth ?? 0, dryLakes: !!s.dryLakes,
     lightMode: s.lightMode || 'archival', sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7, profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,

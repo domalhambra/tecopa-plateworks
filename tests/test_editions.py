@@ -432,7 +432,7 @@ def test_proof_form_restores_a_styled_poster():
               "water_depth": 0.5, "dry_lakes": "true", "golden_strength": 0.4,
               "profile": "true", "profile_height_in": 1.1,
               "track_color_by": "elevation", "label_place": "anchor",
-              "track_weave": "false"}
+              "track_weave": "false", "viewshed": 0.6}
     first, second, cont = _proof_form_round_trip(c, **styled)
     # the first proof really left the defaults: a default-only round trip proves nothing
     plain = _spec()
@@ -442,13 +442,15 @@ def test_proof_form_restores_a_styled_poster():
                          "photo_frame_style", "furniture_scale", "terrain_depth",
                          "shadow_strength", "oblique", "soft_light", "haze_strength",
                          "water_depth", "dry_lakes", "golden_strength", "profile",
-                         "profile_height_in", "track_color_by")
+                         "profile_height_in", "track_color_by", "viewshed")
              if getattr(first, n) != getattr(plain, n)}
-    assert len(moved) == 26, moved
+    assert len(moved) == 27, moved
     # these two leave the FORM defaults ("smart", true), which are not the spec's
     assert first.label_place == "anchor" and first.track_weave is False
     _assert_same_picture(first, second)
     form = cont["proof_form"]
+    # the wash comes back both ways: as the form field, and as the studio's own prefill
+    assert form["viewshed"] == 0.6 and cont["prefill"]["style"]["viewshed"] == 0.6
     assert form["track_color"] == "#4a6936"       # the #rrggbb string the form takes
     assert form["contours"] is True and form["compass"] is False   # JSON booleans
     assert form["output"] == "print" and form["light_mode"] == "archival"

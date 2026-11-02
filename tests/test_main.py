@@ -326,6 +326,61 @@ def test_style_knobs_stamped_through_endpoint():
     assert c.post("/api/proof", data={**data, "soft_light": 1.5}).status_code == 422
     assert c.post("/api/proof", data={**data, "haze_strength": -0.2}).status_code == 422
 
+def test_a_proof_takes_the_viewshed_form_field():
+    # the wash is a picture decision, so it rides the stamped spec (invariant 1): a sent
+    # value lands there, an omitted field is off, and a value past the bound is a 422.
+    from app import session as sess_mod
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data={**data, "viewshed": 0.6}).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].viewshed == 0.6
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].viewshed == 0.0
+    assert c.post("/api/proof", data={**data, "viewshed": 1.5}).status_code == 422
+    assert c.post("/api/proof", data={**data, "viewshed": -0.1}).status_code == 422
+
+
+def _many_marks(session_id, n):
+    """Put n real marks (waypoints) on the session, inside the plate, as an accumulated
+    session holds them. The sample track's own density spots stay."""
+    from app import session as sess_mod
+    b = json.load(open(os.path.join(REGION_DIR, "region.json")))["bounds"]
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    marks = [{"x": cx + (i % 50) * 40.0, "y": cy + (i // 50) * 40.0, "weight": 3,
+              "label": f"M{i}", "icon": "dot", "mark": True} for i in range(n)]
+    st = sess_mod.get(session_id)
+    sess_mod.update(session_id, hotspots=list(st["hotspots"]) + marks)
+
+
+def test_a_proof_with_the_wash_on_refuses_more_marks_than_the_manifest_door_allows(monkeypatch):
+    # a session adds waypoints upload by upload and nothing bounds it outside the manifest
+    # door, and 5,000 marks took 90 s cold with no message. The proof says so in a sentence
+    # that names the count and the limit, and no mark is dropped to make it fit.
+    from app import main as main_mod, provenance, session as sess_mod
+    c = _client(); j = _upload(c)
+    limit = provenance.MAX_MANIFEST_HOTSPOTS
+    _many_marks(j["session"], limit + 1)
+    held = len(sess_mod.get(j["session"])["hotspots"])
+    painted = []
+    monkeypatch.setattr(main_mod.render, "rasterize",
+                        lambda spec, **kw: painted.append(spec) or Image.new("RGB", (8, 8)))
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    r = c.post("/api/proof", data={**data, "viewshed": 0.6})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert f"{limit + 1:,}" in detail and f"{limit:,}" in detail, detail
+    assert painted == []                                   # refused before any paint
+    assert len(sess_mod.get(j["session"])["hotspots"]) == held   # nothing dropped
+    # with the wash off, nothing changes: the same marks proof as they always did
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert len(painted) == 1 and painted[0].viewshed == 0.0
+    # the limit itself is allowed
+    c2 = _client(); j2 = _upload(c2)
+    _many_marks(j2["session"], limit)
+    data2 = {"session_id": j2["session"], **_crop(j2, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c2.post("/api/proof", data={**data2, "viewshed": 0.6}).status_code == 200
+
+
 def test_track_days_stamped_through_endpoint():
     # journey grouping is a rendering-semantics contract: the spec stamped by the
     # endpoint must carry the per-track days ingest parsed (a mutation dropping

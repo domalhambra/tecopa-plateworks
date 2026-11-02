@@ -13,7 +13,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, scan_waypoints, Track
 from app.density import hotspots
-from app.marks import is_mark
+from app.marks import is_mark, observers
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       TITLE_MAX_CHARS, year_span)
 # the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
@@ -1145,6 +1145,20 @@ def _preset_or_422(preset_id: str, custom_px_w: int = 0, custom_px_h: int = 0,
                                  f"see GET /api/wallpapers/presets")
     return p
 
+def _wash_marks_or_422(spec):
+    """The wash costs ray work for every mark, and a session adds waypoints upload by
+    upload with nothing bounding them outside the manifest door (5,000 marks took 90 s
+    cold, in silence). So a proof that asks for the wash with more marks than a manifest
+    may carry says so, in a sentence the studio shows, and no mark is dropped. With the
+    wash off nothing is counted, and nothing changes."""
+    if not spec.viewshed > 0:
+        return
+    n, limit = len(observers(spec.hotspots)), provenance.MAX_MANIFEST_HOTSPOTS
+    if n > limit:
+        raise HTTPException(
+            422, f"This poster has {n:,} marks, and quieting unseen ground works with at "
+                 f"most {limit:,}. Remove some marks, or turn it off.")
+
 @app.post("/api/proof")
 async def proof(session_id: str = Form(...),
                 x0: float = Form(...), y0: float = Form(...),
@@ -1175,7 +1189,10 @@ async def proof(session_id: str = Form(...),
                 output: str = Form("print"), wallpaper_preset: str = Form(""),
                 custom_px_w: int = Form(0), custom_px_h: int = Form(0),
                 custom_ppi: float = Form(0.0), bleed: float = Form(0.0),
-                panels: int = Form(1), panel_gap: float = Form(0.0)):
+                panels: int = Form(1), panel_gap: float = Form(0.0),
+                # The viewshed wash: server default 0.0 is off, so a client that never
+                # sends it, and every pre-feature file, paints as it always did.
+                viewshed: float = Form(0.0)):
     # the Style panel's knobs: all picture decisions, so they ride the spec and the
     # final renders exactly the styled proof. Out-of-range values 422 via validate().
     style = {"track_width_pt": track_width_pt, "track_halo": track_halo,
@@ -1184,6 +1201,7 @@ async def proof(session_id: str = Form(...),
              "terrain_depth": terrain_depth, "shadow_strength": shadow_strength,
              "oblique": oblique,
              "soft_light": soft_light, "haze_strength": haze_strength,
+             "viewshed": viewshed,
              "water_depth": water_depth, "dry_lakes": dry_lakes,
              # Journey Light picture decisions (the resolved sun is injected in _build_spec):
              "golden_strength": golden_strength, "profile": profile,
@@ -1212,6 +1230,7 @@ async def proof(session_id: str = Form(...),
                                    sun_azimuth=sun_azimuth_deg, sun_altitude=sun_altitude_deg)
     except SpecError as e:
         raise HTTPException(422, str(e))
+    _wash_marks_or_422(spec)
     t0 = time.time()
     try:
         img = render.rasterize(spec, dpi=_proof_dpi(spec), region_dir=region.dir,
@@ -2069,6 +2088,7 @@ def _proof_form_for(spec):
         "furniture_scale": f(spec.furniture_scale), "terrain_depth": f(spec.terrain_depth),
         "shadow_strength": f(spec.shadow_strength), "oblique": f(spec.oblique),
         "soft_light": f(spec.soft_light), "haze_strength": f(spec.haze_strength),
+        "viewshed": f(spec.viewshed),
         "water_depth": f(spec.water_depth), "dry_lakes": bool(spec.dry_lakes),
         "light_mode": spec.light_mode, "golden_strength": f(spec.golden_strength),
         "profile": bool(spec.profile), "profile_height_in": f(spec.profile_height_in),
@@ -2162,6 +2182,8 @@ def _open_spec_session(spec, region, *, sources=(), edition=1, lineage=(), extra
                   # Looks restore: a continued poster comes back with exactly the
                   # light it was printed with -- a pre-feature file restores 0/0.
                   "softLight": spec.soft_light, "haze": spec.haze_strength,
+                  # the wash restores as printed; a pre-feature file restores off.
+                  "viewshed": spec.viewshed,
                   # Water restore: a continued poster comes back with the water it
                   # was printed with; a pre-feature file restores flat + no playa.
                   "waterDepth": spec.water_depth, "dryLakes": spec.dry_lakes,

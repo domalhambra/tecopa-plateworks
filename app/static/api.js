@@ -134,6 +134,8 @@ export async function proof(sessionId, cropOv, printW, printH,
     terrain_depth: style.terrain, shadow_strength: style.shadow,
     oblique: style.oblique,
     soft_light: style.softLight, haze_strength: style.haze,
+    // the wash: 0 is off, so the switch decides and the slider only sets how far
+    viewshed: style.viewshedOn ? style.viewshed : 0,
     water_depth: style.waterDepth, dry_lakes: style.dryLakes,
     // Journey Light: light_mode + the sun (hour from the scrubber, or explicit az/alt on
     // the continue-restore path), the golden grade, the elevation profile, and coloring.

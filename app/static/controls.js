@@ -144,6 +144,18 @@ export const CONTROLS = [
     type: 'slider', min: 0, max: 1, step: 0.05, default: 0.15, fmt: pct, affectsProof: true,
     help: 'Sinks the low valleys into a cool haze so the sheet reads deeper front to back.',
     keywords: ['haze', 'atmosphere', 'aerial perspective', 'depth', 'fog'] },
+  // The viewshed wash is one spec field and two controls: the switch holds on or off, and
+  // the slider holds how far, so a flip back keeps the strength. api.js sends 0 when the
+  // switch is off (the spec's own "off"). Off for new posters, unlike Soft light.
+  { id: 'viewshedOn', path: 'style.viewshedOn', section: 'style', panel: 'Terrain', label: 'Quiet unseen ground',
+    hint: 'what your marks could not see', type: 'toggle', default: false, affectsProof: true,
+    help: 'Quiets the ground you couldn\'t see from your marks. Calculated from the land alone, with no trees.',
+    keywords: ['viewshed', 'line of sight', 'visibility', 'seen', 'unseen', 'marks', 'quiet', 'wash'] },
+  { id: 'viewshed', path: 'style.viewshed', section: 'style', panel: 'Terrain', label: 'Unseen ground strength',
+    type: 'slider', min: 0.1, max: 1, step: 0.05, default: 0.6, fmt: pct, affectsProof: true,
+    visibleWhen: (s) => s.style.viewshedOn,
+    help: 'How far the ground your marks couldn\'t see gives up its colour and light.',
+    keywords: ['viewshed', 'strength', 'unseen', 'wash', 'quiet'] },
   { id: 'oblique', path: 'style.oblique', section: 'style', panel: 'Terrain', label: 'High relief',
     hint: 'plan-oblique stand-up terrain', type: 'slider', min: 0, max: 1, step: 0.05, default: 0,
     fmt: f2, affectsProof: true,
