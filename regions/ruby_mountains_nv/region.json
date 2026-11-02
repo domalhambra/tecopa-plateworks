@@ -1,0 +1,24 @@
+{
+  "id": "ruby_mountains_nv",
+  "name": "Ruby Mountains",
+  "crs": "EPSG:32611",
+  "bounds": [
+    605870.0,
+    4434560.0,
+    665830.0,
+    4523430.0
+  ],
+  "overview_size": [
+    944,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1612.2701416015625,
+  "elevation_max": 3139.79248046875,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}

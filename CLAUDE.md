@@ -26,9 +26,9 @@ Unnamed sections below are in `docs/changing-things.md`.
 | A font or type role | Bind fonts per role, then `00_Resources/typography-standards.md` |
 | Anything under `app/static/` | Work on the studio front end |
 | The farm, the relief images, the terrain guard | `marketing/DEPLOY.md`, then Add a region to the farm and publish its relief images |
-| The Tecopa pages on www.plateworks.org | `docs/superpowers/specs/2026-09-24-ghost-landing-page-design.md`, then Edit landing or privacy copy |
+| The Tecopa pages on www.plateworks.org | `docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, then Edit landing or privacy copy |
 | A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
-| The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` |
+| The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` (amended 2026-11-01) |
 | The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
 | The `tecopa` tool, `app/debug.py` | `docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`, then Build the tecopa tool |
 | Blender | Render a hero plate |

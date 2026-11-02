@@ -13,6 +13,19 @@ own renders, resized only:
   wall.webp             840 px long edge, WebP q80    poster.png
   detail.webp           1200 px long edge, WebP q84   detail.png
 
+A plate with a story in marketing/stories.toml (the five showcase plates) also gets one
+image per story section, from the farm's `stories`, `journey`, `editions` and `film`
+tiers (`story_images`):
+
+  story-<n>.webp        1200 px long edge, WebP q84   story_<n>.png, a 1:1 crop
+  journey-before.webp   1200 px long edge, WebP q84   story_<n>_before.png (Journey Light
+  journey-after.webp    1200 px long edge, WebP q84   section: the plain poster's crop,
+                                                      then the lit poster's)
+  edition-<n>.webp      840 px long edge, WebP q80    edition_<n>.png, n = 1, 2, 3
+  film.mp4              copied, not re-encoded        film.mp4
+
+A plate with no story writes the six above and nothing else.
+
 SAME RELIEF AS THE GLB: the coin's surface is `render_model._centered_square`, the crop
 `build_plate_glb` textures the disc with, and its height map is
 `render_model._sample_height`, the grid the GLB's vertices are displaced by. The poster's
@@ -45,6 +58,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from marketing.build_deploy import terrain_guard  # noqa: E402  (the one gate, reused)
+from scripts.story_config import story_for  # noqa: E402
 from scripts.render_mockups import _height_field, load_final  # noqa: E402
 from scripts.render_model import (HEIGHT_SAMPLE, TEXTURE_PX,  # noqa: E402
                                   _centered_square, _sample_height)
@@ -57,6 +71,11 @@ POSTER_PX = 1400
 POSTER_HEIGHT_PX = 320
 WALL_PX = 840
 DETAIL_PX = 1200
+STORY_PX = 1200                 # a story crop's long edge, like detail.webp
+STORY_QUALITY = 84
+EDITION_PX = 840                # an edition at wall size, like wall.webp
+EDITION_QUALITY = 80
+EDITIONS = (1, 2, 3)
 
 # WebP outputs and their quality, from the spec's section 5 table
 OUTPUTS = {"coin.webp": 82, "poster-relief.webp": 84, "wall.webp": 80, "detail.webp": 84}
@@ -67,6 +86,12 @@ WEBP_METHOD = 6
 
 class ReliefError(ValueError):
     """The region cannot be exported: a source render is missing or unreadable."""
+
+
+class StorySourceError(ReliefError):
+    """A plate's story cannot export: a section's source image or the film is missing, or
+    is smaller than the image made from it. The farm counts it as a failure of the run
+    (a story the page shows must export whole), not a skipped tier."""
 
 
 class ReliefRefused(ReliefError):
@@ -126,8 +151,65 @@ def relief_images(poster: Image.Image, detail: Image.Image) -> dict[str, bytes]:
     }
 
 
-def export_region(src_dir: str, out_dir: str, region_id: str, index: dict) -> list[str]:
+def _story_source(src_dir: str, name: str, region_id: str) -> str:
+    path = os.path.join(src_dir, name)
+    if not os.path.isfile(path):
+        raise StorySourceError(f"{region_id}: no {name} in {src_dir} -- render the farm's "
+                               f"stories, journey, editions and film tiers first")
+    return path
+
+
+def story_images(src_dir: str, story: dict | None, region_id: str = "") -> dict[str, bytes]:
+    """The web images of a plate's story, encoded, keyed by output name. {} for a plate
+    with no story. Reads the farm's own files from `src_dir`:
+
+      a `poster` section          story_<n>.png                    -> story-<n>.webp
+      a `poster_journey` section  story_<n>_before.png, story_<n>.png
+                                                  -> journey-before.webp, journey-after.webp
+      an `editions` section       edition_1..3.png                 -> edition-<n>.webp
+      a `film` section            film.mp4                         -> film.mp4, as is
+
+    A missing source raises ReliefError naming it: the page shows every one of these,
+    so a story that cannot export all of them exports none. So does a source whose long
+    edge is under its output's size: the images are print pixels, never upscaled. (The
+    six images above keep their old resize either way.)"""
+    if not story:
+        return {}
+    out: dict[str, bytes] = {}
+
+    def crop(src_name: str, out_name: str, px: int, quality: int) -> None:
+        img = Image.open(_story_source(src_dir, src_name, region_id)).convert("RGB")
+        if max(img.size) < px:
+            # a story image is print pixels, scaled down or taken as they are, never up
+            raise StorySourceError(
+                f"{region_id}: {src_name} is {img.size[0]} x {img.size[1]} px, under the "
+                f"{px} px {out_name} needs -- widen the section's crop_in or render the "
+                f"farm at full dpi, not --quick")
+        out[out_name] = _webp(_long_edge(img, px), quality)
+
+    for n, section in enumerate(story.get("sections", []), start=1):
+        variant = section.get("variant")
+        if variant == "poster":
+            crop(f"story_{n}.png", f"story-{n}.webp", STORY_PX, STORY_QUALITY)
+        elif variant == "poster_journey":
+            crop(f"story_{n}_before.png", "journey-before.webp", STORY_PX, STORY_QUALITY)
+            crop(f"story_{n}.png", "journey-after.webp", STORY_PX, STORY_QUALITY)
+        elif variant == "editions":
+            for ed in EDITIONS:
+                crop(f"edition_{ed}.png", f"edition-{ed}.webp", EDITION_PX, EDITION_QUALITY)
+        elif variant == "film":
+            path = _story_source(src_dir, "film.mp4", region_id)
+            with open(path, "rb") as f:
+                out["film.mp4"] = f.read()
+    return out
+
+
+def export_region(src_dir: str, out_dir: str, region_id: str, index: dict,
+                  story: dict | None = None) -> list[str]:
     """Gate, read, encode, then write. Returns the written paths.
+
+    `story` is the plate's table from marketing/stories.toml, or None for a plate with
+    none; it adds the story's images (`story_images`) to the six.
 
     Nothing is read before the gate passes, and nothing is written until every output
     has encoded, so a refusal or a failure leaves no partial set behind.
@@ -149,6 +231,7 @@ def export_region(src_dir: str, out_dir: str, region_id: str, index: dict) -> li
     poster = frames[0]
     detail = Image.open(sources["detail.png"]).convert("RGB")
     encoded = relief_images(poster, detail)
+    encoded.update(story_images(src_dir, story, region_id))
     os.makedirs(out_dir, exist_ok=True)
     made = []
     for name, data in encoded.items():
@@ -174,7 +257,8 @@ def main(argv=None) -> int:
         dest = (os.path.join(args.out, rid) if args.out
                 else os.path.join(args.assets, rid, "relief"))
         try:
-            made = export_region(os.path.join(args.assets, rid), dest, rid, index)
+            made = export_region(os.path.join(args.assets, rid), dest, rid, index,
+                                 story=story_for(rid))
         except ReliefError as ex:
             print(f"! {ex}", file=sys.stderr)
             status = 1

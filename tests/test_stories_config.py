@@ -43,11 +43,16 @@ def test_copy_says_real_trails_and_stays_in_register():
 
 def test_config_lists_the_five_plates_in_page_order():
     cfg = tomllib.loads(STORIES.read_text())
-    assert cfg["status"] == "plan"
+    assert cfg["status"] == "ready"
     plates = [k for k in cfg if k != "status"]
     assert plates == PLATES
     assert [cfg[p]["anchor"] for p in plates] == [
         "canyonlands", "tahoe", "sierra", "rubies", "zion"]
+
+
+def test_every_plate_sets_a_road_cost():
+    cfg = tomllib.loads(STORIES.read_text())
+    assert all(cfg[p]["road_cost"] > 0 for p in PLATES)
 
 
 def test_every_section_heading_is_in_the_copy_document():
@@ -65,6 +70,16 @@ def test_drive_trips_name_their_road():
     assert {"shape": "drive", "road": "Lamoille Canyon Road"} in cfg["ruby_mountains_nv"]["trips"]
 
 
-def test_a_heading_a_render_could_contradict_carries_the_mark():
-    section = COPY.read_text().split("Walter's Wiggles keeps every switchback")[1].split("###")[0]
-    assert "(check against the crop)" in section
+def test_the_drives_run_as_the_stories_need():
+    def drives(plate, road):
+        return tomllib.loads(STORIES.read_text())[plate]["trips"].count(
+            {"shape": "drive", "road": road})
+    assert drives("canyonlands_ut", "White Rim Road") == 1
+    assert drives("ruby_mountains_nv", "Lamoille Canyon Road") == 4
+
+
+def test_the_copy_holds_no_claim_still_waiting_on_a_render():
+    # Every section's sentences were read against its crop, 2026-11-01 (spec section 10).
+    # A blank in braces is a caption filled from the render. A new mark means an unread claim.
+    body = COPY.read_text().split("## Canyonlands and Moab")[1]
+    assert "(check against the crop)" not in body

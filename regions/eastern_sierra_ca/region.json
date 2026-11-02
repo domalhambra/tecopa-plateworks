@@ -1,0 +1,24 @@
+{
+  "id": "eastern_sierra_ca",
+  "name": "Eastern Sierra",
+  "crs": "EPSG:32611",
+  "bounds": [
+    352630.0,
+    4034740.0,
+    419940.0,
+    4151110.0
+  ],
+  "overview_size": [
+    809,
+    1400
+  ],
+  "dem_path": "dem.tif",
+  "overview_path": "overview.png",
+  "hydro_path": "hydro.json",
+  "native_resolution_m": 10,
+  "elevation_min": 1043.7880859375,
+  "elevation_max": 3961.04248046875,
+  "light_azimuth": 315,
+  "light_altitude": 45,
+  "z_factor": 1.0
+}

@@ -1,6 +1,7 @@
 # Real-network demo tracks for the marketing farm
 
 **Date:** 2026-08-15 · **Status:** Approved by Dom (this session) · **Scope:** `scripts/` only — no engine changes
+**Amended 2026-11-01:** trail-first story trips are in `2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, section 7. This spec still governs the plates with no story.
 
 ## Problem
 

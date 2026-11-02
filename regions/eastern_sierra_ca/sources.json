@@ -1,0 +1,64 @@
+{
+  "id": "eastern_sierra_ca",
+  "built": "2026-11-01",
+  "fetch_bbox_4326": [
+    -118.65,
+    36.45,
+    -117.9,
+    37.5
+  ],
+  "crs": "EPSG:32611",
+  "rebuild": "python region_prep.py --id eastern_sierra_ca --name <name> --bbox -118.65 36.45 -117.9 37.5 --epsg 32611 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "aaba9bbb9ce6fd853edf68fbd674da5286294602dbdd4f14d94d57c13d7116bd",
+      "bytes": 336048681
+    },
+    "hydro.json": {
+      "sha256": "bb77685793d04d2730e2daf6d785e243faa6706820509f4c0a7a2b5779a57e38",
+      "bytes": 401018
+    },
+    "region.json": {
+      "sha256": "2c4c770e9eedb5e4e99aa8d6832cbbad096eac3b9d939581bd3e43161e189ff6",
+      "bytes": 461
+    },
+    "overview.png": {
+      "sha256": "6218e6ca7d9640edd47ccf2eaa6317ef10ddbec5661dcc9a0e6378b9e12d42f3",
+      "bytes": 450979
+    },
+    "landcover.tif": {
+      "sha256": "278ee73b5812ad37fa914b80d9982ed839564d4f6544ceb2fd7565f82d29378a",
+      "bytes": 930673
+    },
+    "labels.json": {
+      "sha256": "3424da7569e97614d72fd2368a10721f521fa7d813b0215edaedaed7f9c6d293",
+      "bytes": 52230
+    },
+    "playa.json": {
+      "sha256": "f1f488b546b99b9fac9309652b80c8e67f92a34379b692c3ca327834301c1fef",
+      "bytes": 8081
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "rasterio, USGS_Seamless_DEM_13.vrt",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}

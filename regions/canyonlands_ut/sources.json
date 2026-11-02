@@ -1,0 +1,60 @@
+{
+  "id": "canyonlands_ut",
+  "built": "2026-11-01",
+  "fetch_bbox_4326": [
+    -110.25,
+    37.95,
+    -109.35,
+    38.75
+  ],
+  "crs": "EPSG:32612",
+  "rebuild": "python region_prep.py --id canyonlands_ut --name <name> --bbox -110.25 37.95 -109.35 38.75 --epsg 32612 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "eb4c356af1370788c1057f10b9dc7482d6443082b0f7e635289d106933f46629",
+      "bytes": 295373385
+    },
+    "hydro.json": {
+      "sha256": "b08878e6186034f699dd26554cff9cefb1b9d006ae7c17202712c66d54802b6d",
+      "bytes": 674546
+    },
+    "region.json": {
+      "sha256": "2258caed2db96f28b276d95c1de730bb1d5eb03cbfb57885edaa59bc5fa0bd79",
+      "bytes": 467
+    },
+    "overview.png": {
+      "sha256": "2ff0e3c8e4e822bf7539032ec4e535fcf064ada7a2c443fb902f17c08a927231",
+      "bytes": 951267
+    },
+    "landcover.tif": {
+      "sha256": "d37911555b2c8b61d11f03e1d60445e81cc7c79ecdeb863eab2b69079b41d611",
+      "bytes": 579047
+    },
+    "labels.json": {
+      "sha256": "170654b5e40a82b1252e4fe105c7b9514a6e41c13664a54bfdbdde429dfa8961",
+      "bytes": 36411
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "rasterio, USGS_Seamless_DEM_13.vrt",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}

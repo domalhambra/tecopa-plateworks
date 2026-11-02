@@ -13,7 +13,7 @@ through `scripts/export_relief.py`.
 
 ## `stories.toml`
 
-The five showcase plates of the Pick-a-plate landing page and their stories: names, pinned destinations, trip shapes, and each section's heading and crop in words. Its status is `plan`, so nothing reads it yet. In Phase B of `docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, the farm and the exporter read it. The sentences live in `docs/superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md`, and `tests/test_stories_config.py` holds the headings in step with them.
+The five showcase plates of the Pick-a-plate landing page and their stories: names, pinned destinations, trip shapes, the plate's look and sun, and each section's heading and crop. The asset farm's `stories` and `journey` tiers and `scripts/export_relief.py` read it (`marketing/DEPLOY.md`, "A showcase plate's story"). `python -m scripts.story_config --ship-check` lists the plates still pinning the demo gradient as their photo. The sentences live in `docs/superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md`, and `tests/test_stories_config.py` holds the headings in step with them.
 
 ## `scripts/render_asset_farm.py`
 

@@ -11,6 +11,7 @@ Writer's calls, for Dom to check:
 - No visible "Pick a plate" heading. The profile keeps "plate" as seasoning, never load-bearing, so the coins carry no heading. Their label for screen readers is "Choose a place".
 - The Journey Light claim says a poster "can be" lit by the day's sun, because decision 12 did not make it part of every poster.
 - The Sierra section 2 does not mention the trail ink warming with height. Track color by height is off the page (spec section 4).
+- Checked against the renders: Franklin Lake is mapped as a lake that holds water, so the dry-lake section moved to Dry Lake Flat on the same plate. Walter's Wiggles' turns are narrower than the printed line at this scale, so that section is now the hike to Angels Landing. The haze sinks the low ground, not the far ridges, so that heading changed.
 - Numbers in the mockups ("4,000 feet", "a thousand feet down", "Twenty-one switchbacks") are gone. The heights aren't numbers a customer counts, and nobody has counted the switchbacks in a render.
 
 ## The page's opening
@@ -34,11 +35,12 @@ Poster caption: Canyonlands and Moab, Utah · {days and miles}
 Feature eyebrow: Shading
 Body: Island in the Sky drops to the White Rim and the rim drops again to the river, and each wall lays its shadow on the bench below. Drag the coin to turn it in the light.
 Image alt: Canyonlands as a relief coin.
+Close view alt: Close view of the Canyonlands poster: Island in the Sky drops to the White Rim, with the river beyond.
 
 ### Section 2: The river stays down in its canyon
 
 Feature eyebrow: Rivers
-Body: The Colorado and the Green come together at the Confluence, in the dark of the inner gorge. That's the same water you'd look down on from the overlook. (check against the crop)
+Body: The Colorado and the Green come together at the Confluence, in the dark of the inner gorge. That's the same water you'd look down on from the overlook.
 Image alt: Close view of the Canyonlands poster: two rivers meet at the bottom of a deeply shaded gorge.
 
 ### Section 3: A slow drive bends with every side canyon
@@ -58,20 +60,20 @@ Poster caption: Lake Tahoe and Desolation, California and Nevada · {days and mi
 ### Section 1: The lake shades deeper away from shore
 
 Feature eyebrow: Water
-Body: Tahoe runs pale along its edges and goes dark out in the middle. Fallen Leaf Lake does the same at its own size, right below Tallac. (check against the crop)
+Body: Tahoe runs pale along its edges and goes dark out in the middle.
 Image alt: Close view of the Tahoe poster: the lake pale at the shore and dark toward its center.
 
 ### Section 2: Every creek finds its way down
 
 Feature eyebrow: Creeks and small lakes
-Body: Desolation's lakes sit strung along their outlets. Each creek starts thin up high and widens as it comes down toward the big water.
+Body: Desolation's lakes sit in their granite bowls, and the creeks run thin between them on the way down to the big water.
 Image alt: Close view of the Tahoe poster: small granite lakes joined by creeks that widen as they descend.
 
 ### Section 3: Your summits, marked
 
-Feature eyebrow: Marks and photos
-Body: Freel, Tallac, Rose, Pyramid: a mark on each one you've done, and the photo from the top pinned right beside it. Whatever's left on your list waits for next year's poster.
-Image alt: Close view of the Tahoe poster: a summit with its mark, and a photo pinned beside it.
+Feature eyebrow: Marks
+Body: Freel, Tallac, Rose, Pyramid: a mark on each one you've done. Whatever's left on your list waits for next year's poster.
+Image alt: Close view of the Tahoe poster: a summit with its mark.
 
 ## Eastern Sierra
 
@@ -87,11 +89,11 @@ Feature eyebrow: Coloring
 Body: The colors from the Owens Valley up to the Whitney crest come from what actually grows there. Pinyon country prints one color, the forest another, the bare granite a third.
 Image alt: Close view of the Eastern Sierra poster: pale desert, darker pinyon and forest bands, and bare granite above them.
 
-### Section 2: The climb runs along the foot of the sheet
+### Section 2: Every climb is drawn in a strip beside the title
 
 Feature eyebrow: Elevation
-Body: A strip under the map draws the rise and fall of your trips. Lone Pine sits low, and the road to Whitney Portal stands up out of it. (check against the crop)
-Image alt: The foot of the Eastern Sierra poster, with a strip showing the rise and fall of the trips.
+Body: The strip in the corner of the sheet draws the rise and fall of your trips, from the valley floor up to Whitney.
+Image alt: The corner of the Eastern Sierra poster, with a strip showing the rise and fall of the trips.
 
 ### Section 3: A season draws itself
 
@@ -107,17 +109,17 @@ Title: Ruby Mountains
 Poster alt: A poster of the Ruby Mountains, Nevada, in relief, with trips drawn in gold through Lamoille Canyon and along the crest.
 Poster caption: The Ruby Mountains, Nevada · {days and miles}
 
-### Section 1: Far ridges fade
+### Section 1: Low ground sinks into the haze
 
 Feature eyebrow: Distance
-Body: The Rubies stand alone over the sage, and the back of the range goes soft the way it does at the end of a long day. The near ridges stay sharp, so you can feel how far off the others are.
-Image alt: Close view of the Ruby Mountains poster: sharp near ridges and paler ones behind them.
+Body: The Rubies stand alone over the sage, and the valley floor sinks into a cool haze the way it does at the end of a long day. The high ridges stay sharp, so the range stands up off the paper.
+Image alt: Close view of the Ruby Mountains poster: sharp ridges above a hazy valley floor.
 
 ### Section 2: A dry lake prints as a dry lake
 
 Feature eyebrow: Dry lakes
-Body: Franklin Lake lies on the valley floor as a fine stipple, with no blue painted in. Ruby Lake, which holds its water, stays blue. (check against the crop)
-Image alt: Close view of the Ruby Mountains poster: a dry lake bed drawn as a fine stipple on the valley floor.
+Body: Dry Lake Flat lies on the valley floor as a fine stipple, with no blue painted in. Only the pool that holds water stays blue.
+Image alt: Close view of the Ruby Mountains poster: Dry Lake Flat drawn as a fine stipple, with a blue pool at one end.
 
 ### Section 3: The road you drive every time wears in
 
@@ -136,18 +138,17 @@ Poster caption: Zion, Utah · {days and miles}
 ### Section 1: The light from your own day
 
 Feature eyebrow: Journey Light
-Body: Your poster can be lit by the sun of the day you were there. In this picture that's a low autumn sun, warm on the walls that face it and cool in the shade, with the plain map on the other side of the line. (check against the crop)
+Body: Your poster can be lit by the sun of the day you were there. In this picture that's a low autumn sun, warm on the walls that face it and cool in the shade, with the plain map on the other side of the line.
 Before caption: Before
 After caption: After
 Image alt, before: Zion Canyon on the poster in its plain light.
 Image alt, after: The same view of Zion Canyon lit by a low autumn sun.
 
-### Section 2: Walter's Wiggles keeps every switchback
+### Section 2: The hike to Angels Landing, at the size it prints
 
 Feature eyebrow: Your track
-Body: The trail climbs the wall below Angels Landing in tight turns, shown here at the size it prints. Your photo from the top hangs right beside them. (check against the crop)
-Heading check: every turn must show in the render, or the heading changes.
-Image alt: Close view of the Zion poster: a gold track doubling back up a canyon wall, with a photo pinned beside it.
+Body: The trail climbs out of Zion Canyon and ends on the fin above the river.
+Image alt: Close view of the Zion poster: a gold track climbing to Angels Landing.
 
 ### Section 3: This year's trips, then next year's
 

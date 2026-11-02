@@ -82,6 +82,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-11-01-dem-lanczos-resampling.md` | Changing how a plate's elevation file is read or warped, or rebuilding a curated plate's DEM. The stripe diagnosis, its measurements, and the repair and rollout plan. |
 | `superpowers/plans/2026-11-01-viewshed-wash.md` | Building the viewshed wash: which spots are real marks, the mark cap, the line-of-sight module and its relief pass, the studio toggle, and waypoints in orders. The plan and its build record. |
 | `superpowers/plans/2026-11-01-pick-a-plate-phase-a.md` | Picking up the new Tecopa landing page. Phase A: the copy, the story config, and the page on an unmerged plateworks-site branch. |
+| `superpowers/plans/2026-11-01-pick-a-plate-phase-b.md` | Picking up the new Tecopa landing page. Phase B: the look, the five plates, the journeys, the renders and the ship. |
 
 ## Handoffs
 

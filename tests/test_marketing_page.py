@@ -11,6 +11,7 @@
 # run (tests/conftest.py). Run them after every publish of any of the three pages:
 #
 #   .venv/bin/python -m pytest -m live tests/test_marketing_page.py
+import html
 import pathlib
 import re
 from functools import lru_cache
@@ -67,11 +68,53 @@ RETIRED_2026_09 = ["$299", "commission", "Tell me where you've been", "region-re
 # email with attachments, and the invoice after the proof
 RETIRED_2026_10_12 = ["Email me your tracks", "Start the email", "invoice", "LZ Books"]
 
+# the demo journeys are trail-first and generated, not trips anyone took: the page says
+# real country and real trails (spec 2026-11-01, section 10)
+RETIRED_2026_11_01 = ["real trips"]
+
 
 def test_no_retired_claims():
     for path, page in (("/tecopa/", landing()), ("/tecopa-build/", order())):
-        for phrase in RETIRED + RETIRED_2026_09 + RETIRED_2026_10_12:
+        for phrase in RETIRED + RETIRED_2026_09 + RETIRED_2026_10_12 + RETIRED_2026_11_01:
             assert phrase not in page, f"retired claim back on {path}: {phrase!r}"
+
+
+COPY = REPO / "docs/superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md"
+STORIES = {"canyonlands": ("canyonlands_ut", "Canyonlands and Moab"),
+           "tahoe": ("tahoe_ca", "Lake Tahoe and Desolation"),
+           "sierra": ("eastern_sierra_ca", "Eastern Sierra"),
+           "rubies": ("ruby_mountains_nv", "Ruby Mountains"),
+           "zion": ("zion_ut", "Zion")}
+JOURNEY_LIGHT = "Your poster can be lit by the sun of the day you were there."
+
+
+def page_words(page):
+    # the page escapes & in its text; the copy document is plain
+    return html.unescape(page)
+
+
+def test_the_five_stories_are_on_the_page():
+    page = landing()
+    for anchor, (plate, title) in STORIES.items():
+        assert f'id="{anchor}"' in page, f"no story anchor {anchor}"
+        assert f">{title}</h3>" in page, f"no story title {title}"
+        assert f"{plate}-coin" in page, f"no coin for {plate}"
+
+
+def test_the_page_says_real_trails():
+    assert "real trails" in landing()
+
+
+def test_every_section_heading_of_the_copy_is_on_the_page():
+    words = page_words(landing())
+    headings = re.findall(r"^### Section \d: (.+)$", COPY.read_text(), re.M)
+    assert len(headings) == 15, "the copy document's story sections moved"
+    missing = [h for h in headings if f">{h}</h4>" not in words]
+    assert not missing, f"section headings absent from the page: {missing}"
+
+
+def test_the_journey_light_claim_is_on_the_page():
+    assert JOURNEY_LIGHT in landing()
 
 
 def built_plates():
@@ -98,8 +141,8 @@ def test_no_ghost_plates_on_the_page():
 # and, since the client intake (spec 2026-10-12, decisions 6 and 7), the two sets
 # and the shipping of each print
 LANDING_PRICES = ["$69", "$99", "$149", "$189", "$39", "$59", "$119", "$159", "$25",
-                  "$8", "$12", "$16"]
-ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$12", "$16"]
+                  "$8", "$14", "$16"]
+ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$14", "$16"]
 SIZES = ["11×17", "17×22", "two panels", "three panels"]
 # the Tecopa order form, on plateworks.org since the intake's D43 (Netlify Forms,
 # which posts to the intake's /forms); Tally's q4xp89 before

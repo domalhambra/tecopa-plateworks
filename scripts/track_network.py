@@ -93,22 +93,37 @@ SEASONS = {                   # kind -> (first day-of-year, last), spec §3 date
     "lake":   (60, 181),      # Mar-Jun
     "gap":    (152, 243),     # Jun-Aug
     "summit": (182, 304),     # Jul-Oct
+    "drive":  (182, 304),     # the same bucket as a summit
 }
 # kind -> marker glyph (spec §3). Total over the kinds `destination_pool` can
 # produce -- it emits exactly summit/gap from labels.json and lake from
-# hydro.json -- and every value is a glyph `render._draw_glyph` already knows.
+# hydro.json -- plus a story's drive, and every value is a glyph
+# `render._draw_glyph` already knows.
 # The farm's positional icon cycle is fine for invented density hotspots but
 # libellous next to a real name: it put a tent on "Road Lake" and a camera on a
 # summit. KIND_ICONS is the fix; the `.get` fallback keeps a future kind from
 # taking down a farm run over a marker glyph.
-KIND_ICONS = {"summit": "peak", "gap": "flag", "lake": "water"}
+KIND_ICONS = {"summit": "peak", "gap": "flag", "lake": "water", "drive": "flag"}
 KIND_ICON_DEFAULT = "dot"
+# A story's trip shapes. `drive` is the one that takes a road, not a destination.
+STORY_SHAPES = ("out_and_back", "loop", "4wd", "drive")
+DRIVE_NAMED_COST = 0.1        # a named road's edges, whatever their class
+FILL_CLASSES = ("trail",)     # what an unpinned story stop's vertex must touch
+ROUTE_SEARCH_FACTOR = 1.5     # how far past its target a story trailhead search runs
+
+
+class PinError(RuntimeError):
+    """A plate's story cannot be composed as written: a pinned place or road that
+    does not resolve, or a story missing what it must say. Deliberately NOT one of
+    the errors `render_asset_farm._demo_journeys` catches. The story's captions name
+    these places, so the run fails with the name in the message and never falls back
+    to a random pick or to synthetic tracks."""
 
 
 class Graph:
     def __init__(self):
         self.adj: dict[tuple, list[tuple]] = {}   # key -> [(other_key, edge_idx)]
-        self.edges: list[dict] = []               # {"class", "coords", "len_m"}
+        self.edges: list[dict] = []               # {"class", "coords", "len_m", "name"}
 
     @staticmethod
     def key(pt) -> tuple:
@@ -135,7 +150,8 @@ def build_graph(ways: list[dict]) -> Graph:
             idx = len(g.edges)
             g.edges.append({"class": w["class"],
                             "coords": [list(map(float, a)), list(map(float, b))],
-                            "len_m": length})
+                            "len_m": length,
+                            "name": w.get("name")})   # None: nameless, or an old cache
             g.adj.setdefault(ka, []).append((kb, idx))
             g.adj.setdefault(kb, []).append((ka, idx))
     return g
@@ -469,10 +485,259 @@ def _trailhead_for(index, dest_node: tuple, target: float, rng, centre=None):
     return keys[int(rng.choice(cand))]
 
 
-def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None = None):
+def straight_counts(path, step_m: float = 100.0, tol_deg: float = 3.0) -> tuple[int, int]:
+    """(straight, total) heading changes of one path, resampled every `step_m`
+    along its length. A change is straight when the heading turns by less than
+    `tol_deg`. Fewer than three samples have no heading change: (0, 0).
+
+    Read the ROUTED path, before densify and jitter. The 3 m jitter blurs a
+    straight run into small wobbles and reads as curvy, so the measure taken
+    after it understates how straight the trips are."""
+    pts = np.asarray(path, dtype=float).reshape(-1, 2)
+    if len(pts) < 2:
+        return 0, 0
+    seg = np.hypot(*np.diff(pts, axis=0).T)
+    keep = np.concatenate([[True], seg > 0.0])         # drop repeated vertices
+    pts = pts[keep]
+    if len(pts) < 2:
+        return 0, 0
+    cum = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+    at = np.arange(0.0, cum[-1] + 1e-9, step_m)
+    if len(at) < 3:
+        return 0, 0
+    xy = np.column_stack([np.interp(at, cum, pts[:, 0]),
+                          np.interp(at, cum, pts[:, 1])])
+    d = np.diff(xy, axis=0)
+    heading = np.degrees(np.arctan2(d[:, 1], d[:, 0]))
+    turn = np.abs((np.diff(heading) + 180.0) % 360.0 - 180.0)
+    return int(np.sum(turn < tol_deg)), int(len(turn))
+
+
+def straight_share(path, step_m: float = 100.0, tol_deg: float = 3.0) -> float:
+    """Share of a path's `step_m` heading changes under `tol_deg`: 1.0 dead
+    straight, near 0 winding. A path under three samples gives 0.0.
+    Spec: docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md, section 7."""
+    straight, total = straight_counts(path, step_m, tol_deg)
+    return straight / total if total else 0.0
+
+
+def pinned_destinations(pool: list[dict], names: list[str]) -> list[dict]:
+    """The pool's entries for `names`, in that order. A name the pool does not hold
+    raises PinError: it is missing from labels.json and hydro.json, or it snapped
+    too far from the network and `destination_pool` dropped it."""
+    by_name = {d["name"]: d for d in pool}
+    missing = [n for n in names if n not in by_name]
+    if missing:
+        raise PinError(f"story destination not on this plate: {', '.join(missing)}")
+    return [by_name[n] for n in names]
+
+
+def drive_path(g: Graph, road: str) -> list:
+    """The route along a road named in OSM: between its two named vertices farthest
+    apart, named edges at DRIVE_NAMED_COST a metre and every other edge at its
+    `4wd_day` weight, so the ordinary ways bridge any break in the name. The start
+    is the lower-sorting end (west, then south), which makes the result stable.
+    PinError when no way carries the name, or when its pieces cannot be joined."""
+    weights = WEIGHTS["4wd_day"]
+    penalty = {i: DRIVE_NAMED_COST / weights[e["class"]]
+               for i, e in enumerate(g.edges) if e.get("name") == road}
+    if not penalty:
+        raise PinError(f"story road not on this plate: {road}")
+    keys = sorted({g.key(pt) for i in penalty for pt in g.edges[i]["coords"]})
+    arr = np.array(keys, dtype=float)
+    best, ends = -1.0, (keys[0], keys[-1])
+    for i in range(len(arr) - 1):
+        d2 = ((arr[i + 1:] - arr[i]) ** 2).sum(axis=1)
+        j = int(np.argmax(d2))
+        if d2[j] > best:
+            best, ends = float(d2[j]), (keys[i], keys[i + 1 + j])
+    got = dijkstra_edges(g, ends[0], ends[1], weights, edge_penalty=penalty)
+    if got is None:
+        raise PinError(f"story road does not join up on this plate: {road}")
+    return got[0]
+
+
+def outing_weights(story: dict) -> dict:
+    """The outing weights with the road cost this plate's story asks for."""
+    if "road_cost" not in story:
+        raise PinError("story sets no road_cost")   # a KeyError would read as a bad cache
+    return {**WEIGHTS["outing"], "road": story["road_cost"]}
+
+
+def _shape_path(g: Graph, shape: str, th: tuple, node: tuple, out_path: list,
+                out_ids: list, weights: dict) -> list:
+    """The full path of a trip that reached `node` by `out_path`: a loop when a
+    second way back exists, a 4wd out-and-back when the ground holds one, and an
+    out-and-back on the routed path otherwise. Draws no RNG."""
+    if shape == "loop":
+        pen = {ei: LOOP_PENALTY for ei in out_ids}
+        back = dijkstra_edges(g, node, th, weights, edge_penalty=pen)
+        if back is not None:
+            back_path, back_ids = back
+            shared = set(back_ids) & set(out_ids)
+            if len(shared) <= LOOP_SHARE_MAX * len(out_ids):
+                return out_path + back_path[1:]
+    elif shape == "4wd":
+        p4 = dijkstra_edges(g, th, node, WEIGHTS["4wd_day"])
+        if p4 is not None:
+            p, ids = p4
+            l4 = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
+            lt = sum(g.edges[i]["len_m"] for i in ids) or 1.0
+            if l4 / lt >= 0.4:
+                return p + p[-2::-1]               # 4wd out-and-back
+    return out_path + out_path[-2::-1]             # default / fallbacks
+
+
+def _route_trailhead(g: Graph, index, node: tuple, target: float, weights: dict, rng,
+                     centre: tuple) -> tuple | None:
+    """A story trip's road vertex to start from, chosen by how far the ROUTE runs.
+
+    `_trailhead_for` matches the straight-line distance, and on real plates that sends
+    a story trip the long way round: a trailhead 6 km from Observation Point across
+    Zion Canyon is an 84 km route, and raising the road cost makes it longer. So this
+    walks out from the destination at the trip's own weights and takes the road
+    vertices whose route length is nearest `target`, then narrows and draws the way
+    `_trailhead_for` does. Only vertices joined to the destination can come back,
+    which is also what lets a pin in a pocket of the network find its own road.
+    None when no road vertex is joined to it."""
+    roads = set(index[0])
+    dist, metres, on_road, found = {node: 0.0}, {node: 0.0}, {node: False}, []
+    pq = [(0.0, node)]
+    while pq:
+        d, u = heapq.heappop(pq)
+        if d > dist[u]:
+            continue
+        if metres[u] > ROUTE_SEARCH_FACTOR * target and any(
+                c[1] > TRAILHEAD_MIN_M for c in found):
+            break
+        if u in roads and u != node:
+            found.append((u, metres[u], on_road[u]))
+        for v, ei in g.adj[u]:
+            e = g.edges[ei]
+            nd = d + e["len_m"] * weights[e["class"]]
+            if nd < dist.get(v, float("inf")):
+                dist[v], metres[v] = nd, metres[u] + e["len_m"]
+                on_road[v] = on_road[u] or e["class"] == "road"
+                heapq.heappush(pq, (nd, v))
+    if not found:
+        return None
+    far = [c for c in found if c[1] > TRAILHEAD_MIN_M]
+    if not far:
+        return max(found, key=lambda c: c[1])[0]       # all of them inside the floor
+    # A trailhead proper: where the route first meets a road, not a point further along it.
+    far = [c for c in far if not c[2]] or far
+    far.sort(key=lambda c: (abs(c[1] - target), c[0]))
+    cand = np.array([c[0] for c in far[:TRAILHEAD_SHORTLIST]], dtype=float)
+    mid = (cand + np.asarray(node, dtype=float)) / 2.0
+    inward = np.hypot(mid[:, 0] - centre[0], mid[:, 1] - centre[1])
+    cand = cand[np.argsort(inward, kind="stable")[:TRAILHEAD_CANDIDATES]]
+    x, y = cand[int(rng.integers(len(cand)))]
+    return (float(x), float(y))
+
+
+def _trip_slots(shapes: list[dict], n_trips: int) -> list[dict]:
+    """The story's list once, in order, then its outing shapes round again up to
+    `n_trips`. A drive runs exactly as often as the list names it: three of a 115 km
+    road once took 48 percent of a plate's manifest for one visible line."""
+    outings = [t for t in shapes if t["shape"] != "drive"]
+    extra = max(0, n_trips - len(shapes)) if outings else 0
+    return (shapes + [outings[i % len(outings)] for i in range(extra)])[:n_trips]
+
+
+def _story_plan(story: dict, pool: list[dict], n_trips: int) -> tuple[list[dict], list[dict]]:
+    """Check a story before any trip is routed: (its trip slots, its pins). Every
+    failure is a PinError, for the reason on PinError."""
+    shapes = story.get("trips") or []
+    if not shapes:
+        raise PinError("story lists no trips")
+    for t in shapes:
+        if t.get("shape") not in STORY_SHAPES:
+            raise PinError(f"story trip has an unknown shape: {t.get('shape')}")
+        if t["shape"] == "drive" and not t.get("road"):
+            raise PinError("story drive names no road")
+    pins = pinned_destinations(pool, story.get("destinations") or [])
+    slots = _trip_slots(shapes, n_trips)
+    cut = [t["road"] for t in shapes[n_trips:] if t["shape"] == "drive"]
+    if cut:
+        raise PinError(f"story lists more trips than the plate holds, dropping: {', '.join(cut)}")
+    outings = sum(t["shape"] != "drive" for t in slots)
+    if len(pins) > outings:
+        dropped = ", ".join(d["name"] for d in pins[outings:])
+        raise PinError(f"story has {outings} outings and no room for: {dropped}")
+    return slots, pins
+
+
+def _story_trips(g: Graph, story: dict, pool: list[dict], bounds: tuple, n_trips: int,
+                 index, centre: tuple, spacing: float, rng, year: int) -> tuple[list, int]:
+    """A story's trips, as (trips, skipped). Slots come from `_trip_slots`, and no two
+    trips share a day, because `render._journey_groups` merges same-day tracks into one
+    visit. An outing slot takes the next destination: the pins in config
+    order, then the seeded selection over the rest of the pool. A drive slot takes
+    its named road and no destination. A pin that no road joins raises; an unpinned
+    pick that none joins gives way to the next, as it does with no story."""
+    weights = outing_weights(story)
+    slots, pins = _story_plan(story, pool, n_trips)
+    pinned = {d["name"] for d in pins}
+    rest = [d for d in pool if d["name"] not in pinned]
+    # An outing leaves the road, so an unpinned stop has to be somewhere off it.
+    off_road = [d for d in rest
+                if any(g.edges[ei]["class"] in FILL_CLASSES for _v, ei in g.adj[d["node"]])]
+    rest = off_road or rest
+    stops = iter(pins + select_destinations(rest, bounds, len(rest), rng))
+    trips, skipped = [], 0
+    drives: dict[str, list] = {}
+    taken: set[int] = set()                # days of the year already holding a trip
+
+    def add(d: dict, path: list) -> None:
+        lo, hi = SEASONS[d["kind"]]
+        if taken.issuperset(range(lo, hi + 1)):
+            raise PinError(f"story has more trips than days in the {d['kind']} season: {d['name']}")
+        doy = int(rng.integers(lo, hi + 1))
+        while doy in taken:
+            doy = int(rng.integers(lo, hi + 1))
+        taken.add(doy)
+        day = date(year, 1, 1) + timedelta(days=doy - 1)
+        raw = np.asarray(path, dtype=float)
+        trips.append((day, len(trips), d, _densify(raw, rng, spacing), raw))
+
+    while len(trips) < len(slots):
+        trip = slots[len(trips)]
+        if trip["shape"] == "drive":
+            road = trip["road"]
+            if road not in drives:
+                drives[road] = drive_path(g, road)
+            path = drives[road]
+            add({"name": road, "kind": "drive", "x": path[-1][0], "y": path[-1][1]}, path)
+            continue
+        d = next(stops, None)
+        if d is None:
+            break
+        th = _route_trailhead(g, index, d["node"], trip_target_m(bounds, rng), weights,
+                              rng, centre)
+        got = None if th is None else dijkstra_edges(g, th, d["node"], weights)
+        if got is None:
+            if d["name"] in pinned:
+                raise PinError(f"no road on this plate reaches story destination: {d['name']}")
+            skipped += 1
+            continue
+        add(d, _shape_path(g, trip["shape"], th, d["node"], got[0], got[1], weights))
+    return trips, skipped
+
+
+def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None = None,
+                   story=None, raw_out: list | None = None):
     """The year of trips: seeded, deterministic from (ways, plate files, seed)
     alone. Returns (tracks, spots) ready for the farm. `n_trips` defaults to
-    the plate's own count (see trip_count)."""
+    the plate's own count (see trip_count).
+
+    `raw_out`, a list, receives each trip's routed path (an (N, 2) array, before
+    densify and jitter) in the order of the returned tracks, for straight_share.
+    It draws no RNG and changes no track.
+
+    `story`, a plate's table from marketing/stories.toml, pins its destinations,
+    sets its road cost and cycles its trip shapes (see _story_trips). With
+    `story=None`, the six older plates' case, nothing here draws differently: their
+    trips are held byte for byte by a digest in tests/test_track_network.py."""
     from app.ingest import Track          # local: the graph half of this module
                                           # must stay importable without the engine
     rng = np.random.default_rng(seed)
@@ -481,17 +746,16 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None 
     if n_trips is None:
         n_trips = trip_count(bounds)
     pool = destination_pool(region.dir, g)
+    year = 2024
+    index = road_vertex_index(g)           # built once: see road_vertex_index
+    centre = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
+    spacing = densify_spacing_m(region.cfg)
     # The WHOLE pool, in selection order: the first n_trips are exactly the picks
     # an n_trips-sized call returns (the rng is drawn once, for the start, and the
     # greedy order is prefix-stable), and the rest are the replacements an
     # unreachable pick falls through to. A plate that loses no destination
     # therefore composes the same trips it always did.
-    dests = select_destinations(pool, bounds, len(pool), rng)
-    index = road_vertex_index(g)           # built once: see road_vertex_index
-    centre = ((bounds[0] + bounds[2]) / 2.0, (bounds[1] + bounds[3]) / 2.0)
-    spacing = densify_spacing_m(region.cfg)
-
-    year = 2024
+    dests = [] if story is not None else select_destinations(pool, bounds, len(pool), rng)
     trips = []
     # A destination in a different connected component than its trailhead routes
     # to None. On a clipped OSM extract that is real topology (a pocket of trails
@@ -499,6 +763,9 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None 
     # Only when the pool runs out does the poster ship thinner -- and then it
     # says so rather than shipping seven journeys where eight were intended.
     skipped = 0
+    if story is not None:
+        trips, skipped = _story_trips(g, story, pool, bounds, n_trips, index, centre,
+                                      spacing, rng, year)
     for seq, d in enumerate(dests):
         if len(trips) == n_trips:
             break
@@ -517,25 +784,7 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None 
             continue
         out_path, out_ids = got
         shape = rng.choice(["out_and_back", "loop", "4wd"])
-        path = None
-        if shape == "loop":
-            pen = {ei: LOOP_PENALTY for ei in out_ids}
-            back = dijkstra_edges(g, d["node"], th, WEIGHTS["outing"], edge_penalty=pen)
-            if back is not None:
-                back_path, back_ids = back
-                shared = set(back_ids) & set(out_ids)
-                if len(shared) <= LOOP_SHARE_MAX * len(out_ids):
-                    path = out_path + back_path[1:]
-        elif shape == "4wd":
-            p4 = dijkstra_edges(g, th, d["node"], WEIGHTS["4wd_day"])
-            if p4 is not None:
-                p, ids = p4
-                l4 = sum(g.edges[i]["len_m"] for i in ids if g.edges[i]["class"] == "4wd")
-                lt = sum(g.edges[i]["len_m"] for i in ids) or 1.0
-                if l4 / lt >= 0.4:
-                    path = p + p[-2::-1]               # 4wd out-and-back
-        if path is None:                               # default / fallbacks
-            path = out_path + out_path[-2::-1]
+        path = _shape_path(g, shape, th, d["node"], out_path, out_ids, WEIGHTS["outing"])
         lo, hi = SEASONS[d["kind"]]
         day = date(year, 1, 1) + timedelta(days=int(rng.integers(lo, hi + 1)) - 1)
         raw = np.asarray(path, dtype=float)
@@ -578,17 +827,21 @@ def network_tracks(region, ways: list[dict], seed: int = 7, n_trips: int | None 
     tracks = [Track(track_id=f"{d['kind']}:{d['name']}", coords=coords,
                     day=day.isoformat())
               for day, _seq, d, coords, _raw in trips]
-    # One spot per trip, weight 1, stated outright rather than accumulated:
-    # `destination_pool` dedupes by name and `select_destinations` removes each
-    # pick from its pool, so a destination can never be visited twice and the
-    # accumulation loop this replaces could only ever count to 1. x/y are the
-    # real summit/lake position, NOT the snapped road vertex -- the marker
-    # belongs on the place, not on the trailhead path. The icon rides along so
-    # the glyph agrees with the name (see KIND_ICONS); the farm's `_annotate`
-    # leaves both alone once they are set.
-    return tracks, [{"x": d["x"], "y": d["y"], "weight": 1, "label": d["name"],
-                     "icon": KIND_ICONS.get(d["kind"], KIND_ICON_DEFAULT)}
-                    for _day, _seq, d, _coords, _raw in trips]
+    if raw_out is not None:
+        raw_out.extend(raw for _day, _seq, _d, _coords, raw in trips)
+    # One spot per place, weighted by its trips. `destination_pool` dedupes by name
+    # and `select_destinations` removes each pick from its pool, so only a road a
+    # story drives more than once counts past 1. x/y are the real summit/lake
+    # position, NOT the snapped road vertex -- the marker belongs on the place, not
+    # on the trailhead path. The icon rides along so the glyph agrees with the name
+    # (see KIND_ICONS); the farm's `_annotate` leaves both alone once they are set.
+    spots: dict[str, dict] = {}
+    for _day, _seq, d, _coords, _raw in trips:
+        spot = spots.setdefault(d["name"], {
+            "x": d["x"], "y": d["y"], "weight": 0, "label": d["name"],
+            "icon": KIND_ICONS.get(d["kind"], KIND_ICON_DEFAULT)})
+        spot["weight"] += 1
+    return tracks, list(spots.values())
 
 
 def path_edge_ids(g: Graph, path: list) -> list[int]:

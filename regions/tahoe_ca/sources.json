@@ -1,0 +1,60 @@
+{
+  "id": "tahoe_ca",
+  "built": "2026-11-01",
+  "fetch_bbox_4326": [
+    -120.35,
+    38.7,
+    -119.7,
+    39.45
+  ],
+  "crs": "EPSG:32610",
+  "rebuild": "python region_prep.py --id tahoe_ca --name <name> --bbox -120.35 38.7 -119.7 39.45 --epsg 32610 --resolution 10",
+  "assets": {
+    "dem.tif": {
+      "sha256": "9736ce655a783754e4c73f8160e3c625908edde791d5e2c1c13c4f9c60735a50",
+      "bytes": 185699909
+    },
+    "hydro.json": {
+      "sha256": "78b17ed85bfc2cdc258e371b5e67b9c15ab32789aedf62dff29ec2e99c5a023c",
+      "bytes": 270361
+    },
+    "region.json": {
+      "sha256": "151f76c31834ff22586cf9665cae101788e82d9455dcdc03b8786e56757a69fe",
+      "bytes": 463
+    },
+    "overview.png": {
+      "sha256": "75fda20a71ebcc46b3cd283c3223e8e900ebc163c12f6c64e0eafd32d7572665",
+      "bytes": 498976
+    },
+    "landcover.tif": {
+      "sha256": "8c548417aef950e87a13241f14e2009939c7ad01e8aeb851f0834ac05fdaa511",
+      "bytes": 598785
+    },
+    "labels.json": {
+      "sha256": "566f0193af261e12833e95f7661bc4db82921367c546a9b1aeb9de26d0d4a5cd",
+      "bytes": 34891
+    }
+  },
+  "sources": [
+    {
+      "dataset": "USGS 3DEP 10 m DEM",
+      "via": "rasterio, USGS_Seamless_DEM_13.vrt",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "USGS NHD waterbodies + network flowlines",
+      "via": "pynhd.WaterData nhdwaterbody/nhdflowline_network",
+      "license": "Public domain (USGS)"
+    },
+    {
+      "dataset": "NLCD 2021 land cover (30 m)",
+      "via": "pygeohydro.nlcd_bygeom",
+      "license": "Public domain (USGS/MRLC)"
+    },
+    {
+      "dataset": "USGS GNIS Landforms",
+      "via": "carto.nationalmap.gov geonames MapServer/5 (scripts/build_labels.py)",
+      "license": "Public domain (USGS)"
+    }
+  ]
+}
