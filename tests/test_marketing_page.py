@@ -141,8 +141,8 @@ def test_no_ghost_plates_on_the_page():
 # and, since the client intake (spec 2026-10-12, decisions 6 and 7), the two sets
 # and the shipping of each print
 LANDING_PRICES = ["$69", "$99", "$149", "$189", "$39", "$59", "$119", "$159", "$25",
-                  "$8", "$12", "$16"]
-ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$12", "$16"]
+                  "$8", "$14", "$16"]
+ORDER_PRICES = ["$69", "$99", "$149", "$189", "$39", "$8", "$14", "$16"]
 SIZES = ["11×17", "17×22", "two panels", "three panels"]
 # the Tecopa order form, on plateworks.org since the intake's D43 (Netlify Forms,
 # which posts to the intake's /forms); Tally's q4xp89 before
