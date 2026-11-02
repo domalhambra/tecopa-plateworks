@@ -80,6 +80,13 @@ So end to end, a new technique is: a spec field, a `@relief_extra` reader, a
 > that sinks low ground into the cool Imhof haze. Both are gated at 0.0, so the shipped
 > registry is still a strict no-op at the spec defaults. Read it alongside this page —
 > it is shorter than the explanation.
+>
+> `looks.py` also holds the pass for the viewshed wash, the example of a pass that needs
+> plate data. `render._seen_field` reads the plate and adds a `SeenField` to
+> `frame.extras["seen"]` at the `shaded_relief` call, only when there is one to add. The
+> pass reads only the frame (rule 4), and its `enabled` predicate needs both the knob and
+> the field. So `_relief_extras(spec)` still depends on the spec alone. See
+> `superpowers/specs/2026-11-01-viewshed-wash-design.md`.
 
 ## The stages
 
@@ -152,10 +159,18 @@ land cover, contours and place names on, in bytes of live arrays for each output
 | Terrain depth on (`elko_bonneville`) | 135.5 | 75.3 | the four heavy passes and the light they build |
 | High relief 0.5 | 142.7 | 79.3 | the four heavy passes and the light they build |
 | `soft_light` 0.35 and `haze_strength` 0.15 | 135.5 | 95.3 | the soft-light pass |
+| The viewshed wash at 1.0, 64 marks (measured 2026-11-01, on the same sheet with the same layers, against 75.3 with the wash off) | not applicable | 75.7 | the four heavy passes and the light they build |
 
 The old peak was the tonal curve, and only about 25 of its bytes were in use there. The
 soft-light pass was not changed: its own planes are now the peak of a sheet that uses
 it.
+
+The wash adds no full-sheet plane. Its mask is on a coarse grid of the plate, at most about
+4 million cells (16 MB), whatever the sheet's size, and `render` holds at most three of
+them (`SEEN_MASKS_MAX`). The pass samples the mask a band at a time, and it runs after the
+core has freed 15 bytes a pixel, so a segment's peak cannot see it.
+`test_the_wash_holds_no_full_sheet_plane` in `tests/test_render_memory.py` measures the pass
+alone.
 
 The chain keeps these rules, and a new pass must keep them too:
 

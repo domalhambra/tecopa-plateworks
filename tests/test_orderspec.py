@@ -355,9 +355,10 @@ def _fixed_spec(**kw):
 # added: it proves only that I2 left photo-less hashing unchanged on this branch. It is not
 # a hash from main: this branch added two spec fields (photo_layout, photo_band_side), so
 # every spec hashes differently here than on main, and an order approved on main needs
-# approving again after the merge.
+# approving again after the merge. The `viewshed` field moved it again, as any new field
+# does: every field reaches the JSON, so an order approved before it is approved again.
 PHOTOLESS_HASH_BEFORE_PHOTO_DIGESTS = (
-    "dc40681848f36bc805addd3e896e56fb924ee7948f211f7f006ccbe60c2205c0")
+    "d858d23e7fbe8502284acf4a7495121e2317b1ceb4833ebc77cfe409aa378bb5")
 
 
 def test_a_spec_with_no_order_photo_hashes_as_it_did_before_photo_digests():

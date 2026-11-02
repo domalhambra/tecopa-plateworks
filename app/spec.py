@@ -124,7 +124,9 @@ STYLE_BOUNDS = {"track_width_pt": (0.8, 6.0), "track_halo": (0.0, 0.9),
                 # the depth pass's own techniques, exposed as deliberate knobs.
                 "soft_light": (0.0, 1.0), "haze_strength": (0.0, 1.0),
                 # Water (v1.14): the lake depth vignette (Imhof's littoral shelf).
-                "water_depth": (0.0, 1.0)}
+                "water_depth": (0.0, 1.0),
+                # The viewshed wash: how far unseen ground is quieted (app/looks.py).
+                "viewshed": (0.0, 1.0)}
 
 _KIND_WORDS = {"float": "a number", "int": "a whole number", "str": "text",
                "bool": "true or false", "list": "a list", "list | None": "a list"}
@@ -275,6 +277,11 @@ class CompositionSpec:
     # (store.js), the labelPlace precedent.
     soft_light: float = 0.0
     haze_strength: float = 0.0
+    # The viewshed wash: ground the poster's marks cannot see is quieted. 0.0 is off:
+    # the pass never runs and the plate is not read for it. The marks are the hotspots
+    # (app/marks.py), so there is no second list of places on the spec. See
+    # docs/superpowers/specs/2026-11-01-viewshed-wash-design.md.
+    viewshed: float = 0.0
     # Water (v1.14): the lake depth vignette. A lake is the one element on the sheet
     # with no internal structure -- one flat chip of colour, which reads as a hole cut
     # in the map rather than a surface. This grades it from a pale littoral shelf at

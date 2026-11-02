@@ -58,8 +58,8 @@ def _render(elev, **kw):
 
 def test_looks_registers_the_shipped_passes():
     assert registered_relief_passes("light") == ["soft-light"]
-    assert registered_relief_passes("finish") == ["haze"]
-    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze"}
+    assert registered_relief_passes("finish") == ["haze", "viewshed"]
+    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze", "viewshed"}
 
 
 def test_zero_knobs_are_byte_identical_to_an_empty_registry(terrain):
