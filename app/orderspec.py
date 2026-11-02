@@ -64,8 +64,9 @@ PHOTO_BOX_REF_AREA = 216.0
 _SPEC_DEFAULTS = {f.name: f.default for f in dataclasses.fields(CompositionSpec)}
 
 
-def _route_cells(coords) -> set:
-    """The REPEAT_CELL_M cells a track passes through, walked between its points."""
+def _route_cells(coords, offset=0.0) -> set:
+    """The REPEAT_CELL_M cells a track passes through, walked between its points, on a
+    grid shifted by `offset` metres."""
     pts = np.asarray(coords, dtype=float)
     if len(pts) < 2:
         return set()
@@ -73,20 +74,25 @@ def _route_cells(coords) -> set:
     at = np.concatenate([[0.0], np.cumsum(seg)])
     d = np.arange(0.0, at[-1] + REPEAT_CELL_M / 2, REPEAT_CELL_M / 2)
     walk = np.column_stack([np.interp(d, at, pts[:, 0]), np.interp(d, at, pts[:, 1])])
-    return set(map(tuple, np.floor(walk / REPEAT_CELL_M).astype(np.int64).tolist()))
+    return set(map(tuple, np.floor((walk + offset) / REPEAT_CELL_M).astype(np.int64).tolist()))
 
 
 def repeats_a_route(tracks, track_days) -> bool:
     """True when two journeys share at least REPEAT_MIN_M of line: a road driven again, a
-    trail hiked twice. Segments of one day are one journey (render._journey_groups)."""
+    trail hiked twice. Segments of one day are one journey (render._journey_groups). Two
+    grids half a cell apart read the line: on one grid alone, two traces of a road running
+    along a cell line fall in neighbouring cells and share none."""
     from app import render       # here, as in band_height_for
-    seen, shared = {}, set()
-    for n, group in enumerate(render._journey_groups(
-            SimpleNamespace(tracks=tracks, track_days=track_days))):
-        for cell in set().union(*(_route_cells(tracks[i]) for i in group)):
-            if seen.setdefault(cell, n) != n:
-                shared.add(cell)
-    return len(shared) * REPEAT_CELL_M >= REPEAT_MIN_M
+    groups = render._journey_groups(SimpleNamespace(tracks=tracks, track_days=track_days))
+    for offset in (0.0, REPEAT_CELL_M / 2):
+        seen, shared = {}, set()
+        for n, group in enumerate(groups):
+            for cell in set().union(*(_route_cells(tracks[i], offset) for i in group)):
+                if seen.setdefault(cell, n) != n:
+                    shared.add(cell)
+        if len(shared) * REPEAT_CELL_M >= REPEAT_MIN_M:
+            return True
+    return False
 
 
 def order_look(tracks, track_days) -> dict:

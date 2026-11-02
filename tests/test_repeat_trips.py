@@ -61,3 +61,17 @@ def test_the_farm_applies_the_same_rule():
               Track(track_id="b", coords=_line(0, 8, 5000, 8), day="2024-08-01")]
     assert _base_spec(_region(), tracks, []).track_weave is False
     assert _base_spec(_region(), tracks[:1], []).track_weave is True
+
+
+def test_a_road_along_a_cell_line_still_repeats():
+    # 8 m of GPS noise either side of a cell line, running along it: no cell in common
+    days = ["2024-07-01", "2024-08-01"]
+    a, b = _line(0, 0, 5000, 0), _line(0, -8, 5000, -8)
+    assert orderspec.repeats_a_route([a, b], days) is True
+    a, b = _line(0, 0, 0, 5000), _line(-8, 0, -8, 5000)
+    assert orderspec.repeats_a_route([a, b], days) is True
+
+
+def test_a_road_and_a_trail_a_quarter_mile_apart_do_not_repeat():
+    a, b = _line(0, 0, 5000, 0), _line(0, 400, 5000, 400)
+    assert orderspec.repeats_a_route([a, b], ["2024-07-01", "2024-08-01"]) is False
