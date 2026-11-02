@@ -94,3 +94,90 @@ def test_a_title_past_the_specs_limit_refuses_every_size(tmp_path):
         assert not e["offered"] and "image" not in e
         assert e["why"] == f"title_text must be at most {TITLE_MAX_CHARS} characters"
     assert list(tmp_path.iterdir()) == []                   # no map was written
+
+
+# ---- the wash: with the key, a second map of each size (viewshed wash, decision 20) ----
+
+def _waypoints():
+    """Three waypoints on the Lassen plate, in its CRS, two near the track."""
+    b = json.load(open(os.path.join(REGION_DIR, "region.json")))["bounds"]
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    return [{"x": cx - 9000.0, "y": cy - 1500.0, "weight": 3, "label": "Camp",
+             "icon": "flag", "mark": True},
+            {"x": cx + 1000.0, "y": cy + 2500.0, "weight": 3, "label": "",
+             "icon": "flag", "mark": True},
+            {"x": cx + 11000.0, "y": cy - 900.0, "weight": 3, "label": "Spring",
+             "icon": "water", "mark": True}]
+
+
+def _entries(tracks):
+    pts = tracks[0].coords
+    bounds = (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
+    return opv.plan_sizes(bounds, [t.coords for t in tracks], forced=("11x17", "three"))
+
+
+def test_preview_shows_both_with_the_key(tmp_path, monkeypatch):
+    from app import render
+    real, asked = render.rasterize, []
+
+    def spy(spec, **kw):
+        asked.append((spec.viewshed, len(spec.hotspots), kw.get("watermark_text")))
+        return real(spec, **kw)
+    monkeypatch.setattr(render, "rasterize", spy)
+    tracks = _tracks()
+    entries = _entries(tracks)
+    opv.render_maps(entries, tracks, REGION_DIR, "Lassen walk", str(tmp_path),
+                    waypoints=_waypoints(), viewshed=0.6)
+    for e in entries:
+        if not e["offered"]:                        # forced: only these two are drawn
+            assert "image" not in e and "wash_image" not in e
+            continue
+        assert e["image"] == str(tmp_path / f"{e['key']}.png")
+        assert e["wash_image"] == str(tmp_path / f"{e['key']}-wash.png")
+        plain, wash = Image.open(e["image"]), Image.open(e["wash_image"])
+        assert plain.size == wash.size             # one picture, two looks
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "11x17-wash.png", "11x17.png", "three-wash.png", "three.png"]
+    # the plain map is what it always was: no marks, no wash. The second has both.
+    assert asked == [(0.0, 0, "PREVIEW"), (0.6, 3, "PREVIEW")] * 2
+    one = {e["key"]: e for e in entries}["11x17"]
+    a = np.asarray(Image.open(one["image"]).convert("RGB")).astype(int)
+    b = np.asarray(Image.open(one["wash_image"]).convert("RGB")).astype(int)
+    assert (a != b).any()                       # pins and the quieted ground are drawn
+
+
+def test_the_plain_map_is_the_same_with_the_key_as_without(tmp_path):
+    tracks = _tracks()
+    with_key, without = tmp_path / "with", tmp_path / "without"
+    entries = _entries(tracks)
+    opv.render_maps(entries, tracks, REGION_DIR, "Lassen walk", str(with_key),
+                    waypoints=_waypoints(), viewshed=0.6)
+    opv.render_maps(_entries(tracks), tracks, REGION_DIR, "Lassen walk", str(without))
+    for key in ("11x17", "three"):
+        assert (with_key / f"{key}.png").read_bytes() == (without / f"{key}.png").read_bytes()
+
+
+def test_preview_shows_one_without_the_key(tmp_path):
+    tracks = _tracks()
+    for kw in ({}, dict(waypoints=_waypoints()), dict(waypoints=_waypoints(), viewshed=0.0),
+               dict(viewshed=0.6), dict(waypoints=[], viewshed=0.6)):
+        out = tmp_path / str(len(list(tmp_path.iterdir())))
+        entries = _entries(tracks)
+        opv.render_maps(entries, tracks, REGION_DIR, "Lassen walk", str(out), **kw)
+        assert all("wash_image" not in e for e in entries)      # nothing to show, no second map
+        assert sorted(p.name for p in out.iterdir()) == ["11x17.png", "three.png"]
+
+
+def test_a_refused_size_leaves_neither_map(tmp_path):
+    b = json.load(open(os.path.join(REGION_DIR, "region.json")))["bounds"]
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    coords = np.array([[cx - 10000.0, cy - 10000.0], [cx + 10000.0, cy + 10000.0]])
+    tracks = [Track("t-0", coords, "2024-06-01")]
+    entries = opv.plan_sizes((cx - 10000.0, cy - 10000.0, cx + 10000.0, cy + 10000.0),
+                             [coords], forced=("11x17", "three"))
+    opv.render_maps(entries, tracks, REGION_DIR, "Lassen walk", str(tmp_path),
+                    waypoints=_waypoints(), viewshed=0.6)
+    by_key = {e["key"]: e for e in entries}
+    assert not by_key["three"]["offered"]
+    assert "image" not in by_key["three"] and "wash_image" not in by_key["three"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["11x17-wash.png", "11x17.png"]

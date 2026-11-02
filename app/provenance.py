@@ -103,7 +103,8 @@ LINEAGE_MAX = 100
 # before validate()/rasterize even runs -- the geometry-bomb guard.
 MAX_MANIFEST_TRACKS = 4096
 MAX_MANIFEST_POINTS = 5_000_000
-MAX_MANIFEST_HOTSPOTS = 64
+MAX_MANIFEST_HOTSPOTS = 1000
+MAX_MANIFEST_PHOTOS = 64    # each photo is decoded and framed at render time; marks are cheap, photos are not
 
 
 def source_entry(data: bytes, filename: str | None) -> dict:
@@ -229,6 +230,11 @@ def bound_geometry(spec: CompositionSpec) -> CompositionSpec:
     if len(spec.hotspots or []) > MAX_MANIFEST_HOTSPOTS:
         raise SpecError(f"manifest declares {len(spec.hotspots)} hotspots "
                         f"(max {MAX_MANIFEST_HOTSPOTS})")
+    photos = sum(1 for hs in spec.hotspots or []
+                 if isinstance(hs, dict) and hs.get("photo"))
+    if photos > MAX_MANIFEST_PHOTOS:
+        raise SpecError(f"manifest declares {photos} photos "
+                        f"(max {MAX_MANIFEST_PHOTOS})")
     return spec
 
 
@@ -579,10 +585,12 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
     mis-copying) it:
 
       1. manifest_to_spec        -- parse the manifest; a malformed one -> ManifestError.
-      2. drop_unembedded_photos  -- keep only size-bounded embedded photos, so no server
+      2. bound_geometry          -- refuse a geometry bomb (millions of points / thousands
+                                    of tracks / too many photos) BEFORE anything is decoded
+                                    or validate/rasterize allocate anything. It runs before
+                                    step 3 so it counts every photo the file DECLARES.
+      3. drop_unembedded_photos  -- keep only size-bounded embedded photos, so no server
                                     path can ride in on a hotspot (nothing to traverse).
-      3. bound_geometry          -- refuse a geometry bomb (millions of points / thousands
-                                    of tracks) BEFORE validate/rasterize allocate anything.
       4. validate(final_dpi)     -- aspect, the 120 MP output ceiling, the zoom cap.
       5. bound_photo_keys        -- a photo's box / crop / source: finite, on the sheet,
                                     in range, or dropped from its hotspot.
@@ -602,8 +610,8 @@ def spec_from_manifest(manifest: dict) -> CompositionSpec:
     # type itself; this catches what it does not name (a hotspot list that is a number,
     # a track that is not a list), so the promise above holds: only SpecError leaves.
     try:
-        drop_unembedded_photos(spec)
         bound_geometry(spec)
+        drop_unembedded_photos(spec)
         spec.validate(spec.final_dpi())
         bound_photo_keys(spec)
     except SpecError:

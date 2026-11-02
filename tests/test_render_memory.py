@@ -87,6 +87,8 @@ def _spec(width_m, **kw):
                                [crop[2] - 2000, crop[3] - 2000]])],
              hotspots=[], seed=7, title_text="Memory")
     d.update(kw)
+    if d["hotspots"] == "centre":                   # a mark, for the wash to look from
+        d["hotspots"] = [{"x": cx, "y": cy, "weight": 1, "mark": True}]
     return CompositionSpec(**d)
 
 
@@ -225,6 +227,8 @@ CASES = {
                                         sun_altitude_deg=18.0, golden_strength=0.7), 93.0),
     # 57 km on 9 in is 1:249,000, where the scale-keyed depth pass is on
     "terrain depth": (57_000.0, {}, 87.0),
+    # the wash: its mask is on the plate's coarse grid, and its pass works a band at a time
+    "the viewshed wash": (27_000.0, dict(viewshed=1.0, hotspots="centre"), 87.0),
 }
 
 # case -> segment -> (peak, end), bytes a pixel. Printed by this file (see the top).
@@ -284,6 +288,18 @@ MEASURED = {
         "light -> depth in": (0.00, -14.81),
         "depth in -> depth out": (20.12, 0.00),
         "depth out -> finish": (0.00, 0.00),
+        "finish -> grade": (3.03, 0.00),
+        "grade -> relief out": (15.34, -41.63),
+    },
+    "the viewshed wash": {    # the whole peak: 75.30
+        "relief in -> color": (26.36, 25.09),
+        "color -> hillshade in": (25.09, 10.04),
+        "hillshade in -> hillshade out": (20.07, 5.02),
+        "hillshade out -> shadow in": (25.09, 10.04),
+        "shadow in -> pre-smooth": (0.00, 0.00),
+        "pre-smooth -> shadow out": (11.06, 10.04),
+        "shadow out -> light": (10.04, 0.00),
+        "light -> finish": (0.00, -14.81),
         "finish -> grade": (3.03, 0.00),
         "grade -> relief out": (15.34, -41.63),
     },
@@ -351,6 +367,36 @@ def test_the_gauge_sees_one_scalar_plane(monkeypatch):
     assert len(wrong) == 1 and wrong[0].startswith("hillshade out -> shadow in: end"), wrong
     # and the peak of the whole render does not see it: that bound alone is not enough
     assert whole < CASES[case][2]
+
+
+def test_the_wash_holds_no_full_sheet_plane():
+    """The wash's pass runs just after the core frees 15 bytes a pixel, so a segment's peak
+    cannot see it: it would have to build three whole planes to show. Measured alone, on
+    this file's sheet, it stays under one scalar plane (4 bytes a pixel of its window) and
+    leaves nothing behind. The temporaries are a band's, so a taller sheet costs less."""
+    from app import looks
+    h, w = 3600, 2700
+    sheet = np.full((h, w, 3), 0.5, dtype=np.float32)
+    mask = np.zeros((2000, 2000), dtype=np.float32)
+    mask.flags.writeable = False
+    field = render.SeenField(mask, render.Affine(10.0, 0.0, 0.0, 0.0, -10.0, 20_000.0),
+                             (0.0, 0.0, 20_000.0, 20_000.0))
+    elev = np.zeros((1, 1), dtype=np.float32)
+    frame = relief.ReliefFrame(elev=elev, res_m=1.0, norm=elev, elev_min=0.0, elev_max=1.0,
+                               seed=1, azimuth=315.0, altitude=45.0, z_factor=1.0,
+                               extras={"viewshed": 1.0, "seen": field})
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        tracemalloc.reset_peak()
+        out = looks._viewshed(sheet, frame)
+        live, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert out is sheet
+    px = h * w
+    assert (peak - before) / px < 4.0, f"{(peak - before) / px:.2f} bytes a pixel"
+    assert (live - before) / px < 0.1
 
 
 def test_the_marks_are_taken_out_again():

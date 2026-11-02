@@ -21,7 +21,15 @@ the depth pass's own AERIAL term when both run.
 
 Both passes are gated `enabled` on knob > 0 -- a zero knob never runs, so the
 shipped-registry state is a strict no-op at the spec defaults and every pre-feature
-manifest renders byte-identically (tests/test_looks.py holds this line)."""
+manifest renders byte-identically (tests/test_looks.py holds this line).
+
+viewshed -- the wash (docs/superpowers/specs/2026-11-01-viewshed-wash-design.md,
+decisions 7 and 8): ground the poster's marks cannot see loses colour and falls in value,
+and seen ground stays exactly as it is. `render` reads the plate and hands over a
+`SeenField` in `frame.extras["seen"]`, its mask on a coarse grid of the plate (rule 4 of
+docs/relief-passes.md); this pass only samples it, a band at a time, by ground position.
+So the pass cannot change with the dpi. With no field there is no pass: no mark on the
+plate means nothing to say, not that nothing is seen (tests/test_viewshed_render.py)."""
 from __future__ import annotations
 import numpy as np
 
@@ -33,6 +41,11 @@ from .render import relief_extra
 HAZE_KNOB_MAX = 0.30      # haze on the lowest ground at knob 1.0 (deliberate, so it
                           # reaches past the depth ramp's automatic 0.18)
 HAZE_GAMMA = 1.5          # the depth pass's own falloff curve, kept identical
+SEEN_VALUE_FALL = 0.128   # unseen ground at knob 1.0. Decision 7's limit is 15% on the
+                          # print; the tonal curve after this stage steepens midtones
+                          # by up to 1.17 times, so 12.8% here is at most 15% there.
+SEEN_CHROMA_FALL = 0.50   # the share of its colour unseen ground gives up at knob 1.0
+SEEN_LUMA = np.array([0.299, 0.587, 0.114], np.float32)   # Rec. 601, as _tonal_finish
 
 
 @relief_extra("soft_light")
@@ -43,6 +56,11 @@ def _soft_light_knob(spec):
 @relief_extra("haze")
 def _haze_knob(spec):
     return spec.haze_strength
+
+
+@relief_extra("viewshed")
+def _viewshed_knob(spec):
+    return spec.viewshed
 
 
 def _soft_light(light, frame):
@@ -102,6 +120,41 @@ def _haze(img, frame):
     return img
 
 
+def _viewshed(img, frame):
+    """Quiet the ground the marks cannot see. Each row of the sheet reads two rows of the
+    coarse mask and each column two of its columns, by the pixel's ground position, so
+    a band's temporaries are band-sized and no full-sheet plane is built. Both blends are
+    written so a cell that says "seen" adds exactly nothing, and seen ground keeps its
+    bytes."""
+    k = float(np.clip(frame.extras.get("viewshed", 0.0), 0.0, 1.0))
+    field = frame.extras["seen"]
+    mask, t = field.mask, field.transform
+    grid_h, grid_w = mask.shape
+    left, bottom, right, top = field.bounds
+    h, w = img.shape[:2]
+    x = left + (np.arange(w) + 0.5) * ((right - left) / w)
+    col = np.clip((x - t.c) / t.a - 0.5, 0.0, grid_w - 1.0)
+    col0 = col.astype(np.int32)
+    col1 = np.minimum(col0 + 1, grid_w - 1)
+    across = (col - col0).astype(np.float32)
+    y = top - (np.arange(h) + 0.5) * ((top - bottom) / h)
+    row = np.clip((y - t.f) / t.e - 0.5, 0.0, grid_h - 1.0)
+    row0 = row.astype(np.int32)
+    row1 = np.minimum(row0 + 1, grid_h - 1)
+    down = (row - row0).astype(np.float32)
+    for rows in relief._bands(h):
+        near = mask[row0[rows]]
+        strip = near + (mask[row1[rows]] - near) * down[rows][:, None]
+        near = strip[:, col0]
+        seen = near + (strip[:, col1] - near) * across
+        quiet = k * (1.0 - seen)
+        ib = img[rows]
+        lum = (ib * SEEN_LUMA).sum(axis=2, keepdims=True)
+        ib += (lum - ib) * (SEEN_CHROMA_FALL * quiet)[..., None]
+        ib *= (1.0 - SEEN_VALUE_FALL * quiet)[..., None]
+    return img
+
+
 def register():
     """Idempotent (register replaces by name): the import-time call below sets the
     shipped state; tests that empty the registry call this to restore it."""
@@ -109,6 +162,9 @@ def register():
                          enabled=lambda f: f.extras.get("soft_light", 0.0) > 0)
     register_relief_pass("finish", "haze", _haze,
                          enabled=lambda f: f.extras.get("haze", 0.0) > 0)
+    register_relief_pass("finish", "viewshed", _viewshed,
+                         enabled=lambda f: (f.extras.get("viewshed", 0.0) > 0
+                                            and f.extras.get("seen") is not None))
 
 
 register()

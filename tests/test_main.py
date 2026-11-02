@@ -326,6 +326,65 @@ def test_style_knobs_stamped_through_endpoint():
     assert c.post("/api/proof", data={**data, "soft_light": 1.5}).status_code == 422
     assert c.post("/api/proof", data={**data, "haze_strength": -0.2}).status_code == 422
 
+def test_a_proof_takes_the_viewshed_form_field():
+    # the wash is a picture decision, so it rides the stamped spec (invariant 1): a sent
+    # value lands there, an omitted field is off, and a value past the bound is a 422.
+    from app import session as sess_mod
+    c = _client(); j = _upload(c)
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c.post("/api/proof", data={**data, "viewshed": 0.6}).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].viewshed == 0.6
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert sess_mod.get(j["session"])["spec"].viewshed == 0.0
+    assert c.post("/api/proof", data={**data, "viewshed": 1.5}).status_code == 422
+    assert c.post("/api/proof", data={**data, "viewshed": -0.1}).status_code == 422
+
+
+def _many_marks(session_id, n):
+    """Put n real marks (waypoints) on the session, inside the plate, as an accumulated
+    session holds them. The sample track's own density spots stay."""
+    from app import session as sess_mod
+    b = json.load(open(os.path.join(REGION_DIR, "region.json")))["bounds"]
+    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+    marks = [{"x": cx + (i % 50) * 40.0, "y": cy + (i // 50) * 40.0, "weight": 3,
+              "label": f"M{i}", "icon": "dot", "mark": True} for i in range(n)]
+    st = sess_mod.get(session_id)
+    sess_mod.update(session_id, hotspots=list(st["hotspots"]) + marks)
+
+
+def test_a_proof_with_the_wash_on_refuses_more_marks_than_the_manifest_door_allows(monkeypatch):
+    # a session adds waypoints upload by upload and nothing bounds it outside the manifest
+    # door, and 5,000 marks took 90 s cold with no message. The proof says so in a sentence
+    # that names the count and the limit, and no mark is dropped to make it fit.
+    from app import main as main_mod, provenance, session as sess_mod
+    c = _client(); j = _upload(c)
+    limit = provenance.MAX_MANIFEST_HOTSPOTS
+    _many_marks(j["session"], limit + 1)
+    held = len(sess_mod.get(j["session"])["hotspots"])
+    painted = []
+    monkeypatch.setattr(main_mod.render, "rasterize",
+                        lambda spec, **kw: painted.append(spec) or Image.new("RGB", (8, 8)))
+    data = {"session_id": j["session"], **_crop(j, km_wide=30.0), "print_w": 9, "print_h": 12}
+    r = c.post("/api/proof", data={**data, "viewshed": 0.6})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert f"{limit + 1:,}" in detail and f"{limit:,}" in detail, detail
+    # it names steps the studio has: a new poster from fewer files, or the wash off. The
+    # studio has no control that removes a mark, so the sentence must not offer one.
+    assert "Start a new poster from fewer files" in detail and "turn the wash off" in detail
+    assert "Remove some marks" not in detail
+    assert painted == []                                   # refused before any paint
+    assert len(sess_mod.get(j["session"])["hotspots"]) == held   # nothing dropped
+    # with the wash off, nothing changes: the same marks proof as they always did
+    assert c.post("/api/proof", data=data).status_code == 200
+    assert len(painted) == 1 and painted[0].viewshed == 0.0
+    # the limit itself is allowed
+    c2 = _client(); j2 = _upload(c2)
+    _many_marks(j2["session"], limit)
+    data2 = {"session_id": j2["session"], **_crop(j2, km_wide=30.0), "print_w": 9, "print_h": 12}
+    assert c2.post("/api/proof", data={**data2, "viewshed": 0.6}).status_code == 200
+
+
 def test_track_days_stamped_through_endpoint():
     # journey grouping is a rendering-semantics contract: the spec stamped by the
     # endpoint must carry the per-track days ingest parsed (a mutation dropping
@@ -565,3 +624,55 @@ def test_a_huge_integer_is_not_a_finite_coordinate():
     for bad in (True, None, "3", float("nan"), float("inf"), [1]):
         assert main._finite_num(bad) is False
 
+
+
+# ---- waypoints: left out and off the plate are counted, never silent (viewshed wash) ----
+
+def _gpx_with_waypoints(wpts):
+    """The sample track's neighbourhood plus <wpt>s, each (lon, lat, name)."""
+    track = _gpx_lonlat([(-120.65, 40.42), (-120.64, 40.43)])
+    rows = "".join(f'<wpt lat="{lat}" lon="{lon}"><name>{n}</name></wpt>' for lon, lat, n in wpts)
+    return track.replace(b"<trk>", rows.encode() + b"<trk>")
+
+def test_upload_counts_waypoints_over_the_cap():
+    c = _client()
+    wpts = [(-120.70 + (i % 40) * 0.001, 40.40 + (i // 40) * 0.001, f"W{i}")
+            for i in range(1005)]
+    r = c.post("/api/upload", files=[("files", ("w.gpx", _gpx_with_waypoints(wpts),
+                                               "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["waypoints_left_out"] == 5
+    assert j["waypoints_off_plate"] == 0
+    assert sum(1 for h in j["hotspots"] if h["label"].startswith("W")) == 1000
+
+def test_upload_counts_waypoints_off_the_plate():
+    # one waypoint past the plate's west edge (still finite in UTM 10N), one inside
+    c = _client()
+    wpts = [(-120.65, 40.42, "Inside"), (-121.6, 40.5, "Beyond")]
+    r = c.post("/api/upload", files=[("files", ("w.gpx", _gpx_with_waypoints(wpts),
+                                               "application/gpx+xml"))],
+               data={"region_id": "lassen_ca"})
+    assert r.status_code == 200
+    j = r.json()
+    assert j["waypoints_off_plate"] == 1
+    assert j["waypoints_left_out"] == 0
+    # off the plate is reported, not dropped: the mark is still on the session
+    assert {h["label"] for h in j["hotspots"]} >= {"Inside", "Beyond"}
+
+def test_upload_waypoint_fields_default_to_zero():
+    j = _upload(_client())
+    assert j["waypoints_left_out"] == 0
+    assert j["waypoints_off_plate"] == 0
+
+def test_adding_a_file_keeps_the_first_files_waypoints_in_place():
+    c = _client()
+    first = _gpx_with_waypoints([(-120.65, 40.42, "Camp")])
+    j1 = c.post("/api/upload", files=[("files", ("a.gpx", first, "application/gpx+xml"))],
+                data={"region_id": "lassen_ca"}).json()
+    camp1 = next(h for h in j1["hotspots"] if h["label"] == "Camp")
+    j2 = c.post("/api/upload", files=[_file2("b.gpx")],
+                data={"session_id": j1["session"]}).json()
+    camp2 = [h for h in j2["hotspots"] if h["label"] == "Camp"]
+    assert len(camp2) == 1 and camp2[0]["px"] == camp1["px"]

@@ -215,3 +215,55 @@ def test_loads_dummy_fixture():
         assert t.coords.shape[0] >= 2                 # simplified, not collapsed
         assert np.isfinite(t.coords).all()
         assert (t.coords[:, 0] > 100000.0).all()      # eastings in metres, not degrees
+
+
+# ---- waypoints: the cap is loud, and every one is a mark (viewshed wash) ----
+
+def _gpx_waypoints(n, name="W"):
+    """n distinct in-region waypoints on a grid ~100 m apart, so none collapses."""
+    rows = "".join(
+        f'<wpt lat="{39.30 + (i // 30) * 0.001:.6f}" lon="{-111.5 + (i % 30) * 0.001:.6f}">'
+        f'<name>{name}{i}</name></wpt>' for i in range(n))
+    return (f'<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            f'xmlns="http://www.topografix.com/GPX/1/1">{rows}</gpx>').encode()
+
+def test_every_loaded_waypoint_is_a_mark():
+    from app.ingest import load_waypoints
+    wpts = load_waypoints(_gpx_waypoints(3), REGION)
+    assert len(wpts) == 3 and all(w["mark"] is True for w in wpts)
+
+def test_the_waypoint_cap_is_a_real_collector_not_a_phone_dump():
+    from app.ingest import MAX_WAYPOINTS
+    assert MAX_WAYPOINTS == 1000
+
+def test_over_the_waypoint_cap_is_counted():
+    from app.ingest import MAX_WAYPOINTS, load_waypoints, scan_waypoints
+    data = _gpx_waypoints(MAX_WAYPOINTS + 5)
+    scan = scan_waypoints(data, REGION, "w.gpx")
+    assert len(scan.spots) == 1000 and scan.over_cap == 5
+    # the existing entry point is unchanged: still a plain list, same first 1,000
+    assert load_waypoints(data, REGION, "w.gpx") == scan.spots
+
+def test_at_the_waypoint_cap_nothing_is_left_out():
+    from app.ingest import MAX_WAYPOINTS, scan_waypoints
+    scan = scan_waypoints(_gpx_waypoints(MAX_WAYPOINTS), REGION, "w.gpx")
+    assert len(scan.spots) == 1000 and scan.over_cap == 0
+
+def test_over_the_waypoint_cap_is_counted_in_kml_too():
+    from app.ingest import MAX_WAYPOINTS, scan_waypoints
+    pm = "".join(f'<Placemark><name>P{i}</name><Point><coordinates>'
+                 f'{-111.5 + (i % 30) * 0.001:.6f},{39.30 + (i // 30) * 0.001:.6f}'
+                 f'</coordinates></Point></Placemark>' for i in range(MAX_WAYPOINTS + 3))
+    kml = (f'<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2">'
+           f'<Document>{pm}</Document></kml>').encode()
+    scan = scan_waypoints(kml, REGION, "w.kml")
+    assert len(scan.spots) == 1000 and scan.over_cap == 3
+
+def test_a_waypoint_that_will_not_reproject_is_not_counted_as_left_out():
+    from app.ingest import scan_waypoints
+    data = (b'<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            b'xmlns="http://www.topografix.com/GPX/1/1">'
+            b'<wpt lat="39.3" lon="-111.5"><name>ok</name></wpt>'
+            b'<wpt lat="95" lon="200"><name>void</name></wpt></gpx>')
+    scan = scan_waypoints(data, REGION, "w.gpx")
+    assert [s["label"] for s in scan.spots] == ["ok"] and scan.over_cap == 0

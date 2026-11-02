@@ -172,6 +172,38 @@ def test_bound_geometry_rejects_too_many_hotspots():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(hotspots=spots))
 
+def test_a_manifest_of_1000_hotspots_is_accepted():
+    # a real collector can hold a thousand marks (the viewshed-wash design, decision 14);
+    # the cap stays, so one past it is still refused.
+    spot = {"x": 0.0, "y": 0.0, "weight": 1}
+    provenance.bound_geometry(_spec(hotspots=[dict(spot) for _ in range(1000)]))
+    with pytest.raises(SpecError):
+        provenance.bound_geometry(_spec(hotspots=[dict(spot) for _ in range(1001)]))
+
+def test_a_manifest_of_64_photo_hotspots_is_accepted_and_65_is_refused():
+    # each photo costs real drawing work (decode, framed and blurred paste) that the
+    # wash's budget does not cover, so photos keep the old total cap of 64.
+    def spots(n):
+        return [{"x": 0.0, "y": 0.0, "weight": 1, "photo": "data:image/jpeg;base64,AAAA"}
+                for _ in range(n)]
+    provenance.bound_geometry(_spec(hotspots=spots(provenance.MAX_MANIFEST_PHOTOS)))
+    with pytest.raises(SpecError):
+        provenance.bound_geometry(_spec(hotspots=spots(provenance.MAX_MANIFEST_PHOTOS + 1)))
+
+def test_1000_photo_less_marks_still_pass_beside_the_photo_cap():
+    marks = [{"x": 0.0, "y": 0.0, "weight": 3, "label": f"Camp {i}", "icon": "flag",
+              "mark": True} for i in range(1000)]
+    provenance.bound_geometry(_spec(hotspots=marks))
+
+def test_the_photo_cap_refuses_a_crafted_file_before_any_photo_is_decoded():
+    # 65 photo spots, none a valid embedded photo: drop_unembedded_photos would strip
+    # them all, so only a count that runs first refuses the file.
+    m = provenance.build_manifest(_spec(), [])
+    m["spec"]["hotspots"] = [{"x": 690000.0, "y": 4485000.0, "weight": 1,
+                              "photo": "/etc/hosts"}] * (provenance.MAX_MANIFEST_PHOTOS + 1)
+    with pytest.raises(SpecError):
+        provenance.spec_from_manifest(m)
+
 def test_bound_geometry_rejects_non_n2_track_shape():
     with pytest.raises(SpecError):
         provenance.bound_geometry(_spec(tracks=[np.zeros((3, 3))], track_days=None))
@@ -400,7 +432,7 @@ def test_proof_form_restores_a_styled_poster():
               "water_depth": 0.5, "dry_lakes": "true", "golden_strength": 0.4,
               "profile": "true", "profile_height_in": 1.1,
               "track_color_by": "elevation", "label_place": "anchor",
-              "track_weave": "false"}
+              "track_weave": "false", "viewshed": 0.6}
     first, second, cont = _proof_form_round_trip(c, **styled)
     # the first proof really left the defaults: a default-only round trip proves nothing
     plain = _spec()
@@ -410,13 +442,15 @@ def test_proof_form_restores_a_styled_poster():
                          "photo_frame_style", "furniture_scale", "terrain_depth",
                          "shadow_strength", "oblique", "soft_light", "haze_strength",
                          "water_depth", "dry_lakes", "golden_strength", "profile",
-                         "profile_height_in", "track_color_by")
+                         "profile_height_in", "track_color_by", "viewshed")
              if getattr(first, n) != getattr(plain, n)}
-    assert len(moved) == 26, moved
+    assert len(moved) == 27, moved
     # these two leave the FORM defaults ("smart", true), which are not the spec's
     assert first.label_place == "anchor" and first.track_weave is False
     _assert_same_picture(first, second)
     form = cont["proof_form"]
+    # the wash comes back both ways: as the form field, and as the studio's own prefill
+    assert form["viewshed"] == 0.6 and cont["prefill"]["style"]["viewshed"] == 0.6
     assert form["track_color"] == "#4a6936"       # the #rrggbb string the form takes
     assert form["contours"] is True and form["compass"] is False   # JSON booleans
     assert form["output"] == "print" and form["light_mode"] == "archival"
@@ -803,3 +837,26 @@ def test_continue_then_reexport_dedups_across_editions():
                data={"session_id": sid}).json()
     assert j["skipped_duplicate_tracks"] == 1            # edition-1 track carried in the poster
     assert len(j["tracks"]) == 2                         # edition-1 track + the new one
+
+
+# ---- the manifest door at the cap, at the route level (viewshed wash, decision 14) ----
+
+def _manifest_of_marks(n):
+    """The frozen v1 manifest with n unnamed waypoints (`mark: true`) inside its crop."""
+    m = json.load(open("tests/fixtures/manifest_v1.json"))
+    x0, y0, x1, y1 = m["spec"]["crop"]
+    m["spec"]["hotspots"] = [
+        {"x": x0 + (x1 - x0) * (0.1 + 0.8 * (i % 40) / 40),
+         "y": y0 + (y1 - y0) * (0.1 + 0.8 * (i // 40) / (n // 40 + 1)),
+         "weight": 3, "label": "", "icon": "dot", "mark": True} for i in range(n)]
+    return _embed(m)
+
+
+def test_a_poster_of_1000_marks_reprints_and_continues_and_1001_answers_422():
+    c = _client()
+    for route in ("/api/reprint", "/api/continue"):
+        ok = c.post(route, files={"file": ("p.png", _manifest_of_marks(1000), "image/png")})
+        assert ok.status_code == 200, (route, ok.text[:200])
+        over = c.post(route, files={"file": ("p.png", _manifest_of_marks(1001), "image/png")})
+        assert over.status_code == 422, (route, over.status_code)
+        assert "hotspots" in over.json()["detail"], over.json()

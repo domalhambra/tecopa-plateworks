@@ -68,6 +68,11 @@ export const state = {
     // continued poster restores its own stored values (the labelPlace precedent).
     softLight: 0.35,      // flanking-light blend weight around the principal azimuth
     haze: 0.15,           // how far the low ground sinks into the cool atmosphere
+    // The viewshed wash: OFF for new posters too (unlike the Looks above). The spec holds
+    // one number, 0 for off; the studio holds the switch and the strength apart so a flip
+    // back keeps the strength, and api.js sends 0 while the switch is off.
+    viewshedOn: false,    // quiet the ground the poster's marks cannot see
+    viewshed: 0.6,        // how far, once the switch is on
     // Water (v1.14). waterDepth is subtle-on for NEW posters like the Looks knobs;
     // dryLakes stays OFF by default because it needs a plate that has been baked with
     // scripts/bake_playa.py, and most plates carry no playa at all.
@@ -160,7 +165,8 @@ const SNAPSHOT_PATHS = [
   'title', 'contours', 'compass', 'biome', 'labels',
   'style.width', 'style.halo', 'style.color', 'style.marker', 'style.ring',
   'style.photoStyle', 'style.furniture', 'style.terrain', 'style.shadow', 'style.oblique',
-  'style.softLight', 'style.haze', 'style.waterDepth', 'style.dryLakes',
+  'style.softLight', 'style.haze', 'style.viewshedOn', 'style.viewshed',
+  'style.waterDepth', 'style.dryLakes',
   'style.lightMode', 'style.sunHour', 'style.golden', 'style.profile', 'style.profileHeight',
   'style.trackColorBy', 'style.labelPlace', 'style.trackWeave',
 ];

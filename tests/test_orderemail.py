@@ -252,3 +252,140 @@ def test_an_order_from_before_the_intake_has_a_report_line_and_no_email(tmp_path
     assert not (d / "out" / "preview" / "email.txt").exists()
     assert "Email: not written. order.toml has no order_number" in \
         (d / "work" / "preview" / "report.txt").read_text()
+
+
+# ---- the wash: the email tells the client the PDF shows two maps (viewshed wash, 20) ----
+
+def _washed(*offered):
+    return [{**e, "wash_image": f"/x/{e['key']}-wash.png"} if e["offered"] else e
+            for e in _entries(*offered)]
+
+
+def test_the_email_says_each_page_shows_two_maps_when_the_preview_drew_both(tmp_path):
+    text = oe.email_text(_order(tmp_path), _washed("11x17", "two"), _rows())
+    assert oe.WASH_PARAGRAPH in text.splitlines()
+    assert oe.WASH_PARAGRAPH == (
+        "The page for each size shows your map twice, side by side: as it is, and with your "
+        "pins and the ground they can see. Ground out of their sight is toned down. It's line "
+        "of sight over bare ground, so it ignores trees and buildings. Reply and tell me "
+        "which one you'd like.")
+    lines = text.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("Here's your map"))
+    assert lines[first + 2] == oe.WASH_PARAGRAPH and lines[first + 1] == ""
+    # nothing else of the email moved, and the links are the same
+    plain = oe.email_text(_order(tmp_path), _entries("11x17", "two"), _rows())
+    assert "\n".join(l for l in lines if l != oe.WASH_PARAGRAPH).replace("\n\n\n", "\n\n") == \
+        plain.rstrip("\n").replace("\n\n\n", "\n\n")
+
+
+def test_the_email_has_no_such_paragraph_without_a_second_map(tmp_path):
+    for entries in (_entries("11x17", "two"),
+                    [{**e, "wash_image": "/x.png"} if not e["offered"] else e
+                     for e in _entries("11x17")]):                 # only a size not offered has one
+        assert oe.WASH_PARAGRAPH not in oe.email_text(_order(tmp_path), entries, _rows())
+
+
+def test_the_wash_paragraph_keeps_to_the_profile():
+    words = oe.WASH_PARAGRAPH
+    assert "line of sight over bare ground" in words
+    assert "what you saw" not in words.lower() and "—" not in words
+    assert "plate" not in words.lower() and "viewshed" not in words.lower()
+    assert not words.startswith(("I ", "We "))                       # not the maker's verb first
+
+
+def test_the_preview_of_an_order_with_the_key_writes_the_paragraph(tmp_path, tools, monkeypatch):
+    from tests.test_orderpreview import _asking_for_the_wash, _washing_render
+    _sizes_file(tmp_path, monkeypatch)
+    d = _intake_order(tmp_path)
+    intake = (f'order_number = "{NUMBER}"\nreturning = false\n'
+              'client = "Sam Smith"\nemail = "sam@example.com"\n')
+    _asking_for_the_wash(d, [(-116.2, 35.9, "Camp")])
+    with open(d / "order.toml", "a") as f:
+        f.write(intake)
+
+    def run():
+        opv.preview(str(d), tools, log=lambda s: None, render=_washing_render([]),
+                    write_pdf=lambda path, entries, names, title: None)
+        return (d / "out" / "preview" / "email.txt").read_text()
+    assert oe.WASH_PARAGRAPH in run().splitlines()
+    # take the key away and it is the email it was
+    (d / "order.toml").write_text('title = "Smith home ground"\nsize = "12x18"\n' + intake)
+    assert oe.WASH_PARAGRAPH not in run()
+
+
+# ---- a photos-only order with the key: the proof is the first picture of its wash ----
+
+def _with_photos(tmp_path, n=2, **kw):
+    from tests.test_photos import _make
+    (tmp_path / "in").mkdir(exist_ok=True)
+    for k in range(n):
+        _make(tmp_path / "in" / f"p{k}.jpg")
+    return _order(tmp_path, **kw)
+
+
+def _paragraphs(text):
+    return [l for l in text.splitlines() if l]
+
+
+def test_the_email_for_photos_and_no_second_map_says_the_proof_shows_the_wash(tmp_path):
+    order = _with_photos(tmp_path, viewshed=0.6)
+    text = oe.email_text(order, _entries("11x17", "two"), _rows())
+    lines = text.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("Here's your map"))
+    assert lines[first + 2] == oe.WASH_PHOTOS_PROOF and lines[first + 1] == ""
+    assert oe.WASH_PHOTOS_PROOF == (
+        "Your photos mark places on the map, and the proof will tone down the ground that "
+        "can't be seen from them. It's line of sight over bare ground, so it ignores trees "
+        "and buildings. If you'd rather have the plain map, just say so.")
+    assert oe.WASH_PARAGRAPH not in lines and oe.WASH_PHOTOS_TOO not in lines
+    assert len(URL.findall(text)) == 3                    # the links did not move
+
+
+def test_the_email_for_waypoints_and_photos_says_the_proof_can_show_more(tmp_path):
+    order = _with_photos(tmp_path, viewshed=0.6)
+    text = oe.email_text(order, _washed("11x17", "two"), _rows())
+    lines = text.splitlines()
+    first = lines.index(oe.WASH_PARAGRAPH)
+    assert lines[first + 1] == "" and lines[first + 2] == oe.WASH_PHOTOS_TOO
+    assert oe.WASH_PHOTOS_TOO == (
+        "Your photos count as pins too. They only get their places when the proof is made, "
+        "so it can show more ground in sight than these pages do.")
+    assert oe.WASH_PHOTOS_PROOF not in lines
+
+
+def test_photos_say_nothing_about_a_wash_without_the_key_or_when_the_wash_has_no_photo(tmp_path):
+    photos = _with_photos(tmp_path)                                    # no key
+    for entries in (_entries("11x17"), _washed("11x17")):
+        text = oe.email_text(photos, entries, _rows())
+        assert not {oe.WASH_PHOTOS_PROOF, oe.WASH_PHOTOS_TOO} & set(text.splitlines())
+    keyed = _order(tmp_path / "none", viewshed=0.6)                    # the key, no photo
+    text = oe.email_text(keyed, _washed("11x17"), _rows())
+    assert oe.WASH_PARAGRAPH in text.splitlines()
+    assert oe.WASH_PHOTOS_TOO not in text.splitlines()
+    assert oe.WASH_PHOTOS_PROOF not in oe.email_text(keyed, _entries("11x17"), _rows())
+
+
+@pytest.mark.parametrize("words", ["WASH_PHOTOS_PROOF", "WASH_PHOTOS_TOO"])
+def test_the_photo_sentences_keep_to_the_profile(words):
+    text = getattr(oe, words)
+    assert "what you saw" not in text.lower() and "—" not in text
+    assert "plate" not in text.lower() and "viewshed" not in text.lower()
+    assert not text.startswith(("I ", "We ")) and " by " not in text   # no maker's verb "by"
+    assert ("line of sight over bare ground" in text) == (words == "WASH_PHOTOS_PROOF")
+
+
+def test_the_preview_of_a_photos_only_order_with_the_key_writes_the_proof_paragraph(
+        tmp_path, tools, monkeypatch):
+    from tests.test_orderpreview import _asking_for_the_wash, _washing_render
+    from tests.test_photos import _make
+    _sizes_file(tmp_path, monkeypatch)
+    d = _intake_order(tmp_path)
+    _asking_for_the_wash(d, [])                          # the key, and no waypoint in the files
+    with open(d / "order.toml", "a") as f:
+        f.write(f'order_number = "{NUMBER}"\nreturning = false\n'
+                'client = "Sam Smith"\nemail = "sam@example.com"\n')
+    _make(d / "in" / "a.jpg")
+    opv.preview(str(d), tools, log=lambda s: None, render=_washing_render([]),
+                write_pdf=lambda path, entries, names, title: None)
+    lines = (d / "out" / "preview" / "email.txt").read_text().splitlines()
+    assert oe.WASH_PHOTOS_PROOF in lines and oe.WASH_PARAGRAPH not in lines

@@ -201,6 +201,10 @@ approval, `finish`, the printer.
    reader ignores any other key, so a misspelled key is lost without a word. An order
    with photos also takes `band_side`: `"top"` (the default) or `"bottom"`, the end of
    the sheet the photo band takes when the order uses a band. The studio can change it.
+   An order that asks for the wash also takes `viewshed`: `true` (a strength of 0.6) or a
+   number from 0 to 1. `false`, 0 or no key is off, and the order prints as it always
+   did. Anything else, `"yes"` among it, stops the order with the key named. Read
+   "An order's wash" below before you set it.
 3. To let the client choose a size, run the preview before Prepare:
    `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
    and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
@@ -224,6 +228,9 @@ approval, `finish`, the printer.
      `<folder>/out/preview/<title>-preview.pdf`, where `<title>` is the title as a
      slug. Page 1 shows every offered size on one wall at one scale. Then each size
      has a page with its name, its hung size and its price.
+   - With `viewshed` set, it draws each offered size twice (see "An order's wash"): the
+     map as it is, and the map with the order's waypoints and the wash. Each size page of
+     the PDF shows the two side by side, and the email says so.
    - It writes `<folder>/out/preview/email.txt`, the email to the client: a line for
      each offered size and a last line for the digital poster, each with its price,
      its shipping and its Payment Link ending in `?client_reference_id=TP-26-001`, then
@@ -722,6 +729,78 @@ Known limits:
 - A reframe made without a proof is lost when an edit flips the layout or moves the
   band's end. Render a proof after each reframe.
 
+### An order's wash
+
+Read `superpowers/specs/2026-11-01-viewshed-wash-design.md`, decisions 18 to 20, before
+you change it. The wash quiets the ground that none of a poster's marks can see. An order
+gets it only when you set `viewshed` in its `order.toml`. Nothing offers it to a customer:
+no intake form changes, and the preview email says nothing of it, until you set the key.
+
+How an order asks for it:
+
+1. A customer who wants it says so in a reply, in words like "show me the ground my pins
+   can see". Add `viewshed = true` to the order's `order.toml`, or a number from 0 to 1 for a
+   stronger or a weaker wash (`true` is 0.6). Set it before you open the order in the
+   studio. Once you have saved a spec in the studio, that saved spec decides what prints,
+   because the customer approves that spec. The key does not override it: change the key
+   afterwards and Prepare only warns (step 4). Change the wash in the studio.
+2. Run the preview again. Each offered size is drawn twice, as `work/preview/<size>.png`
+   and `work/preview/<size>-wash.png`. The second has the waypoints as pins and the wash.
+   The PDF shows both side by side on each size page, and the email has one more
+   paragraph. The preview report says `Wash: on at 0.6, 2 waypoints.` When the files hold
+   no waypoint it says so and draws no second map.
+
+   A photo has no place until Prepare gives it one, so the second map holds waypoints only.
+   With the key and photos in `in/`, the preview report adds a sentence: the wash will use
+   the photos as marks once Prepare places them. With waypoints too, it says the proof can
+   show more ground in sight than the second map does, and the email adds one paragraph
+   that says the same to the customer. With photos and no waypoint there is no second map:
+   the email says the proof will tone down the ground that cannot be seen from the photos,
+   and that the customer can ask for the plain map. The first picture of that wash is the
+   proof. Prepare's report says so too, in a `Wash marks:` line.
+
+   Send the customer the PDF and ask which one they want. If they want the plain map,
+   remove the key.
+3. Run Prepare. It reads the waypoints in the same step that reads the tracks, because
+   `order new` opens no file. They go into `state.json` as `waypoints`, hotspots in the
+   plate's projection, and the report has a `Waypoints:` line. The line reads from the spec
+   that prints, never from the key: `Waypoints: 2 read, 2 on the poster as pins, the wash
+   is on at 0.6`. The same waypoint in two files (two overlapping exports) is kept once,
+   and the line says how many copies were collapsed. The order's default spec carries the
+   waypoints as pins, ahead of the photos, with the strength in `viewshed`, and the approval
+   hash covers both: change a waypoint or the key, and the approval is void. A spec saved
+   in the studio keeps its own strength and pins, and the hash covers those.
+4. Read the warnings. `<n> waypoints are off the plate` names waypoints that draw no pin
+   and see no ground: none is removed, and the customer's file stays as it is. `<file>:
+   its waypoints could not be read` means that no waypoint of that file is on the poster.
+   `The saved studio spec prints ... order.toml asks for ...` means the key and a saved
+   studio spec disagree about the wash or its pins. Three cases: you took the key away, or
+   changed its number, after a save; or you set the key after a save made without it. The
+   saved spec still prints, and its approval stands. To print what the key asks for, change
+   the wash in the studio, save and approve again.
+5. Over 1,000 marks Prepare and the preview stop with `This order has <n> marks`, before
+   a plate is built, and write no proof. A mark is a waypoint or a photo, and a file with
+   more than 1,000 waypoints counts all of them. A waypoint that another file already holds
+   (within 1 m) is one mark. No mark is dropped for you. Ask the customer for a trimmed
+   file. `order new` only adds files: it never replaces or removes one, so no step of the
+   tool takes a file out of the count. Do it by hand:
+   - A trimmed file with a new name: run `order new` once to copy it into `in/`, then
+     delete the old file from `in/` yourself.
+   - A trimmed file with the old name: `order new` refuses it ("a different file of that
+     name is in in/ already"). Put it in `in/` yourself, in place of the old file.
+   - After you delete a file from `in/`, do not run `order new` again for that order. It
+     finds the file missing and copies the original back from `<job>/01_received/`.
+   - Run Prepare again. The count reads `in/` as it is.
+
+   Or remove the key, to print the order without the wash. In the studio the same limit
+   answers a proof with "Start a new poster from fewer files, or turn the wash off." The
+   studio has no control that removes one mark.
+
+Without the key an order reads no waypoint at all, so its default spec, its state and its
+pixels are what they were. A `state.json` from before waypoints has no `waypoints` key and
+works as it is. Taking the key away and running Prepare again clears the waypoints and
+their warnings.
+
 ### The test sheet
 
 The first print on the roll settles two things the code cannot: the rendering intent
@@ -866,7 +945,7 @@ only such test in the suite: two of them can run side by side on two workers.
 `MANIFEST.md` is the format doc, internal since 2026-07-27. The CC0 dedication stands
 for the versions published before then and cannot be revoked, but the document is no
 longer a contract for outside implementers. `provenance.spec_from_manifest` is the one
-untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate,
+untrusted-manifest door: parse, bound geometry, drop non-embedded photos, validate,
 then bound the photo keys (`provenance.bound_photo_keys`: a hotspot's `box`, `crop` and
 `source`; a malformed key is dropped from its hotspot, never an error). Every
 new verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect`

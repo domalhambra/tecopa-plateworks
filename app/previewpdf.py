@@ -1,5 +1,6 @@
 # app/previewpdf.py
-"""The preview PDF of an order: one wall page, then one page for each offered size.
+"""The preview PDF of an order: one wall page, then one page for each offered size. When the
+order asks for the wash, a size's page shows its two maps side by side (pair_layout).
 
 Pillow writes it, so there is no new dependency and no link in the file. The client
 answers with a choice. Names and prices come from config/sizes.toml.
@@ -57,6 +58,11 @@ WALL_LABEL = "Every size on one wall, at one scale"
 ELLIPSIS = "…"
 FOOT_LABEL_SHARE = 0.35      # of the page's width: the most "title · page" takes in the footer
 SOFA_LABEL = "A 7 ft sofa, for scale"
+# Under the two maps of a size page when the order asks for the wash (viewshed wash spec,
+# decision 20). Customer words: they go through the profile and say "line of sight over
+# bare ground", never what the client saw. The second map has the pins, so the label says so.
+WASH_LABELS = ("As it is", "With your pins and line of sight over bare ground")
+WASH_GAP_IN = 0.12           # between the two maps' labels and the caption under them
 NOTE = ("This is a preview. The final map is drawn from finer terrain data, "
         "and a place name can sit in another position.")
 
@@ -441,9 +447,53 @@ def size_layout(entry, names, box) -> dict:
             "caption": (x0, y0 + mh + gap, below["w"], below["h"])}
 
 
+def _label_block(text, max_w) -> dict:
+    """A label under a map: the text in the muted ink, wrapped to `max_w`."""
+    font, lines, w = _font(MUTED_PT), [], 0
+    for part in wrap(text, font, max_w):
+        lines.append((part, MUTED_PT, MUTED))
+        w = max(w, font.getlength(part))
+    return {"lines": lines, "w": int(w) + 1, "h": _pt(LEADING[MUTED_PT]) * len(lines)}
+
+
+def pair_layout(entry, names, box) -> dict:
+    """One size and its second map (`wash_image`), side by side at one scale, each as large
+    as the page allows, the plain one first. A label sits under each map, as wide as its
+    map at the most, and the caption runs under both."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    aspect = entry["print_in"][0] / entry["print_in"][1]
+    gap, cap_gap, below_gap = _px(MIN_GAP_IN), _px(CAPTION_GAP_IN), _px(WASH_GAP_IN)
+    caption = _caption_block(entry, names, w)
+    each = (w - gap) // 2
+    # the labels wrap to the width of a map, and a map's height depends on its labels'
+    # height: settle it from the widest each could be, then wrap to the map's own width
+    label_h = max(_label_block(text, max(1, each))["h"] for text in WASH_LABELS)
+    mw, mh = _fit(aspect, each, h - cap_gap - label_h - below_gap - caption["h"])
+    labels = [_label_block(text, max(1, mw)) for text in WASH_LABELS]
+    label_h = max(b["h"] for b in labels)
+    xs = (x0, x0 + mw + gap)
+    out = {"map": (xs[0], y0, mw, mh), "wash": (xs[1], y0, mw, mh), "labels": [
+        {"box": (x, y0 + mh + cap_gap, b["w"], b["h"]), "block": b}
+        for x, b in zip(xs, labels)], "block": caption}
+    out["caption"] = (x0, y0 + mh + cap_gap + label_h + below_gap, caption["w"], caption["h"])
+    return out
+
+
 def size_page(entry, names, title, page=None, pages=None):
-    """One size, its map as large as the page allows."""
+    """One size, its map as large as the page allows. With a `wash_image`, the plain map
+    and that one side by side, each with its label (pair_layout)."""
     img, d, box = _page(title, size_label(page, pages), False, page, pages)
+    if entry.get("wash_image"):
+        lay = pair_layout(entry, names, box)
+        for key, path in (("map", entry["image"]), ("wash", entry["wash_image"])):
+            x, y, w, h = lay[key]
+            art = Image.open(path).convert("RGB")
+            img.paste(art.resize((w, h), Image.LANCZOS), (x, y))
+        for label in lay["labels"]:
+            _draw_caption(d, label["box"][0], label["box"][1], label["block"])
+        _draw_caption(d, lay["caption"][0], lay["caption"][1], lay["block"])
+        return img
     lay = size_layout(entry, names, box)
     x, y, w, h = lay["map"]
     art = Image.open(entry["image"]).convert("RGB")
