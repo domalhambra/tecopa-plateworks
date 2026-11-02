@@ -42,9 +42,9 @@ key = "17x22"
 name = "17 × 22 in"
 price = "$99"
 next_price = "$69"
-shipping = "$12"
-link = "https://buy.stripe.com/5kQcN61r2eIubjK7KHafS0M"          # sku tecopa-17x22
-next_link = "https://buy.stripe.com/4gMeVe0mY0REbjK7KHafS0N"     # sku tecopa-17x22-next
+shipping = "$14"
+link = "https://buy.stripe.com/fZudRa0mYcAm5Zq3urafS18"          # sku tecopa-17x22
+next_link = "https://buy.stripe.com/dRmaEY0mY1VIafGe95afS19"     # sku tecopa-17x22-next
 member_link = "https://buy.stripe.com/fZu28s8TugQCafG8OLafS0V"   # sku tecopa-17x22-member
 member_next_link = "https://buy.stripe.com/5kQcN64DeeIuevW3urafS0W"   # sku tecopa-17x22-next-member
 

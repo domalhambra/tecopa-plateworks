@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from app import orderpreview as opv
-from app import panels
+from app import panels, render
 from app.ingest import Track
 from tests.conftest import synthetic_region
 

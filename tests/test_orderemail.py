@@ -79,7 +79,7 @@ def test_a_returning_client_gets_the_next_year_links_and_prices(tmp_path):
     text = oe.email_text(_order(tmp_path, returning=True), _entries("17x22", "three"), _rows())
     assert URL.findall(text) == [f"https://buy.stripe.com/next_{k}?client_reference_id={NUMBER}"
                                  for k in ("17x22", "three", "digital")]
-    assert "- 17 × 22 in, $69 plus $12 shipping: " in text
+    assert "- 17 × 22 in, $69 plus $14 shipping: " in text
     assert "- Three panels, $159 plus $16 shipping: " in text
     assert "- Digital poster, $25, nothing to ship: " in text
     assert "first_" not in text and "$99" not in text and "$189" not in text

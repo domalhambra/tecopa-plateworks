@@ -24,7 +24,7 @@ def test_the_repo_file_has_the_prices_shipping_and_links_of_the_design():
     rows = sizes.table()
     assert list(rows) == ["11x17", "17x22", "two", "three", "digital"]
     assert {k: (r["price"], r["next_price"], r["shipping"]) for k, r in rows.items()} == {
-        "11x17": ("$69", "$59", "$8"), "17x22": ("$99", "$69", "$12"),
+        "11x17": ("$69", "$59", "$8"), "17x22": ("$99", "$69", "$14"),
         "two": ("$149", "$119", "$16"), "three": ("$189", "$159", "$16"),
         "digital": ("$39", "$25", "")}
     assert rows["digital"]["name"] == "Digital poster"
