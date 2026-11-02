@@ -770,8 +770,20 @@ How an order asks for it:
 5. Over 1,000 marks Prepare and the preview stop with `This order has <n> marks`, before
    a plate is built, and write no proof. A mark is a waypoint or a photo, and a file with
    more than 1,000 waypoints counts all of them. A waypoint that another file already holds
-   (within 1 m) is one mark. Ask the customer which marks to keep, and
-   remove the rest from the file in `in/`, or remove the key. No mark is dropped for you.
+   (within 1 m) is one mark. No mark is dropped for you. Ask the customer for a trimmed
+   file. `order new` only adds files: it never replaces or removes one, so no step of the
+   tool takes a file out of the count. Do it by hand:
+   - A trimmed file with a new name: run `order new` once to copy it into `in/`, then
+     delete the old file from `in/` yourself.
+   - A trimmed file with the old name: `order new` refuses it ("a different file of that
+     name is in in/ already"). Put it in `in/` yourself, in place of the old file.
+   - After you delete a file from `in/`, do not run `order new` again for that order. It
+     finds the file missing and copies the original back from `<job>/01_received/`.
+   - Run Prepare again. The count reads `in/` as it is.
+
+   Or remove the key, to print the order without the wash. In the studio the same limit
+   answers a proof with "Start a new poster from fewer files, or turn the wash off." The
+   studio has no control that removes one mark.
 
 Without the key an order reads no waypoint at all, so its default spec, its state and its
 pixels are what they were. A `state.json` from before waypoints has no `waypoints` key and

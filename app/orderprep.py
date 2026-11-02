@@ -47,8 +47,11 @@ from app.spec import SpecError
 # the same step that reads its tracks, only when order.toml's `viewshed` key is set.
 MARK_LIMIT = provenance.MAX_MANIFEST_HOTSPOTS     # the most marks a poster that asks for it holds
 TOO_MANY_MARKS = ("This order has {n:,} marks: {w:,} waypoints and {p:,} photos. A poster "
-                  "that quiets unseen ground holds at most {limit:,}. Ask the customer "
-                  "which marks to keep. Or remove viewshed from order.toml, to print "
+                  "that quiets unseen ground holds at most {limit:,}. Ask the customer for a "
+                  "trimmed file. order new only adds files and never replaces or removes "
+                  "one, so after it brings the trimmed file in, delete the old file from "
+                  "in/ by hand, and do not run order new again: it copies a missing file "
+                  "back from 01_received. Or remove viewshed from order.toml, to print "
                   "without it.")
 FILE_OVER_CAP = (" One file carries more waypoints than the {cap:,} that one file can "
                  "hold.")

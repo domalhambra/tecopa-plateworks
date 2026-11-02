@@ -1156,7 +1156,7 @@ def _wash_marks_or_422(spec):
     if n > limit:
         raise HTTPException(
             422, f"This poster has {n:,} marks, and quieting unseen ground works with at "
-                 f"most {limit:,}. Remove some marks, or turn it off.")
+                 f"most {limit:,}. Start a new poster from fewer files, or turn the wash off.")
 
 @app.post("/api/proof")
 async def proof(session_id: str = Form(...),

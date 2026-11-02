@@ -1218,7 +1218,12 @@ def test_prepare_stops_over_1000_marks(tmp_path, tools):
         op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
     text = str(ex.value)
     assert "1,001 marks" in text and "1,001 waypoints and 0 photos" in text
-    assert "at most 1,000" in text and "Ask the customer which marks to keep" in text
+    assert "at most 1,000" in text and "Ask the customer for a trimmed file" in text
+    # the steps are the real ones: order new only adds, so the old file leaves by hand,
+    # and a second order new would copy it back from 01_received
+    assert "never replaces or removes one" in text and "delete the old file from in/" in text
+    assert "do not run order new again" in text and "01_received" in text
+    assert "which marks to keep" not in text and "remove the rest" not in text
     assert "viewshed" in text                                    # and how to print without
     assert fake.calls == []                                      # no proof
     assert _builds(d) == [] and not (d / "work" / "state.json").exists()    # and no plate

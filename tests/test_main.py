@@ -369,6 +369,10 @@ def test_a_proof_with_the_wash_on_refuses_more_marks_than_the_manifest_door_allo
     assert r.status_code == 422
     detail = r.json()["detail"]
     assert f"{limit + 1:,}" in detail and f"{limit:,}" in detail, detail
+    # it names steps the studio has: a new poster from fewer files, or the wash off. The
+    # studio has no control that removes a mark, so the sentence must not offer one.
+    assert "Start a new poster from fewer files" in detail and "turn the wash off" in detail
+    assert "Remove some marks" not in detail
     assert painted == []                                   # refused before any paint
     assert len(sess_mod.get(j["session"])["hotspots"]) == held   # nothing dropped
     # with the wash off, nothing changes: the same marks proof as they always did
