@@ -70,9 +70,9 @@ eyebrow = "Water"
 destinations = ["Freel Peak", "Mount Tallac", "Mount Rose", "Pyramid Peak"]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 4.0
-# The spot that carries the pinned photo. photo_file, a path under the gitignored
-# marketing/photos/, makes it a real photograph; without it the farm pins a gradient.
-photo_at = "Mount Tallac"
+# No plate pins a photo until Dom has a photograph. To add one, set photo_at (the spot)
+# and photo_file (a path under the gitignored marketing/photos/), and restore the photo
+# sentence in the copy and on the page. --ship-check refuses photo_at with no photo_file.
 look = {}
 
 [[tahoe_ca.sections]]
@@ -95,9 +95,9 @@ crop_place = "Desolation Wilderness, lakes strung along their outlets"
 heading = "Your summits, marked"
 crop_center_m = [751508, 4311901]
 crop_in = [5, 3.75]
-feature = "Marks and photos"
+feature = "Marks"
 variant = "poster"
-crop_place = "centred on the summit that carries the pinned photo, Mount Tallac to start"
+crop_place = "centred on a marked summit, Mount Tallac"
 
 [eastern_sierra_ca]
 anchor = "sierra"
@@ -144,7 +144,7 @@ trips = [
     { shape = "out_and_back" },
 ]
 road_cost = 3.0
-look = { track_weave = false, haze_strength = 0.35 }
+look = { haze_strength = 0.35 }
 
 [[ruby_mountains_nv.sections]]
 heading = "Low ground sinks into the haze"
@@ -182,7 +182,6 @@ destinations = [
 ]
 trips = [{ shape = "out_and_back" }, { shape = "loop" }]
 road_cost = 2.0
-photo_at = "Angels Landing"
 look = {}
 journey = { sun_azimuth_deg = 250.0, sun_altitude_deg = 10.0, golden_strength = 1.0 }
 
@@ -200,7 +199,7 @@ crop_center_m = [327109, 4126885]
 crop_in = [4.67, 3.5]
 feature = "Your track"
 variant = "poster"
-crop_place = "the trail up to Angels Landing, with the pinned photo"
+crop_place = "the trail up to Angels Landing"
 
 [[zion_ut.sections]]
 heading = "This year's trips, then next year's"

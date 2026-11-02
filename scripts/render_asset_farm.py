@@ -114,7 +114,7 @@ from app.ingest import Track
 from app.density import hotspots
 from app.spec import CompositionSpec
 from app import render, provenance, timelapse, wallpaper
-from app.orderspec import ORDER_LOOK
+from app.orderspec import order_look
 from scripts.story_config import StoryError, story_for
 from scripts.track_network import PinError, load_network, network_tracks
 
@@ -275,15 +275,14 @@ def _finite_envelope(region: Region, bounds: tuple) -> tuple:
 
 
 def _annotate(spots: list, out_dir: str, story: dict | None = None) -> list:
-    """Name + icon each hotspot and pin one photo, so the poster shows the
-    marker/photo furniture the product is about (the photo embeds into the manifest).
+    """Name + icon each hotspot and pin the story's photo, if it has one (the photo
+    embeds into the manifest).
 
-    With no story the pin is a synthetic gradient on spots[0], as it always was. A
-    story decides instead: its `photo_at` names the spot that carries the photo (a
-    label that matches no spot is a PinError), and no `photo_at` pins nothing. Its
-    `photo_file`, a path under the gitignored marketing/photos/, makes that photo a
-    real photograph; without one the gradient stays as the fallback (Task 6's gate
-    stops a gradient shipping). A `photo_file` that does not exist is a PinError too.
+    A plate with no story pins nothing. A story's `photo_at` names the spot that carries
+    the photo (a label that matches no spot is a PinError), and no `photo_at` pins
+    nothing. Its `photo_file`, a path under the gitignored marketing/photos/, makes that
+    photo a real photograph; without one a painted gradient stands in, and `--ship-check`
+    stops it shipping. A `photo_file` that does not exist is a PinError too.
 
     A spot that ALREADY carries a label or icon keeps both: network journeys arrive
     named after the real summit/lake they reached, and carrying the glyph that matches
@@ -301,16 +300,13 @@ def _annotate(spots: list, out_dir: str, story: dict | None = None) -> list:
             s["label"] = HOTSPOT_LABELS[k % len(HOTSPOT_LABELS)]
         if "icon" not in s:
             s["icon"] = HOTSPOT_ICONS[k % len(HOTSPOT_ICONS)]
-    if story is None:
-        target = spots[0] if spots else None
-    elif story.get("photo_at"):
+    target = None
+    if story and story.get("photo_at"):
         target = next((s for s in spots if s["label"] == story["photo_at"]), None)
         if target is None:
             raise PinError(f"story photo_at is not a spot on this plate: {story['photo_at']}")
-    else:
-        target = None
     if target is not None:
-        real = story.get("photo_file") if story else None
+        real = story.get("photo_file")
         if real:
             if not os.path.isfile(real):
                 raise PinError(f"story photo_file not found: {real}")
@@ -375,7 +371,7 @@ def _edition_spots(sub: list, spots: list, region, out_dir: str,
     names = [t.track_id.split(":", 1)[1] for t in sub if ":" in t.track_id]
     if names:
         # drop any inherited "photo" pin -- _annotate re-pins by the same rule as the
-        # poster (spots[0] with no story, the `photo_at` spot with one), so an
+        # poster (the `photo_at` spot, if the story has one), so an
         # edition carries ONE pinned photo like the poster, not two. The strip is
         # defensive rather than load-bearing under today's caller, and costs
         # nothing. Not tested, because no reachable state produces a double pin.
@@ -397,15 +393,17 @@ def _edition_spots(sub: list, spots: list, region, out_dir: str,
 
 def _base_spec(region: Region, tracks: list, spots: list, edition: int = 1,
                look: dict | None = None) -> CompositionSpec:
-    """The farm's spec: the customer's look (orderspec.ORDER_LOOK), so the marketing
-    images show what an order ships. `look` overrides single fields of it for one plate."""
+    """The farm's spec: the customer's look for these tracks (orderspec.order_look), so
+    the marketing images show what an order ships. `look` overrides single fields of it
+    for one plate."""
     crop, pw, ph = _frame(region)
+    coords, days = [t.coords for t in tracks], [t.day for t in tracks]
     return CompositionSpec(
         region_id=region.id, crs=region.cfg["crs"], crop=crop,
         print_w_in=pw, print_h_in=ph, native_resolution_m=region.cfg["native_resolution_m"],
-        tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
+        tracks=coords, track_days=days,
         hotspots=spots, seed=7, title_text=region.name.upper(),
-        contours=True, edition=edition, **{**ORDER_LOOK, **(look or {})})
+        contours=True, edition=edition, **{**order_look(coords, days), **(look or {})})
 
 
 def _plate_spec(region: Region, tracks: list, spots: list,

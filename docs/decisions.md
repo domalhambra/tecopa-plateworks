@@ -434,6 +434,13 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 |---|---|---|
 | Every new poster carries the biome coloring, the geography names, the dry-lake stipple and the elevation profile strip by default: `ORDER_LOOK` gains `biome`, `labels`, `dry_lakes` and `profile`, and the studio's `store.js` and `controls.js` defaults match. The marketing farm renders with the same look (`_base_spec(..., look=None)` merges a per-plate override over it). `default_spec` and the order preview still set `labels` from the plate's `labels.json`. The Archival preset also turns the profile strip off, as it already does the other layers. | The Pick-a-plate page shows what an order ships, and a customer should not have to find four toggles to get it. A layer a plate lacks (no landcover, no labels, no playa) paints nothing, and a test renders a plate with none of them. A saved or continued poster restores its own stored values, so no old print changes. | `app/orderspec.py` `ORDER_LOOK`; `scripts/render_asset_farm.py` `_base_spec`; `tests/test_asset_farm_look.py` |
 
+## 2026-11-01 (repeat trips wear in)
+
+| Decision | Why | Carried in |
+|---|---|---|
+| A new poster whose journeys share at least 1 km of line turns the weave off; a poster whose journeys only cross keeps it. `orderspec.order_look(tracks, days)` decides for the default order spec, the size preview and the marketing farm. The studio's new-poster default stays on, with its toggle; opening an order shows that order's value. A saved spec keeps what was saved. Dom, 2026-11-01, from the contact sheet. | The weave inks each journey alone, so a road driven ten times stayed a thin line. The landing page says it wears in, and a customer's poster must do what the page says. The cost: a repeat-trip poster loses the over/under at its crossings. | `app/orderspec.py`, `tests/test_repeat_trips.py` |
+| The marketing farm pins no photo on a plate with no story, and no story pins one until Dom has a photograph. The Tahoe and Zion sections lose the photo sentence. Dom, 2026-11-01. | The pin was a painted gradient. A gradient beside the word photo fails marketing honesty, on the six older posters too. | `scripts/render_asset_farm.py`, `marketing/stories.toml` |
+
 ## 2026-11-01 (the straightness measure)
 
 | Decision | Why | Carried in |

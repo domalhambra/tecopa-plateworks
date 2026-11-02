@@ -100,9 +100,9 @@ def test_a_title_names_files_by_its_slug():
     assert orderspec.file_stem("Smith home ground!") == "smith_home_ground"
 
 
-def test_orderpreview_keeps_its_name_for_the_look():
-    from app import orderpreview
-    assert orderpreview.PREVIEW_LOOK is orderspec.ORDER_LOOK
+def test_default_spec_turns_the_weave_off_for_repeat_trips(order, monkeypatch):
+    monkeypatch.setattr(orderspec, "repeats_a_route", lambda tracks, days: True)
+    assert orderspec.default_spec(order, read_state(order)).track_weave is False
 
 
 def test_no_plate_says_run_prepare(order):

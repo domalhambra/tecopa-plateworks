@@ -1222,7 +1222,7 @@ def test_annotate_keeps_existing_labels(tmp_path):
     assert out[0]["label"] == "Antelope Mountain"      # real name survives
     assert out[1]["label"] in farm.HOTSPOT_LABELS      # unnamed spot gets one
     assert all("icon" in s for s in out)
-    assert "photo" in out[0]
+    assert not any("photo" in s for s in out)          # no story, no pin
 
 
 def test_edition_spots_keep_real_names_for_network_tracks(tmp_path):
@@ -1240,9 +1240,11 @@ def test_edition_spots_keep_real_names_for_network_tracks(tmp_path):
     eds = farm._edition_spots(sub, spots, r, str(tmp_path))
     assert {s["label"] for s in eds} == {"Near Summit", "Road Lake"}
     assert next(s for s in eds if s["label"] == "Near Summit")["weight"] == 1
-    # exactly one pinned photo, like the poster -- has teeth against a mutant
-    # dropping the _annotate() re-pin on the network branch
-    assert sum("photo" in s for s in eds) == 1
+    assert sum("photo" in s for s in eds) == 0         # no story, no pin
+    # exactly one pinned photo under a story that pins one -- has teeth against a
+    # mutant dropping the _annotate() re-pin on the network branch
+    eds = farm._edition_spots(sub, spots, r, str(tmp_path), {"photo_at": "Road Lake"})
+    assert [s["label"] for s in eds if "photo" in s] == ["Road Lake"]
     # synthetic ids (no colon) keep the density path -- track INSIDE bounds so
     # hotspots() actually yields a spot and the assertion has teeth
     synth = [Track(track_id="day-1",

@@ -38,7 +38,7 @@ from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, STATIC_LAYERS_M, STATIC_S
                             CoverageError, PlateError, choose_grid, conus_covered,
                             curated_fit, nestled_frame, order_epsg, plate_bounds,
                             project_bbox, to_lonlat_bbox, track_shares)
-from app.orderspec import ORDER_LOOK
+from app.orderspec import order_look
 from app.regionbuild import slugify
 from app.spec import TITLE_MAX_CHARS, CompositionSpec, SpecError
 
@@ -281,7 +281,6 @@ def plan_sizes(bounds_m=None, tracks_m=None, widen=None, forced=(), ground=None)
 
 PREVIEW_SINGLE_PX = 1600   # the long side of a single sheet's map
 PREVIEW_SET_DPI = 50.0     # a set: 1,100 px along a panel's long side
-PREVIEW_LOOK = ORDER_LOOK   # the look of a new poster in the studio; app/orderspec.py
 
 
 def preview_dpi(entry) -> float:
@@ -340,6 +339,7 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
     with open(os.path.join(plate_dir, "region.json")) as f:
         cfg = json.load(f)
     labels = os.path.isfile(os.path.join(plate_dir, "labels.json"))
+    look = order_look([t.coords for t in tracks], [t.day for t in tracks])
     os.makedirs(out_dir, exist_ok=True)
     for e in entries:
         if not e["offered"]:
@@ -353,7 +353,7 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
                 tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
                 hotspots=[], seed=7, title_text=title,
                 panels=e["panels"], panel_gap_in=e["gap"],
-                **{**PREVIEW_LOOK, "labels": labels})   # the file check wins
+                **{**look, "labels": labels})   # the file check wins
             img = render.rasterize(spec, dpi=dpi, region_dir=plate_dir, watermark=True,
                                    watermark_text="PREVIEW", cfg=cfg)
         except SpecError as ex:

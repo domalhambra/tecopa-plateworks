@@ -19,7 +19,7 @@ An order with no photos keeps the spec it always had, less any order photos and 
 save from before the photos were taken out of in/ still carries.
 
 This file never imports app.main (it starts queues, caches and region discovery). It
-imports app.orderpreview only inside default_spec: orderpreview takes ORDER_LOOK from
+imports app.orderpreview only inside default_spec: orderpreview takes order_look from
 here."""
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ import math
 import os
 import re
 from types import SimpleNamespace
+
+import numpy as np
 
 from app import geo, provenance
 from app.credit import credit_text
@@ -47,6 +49,11 @@ from app.spec import PHOTO_BAND_SIDES, PHOTO_LAYOUTS, CompositionSpec
 ORDER_LOOK = dict(soft_light=0.35, haze_strength=0.15, water_depth=0.5,
                   label_place="smart", track_weave=True,
                   biome=True, labels=True, dry_lakes=True, profile=True)
+# Two journeys "repeat" when they share this much line, on cells this wide (metres). The
+# cell is wide enough to hold two GPS traces of one road; the length is more than a
+# crossing or a shared trailhead covers.
+REPEAT_CELL_M = 100.0
+REPEAT_MIN_M = 1000.0
 SEED = 7                    # the same seed the size preview draws with
 NO_PLATE = "Run Prepare first: work/state.json has no plate."
 SIZE_TOL = 1e-6             # inches: a size read back from JSON is the same size
@@ -55,6 +62,38 @@ SIZE_TOL = 1e-6             # inches: a size read back from JSON is the same siz
 PHOTO_BOX_REF_IN = 2.25
 PHOTO_BOX_REF_AREA = 216.0
 _SPEC_DEFAULTS = {f.name: f.default for f in dataclasses.fields(CompositionSpec)}
+
+
+def _route_cells(coords) -> set:
+    """The REPEAT_CELL_M cells a track passes through, walked between its points."""
+    pts = np.asarray(coords, dtype=float)
+    if len(pts) < 2:
+        return set()
+    seg = np.hypot(*np.diff(pts, axis=0).T)
+    at = np.concatenate([[0.0], np.cumsum(seg)])
+    d = np.arange(0.0, at[-1] + REPEAT_CELL_M / 2, REPEAT_CELL_M / 2)
+    walk = np.column_stack([np.interp(d, at, pts[:, 0]), np.interp(d, at, pts[:, 1])])
+    return set(map(tuple, np.floor(walk / REPEAT_CELL_M).astype(np.int64).tolist()))
+
+
+def repeats_a_route(tracks, track_days) -> bool:
+    """True when two journeys share at least REPEAT_MIN_M of line: a road driven again, a
+    trail hiked twice. Segments of one day are one journey (render._journey_groups)."""
+    from app import render       # here, as in band_height_for
+    seen, shared = {}, set()
+    for n, group in enumerate(render._journey_groups(
+            SimpleNamespace(tracks=tracks, track_days=track_days))):
+        for cell in set().union(*(_route_cells(tracks[i]) for i in group)):
+            if seen.setdefault(cell, n) != n:
+                shared.add(cell)
+    return len(shared) * REPEAT_CELL_M >= REPEAT_MIN_M
+
+
+def order_look(tracks, track_days) -> dict:
+    """ORDER_LOOK for these tracks. Repeat trips turn the weave off: the weave inks each
+    journey alone, and only a single summed layer lets a repeated road swell to the worn
+    width. Journeys that only cross keep the weave."""
+    return {**ORDER_LOOK, "track_weave": not repeats_a_route(tracks, track_days)}
 
 
 def photo_box_in(print_in, panels: int = 1) -> float:
@@ -259,16 +298,18 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
     path, cfg = _region_config(state)
     tracks = load_tracks_m(order.payloads(), state["epsg"])
     photos = _photo_fields(order, state) or {"hotspots": []}
+    coords, days = [t.coords for t in tracks], [t.day for t in tracks]
     spec = CompositionSpec(
         region_id=cfg["id"], crs=cfg["crs"], crop=tuple(state["frame"]),
         print_w_in=state["print_in"][0], print_h_in=state["print_in"][1],
         native_resolution_m=cfg["native_resolution_m"],
-        tracks=[t.coords for t in tracks], track_days=[t.day for t in tracks],
+        tracks=coords, track_days=days,
         seed=SEED, title_text=order.title,
         credit_text=credit_text(path),      # as the studio's proof derives it
         panels=state["panels"], panel_gap_in=state["gap"], **photos,
         # the file check still wins over the look's labels=True
-        **{**ORDER_LOOK, "labels": os.path.isfile(os.path.join(path, "labels.json"))})
+        **{**order_look(coords, days),
+           "labels": os.path.isfile(os.path.join(path, "labels.json"))})
     return provenance.bound_photo_keys(spec)
 
 

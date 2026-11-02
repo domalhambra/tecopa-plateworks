@@ -48,9 +48,9 @@ def test_full_look_renders_on_a_plate_with_no_landcover_labels_or_playa(tmp_path
 
 
 # ---- pinned photos (Pick-a-plate phase B, task 5) ----
-# The marketing farm pins one demo photo on each poster. Without a story it pins
-# spots[0], as it always has. A story's `photo_at` names the spot that carries the
-# photo, and `photo_file` makes it a real photograph instead of the gradient.
+# A poster with no story pins no photo: the farm never paints a gradient onto a page
+# that says photo. A story's `photo_at` names the spot that carries the photo, and
+# `photo_file` makes it a real photograph; `--ship-check` refuses a gradient fallback.
 import numpy as np
 import pytest
 from PIL import Image
@@ -70,9 +70,10 @@ def _pinned(spots):
     return [s["label"] for s in spots if "photo" in s]
 
 
-def test_no_story_pins_spots_0_as_today(tmp_path):
+def test_no_story_pins_nothing(tmp_path):
     out = farm._annotate(_spots(), str(tmp_path))
-    assert _pinned(out) == ["Near Summit"]
+    assert _pinned(out) == []
+    assert not (tmp_path / "_demo_photo.png").exists()
 
 
 def test_a_story_with_photo_at_pins_that_spot_only(tmp_path):
@@ -162,10 +163,9 @@ def test_the_photos_folder_is_gitignored():
     assert r.returncode == 0
 
 
-def test_tahoe_and_zion_name_their_photo_spot_and_the_others_name_none():
+def test_no_plate_pins_a_photo_until_dom_supplies_one():
+    # Dom, 2026-11-01: the sections lose the photo and its sentence until a photograph
+    # exists. Setting photo_at and photo_file together puts one back.
     from scripts.story_config import load_stories
-    stories = load_stories()
-    assert stories["tahoe_ca"]["photo_at"] == "Mount Tallac"
-    assert stories["zion_ut"]["photo_at"] == "Angels Landing"
-    for rid in ("canyonlands_ut", "eastern_sierra_ca", "ruby_mountains_nv"):
-        assert "photo_at" not in stories[rid] and "photo_file" not in stories[rid]
+    for rid, story in load_stories().items():
+        assert "photo_at" not in story and "photo_file" not in story, rid

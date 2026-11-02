@@ -98,8 +98,9 @@ read from the sheet. The exporter refuses a story image whose source is smaller 
 image made from it (it never upscales), and the farm counts a missing story source or film
 as a failed run, as the exporter CLI does; only a terrain refusal skips `relief`. A plate with no story exports the six images above and nothing more. The
 guard is unchanged: it runs first, and nothing is written until every output has encoded.
-`--ship-check` lists the plates whose pinned photo is still the farm's painted gradient
-(`photo_at` with no `photo_file`); the page must not ship while it lists any.
+A plate pins a photo only through its story: no story, no pin. `--ship-check` lists the
+plates whose pinned photo is still the farm's painted gradient (`photo_at` with no
+`photo_file`); the page must not ship while it lists any.
 
 ## Gotchas paid for
 

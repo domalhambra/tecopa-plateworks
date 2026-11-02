@@ -94,3 +94,19 @@ def test_a_title_past_the_specs_limit_refuses_every_size(tmp_path):
         assert not e["offered"] and "image" not in e
         assert e["why"] == f"title_text must be at most {TITLE_MAX_CHARS} characters"
     assert list(tmp_path.iterdir()) == []                   # no map was written
+
+
+def test_a_preview_turns_the_weave_off_for_repeat_trips(tmp_path, monkeypatch):
+    weaves = []
+    real = render.rasterize
+    def spy(spec, **kw):
+        weaves.append(spec.track_weave)
+        return real(spec, **kw)
+    monkeypatch.setattr(render, "rasterize", spy)
+    monkeypatch.setattr(opv, "order_look", lambda tracks, days: {"track_weave": False})
+    tracks = _tracks()
+    pts = tracks[0].coords
+    bounds = (pts[:, 0].min(), pts[:, 1].min(), pts[:, 0].max(), pts[:, 1].max())
+    entries = opv.plan_sizes(bounds, [t.coords for t in tracks])
+    opv.render_maps(entries, tracks, REGION_DIR, "Lassen walk", str(tmp_path))
+    assert weaves and not any(weaves)

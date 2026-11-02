@@ -481,8 +481,8 @@ def test_a_story_with_no_windows_stops_the_run_before_it_renders(tmp_path, monke
 
 # ---- the ship check -----------------------------------------------------------------
 
-def test_demo_photo_plates_names_tahoe_and_zion_until_a_photo_is_set():
-    assert story_config.demo_photo_plates() == ["tahoe_ca", "zion_ut"]
+def test_no_shipped_plate_carries_the_demo_photo():
+    assert story_config.demo_photo_plates() == []
 
 
 def test_a_plate_with_a_photo_file_is_not_a_demo_photo_plate(tmp_path):
@@ -495,8 +495,10 @@ def test_a_plate_with_a_photo_file_is_not_a_demo_photo_plate(tmp_path):
     assert story_config.demo_photo_plates(str(cfg)) == ["b_plate"]
 
 
-def test_ship_check_prints_the_plates_and_exits_1_while_any_remain(capsys):
-    assert story_config.main(["--ship-check"]) == 1
+def test_ship_check_prints_the_plates_and_exits_1_while_any_remain(tmp_path, capsys):
+    cfg = tmp_path / "stories.toml"
+    cfg.write_text('status = "ready"\n[tahoe_ca]\nphoto_at = "Peak"\n[zion_ut]\nphoto_at = "Fin"\n')
+    assert story_config.main(["--ship-check", "--config", str(cfg)]) == 1
     out = capsys.readouterr().out
     assert "tahoe_ca" in out and "zion_ut" in out
 

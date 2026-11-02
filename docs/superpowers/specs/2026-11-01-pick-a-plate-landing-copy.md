@@ -70,9 +70,9 @@ Image alt: Close view of the Tahoe poster: small granite lakes joined by creeks 
 
 ### Section 3: Your summits, marked
 
-Feature eyebrow: Marks and photos
-Body: Freel, Tallac, Rose, Pyramid: a mark on each one you've done, and the photo from the top pinned right beside it. Whatever's left on your list waits for next year's poster.
-Image alt: Close view of the Tahoe poster: a summit with its mark, and a photo pinned beside it.
+Feature eyebrow: Marks
+Body: Freel, Tallac, Rose, Pyramid: a mark on each one you've done. Whatever's left on your list waits for next year's poster.
+Image alt: Close view of the Tahoe poster: a summit with its mark.
 
 ## Eastern Sierra
 
@@ -146,8 +146,8 @@ Image alt, after: The same view of Zion Canyon lit by a low autumn sun.
 ### Section 2: The hike to Angels Landing, at the size it prints
 
 Feature eyebrow: Your track
-Body: The trail climbs out of Zion Canyon and ends on the fin above the river. Your photo from the top hangs right beside it.
-Image alt: Close view of the Zion poster: a gold track climbing to Angels Landing, with a photo pinned beside it.
+Body: The trail climbs out of Zion Canyon and ends on the fin above the river.
+Image alt: Close view of the Zion poster: a gold track climbing to Angels Landing.
 
 ### Section 3: This year's trips, then next year's
 
