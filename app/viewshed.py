@@ -46,7 +46,11 @@ REFRACTION = 0.87               # the standard factor on the curve's drop (decis
 GRID_BUDGET_CELLS = 4_000_000   # any plate, a county or Oregon to Colorado (decision 13)
 
 RAYS = 1024                     # every mark, always: see the module docstring
-SAMPLE_BUDGET = 1_500_000_000   # 1,000 marks x a whole fan from a full grid's centre, the
+SAMPLE_BUDGET = 1_500_000_000   # A sizing ceiling, not a runtime limit: nothing here stops a
+                                # sweep at it, and no mark is dropped for it. A test
+                                # (test_the_sample_budget_covers_1000_marks_on_a_full_grid)
+                                # holds that RAYS keeps the worst case under it.
+                                # 1,000 marks x a whole fan from a full grid's centre, the
                                 # ceiling RAYS is sized to. No plate reaches it. Measured on
                                 # an Apple M5, one thread, 22 M samples/s: Rifle-Aspen's
                                 # 1,000 marks took 462 M, 21 s; a bowl where every mark

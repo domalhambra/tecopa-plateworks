@@ -13,7 +13,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, scan_waypoints, Track
 from app.density import hotspots
-from app.marks import is_mark, is_same_waypoint, observers
+from app.marks import is_mark, is_same_waypoint, observers, within
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       TITLE_MAX_CHARS, year_span)
 # the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
@@ -571,7 +571,7 @@ def _carry_annotations(old_spots, new_spots):
     keys = ("label", "icon", "photo")
     old_marks = [o for o in old_spots if o.get("mark") is True]
     out = [dict(s) for s in new_spots
-           if is_mark(s) or not any(_within(s, m, WAYPOINT_DEDUP_M) for m in old_marks)]
+           if is_mark(s) or not any(within(s, m, WAYPOINT_DEDUP_M) for m in old_marks)]
     for old in old_spots:
         if old.get("mark") is True or not any(old.get(k) for k in keys):
             continue
@@ -743,9 +743,6 @@ async def upload(files: List[UploadFile] = File(...),
             # (red-team 2026-07-17 -- the one dpi the client used to assume).
             "final_dpi": FINAL_DPI}
 
-def _within(a, b, metres):
-    return ((a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2) ** 0.5 < metres
-
 def _merge_waypoints(spots, waypoints):
     """Add every waypoint to the marker layer. A waypoint is a real mark, so it is never
     dropped for a machine-made one: it replaces any density spot within WAYPOINT_DEDUP_M
@@ -756,7 +753,7 @@ def _merge_waypoints(spots, waypoints):
     for w in waypoints:
         if is_same_waypoint(w, out):
             continue
-        out = [s for s in out if is_mark(s) or not _within(w, s, WAYPOINT_DEDUP_M)]
+        out = [s for s in out if is_mark(s) or not within(w, s, WAYPOINT_DEDUP_M)]
         out.append(w)
     return out
 

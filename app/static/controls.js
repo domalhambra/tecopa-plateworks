@@ -154,7 +154,7 @@ export const CONTROLS = [
   { id: 'viewshed', path: 'style.viewshed', section: 'style', panel: 'Terrain', label: 'Unseen ground strength',
     type: 'slider', min: 0.1, max: 1, step: 0.05, default: 0.6, fmt: pct, affectsProof: true,
     visibleWhen: (s) => s.style.viewshedOn,
-    help: 'How far the ground your marks couldn\'t see gives up its colour and light.',
+    help: 'How far the ground your marks couldn\'t see gives up its color and light.',
     keywords: ['viewshed', 'strength', 'unseen', 'wash', 'quiet'] },
   { id: 'oblique', path: 'style.oblique', section: 'style', panel: 'Terrain', label: 'High relief',
     hint: 'plan-oblique stand-up terrain', type: 'slider', min: 0, max: 1, step: 0.05, default: 0,
