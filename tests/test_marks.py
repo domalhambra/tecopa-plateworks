@@ -135,3 +135,40 @@ def test_mark_true_survives_a_manifest_round_trip():
     back = spec_from_json(spec_to_json(spec))
     assert back.hotspots[0]["mark"] is True
     assert marks.observers(back.hotspots) == [(10.0, 20.0)]
+
+
+# ---- the same waypoint arriving twice: one rule for an upload and for an order ----
+
+def test_the_upload_path_uses_the_shared_same_waypoint_rule():
+    import inspect
+    from app import main
+    assert "is_same_waypoint" in inspect.getsource(main._merge_waypoints)
+    assert not hasattr(main, "WAYPOINT_SAME_M")          # the number lives in app.marks
+    assert marks.WAYPOINT_SAME_M == 1.0
+
+
+def test_is_same_waypoint_looks_only_at_waypoints_within_a_metre():
+    here = _waypoint(100, 100)
+    assert marks.is_same_waypoint(_waypoint(100.5, 100.5), [here])
+    assert not marks.is_same_waypoint(_waypoint(101, 100), [here])        # exactly 1 m: two marks
+    assert not marks.is_same_waypoint(_waypoint(100, 100), [_density(100, 100)])   # not a waypoint
+    assert not marks.is_same_waypoint(_waypoint(100, 100), [])
+
+
+def test_collapse_keeps_the_first_and_counts_the_rest():
+    a, b, c = _waypoint(0, 0, "A"), _waypoint(0.4, 0.3, "A again"), _waypoint(300, 0, "B")
+    kept, collapsed = marks.collapse_waypoints([a, b, c, _waypoint(300.2, 0.1, "B again")])
+    assert kept == [a, c] and collapsed == 2
+    assert marks.collapse_waypoints([]) == ([], 0)
+
+
+def test_collapse_finds_a_neighbour_across_a_grid_line():
+    kept, collapsed = marks.collapse_waypoints([_waypoint(0.9, 0.9), _waypoint(1.1, 1.1),
+                                                _waypoint(0.05, 0.9)])
+    assert len(kept) == 1 and collapsed == 2
+
+
+def test_collapse_agrees_with_the_upload_merge():
+    pts = [_waypoint(x * 0.37, (x * 7) % 3) for x in range(60)] + [_waypoint(5000, 5000)]
+    kept, _ = marks.collapse_waypoints(pts)
+    assert kept == _merge_waypoints([], pts)

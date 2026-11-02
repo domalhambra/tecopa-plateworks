@@ -33,6 +33,7 @@ from app import panels as panel_geo
 from app import orderemail, previewpdf, sizes
 from app.geo import RegionGeo
 from app.ingest import load_tracks, load_waypoints, lonlat_extent
+from app.marks import collapse_waypoints
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
                        parse_order_size, refuse_inside_repo)
 from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, STATIC_LAYERS_M, STATIC_SPAN,
@@ -340,7 +341,7 @@ def load_waypoints_m(payloads, epsg) -> list:
             out += load_waypoints(data, geo, filename=name)
         except Exception:
             continue
-    return out
+    return collapse_waypoints(out)[0]       # the same waypoint in two files is one mark
 
 
 def render_maps(entries, tracks, plate_dir, title, out_dir, waypoints=None,

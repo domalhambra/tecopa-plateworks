@@ -1424,3 +1424,18 @@ def test_a_bad_key_stops_the_preview_too(tmp_path, tools):
     _asking_for_the_wash(d, [], 'viewshed = "yes"')
     with pytest.raises(od.OrderError, match="viewshed must be true, false or a number"):
         _preview(d, tools)
+
+
+def test_a_preview_counts_the_same_waypoint_in_two_files_once(tmp_path, tools):
+    from tests.test_orderprep import WASH_TOML, _gpx, _many
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    for name in ("a.gpx", "b.gpx"):
+        wpts = "".join(f'<wpt lat="{lat}" lon="{lon}"><name>{n}</name></wpt>'
+                       for lon, lat, n in _many(600))
+        (d / "in" / name).write_text('<?xml version="1.0"?><gpx version="1.1" creator="t" '
+                                     f'xmlns="http://www.topografix.com/GPX/1/1">{wpts}</gpx>')
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = true\n")
+    calls = []
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
+                        write_pdf=lambda path, entries, names, title: None)
+    assert len(calls[0]["kw"]["waypoints"]) == 600 and state["wash"]["waypoints"] == 600

@@ -25,7 +25,7 @@ from types import SimpleNamespace
 
 from PIL.ImageCms import PyCMSError
 
-from app import ingest, orderspec, provenance, sizes
+from app import ingest, marks, orderspec, provenance, sizes
 from app.geo import RegionGeo
 from app.ingest import lonlat_extent
 from app import order as order_mod
@@ -52,6 +52,12 @@ TOO_MANY_MARKS = ("This order has {n:,} marks: {w:,} waypoints and {p:,} photos.
                   "without it.")
 FILE_OVER_CAP = (" One file carries more waypoints than the {cap:,} that one file can "
                  "hold.")
+# The early count reads waypoints in a metre CRS (CONUS Albers) so the 1 m same-waypoint
+# rule means metres there too. The plate's own CRS is not known before it is planned.
+COUNT_EPSG = 5070
+SAVED_SPEC_DISAGREES = ("The saved studio spec prints {printed}. order.toml asks for {asked}. "
+                        "The saved spec decides what prints. Change it in the studio.")
+WAYPOINTS_COLLAPSED = ("{n} {copies} of a waypoint that another file held {were} collapsed.")
 WAYPOINTS_OFF_PLATE = "{n} waypoints are off the plate. They draw no pin and see no ground."
 WAYPOINT_OFF_PLATE = "1 waypoint is off the plate. It draws no pin and sees no ground."
 WAYPOINTS_UNREADABLE = ("{file}: its waypoints could not be read ({why}). None of them is "
@@ -338,11 +344,14 @@ def smaller_size(order, track_bounds_m, layer_m: float) -> str | None:
 
 
 def scan_order_waypoints(order, epsg) -> tuple:
-    """(spots, over_cap, unreadable) for every track file of the order: each file's
-    waypoints as hotspots in EPSG:`epsg` (ingest.scan_waypoints), the count the files
-    carried past the cap that one file keeps, and [(file name, error)] for a file whose
-    waypoints could not be read. A file that cannot be read is named by the caller:
-    it is never dropped without a word. Nothing is written."""
+    """(spots, over_cap, unreadable, collapsed) for every track file of the order: each
+    file's waypoints as hotspots in EPSG:`epsg` (ingest.scan_waypoints), the count the files
+    carried past the cap that one file keeps, [(file name, error)] for a file whose
+    waypoints could not be read, and how many waypoints collapsed into one that came
+    before. The same waypoint in two files (two overlapping exports of one phone) is one
+    mark, by the rule an upload uses (marks.collapse_waypoints), so it is counted once. A
+    file that cannot be read is named by the caller: it is never dropped without a word.
+    Nothing is written."""
     region = RegionGeo(crs=f"EPSG:{epsg}", bounds=(0.0, 0.0, 1.0, 1.0), overview_size=(1, 1))
     spots, over_cap, unreadable = [], 0, []
     for data, name in order.payloads():
@@ -353,7 +362,8 @@ def scan_order_waypoints(order, epsg) -> tuple:
             continue
         spots += scan.spots
         over_cap += scan.over_cap
-    return spots, over_cap, unreadable
+    spots, collapsed = marks.collapse_waypoints(spots)
+    return spots, over_cap, unreadable, collapsed
 
 
 def check_marks(order, waypoints, over_cap=0) -> None:
@@ -374,11 +384,11 @@ def check_marks(order, waypoints, over_cap=0) -> None:
 def stop_over_marks(order) -> None:
     """The stop of decision 20, before any plate is built or any file is written: an order
     that asks for the wash (`viewshed` above 0) with more than MARK_LIMIT real marks.
-    The waypoints are counted as lon/lat, the same count in any projection. An order
-    with no key reads nothing."""
+    The waypoints are counted in a metre CRS (COUNT_EPSG), after the same-waypoint collapse.
+    An order with no key reads nothing."""
     if not order.viewshed > 0:
         return
-    spots, over_cap, _ = scan_order_waypoints(order, 4326)
+    spots, over_cap, _, _ = scan_order_waypoints(order, COUNT_EPSG)
     check_marks(order, len(spots) + over_cap, over_cap)
 
 
@@ -394,24 +404,66 @@ def _off_plate(spots, state) -> int:
     return sum(1 for hs in spots if not (w <= hs["x"] <= e and s <= hs["y"] <= n))
 
 
+def _pins(n) -> str:
+    return f"{n} waypoint pin" + ("" if n == 1 else "s")
+
+
+def _printed_pins(spec) -> set:
+    return {(round(float(h["x"]), 3), round(float(h["y"]), 3))
+            for h in spec.hotspots if isinstance(h, dict) and h.get("mark") is True}
+
+
+def saved_spec_note(order, state) -> str | None:
+    """A warning when the order's saved studio spec (manual.spec) and order.toml's `viewshed`
+    key disagree about the wash: its strength, or which waypoints are pins. The saved spec is
+    what prints, because it is the one the customer approves: the key does not override it.
+    The note says what prints and that Dom changes it in the studio. None when there is no
+    saved spec, or it agrees, or it cannot be read (the proof says why)."""
+    if not (state.get("manual") or {}).get("spec"):
+        return None
+    try:
+        spec = orderspec.order_spec(order, state)
+    except (OrderError, SpecError, OSError, ValueError, KeyError, TypeError):
+        return None
+    on_spec = _printed_pins(spec)
+    on_key = {(round(float(h["x"]), 3), round(float(h["y"]), 3))
+              for h in orderspec.waypoint_hotspots(order, state)}
+    if abs(spec.viewshed - order.viewshed) < 1e-9 and on_spec == on_key:
+        return None
+    return SAVED_SPEC_DISAGREES.format(
+        printed=(f"the wash at {spec.viewshed:g}" if spec.viewshed > 0 else "no wash")
+        + f" and {_pins(len(on_spec))}",
+        asked=(f"the wash at {order.viewshed:g}" if order.viewshed > 0 else "no wash")
+        + f" and {_pins(len(on_key))}")
+
+
 def read_waypoints(order, state, log=print) -> dict:
     """The waypoint step of Prepare, after the photos and before the proof. With the key
     (`viewshed` above 0) it reads every waypoint of the order's own files into
     state["waypoints"], hotspots in the plate's CRS, and counts the ones off the plate;
     all of them stay, and the count is a warning (waypoint_warnings, replaced on each run
-    as photo_warnings are). A file whose waypoints could not be read is named in a warning.
-    Without the key it reads nothing, and an order whose state has no waypoints is left as
-    it is; one whose state holds waypoints from a run with the key has them cleared, so the
-    state says what the spec does. A state from before waypoints existed has neither key.
-    Returns the state."""
+    as photo_warnings are). The same waypoint in two files is kept once, and
+    state["waypoints_collapsed"] says how many were collapsed. A file whose waypoints could
+    not be read is named in a warning. Without the key it reads nothing, and an order whose
+    state has no waypoints is left as it is; one whose state holds waypoints from a run with
+    the key has them cleared, so the state says what the key asks.
+
+    A saved studio spec decides what prints, key or no key: when it disagrees with the key
+    (saved_spec_note), that is a warning too, in both cases. A state from before waypoints
+    existed has none of these keys. Returns the state."""
     old = set(state.get("waypoint_warnings") or [])
     base = [w for w in state.get("warnings", []) if w not in old]
     if not order.viewshed > 0:
-        if not state.get("waypoints") and not old:
+        cleared = {**state, "waypoints": []}
+        note = saved_spec_note(order, cleared)
+        notes = [note] if note else []
+        if not notes and not state.get("waypoints") and not old:
             return state
-        return write_state(order, {"waypoints": [], "waypoint_warnings": [],
-                                   "warnings": base})
-    spots, over_cap, unreadable = scan_order_waypoints(order, state["epsg"])
+        for n in notes:
+            log(n)
+        return write_state(order, {"waypoints": [], "waypoint_warnings": notes,
+                                   "waypoints_collapsed": 0, "warnings": base + notes})
+    spots, over_cap, unreadable, collapsed = scan_order_waypoints(order, state["epsg"])
     check_marks(order, len(spots) + over_cap, over_cap)
     notes = []
     for name, ex in unreadable:
@@ -420,10 +472,20 @@ def read_waypoints(order, state, log=print) -> dict:
     off = _off_plate(spots, state)
     if off:
         notes.append(WAYPOINT_OFF_PLATE if off == 1 else WAYPOINTS_OFF_PLATE.format(n=off))
+    saved = saved_spec_note(order, {**state, "waypoints": spots})
+    if saved:
+        notes.append(saved)
     for note in notes:
         log(note)
+    if collapsed:
+        log(_collapsed_line(collapsed))
     return write_state(order, {"waypoints": spots, "waypoint_warnings": notes,
-                               "warnings": base + notes})
+                               "waypoints_collapsed": collapsed, "warnings": base + notes})
+
+
+def _collapsed_line(n) -> str:
+    return WAYPOINTS_COLLAPSED.format(n=n, copies="copy" if n == 1 else "copies",
+                                      were="was" if n == 1 else "were")
 
 
 def _prove(order, state, proofs, log) -> dict:
@@ -1198,6 +1260,28 @@ def _photos_line(state) -> str:
             f"{len(photos) - len(kept)} dropped; layout {state.get('photo_layout', 'open')}")
 
 
+def _waypoints_line(order, state) -> str | None:
+    """The report's line on waypoints, read from the spec that prints (orderspec.order_spec),
+    never from the key: a saved studio spec decides, so the key can say one thing and the
+    poster another. None when the order has no key and prints no wash and no waypoint."""
+    saved = bool((state.get("manual") or {}).get("spec"))
+    if not (order.viewshed > 0 or saved):
+        return None
+    read = len(state.get("waypoints") or [])
+    try:
+        spec = orderspec.order_spec(order, state)
+    except (OrderError, SpecError, OSError, ValueError, KeyError, TypeError):
+        return (f"Waypoints: {read} read. The spec that prints could not be read, so what "
+                "it holds is not shown.")
+    pins = len(_printed_pins(spec))
+    if not (order.viewshed > 0 or spec.viewshed > 0 or pins):
+        return None
+    wash = f"on at {spec.viewshed:g}" if spec.viewshed > 0 else "off"
+    line = f"Waypoints: {read} read, {pins} on the poster as pins, the wash is {wash}"
+    n = state.get("waypoints_collapsed") or 0
+    return line + (f". {_collapsed_line(n)}" if n else "")
+
+
 def write_report(order, state) -> str:
     plate, frame = state["plate"], state["frame"]
     grid = f"{plate['grid_m']:g} m grid"
@@ -1211,9 +1295,9 @@ def write_report(order, state) -> str:
              f"Upsampling: {plate['upsample']:.2f}x (limit {MAX_UPSAMPLE:g}x)"]
     if state.get("photos"):
         lines.append(_photos_line(state))
-    if order.viewshed > 0:
-        lines.append(f"Waypoints: {len(state.get('waypoints') or [])} read, the wash is on "
-                     f"at {order.viewshed:g}")
+    line = _waypoints_line(order, state)
+    if line:
+        lines.append(line)
     proof = state.get("proof")
     if proof:
         lines.append(f"Proof: out/proof/{orderspec.file_stem(order.title)}-proof.jpg "

@@ -741,8 +741,9 @@ How an order asks for it:
 1. A customer who wants it says so in a reply, in words like "show me the ground my pins
    can see". Add `viewshed = true` to the order's `order.toml`, or a number from 0 to 1 for a
    stronger or a weaker wash (`true` is 0.6). Set it before you open the order in the
-   studio. A spec that you saved in the studio earlier keeps its own wash setting: turn
-   the wash on in the studio for that order.
+   studio. Once you have saved a spec in the studio, that saved spec decides what prints,
+   because the customer approves that spec. The key does not override it: change the key
+   afterwards and Prepare only warns (step 4). Change the wash in the studio.
 2. Run the preview again. Each offered size is drawn twice, as `work/preview/<size>.png`
    and `work/preview/<size>-wash.png`. The second has the waypoints as pins and the wash.
    The PDF shows both side by side on each size page, and the email has one more
@@ -751,18 +752,28 @@ How an order asks for it:
    one they want. If they want the plain map, remove the key.
 3. Run Prepare. It reads the waypoints in the same step that reads the tracks, because
    `order new` opens no file. They go into `state.json` as `waypoints`, hotspots in the
-   plate's projection, and the report has a `Waypoints:` line. The order's spec carries
-   them as pins, ahead of the photos, with the strength in `viewshed`, and the approval
-   hash covers both: change a waypoint or the key, and the approval is void.
+   plate's projection, and the report has a `Waypoints:` line. The line reads from the spec
+   that prints, never from the key: `Waypoints: 2 read, 2 on the poster as pins, the wash
+   is on at 0.6`. The same waypoint in two files (two overlapping exports) is kept once,
+   and the line says how many copies were collapsed. The order's default spec carries the
+   waypoints as pins, ahead of the photos, with the strength in `viewshed`, and the approval
+   hash covers both: change a waypoint or the key, and the approval is void. A spec saved
+   in the studio keeps its own strength and pins, and the hash covers those.
 4. Read the warnings. `<n> waypoints are off the plate` names waypoints that draw no pin
    and see no ground: none is removed, and the customer's file stays as it is. `<file>:
    its waypoints could not be read` means that no waypoint of that file is on the poster.
+   `The saved studio spec prints ... order.toml asks for ...` means the key and a saved
+   studio spec disagree about the wash or its pins. Three cases: you took the key away, or
+   changed its number, after a save; or you set the key after a save made without it. The
+   saved spec still prints, and its approval stands. To print what the key asks for, change
+   the wash in the studio, save and approve again.
 5. Over 1,000 marks Prepare and the preview stop with `This order has <n> marks`, before
    a plate is built, and write no proof. A mark is a waypoint or a photo, and a file with
-   more than 1,000 waypoints counts all of them. Ask the customer which marks to keep, and
+   more than 1,000 waypoints counts all of them. A waypoint that another file already holds
+   (within 1 m) is one mark. Ask the customer which marks to keep, and
    remove the rest from the file in `in/`, or remove the key. No mark is dropped for you.
 
-Without the key an order reads no waypoint at all, so its state, its spec hash and its
+Without the key an order reads no waypoint at all, so its default spec, its state and its
 pixels are what they were. A `state.json` from before waypoints has no `waypoints` key and
 works as it is. Taking the key away and running Prepare again clears the waypoints and
 their warnings.

@@ -194,10 +194,13 @@ def photo_hotspots(order: Order, state: dict) -> list:
 def waypoint_hotspots(order: Order, state: dict) -> list:
     """The order's waypoints as hotspots, in the plate's CRS: state["waypoints"], which
     Prepare reads from the order's own files (ingest.load_waypoints), as new dicts. Empty
-    when the order does not ask for the wash (`viewshed` is 0): the key alone decides, so
-    a state that still holds waypoints from an earlier run changes nothing. A state from
-    before waypoints existed has none. An entry that is not a dict with finite x and y is
-    left out: it has no place on the sheet."""
+    when the order does not ask for the wash (`viewshed` is 0): for the DEFAULT spec the key
+    decides, so a state that still holds waypoints from an earlier run changes nothing. It
+    does not decide what a saved studio spec prints: order_spec keeps that spec's own
+    `viewshed` and waypoint pins, because the customer approved that spec, and Prepare warns
+    when the key disagrees (orderprep.saved_spec_note). A state from before waypoints existed
+    has none. An entry that is not a dict with finite x and y is left out: it has no place on
+    the sheet."""
     if not order.viewshed > 0:
         return []
     out = []

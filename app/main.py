@@ -13,7 +13,7 @@ from app.geo import (crs_to_overview_px, crop_px_to_crs_window,
                      overview_px_to_crs, starter_crop)
 from app.ingest import load_tracks, scan_waypoints, Track
 from app.density import hotspots
-from app.marks import is_mark, observers
+from app.marks import is_mark, is_same_waypoint, observers
 from app.spec import (CompositionSpec, SpecError, FINAL_DPI, EDITION_MAX,
                       TITLE_MAX_CHARS, year_span)
 # the cartouche's data-credit line; an order's default spec (app/orderspec.py) takes it
@@ -553,10 +553,9 @@ TRACK_BATCH_MAX_BYTES = 256 * 1024 * 1024
 # nearest-hotspot radius when carrying annotations across a recompute; matches
 # density.hotspots' min_spacing_m, so "nearest" is unambiguous within one spacing.
 ANNOTATION_CARRY_M = 6000.0
-# a waypoint within this of a density spot replaces it; within the second, of another
-# waypoint, it is the same waypoint twice (a re-export carries last year's pins again).
+# a waypoint within this of a density spot replaces it. Within app.marks.WAYPOINT_SAME_M of
+# another waypoint it is the same waypoint twice (a re-export carries last year's pins again).
 WAYPOINT_DEDUP_M = 400.0
-WAYPOINT_SAME_M = 1.0
 
 def _carry_annotations(old_spots, new_spots):
     """Recomputing hotspots must never destroy operator work: transfer each annotated
@@ -755,7 +754,7 @@ def _merge_waypoints(spots, waypoints):
     WAYPOINT_SAME_M of another, which is the same waypoint arriving twice."""
     out = list(spots)
     for w in waypoints:
-        if any(s.get("mark") is True and _within(w, s, WAYPOINT_SAME_M) for s in out):
+        if is_same_waypoint(w, out):
             continue
         out = [s for s in out if is_mark(s) or not _within(w, s, WAYPOINT_DEDUP_M)]
         out.append(w)
