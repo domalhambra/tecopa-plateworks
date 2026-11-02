@@ -1,6 +1,7 @@
 # The Tecopa Landing Page on Ghost — Design
 
 **Date:** 2026-09-24
+**Superseded in part 2026-11-01:** section 2.1, the page's structure, by `2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`.
 **Status:** Approved by Dom for build, 2026-09-24, with the theme modules in §3.1.
 **Live 2026-09-26:** steps 3 to 6 of §9 are done on Dom's go-ahead. The three pages are published on www.plateworks.org, the Cloudflare rule and the `redirects.yaml` entry are in, `verify-redirects.ts` passes 111/111 with the Tecopa pair, and the live tests pass 14/14. Ghost accepted the film, so §7's media host is not needed. `marketing/build_deploy.py` was slimmed to the terrain guard the same day (`21b034e`).
 **Amended 2026-09-26 (Dom):** Tecopa orders are paid by an LZ Books invoice, like every Plateworks order. Rows 5 and step 6 say so, and the page copy was reworded to match.

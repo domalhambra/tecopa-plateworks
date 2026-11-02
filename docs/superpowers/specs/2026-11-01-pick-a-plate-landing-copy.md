@@ -35,6 +35,7 @@ Poster caption: Canyonlands and Moab, Utah · {days and miles}
 Feature eyebrow: Shading
 Body: Island in the Sky drops to the White Rim and the rim drops again to the river, and each wall lays its shadow on the bench below. Drag the coin to turn it in the light.
 Image alt: Canyonlands as a relief coin.
+Close view alt: Close view of the Canyonlands poster: Island in the Sky drops to the White Rim, with the river beyond.
 
 ### Section 2: The river stays down in its canyon
 

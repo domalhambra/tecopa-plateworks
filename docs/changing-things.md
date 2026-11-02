@@ -952,6 +952,13 @@ publish path (the blog folder's ghost-tecopa-pages script, retired with Ghost on
 5. `.venv/bin/python -m pytest -m live tests/test_marketing_page.py`. A new region
    without a coin on the page turns `test_every_built_plate_is_on_the_page` red.
 
+A showcase plate also has a story in `marketing/stories.toml`: its name, pinned
+destinations, trip shapes, look, sun and each section's crop. Its `stories` and
+`journey` tiers render the crops, and `film` and `editions` render the rest. See
+"A showcase plate's story" in `marketing/DEPLOY.md`. Run
+`.venv/bin/python -m scripts.story_config --ship-check` before a publish: it exits
+non-zero while a plate pins the demo gradient as a photo.
+
 Tests: `tests/test_terrain_provenance.py`, `tests/test_asset_farm_gate.py`,
 `tests/test_export_relief.py`. The Netlify landing retired on 2026-09-26 (tag
 `landing-final-2026-09-26`); `marketing/DEPLOY.md` keeps the farm and the guard.
@@ -975,6 +982,11 @@ copy answers to the Collector register, and `tests/test_marketing_page.py` enfor
 5. Every marketing image is an engine render, and every claim has a test. A deleted
    test is a deleted claim. Plates are free, always. The name is always the full
    compound Tecopa Plateworks.
+6. The landing page is five stories, one per showcase plate. Their sentences live in
+   `superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md`: edit them there and on
+   the page together. The live tests pin each story's anchor and title, "real trails",
+   each section heading and the Journey Light claim, and `tests/test_stories_config.py`
+   holds `marketing/stories.toml` to the same headings.
 
 ## Rebuild the macOS launcher
 

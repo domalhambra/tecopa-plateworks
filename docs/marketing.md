@@ -1,5 +1,7 @@
 # Tecopa Plateworks marketing plan — one story, told three times
 
+> **Amended 2026-11-01.** The landing page is five stories, one per showcase plate: spec
+> `superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`.
 > **Amended 2026-10-23.** Ghost was retired on 2026-10-15; the landing page is a page
 > on www.plateworks.org in plateworks-site.
 > **Amended 2026-09-26.** The landing page is on Ghost (www.plateworks.org/tecopa/,

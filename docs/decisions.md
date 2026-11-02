@@ -419,6 +419,14 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 | Known limits, accepted: the box outlines and the layout ignore High relief (oblique) displacement, and the order look has oblique 0. On a panel set the studio holds a box outline inside the sheet, not the panel. A reframe made without a proof is lost when an edit flips the layout or the band's end. | — | `changing-things.md`, "An order's photos" |
 | A plate for an order with photos is planned around the union of the open frame and the band frame on the band's current side only (`orderplate.photo_plan_frame(frame, ph, bh, side)`), not both sides. Switching the band to the other side in the studio can need ground outside the plate: `place_photos` measures the holes again and warns, and Prepare again plans a new plate for the new side (`state.photo_plan_side`). `check_holes` counts frame ground outside `dem.tif` as no data. The grid resolution is still planned on the open frame. | Planning for both ends scaled a frame by `ph / (ph - 2 bh)` each way: about 2.75 times on the Reno to Salt Lake acceptance order, about 7.5 times the area, a 3,000 km plate whose terrain fetch reached the Pacific and failed. One side is about 1.9 times the area on a landscape 11×17. The hole check clipped the frame to the plate, so a frame hanging off the plate raised no warning. | Dom, 2026-10-24, acceptance fix 2; `app/orderplate.py`, `app/orderprep.py`, `tests/test_orderprep_photos.py` |
 
+## 2026-11-01 (the five showcase plates)
+
+| Decision | Why | Carried in |
+|---|---|---|
+| The landing page is five stories, one per new plate: Canyonlands and Moab, Lake Tahoe and Desolation, Eastern Sierra, Ruby Mountains, Zion. Each pairs terrain with what the generator does to it. Tahoe opens by default. The six older plates stay as coins under More country. Dom, 2026-11-01. | The old page showed one poster. Dom wants a visitor to see the shading, the coloring and the water on ground they know. | `docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` |
+| A plate's story lives in `marketing/stories.toml`, and the sentences live in the copy document. A test holds their headings together. | The farm needs the crops and the page needs the words. One heading list keeps a crop from drifting off its sentence. | `tests/test_stories_config.py` |
+| Zion's Journey Light uses azimuth 250, altitude 10, golden 1.0, chosen for the before-and-after, not read from a track's day. The page says a poster "can be" lit by the day's sun. | Higher and paler suns barely differed from the plain map. | `marketing/stories.toml` |
+
 ## 2026-11-01 (the DEM stripes)
 
 | Decision | Why | Carried in |
