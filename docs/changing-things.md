@@ -934,7 +934,7 @@ only such test in the suite: two of them can run side by side on two workers.
 `MANIFEST.md` is the format doc, internal since 2026-07-27. The CC0 dedication stands
 for the versions published before then and cannot be revoked, but the document is no
 longer a contract for outside implementers. `provenance.spec_from_manifest` is the one
-untrusted-manifest door: parse, drop non-embedded photos, bound geometry, validate,
+untrusted-manifest door: parse, bound geometry, drop non-embedded photos, validate,
 then bound the photo keys (`provenance.bound_photo_keys`: a hotspot's `box`, `crop` and
 `source`; a malformed key is dropped from its hotspot, never an error). Every
 new verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect`
