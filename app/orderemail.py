@@ -30,6 +30,16 @@ WASH_PARAGRAPH = (
     "pins and the ground they can see. Ground out of their sight is toned down. It's line "
     "of sight over bare ground, so it ignores trees and buildings. Reply and tell me which "
     "one you'd like.")
+# Photos get their places in Prepare, so the preview's second map holds the waypoints and
+# no photo (wash spec, final review, finding 4). These two sentences say what the proof adds.
+# Customer sentences: "line of sight over bare ground", and what is on the paper first.
+WASH_PHOTOS_TOO = (
+    "Your photos count as pins too. They only get their places when the proof is made, so "
+    "it can show more ground in sight than these pages do.")
+WASH_PHOTOS_PROOF = (
+    "Your photos mark places on the map, and the proof will tone down the ground that "
+    "can't be seen from them. It's line of sight over bare ground, so it ignores trees and "
+    "buildings. If you'd rather have the plain map, just say so.")
 
 
 def _fields(order, key) -> tuple:
@@ -77,8 +87,11 @@ def email_text(order, entries, rows) -> str:
     # One paragraph to a line: HEY wraps the lines itself, and a hard break would show.
     lines += ["Here's your map at each size it suits. The PDF attached shows them all on one "
               "wall first, so you can see how big each one is, then a page for each size."]
+    photos = bool(order.viewshed > 0 and order.photo_files())     # they are marks in the wash
     if any(e["offered"] and e.get("wash_image") for e in entries):
-        lines += ["", WASH_PARAGRAPH]
+        lines += ["", WASH_PARAGRAPH] + (["", WASH_PHOTOS_TOO] if photos else [])
+    elif photos:                           # a wash with no second map: the proof shows it first
+        lines += ["", WASH_PHOTOS_PROOF]
     if order.returning:
         lines += ["", "Good to see your tracks again. Since this isn't your first poster, these "
                       "are the next-year prices."]

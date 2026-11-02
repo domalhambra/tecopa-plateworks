@@ -725,3 +725,51 @@ def test_a_photo_replaced_after_approval_voids_it(tmp_path, tools):
     state = _prepare(d, tools)
     assert state["approval"] is not None                      # the same plate: kept
     assert not orderstudio.approval_ok(order, state)          # but no longer this print
+
+
+# ---- a photos-only order with the key: a wash it never previewed (viewshed wash, final review) ----
+
+WASH_KEY = "viewshed = true\n"
+PHOTO_MARKS_ONLY = ("Wash marks: the wash will use this order's 2 photos as marks. No second "
+                    "preview map shows them: the first picture of this wash is the proof.")
+PHOTO_MARKS_AND_PINS = ("Wash marks: 1 waypoint pin and 2 photos. The preview's second map "
+                        "drew the waypoints only, so the proof can show more ground in "
+                        "sight than the preview did.")
+
+
+def _two_gps_photos(d):
+    _make(d / "in" / "a_gps.jpg", size=BIG, gps=NEAR_PEAK)
+    _make(d / "in" / "b_gps.jpg", size=BIG, gps=WEST)
+
+
+def test_a_photos_only_order_with_the_key_is_told_its_wash_uses_the_photos(tmp_path, tools):
+    d = _order(tmp_path, extra=WASH_KEY)
+    _two_gps_photos(d)
+    state = _prepare(d, tools)
+    assert state.get("waypoints") == []
+    spec = orderspec.order_spec(od.load(str(d)), state)
+    assert spec.viewshed == 0.6 and sum(1 for h in spec.hotspots if h.get("photo")) == 2
+    report = (d / "work" / "report.txt").read_text()
+    assert PHOTO_MARKS_ONLY in report
+
+
+def test_photos_and_waypoints_with_the_key_say_the_proof_shows_more(tmp_path, tools):
+    d = _order(tmp_path, extra=WASH_KEY)
+    gpx = (d / "in" / "trip.gpx").read_text().replace(
+        "<trk>", '<wpt lat="35.91" lon="-116.19"><name>Elk camp</name></wpt><trk>', 1)
+    (d / "in" / "trip.gpx").write_text(gpx)
+    _two_gps_photos(d)
+    report_state = _prepare(d, tools)
+    assert len(report_state["waypoints"]) == 1
+    report = (d / "work" / "report.txt").read_text()
+    assert PHOTO_MARKS_AND_PINS in report and PHOTO_MARKS_ONLY not in report
+
+
+def test_photos_with_no_key_or_no_wash_add_no_wash_line(tmp_path, tools):
+    d = _order(tmp_path)                       # photos, and no key
+    _two_gps_photos(d)
+    _prepare(d, tools)
+    assert "Wash marks" not in (d / "work" / "report.txt").read_text()
+    w = _order(tmp_path / "w", extra=WASH_KEY)  # the key, and no photo at all
+    _prepare(w, tools)
+    assert "Wash marks" not in (w / "work" / "report.txt").read_text()

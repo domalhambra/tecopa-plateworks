@@ -1263,26 +1263,55 @@ def _photos_line(state) -> str:
             f"{len(photos) - len(kept)} dropped; layout {state.get('photo_layout', 'open')}")
 
 
-def _waypoints_line(order, state) -> str | None:
-    """The report's line on waypoints, read from the spec that prints (orderspec.order_spec),
+# The wash of an order with photos. A photo has no place until Prepare gives it one, so the
+# preview cannot draw a map that holds the photos as marks: the first picture of that wash
+# is the proof. Both lines are for Dom (final review of the wash, finding 4).
+WASH_PHOTOS_ONLY = ("Wash marks: the wash will use this order's {photos} as marks. No second "
+                    "preview map shows them: the first picture of this wash is the proof.")
+WASH_PHOTOS_AND_PINS = ("Wash marks: {pins} and {photos}. The preview's second map drew the "
+                        "waypoints only, so the proof can show more ground in sight than "
+                        "the preview did.")
+
+
+def _photos(n) -> str:
+    return f"{n} photo" + ("" if n == 1 else "s")
+
+
+def _wash_marks_line(spec, pins) -> str | None:
+    """The line on what the order's wash will use besides waypoints: the photos in the spec
+    that prints. None when the wash is off or no photo is in the spec."""
+    photos = sum(1 for h in spec.hotspots
+                 if isinstance(h, dict) and h.get("photo") and h.get("mark") is not True)
+    if not (spec.viewshed > 0 and photos):
+        return None
+    if pins:
+        return WASH_PHOTOS_AND_PINS.format(pins=_pins(pins), photos=_photos(photos))
+    return WASH_PHOTOS_ONLY.format(photos=_photos(photos))
+
+
+def _waypoints_lines(order, state) -> list:
+    """The report's lines on the wash, read from the spec that prints (orderspec.order_spec),
     never from the key: a saved studio spec decides, so the key can say one thing and the
-    poster another. None when the order has no key and prints no wash and no waypoint."""
+    poster another. First the waypoints, then the photos that count as marks. Empty when the
+    order has no key and prints no wash and no waypoint."""
     saved = bool((state.get("manual") or {}).get("spec"))
     if not (order.viewshed > 0 or saved):
-        return None
+        return []
     read = len(state.get("waypoints") or [])
     try:
         spec = orderspec.order_spec(order, state)
     except (OrderError, SpecError, OSError, ValueError, KeyError, TypeError):
-        return (f"Waypoints: {read} read. The spec that prints could not be read, so what "
-                "it holds is not shown.")
+        return [f"Waypoints: {read} read. The spec that prints could not be read, so what "
+                "it holds is not shown."]
     pins = len(_printed_pins(spec))
+    marks = _wash_marks_line(spec, pins)
     if not (order.viewshed > 0 or spec.viewshed > 0 or pins):
-        return None
+        return []
     wash = f"on at {spec.viewshed:g}" if spec.viewshed > 0 else "off"
     line = f"Waypoints: {read} read, {pins} on the poster as pins, the wash is {wash}"
     n = state.get("waypoints_collapsed") or 0
-    return line + (f". {_collapsed_line(n)}" if n else "")
+    line += f". {_collapsed_line(n)}" if n else ""
+    return [line] + ([marks] if marks else [])
 
 
 def write_report(order, state) -> str:
@@ -1298,9 +1327,7 @@ def write_report(order, state) -> str:
              f"Upsampling: {plate['upsample']:.2f}x (limit {MAX_UPSAMPLE:g}x)"]
     if state.get("photos"):
         lines.append(_photos_line(state))
-    line = _waypoints_line(order, state)
-    if line:
-        lines.append(line)
+    lines += _waypoints_lines(order, state)
     proof = state.get("proof")
     if proof:
         lines.append(f"Proof: out/proof/{orderspec.file_stem(order.title)}-proof.jpg "

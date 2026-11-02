@@ -748,8 +748,19 @@ How an order asks for it:
    and `work/preview/<size>-wash.png`. The second has the waypoints as pins and the wash.
    The PDF shows both side by side on each size page, and the email has one more
    paragraph. The preview report says `Wash: on at 0.6, 2 waypoints.` When the files hold
-   no waypoint it says so and draws no second map. Send the customer the PDF and ask which
-   one they want. If they want the plain map, remove the key.
+   no waypoint it says so and draws no second map.
+
+   A photo has no place until Prepare gives it one, so the second map holds waypoints only.
+   With the key and photos in `in/`, the preview report adds a sentence: the wash will use
+   the photos as marks once Prepare places them. With waypoints too, it says the proof can
+   show more ground in sight than the second map does, and the email adds one paragraph
+   that says the same to the customer. With photos and no waypoint there is no second map:
+   the email says the proof will tone down the ground that cannot be seen from the photos,
+   and that the customer can ask for the plain map. The first picture of that wash is the
+   proof. Prepare's report says so too, in a `Wash marks:` line.
+
+   Send the customer the PDF and ask which one they want. If they want the plain map,
+   remove the key.
 3. Run Prepare. It reads the waypoints in the same step that reads the tracks, because
    `order new` opens no file. They go into `state.json` as `waypoints`, hotspots in the
    plate's projection, and the report has a `Waypoints:` line. The line reads from the spec

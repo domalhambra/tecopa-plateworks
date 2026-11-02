@@ -545,12 +545,24 @@ def write_preview_report(order, state, names) -> str:
             lines.append(f"  Warning: a route end is behind gap {k}.")
     wash = state.get("wash")
     if wash:
-        n = wash["waypoints"]
-        lines.append(
-            f"Wash: on at {wash['viewshed']:g}, {n} waypoint{'s' if n != 1 else ''}. "
-            "Each size page shows it beside the plain map." if n else
-            f"Wash: on at {wash['viewshed']:g}, and the files hold no waypoints, so there "
-            "is no second map.")
+        n, photos = wash["waypoints"], wash.get("photos", 0)
+        said = (f"Wash: on at {wash['viewshed']:g}, {n} waypoint{'s' if n != 1 else ''}. "
+                "Each size page shows it beside the plain map." if n else
+                f"Wash: on at {wash['viewshed']:g}, and the files hold no waypoints, so there "
+                "is no second map.")
+        # A photo has no place until Prepare gives it one, so the second map holds waypoints
+        # only. Dom is told what the proof will add (wash spec, final review, finding 4).
+        one = photos == 1
+        who = "The 1 photo in in/ counts as a mark" if one else \
+            f"The {photos} photos in in/ count as marks"
+        if photos and n:
+            said += (f" {who} once Prepare places {'it' if one else 'them'}, so the proof "
+                     "can show more ground in sight than the second map does.")
+        elif photos:
+            said += (f" The wash will use the {photos} photo{'' if one else 's'} in in/ as "
+                     f"marks once Prepare places {'it' if one else 'them'}, so the proof is "
+                     "the first picture of it.")
+        lines.append(said)
     if "email" in state:
         lines.append(orderemail.report_line(state["email"], member=order.member))
     lines.append(f"Time: {state['seconds']:g} s")
@@ -669,7 +681,8 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
              "names": names, "pdf": pdf, "email": email,
              "seconds": round(time.monotonic() - started, 1)}
     if order.viewshed > 0:           # only with the key: a preview without it is what it was
-        state["wash"] = {"viewshed": order.viewshed, "waypoints": waypoints or 0}
+        state["wash"] = {"viewshed": order.viewshed, "waypoints": waypoints or 0,
+                         "photos": len(order.photo_files())}
     _dump(os.path.join(work, "preview.json"), state)
     write_preview_report(order, state, names)
     return state

@@ -1378,9 +1378,9 @@ def test_a_preview_with_the_key_hands_the_renderer_the_waypoints(tmp_path, tools
     assert back.transform(wpts[0]["x"], wpts[0]["y"]) == pytest.approx((-116.2, 35.9), abs=1e-6)
     offered = [e for e in state["sizes"] if e["offered"]]
     assert offered and all(e["wash_image"].endswith(f"{e['key']}-wash.png") for e in offered)
-    assert state["wash"] == {"viewshed": 0.6, "waypoints": 2}
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 2, "photos": 0}
     saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
-    assert saved["wash"] == {"viewshed": 0.6, "waypoints": 2}
+    assert saved["wash"] == {"viewshed": 0.6, "waypoints": 2, "photos": 0}
     report = (d / "work" / "preview" / "report.txt").read_text()
     assert ("Wash: on at 0.6, 2 waypoints. Each size page shows it beside the plain map."
             in report)
@@ -1402,7 +1402,7 @@ def test_a_key_with_no_waypoints_in_the_files_says_there_is_nothing_to_show(tmp_
     state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
                         write_pdf=lambda path, entries, names, title: None)
     assert all("wash_image" not in e for e in state["sizes"])
-    assert state["wash"] == {"viewshed": 0.6, "waypoints": 0}
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 0, "photos": 0}
     assert ("Wash: on at 0.6, and the files hold no waypoints, so there is no second map."
             in (d / "work" / "preview" / "report.txt").read_text())
 
@@ -1439,3 +1439,47 @@ def test_a_preview_counts_the_same_waypoint_in_two_files_once(tmp_path, tools):
     state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
                         write_pdf=lambda path, entries, names, title: None)
     assert len(calls[0]["kw"]["waypoints"]) == 600 and state["wash"]["waypoints"] == 600
+
+
+# ---- photos with the key: the preview's second map holds waypoints only ----
+
+def _photos_in(d, n):
+    from tests.test_photos import _make
+    for k in range(n):
+        _make(d / "in" / f"p{k}.jpg")
+
+
+def test_a_photos_only_order_with_the_key_is_told_no_second_map_exists(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [])
+    _photos_in(d, 2)
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render([]),
+                        write_pdf=lambda path, entries, names, title: None)
+    assert all("wash_image" not in e for e in state["sizes"])        # no false second map
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 0, "photos": 2}
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert ("Wash: on at 0.6, and the files hold no waypoints, so there is no second map. "
+            "The wash will use the 2 photos in in/ as marks once Prepare places them, so the "
+            "proof is the first picture of it.") in report
+
+
+def test_waypoints_and_photos_with_the_key_say_the_proof_can_show_more(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [(-116.2, 35.9, "Camp")])
+    _photos_in(d, 1)
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render([]),
+                        write_pdf=lambda path, entries, names, title: None)
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 1, "photos": 1}
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert ("Wash: on at 0.6, 1 waypoint. Each size page shows it beside the plain map. "
+            "The 1 photo in in/ counts as a mark once Prepare places it, so the proof can "
+            "show more ground in sight than the second map does.") in report
+
+
+def test_photos_add_nothing_to_a_preview_without_the_key(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _photos_in(d, 2)
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_fake_render([]),
+                        write_pdf=lambda path, entries, names, title: None)
+    assert "wash" not in state
+    assert "Wash" not in (d / "work" / "preview" / "report.txt").read_text()
