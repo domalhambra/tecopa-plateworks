@@ -178,6 +178,37 @@ def test_the_mask_claims_about_what_brute_force_finds():
     assert near >= 0.97 * len(pick), f"{near} of {len(pick)} within 3 cells"
 
 
+def _notched_bowl(n, res, wall_r, notch_deg, notch_at):
+    """A deep bowl (every cell in sight from its centre) with a wall round it at `wall_r`
+    cells, tall enough to hide everything behind it, except a notch `notch_deg` wide that
+    points `notch_at` degrees. Returns the DEM, each cell's distance from the centre in
+    cells, and its angle from the notch's axis."""
+    yy, xx = np.indices((n, n), dtype=np.float32)
+    d = np.hypot(xx - n / 2, yy - n / 2)
+    angle = np.degrees(np.arctan2(yy - n / 2, xx - n / 2))
+    off_axis = (angle - notch_at + 180.0) % 360.0 - 180.0
+    wall = (np.abs(d - wall_r) < 1.5) & (np.abs(off_axis) > notch_deg / 2)
+    dem = (d * res) ** 2 * 2e-4
+    return np.where(wall, dem + 1e7, dem).astype(np.float32), d, off_axis
+
+
+@pytest.mark.parametrize("notch_at", [0.0, 33.7, 118.2])
+def test_the_edge_of_what_a_notch_shows_is_not_pushed_out_by_a_tile(notch_at):
+    """The across half of the four-neighbour rule. Far out, a seen sample paints a tile
+    only when the samples on both sides of it, along the ray and across it, are seen too.
+    Drop the across half and the samples on the flank of a notch paint whole tiles that
+    reach past the notch's edge. Seen ground behind the wall may lie no more than a cell and
+    a half outside the notch's angle. (Removing the across half put 100 to 600 cells there.)"""
+    n, res, wall_r, notch_deg = 2000, 200.0, 300, 20.0
+    dem, d, off_axis = _notched_bowl(n, res, wall_r, notch_deg, notch_at)
+    mask = seen_mask(dem, res, [(n / 2, n / 2)])
+    behind = d > wall_r + 3
+    assert (mask & behind).sum() > 100_000          # the notch shows a real wedge
+    slack = np.degrees(1.5 / np.maximum(d, 1.0))    # a cell and a half, as an angle
+    outside = mask & behind & (np.abs(off_axis) > notch_deg / 2 + slack)
+    assert outside.sum() == 0, f"{outside.sum()} seen cells lie outside the notch"
+
+
 def test_a_far_ridge_one_cell_wide_is_not_stepped_over():
     """Ray samples grow apart with distance. A thin far ridge still blocks."""
     n, res = 2000, 100.0
