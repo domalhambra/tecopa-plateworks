@@ -16,6 +16,8 @@ export const CURATED = [
     // Archival is the reset-look, so it pins the Looks knobs back to the server's
     // own no-op — the plain sheet every pre-feature poster prints as.
     'style.softLight': 0, 'style.haze': 0,
+    // And the wash: Archival is the plain sheet, which has no quieted ground.
+    'style.viewshedOn': false,
     // Same for the water knobs: the flat lake fill and no playa stipple.
     'style.waterDepth': 0, 'style.dryLakes': false, 'style.profile': false,
     'biome': false, 'contours': false, 'labels': false } },

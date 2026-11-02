@@ -22,7 +22,7 @@ from app.relief import (ReliefFrame, RELIEF_STAGES, register_relief_pass,
 # What the seam ships with, now that app/looks.py registers the first real passes
 # (v1.13). Their zero-knob no-op is held by tests/test_looks.py; pinning the exact
 # set here means a stray registration -- or a lost one -- fails loudly.
-SHIPPED = {"color": [], "light": ["soft-light"], "finish": ["haze"], "grade": []}
+SHIPPED = {"color": [], "light": ["soft-light"], "finish": ["haze", "viewshed"], "grade": []}
 
 
 @pytest.fixture
@@ -190,15 +190,15 @@ def test_a_pass_may_write_in_place(terrain, clean_registry):
 
 def test_render_extras_registry_carries_the_looks_knobs():
     """render.relief_extra is the spec-side half of the seam: it ships with exactly
-    the two looks readers, and they surface the spec's own values."""
+    the looks readers, and they surface the spec's own values."""
     from app import render
     from app.spec import CompositionSpec
-    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze"}
+    assert set(render.RELIEF_EXTRAS) == {"soft_light", "haze", "viewshed"}
     s = CompositionSpec(region_id="x", crs="EPSG:32610",
                         crop=(0, 0, 100, 100), print_w_in=18, print_h_in=24,
                         native_resolution_m=10.0, tracks=[], hotspots=[],
                         soft_light=0.4, haze_strength=0.2)
-    assert render._relief_extras(s) == {"soft_light": 0.4, "haze": 0.2}
+    assert render._relief_extras(s) == {"soft_light": 0.4, "haze": 0.2, "viewshed": 0.0}
 
 
 # ---- what the memory trim owes a pass ------------------------------------------------

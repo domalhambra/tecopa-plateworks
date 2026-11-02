@@ -383,3 +383,56 @@ def test_auto_orientation_of_a_set_takes_the_nearer_sheet():
             "aspect = trackAspect()", "aspect") + "console.log(setAutoIsLandscape(2, 2, 0))"],
         capture_output=True, text=True, check=True).stdout) is False     # no box yet
 
+
+
+# ---- the viewshed wash controls (docs/superpowers/specs/2026-11-01-viewshed-wash-design.md) ----
+# One spec field, two controls: a switch and a strength. Each rule is held as text.
+
+def _control(cid):
+    return dict(_control_literals())[cid]
+
+
+def test_the_wash_is_off_for_a_new_poster_and_the_help_is_the_profiles_register():
+    store = (STATIC / "store.js").read_text(encoding="utf-8")
+    assert re.search(r"^\s*viewshedOn: false,", store, re.M), \
+        "a new poster starts with the wash off (unlike Soft light)"
+    sw, strength = _control("viewshedOn"), _control("viewshed")
+    assert "type: 'toggle'" in sw and "default: false" in sw and "affectsProof: true" in sw
+    assert ("help: 'Quiets the ground you couldn\\'t see from your marks. "
+            "Calculated from the land alone, with no trees.'") in sw
+    assert "type: 'slider'" in strength and "default: 0.6" in strength
+    assert "visibleWhen: (s) => s.style.viewshedOn" in strength, \
+        "the strength shows only while the switch is on"
+    assert "section: 'style'" in sw and "panel: 'Terrain'" in sw
+    assert "panel: 'Terrain'" in strength
+
+
+def test_the_slider_stays_inside_the_spec_bound():
+    """STYLE_BOUNDS['viewshed'] is 0 to 1. The slider starts above 0 because 0 is the
+    switch's own off, and it never passes the bound."""
+    from app.spec import STYLE_BOUNDS
+    lo, hi = STYLE_BOUNDS["viewshed"]
+    strength = _control("viewshed")
+    mn = float(re.search(r"\bmin: ([0-9.]+)", strength).group(1))
+    mx = float(re.search(r"\bmax: ([0-9.]+)", strength).group(1))
+    assert lo < mn < mx == hi
+
+
+def test_the_proof_sends_zero_while_the_switch_is_off():
+    api = (STATIC / "api.js").read_text(encoding="utf-8")
+    assert "viewshed: style.viewshedOn ? style.viewshed : 0," in api
+
+
+def test_a_look_carries_the_wash_and_the_plain_look_turns_it_off():
+    store = (STATIC / "store.js").read_text(encoding="utf-8")
+    paths = re.search(r"const SNAPSHOT_PATHS = \[(.*?)\];", store, re.S).group(1)
+    assert "'style.viewshedOn'" in paths and "'style.viewshed'" in paths
+    presets = (STATIC / "presets.js").read_text(encoding="utf-8")
+    archival = re.search(r"id: 'archival'.*?\} \},", presets, re.S).group(0)
+    assert "'style.viewshedOn': false" in archival
+
+
+def test_a_continued_poster_restores_the_wash_as_printed():
+    compose = (STATIC / "compose.js").read_text(encoding="utf-8")
+    assert ("viewshedOn: (s.viewshed ?? 0) > 0, "
+            "viewshed: (s.viewshed ?? 0) > 0 ? s.viewshed : 0.6") in compose

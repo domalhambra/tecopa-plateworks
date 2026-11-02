@@ -305,3 +305,47 @@ def test_the_keys_of_the_intake_are_read(tmp_path):
 def test_a_wrong_key_of_the_intake_stops_the_order(tmp_path, line, words):
     with pytest.raises(od.OrderError, match=words.replace("?", r"\?")):
         od.load(_order(tmp_path, f'title = "T"\n{line}\n'))
+
+
+# ---- the wash: the `viewshed` key (viewshed wash spec, decisions 10, 19) ----
+
+@pytest.mark.parametrize("value,want", [
+    (None, 0.0), (False, 0.0), (0, 0.0), (0.0, 0.0), (-0.0, 0.0),
+    (True, 0.6), (1, 1.0), (1.0, 1.0), (0.25, 0.25), (0.6, 0.6)])
+def test_viewshed_key_parses(value, want):
+    got = od.parse_viewshed(value)
+    assert got == want and isinstance(got, float)
+    assert repr(got) == repr(want)               # -0.0 reads as 0.0: one spec hash
+
+
+@pytest.mark.parametrize("bad", ["yes", "true", "0.6", "", 1.5, -0.1, 2, -1,
+                                 float("nan"), float("inf"), [0.6], {"on": 1}, 10 ** 400])
+def test_viewshed_key_refuses_anything_else_and_names_the_key(bad):
+    with pytest.raises(od.OrderError, match="viewshed must be true, false or a number "
+                                            "from 0 to 1"):
+        od.parse_viewshed(bad)
+    assert len(str(pytest.raises(od.OrderError, od.parse_viewshed, bad).value)) < 120
+
+
+def test_load_reads_the_viewshed_key(tmp_path):
+    assert od.load(_order(tmp_path, TOML)).viewshed == 0.0               # absent: off
+    assert od.load(_order(tmp_path / "a", TOML + "viewshed = true\n")).viewshed == 0.6
+    assert od.load(_order(tmp_path / "b", TOML + "viewshed = 0.8\n")).viewshed == 0.8
+    assert od.load(_order(tmp_path / "c", TOML + "viewshed = false\n")).viewshed == 0.0
+    assert od.load(_order(tmp_path / "d", TOML + "viewshed = 0\n")).viewshed == 0.0
+    with pytest.raises(od.OrderError, match="viewshed must be true, false or a number"):
+        od.load(_order(tmp_path / "e", TOML + 'viewshed = "yes"\n'))
+    with pytest.raises(od.OrderError, match="viewshed"):
+        od.load(_order(tmp_path / "f", TOML + "viewshed = 1.5\n"))
+
+
+def test_an_order_built_in_code_has_no_wash():
+    assert od.Order("/nowhere", "T", "", (11.0, 17.0), "portrait", "").viewshed == 0.0
+
+
+def test_the_key_leaves_the_plates_inputs_hash_alone(tmp_path):
+    # the key changes what a poster paints, not which plate it needs: a plate built
+    # before the key was set stays current when Dom sets it
+    plain = od.load(_order(tmp_path, TOML))
+    washed = od.load(_order(tmp_path / "b", TOML + "viewshed = true\n"))
+    assert washed.inputs_hash() == plain.inputs_hash()

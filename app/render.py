@@ -1,17 +1,19 @@
 # app/render.py
 from __future__ import annotations
-import functools, hashlib, json, math as _m, os, threading
+import collections, functools, hashlib, json, math as _m, os, threading
 from dataclasses import dataclass, replace
+from typing import NamedTuple
 import numpy as np
 import rasterio
 from rasterio.windows import from_bounds
 from rasterio.enums import Resampling
+from rasterio.transform import Affine
 from scipy.ndimage import distance_transform_edt, gaussian_filter, zoom
 from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageFilter
 from app.spec import CompositionSpec, OffDemError, year_span as spec_year_span
 from app.relief import (shaded_relief, grain, TEXTURE_RADIUS_M, VALLEY_RADIUS_M,
                         _fill_nan, _resize_to, _bands, _fits)
-from app import provenance, serialize
+from app import marks, provenance, serialize, viewshed
 from app import panels as panel_geo
 
 MARGIN_FRAC = 0.06   # read a little past the crop so shadows entering the frame are correct
@@ -3099,7 +3101,109 @@ def terrain_window(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict):
     return elev, gpp, elev.shape
 
 
-def _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey, override):
+# ---- the viewshed wash: what the marks can see (docs/superpowers/specs/2026-11-01-
+# viewshed-wash-design.md). A pass never reads the plate, so `render` does, here, and the
+# result reaches the pass as `frame.extras["seen"]`. ----------------------------------
+SEEN_FEATHER_M = 100.0          # the seen edge, 10% to 90%, in ground metres (decision 7)
+SEEN_FEATHER_CELLS = 3.0        # and never under this many grid cells, or a coarse grid's
+                                # cell edges show as stair steps: seen at two cells on Elko
+                                # (a cell is about 200 m) at 15 m a pixel, gone at three
+_SEEN_SIGMA_PER_WIDTH = 2.563   # a Gaussian's 10% to 90% width, in sigmas
+_SEEN_SNAP = 1e-3               # past this close to 0 or 1, a cell is simply 0 or 1, so a
+                                # blur's far tail cannot touch a byte of ground it left
+SEEN_MASKS_MAX = 3              # 16 MB a mask at the grid's budget of 4 M cells
+_SEEN_MASKS = collections.OrderedDict()     # key -> (the mask, or None if it shows nothing,)
+_SEEN_MASKS_LOCK = threading.Lock()
+
+
+class SeenField(NamedTuple):
+    """The seen ground, for one window. `mask` is float32 on the plate's coarse grid: 1 is
+    seen, 0 is not, feathered between. It is shared and frozen. `transform` maps the
+    grid's cell corners to plate CRS metres. `bounds` is the padded window of this render,
+    (left, bottom, right, top), the one thing here that changes with the dpi."""
+    mask: np.ndarray
+    transform: Affine
+    bounds: tuple
+
+
+def _sweep_inputs(hotspots):
+    """The places the wash looks from: sorted and unique, so an equal set of marks in any
+    order is one sweep and one cache key. Two marks on one spot see the same ground, and
+    a sweep's result is a plain union, so neither is lost. Coordinates and nothing else:
+    a mark's label, icon or photo cannot change what it sees (decision 9)."""
+    return sorted(set(marks.observers(hotspots)))
+
+
+def _seen_feather_m(res_m):
+    """The feather's width in ground metres on a grid of `res_m`: pure, so it is one
+    width at every dpi."""
+    return max(SEEN_FEATHER_M, SEEN_FEATHER_CELLS * res_m)
+
+
+def _seen_grid(ds):
+    """(height, width, transform) of the wash's grid on the open plate `ds`: its budget of
+    cells, whole cells across the raster's own bounds, from the raster's own cell size."""
+    b = ds.bounds
+    width_m, height_m = b.right - b.left, b.top - b.bottom
+    res = viewshed.grid_res_m(width_m, height_m, max(abs(ds.res[0]), abs(ds.res[1])))
+    w, h = max(1, round(width_m / res)), max(1, round(height_m / res))
+    return h, w, Affine(width_m / w, 0.0, b.left, 0.0, -height_m / h, b.top)
+
+
+def _sweep_plate(ds, h, w, t, inputs):
+    """The feathered mask for `inputs` on the grid (h, w, t), or None if it shows nothing:
+    no mark landed on the plate, or the plate has no ground. All False is not "nothing is
+    seen", and must never reach the pass, which would quiet the whole sheet. `seen_mask`
+    alone decides what is on the plate, so there is one rule for it."""
+    dem = ds.read(1, out_shape=(h, w), resampling=Resampling.average,
+                  masked=True).astype("float32").filled(np.nan)
+    res_m = (t.a - t.e) / 2.0
+    cells = [((x - t.c) / t.a - 0.5, (y - t.f) / t.e - 0.5) for x, y in inputs]
+    seen = viewshed.seen_mask(dem, res_m, cells)
+    del dem
+    if not seen.any():
+        return None
+    sigma = _seen_feather_m(res_m) / res_m / _SEEN_SIGMA_PER_WIDTH
+    mask = gaussian_filter(seen.astype("float32"), sigma, mode="nearest")
+    mask[mask < _SEEN_SNAP] = 0.0
+    mask[mask > 1.0 - _SEEN_SNAP] = 1.0
+    mask.flags.writeable = False
+    return mask
+
+
+def _seen_field(spec, region_dir, cfg, window_bounds):
+    """The `SeenField` for this spec, or None when the sheet paints as if the knob were 0:
+    the knob is 0, there are no marks, or `_sweep_plate` found nothing to show. None of
+    the off cases opens the plate. A small store holds the masks, keyed on the plate, the
+    grid and the places looked from, and not on the window or the strength: a proof and
+    its final share one mask object, and a new strength does no sweep."""
+    if spec.viewshed <= 0:
+        return None
+    inputs = _sweep_inputs(spec.hotspots)
+    if not inputs:
+        return None
+    with rasterio.open(os.path.join(region_dir, cfg["dem_path"])) as ds:
+        h, w, t = _seen_grid(ds)
+        key = (os.path.abspath(region_dir), _plate_fingerprint(region_dir, cfg), h, w,
+               tuple(t)[:6], tuple(inputs))
+        with _SEEN_MASKS_LOCK:
+            entry = _SEEN_MASKS.get(key)
+            if entry is not None:
+                _SEEN_MASKS.move_to_end(key)
+        if entry is None:
+            # Outside the lock: two threads may sweep once each, and agree.
+            entry = (_sweep_plate(ds, h, w, t, inputs),)
+            with _SEEN_MASKS_LOCK:
+                _SEEN_MASKS[key] = entry
+                _SEEN_MASKS.move_to_end(key)
+                while len(_SEEN_MASKS) > SEEN_MASKS_MAX:
+                    _SEEN_MASKS.popitem(last=False)
+    if entry[0] is None:
+        return None
+    return SeenField(entry[0], t, tuple(window_bounds))
+
+
+def _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey, override, seen=None):
     """The shaded relief for this window -- or a caller's own pixels in its place.
 
     `override=None` is the default and the entire shipped path: the `shaded_relief`
@@ -3131,7 +3235,8 @@ def _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey, override):
         sun_azimuth=spec.sun_azimuth_deg if journey else None,
         sun_altitude=spec.sun_altitude_deg if journey else None,
         golden=spec.golden_strength if journey else 0.0,
-        extras=_relief_extras(spec))
+        extras=(_relief_extras(spec) if seen is None
+                else {**_relief_extras(spec), "seen": seen}))
 
 
 def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
@@ -3202,8 +3307,13 @@ def _paint_terrain(spec: CompositionSpec, dpi: int, region_dir: str, cfg: dict,
     # golden terrain simply drapes into the oblique view. archival -> None/0 -> the call is
     # byte-identical to pre-feature.
     journey = spec.light_mode == "journey"
+    # The wash reads the plate here, not in the pass. Nothing is read at knob 0, and an
+    # override's terrain is the caller's, so nothing is read for one either.
+    seen = (_seen_field(spec, region_dir, cfg,
+                        _padded_bounds(spec.crop, out_w, out_h, pad_x, pad_top, pad_bot))
+            if terrain_override is None else None)
     rgb = _relief_or_override(spec, dpi, cfg, elev, gpp, biome, journey,
-                              terrain_override)
+                              terrain_override, seen=seen)
 
     # ground metres one printed inch spans -- the DPI-independent zoom the contour
     # interval tracks (proof and final share it, so they draw the same lines).
@@ -3665,6 +3775,11 @@ def base_cache_key(spec, dpi, region_dir, cfg):
     payload = serialize.spec_to_json(spec)
     for name in BASE_KEY_MASK_ALWAYS:
         payload.pop(name, None)
+    # `hotspots` is inert on the terrain until the wash is on, and then only a mark's
+    # position reaches it: a new label or photo still hits (decision 9 of the wash's
+    # spec). A density spot that gains a label becomes a mark, and its position enters.
+    if spec.viewshed > 0:
+        payload["viewshed_observers"] = _sweep_inputs(spec.hotspots)
     # cfg is in the key, not just the file fingerprint. rasterize takes cfg as an
     # OVERRIDE (scripts/render_lightsweep.py renders a turntable as
     # {**cfg, "light_azimuth": az}), so the same spec + dpi + plate can legitimately

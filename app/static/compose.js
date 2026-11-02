@@ -262,6 +262,11 @@ export async function doUpload(fileList) {
     const boundary = [];
     if (j.dropped_points) boundary.push(`${j.dropped_points} point${j.dropped_points === 1 ? '' : 's'} outside the plate's map projection — dropped`);
     if (j.journeys_outside_plate) boundary.push(`${j.journeys_outside_plate} of ${j.tracks.length} journeys extend beyond the plate and won't fully appear`);
+    // waypoints are real marks: say how many a file carried past the per-file limit, and how
+    // many sit outside the plate (kept on the poster's marker list, but off the map)
+    const wl = j.waypoints_left_out || 0, wo = j.waypoints_off_plate || 0;
+    if (wl) boundary.push(`${wl} waypoint${wl === 1 ? '' : 's'} left out — over the per-file limit`);
+    if (wo) boundary.push(`${wo} waypoint${wo === 1 ? ' is' : 's are'} outside the plate and won't appear on the poster`);
     if (j.recovered) {
       const note = boundary.length ? ` (${boundary.join('; ')})` : '';
       showHint(`These tracks are in ${j.name} — switched to that region`);
@@ -359,6 +364,9 @@ function applyPrefill(p) {
     // Looks: `?? 0`, NOT the store default — a pre-feature poster restores the plain
     // look it was actually printed with, not the subtle-on look a new poster starts at.
     softLight: s.softLight ?? 0, haze: s.haze ?? 0,
+    // The wash: a spec at 0 (or a pre-feature file) restores off, with the strength back
+    // at its start; a spec above 0 restores on, at the strength it was printed with.
+    viewshedOn: (s.viewshed ?? 0) > 0, viewshed: (s.viewshed ?? 0) > 0 ? s.viewshed : 0.6,
     waterDepth: s.waterDepth ?? 0, dryLakes: !!s.dryLakes,
     lightMode: s.lightMode || 'archival', sunAzimuth: s.sunAzimuth ?? null, sunAltitude: s.sunAltitude ?? null,
     sunHour: null, golden: s.golden ?? 0.7, profile: !!s.profile, profileHeight: s.profileHeight ?? 0.9,

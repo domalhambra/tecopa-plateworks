@@ -467,6 +467,22 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 | In `trips`, a drive runs exactly as many times as it is listed, and only the other shapes cycle. `canyonlands_ut` lists White Rim Road once, and `ruby_mountains_nv` lists Lamoille Canyon Road four times. | Cycling every shape gave three White Rim drives, 48 percent of the manifest for one visible line. Ruby's road needs its repeats to wear in. | `_trip_slots`, `scripts/track_network.py` |
 | No two trips of a story share a day, and each stays in its season bucket. | `render._journey_groups` merges same-day tracks whatever their names. Two White Rim drives on 2024-09-14 made the visit count disagree with the spot. | `_story_trips`, `scripts/track_network.py` |
 
+## 2026-11-01 (the viewshed wash)
+
+The decisions the build made or settled that a maintainer needs. The design record is the `Decisions` table of the spec, and its last section, "What the build changed", lists every ruling made while it was built.
+
+| Decision | Why | Carried in |
+|---|---|---|
+| The wash is an option, off by default, in the spec field `viewshed`. Only marks are observers: a waypoint, a photo spot, or a spot with a name. | Dom's call: a person sees both versions. A density spot sits at the centre of a busy cell, and nobody stood there. | `superpowers/specs/2026-11-01-viewshed-wash-design.md`, decisions 1, 2 and 16; `app/marks.py`, `app/viewshed.py` |
+| Every mark runs one fixed fan of 1,024 rays. There is no per-mark share of a budget. | Adding a mark can then only add ground, and a test holds that. One mark is no finer than a thousand. | the spec's last section; `app/viewshed.py`, `SAMPLE_BUDGET` |
+| The first sweep was replaced. Rings one cell apart, a tile painted only when all four neighbours are seen. | The first sweep over-claimed seen ground by 47 to 73%, against the anti-goal that the wash claims more than it knows. The replacement leaves +10 to +22% at the edge, at twice the time. | `app/viewshed.py`; `tests/test_viewshed.py` |
+| A manifest holds up to 1,000 hotspots, and up to 64 with a photo. | 64 dated from the first editions and would stop a real collector. Each photo costs drawing work that the wash's budget does not cover. | `app/provenance.py`, `MAX_MANIFEST_HOTSPOTS`, `MAX_MANIFEST_PHOTOS`; `tests/test_editions.py` |
+| Prepare reads an order's waypoints, in the step that reads its tracks. `order new` does not. | `order new` opens no file. Prepare is where tracks are first read. | the spec, decisions 18 and 19; `app/orderprep.py` |
+| After a studio save, the saved spec decides what prints. `order.toml`'s `viewshed` does not override it, and Prepare warns when they disagree. | The customer approves that spec. An override would void the approval silently. | `app/orderprep.py`, `saved_spec_note`; `app/orderspec.py` |
+| An order or a studio session with the wash on and more than 1,000 marks stops and names the count. No mark is dropped. Nothing in the studio removes a mark, and `order new` never removes a file from `in/`, so each message names the steps that exist. | A silent drop would change a poster nobody agreed to change. | `app/main.py`, `_wash_marks_or_422`; `app/orderprep.py`, `TOO_MANY_MARKS` |
+| Strength: unseen ground loses 50% of its saturation and 12.8% of its value at `finish`, at most 15% on the print. The feather is the larger of 100 m and 3 grid cells. Lakes can move up to 3 levels per channel. | The spec left the numbers to the builder. They are one constant each, and stay open until Dom reads a real proof. | `app/looks.py`; the spec, decisions 7 and 15 |
+| An order with the key and photos but no waypoint gets no second preview map, and the preview says so. The wash shows first on the proof. | Photos are not placed at preview time, so a second map would draw a wash that does not match the poster. | `app/orderpreview.py`, `app/orderemail.py`, `app/orderprep.py` |
+
 ## Rejected and deferred
 
 | Date | Item | Why | Source |
@@ -499,3 +515,8 @@ The plan's nine planning decisions (B1 to B9) as Dom settled them, and the rulin
 | 2026-10-11 | The peak memory footprint of the engine's own process for the largest set, 59×22 in, after a proof and with its caches loaded. | Not measured. The engine's process was measured once, before the trim, as resident memory (15.74 GB), and that measure reads too low. After the trim the footprint is measured for one render in a script: 14.5 to 16.5 GB. Also not measured: a set final that overlaps a refine or a reprint. | `superpowers/plans/2026-10-11-panel-sets-and-size-preview.md`, "Open before a merge", item 2 |
 | 2026-10-11 | A width limit for the title block of a set. | Not part of this build. A long title can leave panel 1: a title of 80 characters at furniture scale 1.0 is 22 in wide on a 17 in panel. A single 17×22 cuts the same title at the sheet edge. The proof shows it. | the same plan, "Found, and not part of this build" |
 | 2026-10-11 | The three print checks: the 11×17 furniture, the 17×22 furniture, one real set hung at 2 in. | They need paper, a ruler and Dom. They stay open after the build. | the same plan, "Open: three checks that need paper" |
+| 2026-11-01 | A per-mark share of the ray budget. | It could not hold the rule that more marks only add ground. One fixed fan did. | the spec's last section |
+| 2026-11-01 | A studio control that deletes a mark. | Not built. An over-limit poster says to start from fewer files or turn the wash off. Dom may want one later. | the spec's last section |
+| 2026-11-01 | `order new` reading waypoints. | It opens no file. Prepare reads them. | the spec, decision 18 |
+| 2026-11-01 | A second preview map for a photos-only order. | Photos have no place until Prepare, so the map would not match the proof. The email and both reports say so instead. | the spec, decision 20 |
+| 2026-11-01 | The wash's final strength. | Open until Dom reads a real proof on Rifle-Aspen, and on one plate where marks sit low in valleys. | the spec, "How we know it works" |

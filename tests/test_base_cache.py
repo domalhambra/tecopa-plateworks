@@ -503,3 +503,79 @@ def test_the_final_path_does_not_use_the_cache():
     from app import main as main_mod
     src = inspect.getsource(main_mod._render_to_blob)
     assert "base_cache" not in src
+
+
+# ---- the viewshed wash: hotspots reach the terrain only when it is on (decision 9) ----
+
+def _washed(hotspots, viewshed=1.0):
+    return _live_spec(hotspots=hotspots, viewshed=viewshed)
+
+
+def _named(dx=0.0, label="Camp", **kw):
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
+    return {"x": cx + dx, "y": cy, "weight": 2, "label": label, **kw}
+
+
+def test_moving_a_mark_misses_when_the_wash_is_on():
+    assert _key(_washed([_named()])) != _key(_washed([_named(dx=30.0)]))
+
+
+def test_changing_a_label_hits_when_the_wash_is_on():
+    """Only the observer's position enters the key: its label, icon or photo stay out."""
+    base = _key(_washed([_named()]))
+    assert _key(_washed([_named(label="Other camp")])) == base
+    assert _key(_washed([_named(icon="tent")])) == base
+    assert _key(_washed([_named(photo="p.jpg")])) == base
+
+
+def test_moving_a_mark_hits_when_the_wash_is_off():
+    assert _key(_washed([_named()], 0.0)) == _key(_washed([_named(dx=30.0)], 0.0))
+
+
+def test_a_density_spot_only_keys_the_wash_once_it_is_named():
+    spot = {k: v for k, v in _named().items() if k != "label"}
+    bare = _key(_washed([]))
+    assert _key(_washed([spot])) == bare                # not a mark: no observer
+    assert _key(_washed([{**spot, "x": spot["x"] + 30.0}])) == bare
+    assert _key(_washed([{**spot, "label": "Camp"}])) != bare
+
+
+def test_equal_sets_of_marks_share_a_key_in_any_order():
+    a, b = _named(), _named(dx=500.0)
+    assert _key(_washed([a, b])) == _key(_washed([b, a]))
+
+
+def test_toggling_back_does_no_new_sweep(monkeypatch):
+    """A second look at a state already painted does no new relief work and no sweep."""
+    from app import render, viewshed
+    render._SEEN_MASKS.clear()
+    sweeps, reliefs = [], []
+    real_mask, real_relief = viewshed.seen_mask, render.shaded_relief
+    monkeypatch.setattr(render.viewshed, "seen_mask",
+                        lambda *a, **kw: sweeps.append(1) or real_mask(*a, **kw))
+    monkeypatch.setattr(render, "shaded_relief",
+                        lambda *a, **kw: reliefs.append(1) or real_relief(*a, **kw))
+    cfg = _cfg()
+    bx = cfg["bounds"]
+    cx, cy = (bx[0] + bx[2]) / 2, (bx[1] + bx[3]) / 2
+    crop = (cx - 6000, cy - 8000, cx + 6000, cy + 8000)
+    spec = dict(region_id="lassen_ca", crs=cfg["crs"], crop=crop, print_w_in=3,
+                print_h_in=4, native_resolution_m=10, tracks=[], seed=7,
+                hotspots=[_named()])
+    cache = basecache.BaseCache(256 * 1024 * 1024)
+
+    def paint(viewshed_value):
+        s = CompositionSpec(**spec, viewshed=viewshed_value)
+        return np.asarray(render.rasterize(s, dpi=96, region_dir=REGION_DIR, cfg=cfg,
+                                           base_cache=cache))
+    on = paint(1.0)
+    off = paint(0.0)
+    assert len(sweeps) == 1 and len(reliefs) == 2
+    assert np.array_equal(paint(1.0), on)
+    assert np.array_equal(paint(0.0), off)
+    assert len(sweeps) == 1 and len(reliefs) == 2, "the toggle back did new work"
+    # a new strength repaints the relief and reuses the mask
+    paint(0.5)
+    assert len(sweeps) == 1 and len(reliefs) == 3

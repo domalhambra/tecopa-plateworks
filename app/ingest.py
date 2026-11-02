@@ -6,6 +6,7 @@ import io
 import math
 import re
 import zipfile
+from typing import NamedTuple
 import numpy as np
 import gpxpy
 from lxml import etree
@@ -13,8 +14,10 @@ from shapely.geometry import LineString
 from app.geo import RegionGeo, lonlat_to_crs
 
 # Waypoints: a hostile KML can carry thousands of <Placemark>s; bound what rides into
-# the marker layer (loud boundaries, like the KMZ caps below).
-MAX_WAYPOINTS = 200
+# the marker layer (loud boundaries, like the KMZ caps below). Each waypoint is a real
+# mark, so the cap is sized for a collector, not for a phone's whole history; the upload
+# reports how many a file carried past it (scan_waypoints).
+MAX_WAYPOINTS = 1000
 
 @dataclass
 class Track:
@@ -291,16 +294,38 @@ def _waypoint_hotspot(region, lon, lat, name, sym):
     label = (name or "").strip()[:60]
     # weight seeds the marker's presence; waypoints are explicit, so give them a solid
     # (but not dominating) default so they read as pins in the marker layer.
+    # `mark` says a person put this here on purpose, whether or not they named it
+    # (app.marks.is_mark); a machine-made density spot never carries it.
     return {"x": float(x), "y": float(y), "weight": 3,
-            "label": label, "icon": _sym_to_icon(sym)}
+            "label": label, "icon": _sym_to_icon(sym), "mark": True}
 
-def load_waypoints(data: bytes, region: RegionGeo,
-                   filename: str | None = None) -> list[dict]:
+class WaypointScan(NamedTuple):
+    spots: list[dict]    # the first MAX_WAYPOINTS waypoints, as hotspot-shaped dicts
+    over_cap: int        # how many more the file carried, left out and counted
+
+
+def scan_waypoints(data: bytes, region: RegionGeo,
+                   filename: str | None = None) -> WaypointScan:
     """Named user waypoints (GPX <wpt>, KML <Placemark> points) -> hotspot-shaped dicts
-    (the existing marker layer's shape: {x,y,weight,label,icon}). Auto-detects format
-    like load_tracks; bounded by MAX_WAYPOINTS. Off-region points are dropped. Returns []
-    when the file carries none (the common case), so the upload path is unchanged."""
-    out: list[dict] = []
+    (the marker layer's shape: {x,y,weight,label,icon,mark}). Auto-detects format like
+    load_tracks. At most MAX_WAYPOINTS are kept; the rest are counted, not stored, so the
+    upload can say how many it left out. A waypoint that will not reproject is skipped (and, past the cap, only counted).
+    A waypoint off the plate is KEPT: the caller counts it. Empty when the file carries
+    none (the common case), so the upload path is unchanged."""
+    spots: list[dict] = []
+    over_cap = 0
+
+    def take(lon, lat, name, sym):
+        # past the cap a point is only counted: a hostile file's thousands of
+        # placemarks never reach the projection.
+        nonlocal over_cap
+        if len(spots) >= MAX_WAYPOINTS:
+            over_cap += 1
+            return
+        hs = _waypoint_hotspot(region, lon, lat, name, sym)
+        if hs is not None:
+            spots.append(hs)
+
     is_kmz = data[:4] == b"PK\x03\x04"
     low = data.lower()
     fn = (filename or "").lower()
@@ -326,21 +351,19 @@ def load_waypoints(data: bytes, region: RegionGeo,
                 lon, lat = float(tok[0]), float(tok[1])
             except ValueError:
                 continue
-            hs = _waypoint_hotspot(region, lon, lat,
-                                   name_el.text if name_el is not None else "", None)
-            if hs is not None:
-                out.append(hs)
-            if len(out) >= MAX_WAYPOINTS:
-                break
-        return out
+            take(lon, lat, name_el.text if name_el is not None else "", None)
+        return WaypointScan(spots, over_cap)
     gpx = gpxpy.parse(io.BytesIO(data))
     for w in gpx.waypoints:
-        hs = _waypoint_hotspot(region, w.longitude, w.latitude, w.name, w.symbol)
-        if hs is not None:
-            out.append(hs)
-        if len(out) >= MAX_WAYPOINTS:
-            break
-    return out
+        take(w.longitude, w.latitude, w.name, w.symbol)
+    return WaypointScan(spots, over_cap)
+
+
+def load_waypoints(data: bytes, region: RegionGeo,
+                   filename: str | None = None) -> list[dict]:
+    """The waypoints scan_waypoints keeps, as a plain list. Callers that need the
+    count left out over MAX_WAYPOINTS call scan_waypoints."""
+    return scan_waypoints(data, region, filename).spots
 
 
 def lonlat_extent(payloads) -> dict:

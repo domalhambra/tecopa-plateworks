@@ -1040,3 +1040,384 @@ def test_a_hole_check_with_no_prep_python_warns_and_goes_on(tmp_path, monkeypatc
                            log=lambda s: None)
     assert any(n.startswith("HOLES IN THE PRINT") and "could not be checked" in n
                for n in notes)
+
+
+# --- Task 6: waypoints in an order that asks for the wash (viewshed wash, 18-20) ---------
+
+WASH_TOML = 'title = "Smith home ground"\nsize = "12x18"\n'
+
+
+def _wpt_gpx(bbox, points):
+    """The order's track, and a <wpt> for each (lon, lat, name) in `points`."""
+    wpts = "".join(f'<wpt lat="{lat}" lon="{lon}"><name>{name}</name></wpt>'
+                   for lon, lat, name in points)
+    return _gpx(*bbox).replace("<trk>", wpts + "<trk>", 1)
+
+
+def _asks(d, line="viewshed = true", points=((-116.19, 35.91, "Elk camp"),
+                                              (-116.18, 35.92, "Sheds, east draw")),
+          bbox=SMALL):
+    """Give the order folder a GPX that holds `points` and an order.toml with the key."""
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(bbox, points))
+    (d / "order.toml").write_text(WASH_TOML + (line + "\n" if line else ""))
+
+
+def _unread_waypoints(monkeypatch):
+    """A Prepare with no key must not read a waypoint: fail on the first read."""
+    from app import ingest
+
+    def boom(*a, **k):
+        raise AssertionError("a waypoint was read")
+    monkeypatch.setattr(ingest, "scan_waypoints", boom)
+    monkeypatch.setattr(ingest, "load_waypoints", boom)
+
+
+def test_an_order_without_the_key_reads_no_waypoint_and_is_as_it_was(tmp_path, tools,
+                                                                   monkeypatch):
+    plain = _make_order(tmp_path)
+    before = op.prepare(str(plain), tools, log=lambda s: None, proofs=_Fake())
+    other = tmp_path / "orders" / "2026-10-002-jones"
+    (other / "in").mkdir(parents=True)
+    (other / "in" / "trip.gpx").write_text(_wpt_gpx(SMALL, [(-116.19, 35.91, "Elk camp")]))
+    (other / "order.toml").write_text(WASH_TOML)
+    _unread_waypoints(monkeypatch)
+    lines = []
+    state = op.prepare(str(other), tools, log=lines.append, proofs=_Fake())
+    assert set(state) == set(before)                         # no waypoints key, no warning key
+    assert "waypoints" not in state and "waypoint_warnings" not in state
+    assert state["warnings"] == before["warnings"]
+    assert "Waypoints" not in (other / "work" / "report.txt").read_text()
+    assert not any("aypoint" in l for l in lines)
+    again = op.prepare(str(other), tools, log=lambda s: None, proofs=_Fake())   # a current plate
+    assert "waypoints" not in again and "waypoint_warnings" not in again
+
+
+def test_prepare_keeps_an_orders_waypoints_in_its_state(tmp_path, tools):
+    from pyproj import Transformer
+    d = _make_order(tmp_path)
+    _asks(d)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    wpts = state["waypoints"]
+    assert [w["label"] for w in wpts] == ["Elk camp", "Sheds, east draw"]
+    assert all(w["mark"] is True and w["weight"] == 3 and w["icon"] == "flag" for w in wpts)
+    back = Transformer.from_crs(f"EPSG:{state['epsg']}", "EPSG:4326", always_xy=True)
+    lon, lat = back.transform(wpts[0]["x"], wpts[0]["y"])      # in the plate's CRS
+    assert (lon, lat) == pytest.approx((-116.19, 35.91), abs=1e-6)
+    assert od.read_state(od.load(str(d)))["waypoints"] == wpts
+    assert state["waypoint_warnings"] == []
+    report = (d / "work" / "report.txt").read_text()
+    assert "Waypoints: 2 read, 2 on the poster as pins, the wash is on at 0.6" in report
+
+
+def test_prepare_reads_the_waypoints_in_the_step_that_reads_the_tracks(tmp_path, tools):
+    # decision 18 names `order new`, but that command opens no file (app/ordernew.py):
+    # the tracks are first read in Prepare, so the waypoints are too
+    from app import ordernew
+    assert "load_waypoints" not in open(ordernew.__file__).read()
+    assert "scan_waypoints" not in open(ordernew.__file__).read()
+
+
+def test_the_key_set_later_reaches_a_plate_that_is_current(tmp_path, tools):
+    d = _make_order(tmp_path)
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(SMALL, [(-116.19, 35.91, "Elk camp")]))
+    first = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert "waypoints" not in first
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = true\n")
+    lines, fake = [], _Fake()
+    state = op.prepare(str(d), tools, log=lines.append, proofs=fake)
+    assert any("Plate is current" in l for l in lines) and len(_builds(d)) == 1
+    assert [w["label"] for w in state["waypoints"]] == ["Elk camp"]
+    assert len(fake.calls) == 1                                # the proof follows them
+
+
+def test_taking_the_key_away_clears_the_waypoints_and_their_warnings(tmp_path, tools):
+    _curated(tmp_path)
+    d = _make_order(tmp_path, bbox=WIDE)
+    _asks(d, bbox=WIDE, points=((-116.2, 35.9, "Camp"), (-112.0, 36.0, "Far away")))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 2 and state["waypoint_warnings"]
+    assert all(w in state["warnings"] for w in state["waypoint_warnings"])
+    (d / "order.toml").write_text(WASH_TOML)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["waypoints"] == [] and state["waypoint_warnings"] == []
+    assert not any("waypoint" in w for w in state["warnings"])
+    assert "Waypoints" not in (d / "work" / "report.txt").read_text()
+    from app import orderspec
+    assert orderspec.waypoint_hotspots(od.load(str(d)), state) == []
+
+
+def test_prepare_counts_a_waypoint_off_the_plate_and_keeps_it(tmp_path, tools):
+    _curated(tmp_path)                                          # EPSG:32611, BIG_BOUNDS
+    d = _make_order(tmp_path, bbox=WIDE)
+    _asks(d, bbox=WIDE, points=((-116.2, 35.9, "Camp"), (-112.0, 36.0, "Utah"),
+                                (-111.9, 36.1, "Utah again")))
+    lines = []
+    state = op.prepare(str(d), tools, log=lines.append, proofs=_Fake())
+    assert state["plate"]["kind"] == "curated"
+    assert len(state["waypoints"]) == 3                         # none is dropped
+    note = "2 waypoints are off the plate. They draw no pin and see no ground."
+    assert note in state["warnings"] and state["waypoint_warnings"] == [note]
+    assert note in lines
+    assert note in (d / "work" / "report.txt").read_text()
+    # one off the plate says "waypoint is"
+    _asks(d, bbox=WIDE, points=((-116.2, 35.9, "Camp"), (-112.0, 36.0, "Utah")))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert "1 waypoint is off the plate. It draws no pin and sees no ground." in state["warnings"]
+    # and none off the plate says nothing
+    _asks(d, bbox=WIDE, points=((-116.2, 35.9, "Camp"),))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert not any("off the plate" in w for w in state["warnings"])
+
+
+def test_a_waypoint_warning_is_replaced_not_stacked_on_each_prepare(tmp_path, tools):
+    _curated(tmp_path)
+    d = _make_order(tmp_path, bbox=WIDE)
+    _asks(d, bbox=WIDE, points=((-116.2, 35.9, "Camp"), (-112.0, 36.0, "Utah")))
+    for _ in range(3):
+        state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert sum("off the plate" in w for w in state["warnings"]) == 1
+
+
+def test_a_file_whose_waypoints_cannot_be_read_is_named(tmp_path, tools, monkeypatch):
+    from app import ingest
+    d = _make_order(tmp_path)
+    _asks(d)
+    real = ingest.scan_waypoints
+
+    def flaky(data, region, filename=None):
+        if region.crs == f"EPSG:{op.COUNT_EPSG}":          # the count before the plate
+            return real(data, region, filename)
+        raise ValueError("bad xml")
+    monkeypatch.setattr(ingest, "scan_waypoints", flaky)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["waypoints"] == []
+    assert any(w.startswith("trip.gpx: its waypoints could not be read (ValueError: bad xml)")
+               for w in state["warnings"])
+
+
+@pytest.mark.parametrize("bad", ['"yes"', "1.5", "-1", '"true"'])
+def test_a_bad_key_stops_prepare_and_names_it(tmp_path, tools, bad):
+    d = _make_order(tmp_path)
+    _asks(d, f"viewshed = {bad}")
+    fake = _Fake()
+    with pytest.raises(od.OrderError, match="viewshed must be true, false or a number"):
+        op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
+    assert fake.calls == [] and _builds(d) == []
+
+
+def _many(n):
+    """n waypoints about 4.5 m apart: 1 m apart would be the same waypoint twice."""
+    return [(-116.19 + k * 5e-5, 35.91, f"W{k}") for k in range(n)]
+
+
+def test_prepare_stops_over_1000_marks(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _asks(d, points=_many(1001))
+    fake = _Fake()
+    with pytest.raises(od.OrderError) as ex:
+        op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
+    text = str(ex.value)
+    assert "1,001 marks" in text and "1,001 waypoints and 0 photos" in text
+    assert "at most 1,000" in text and "Ask the customer for a trimmed file" in text
+    # the steps are the real ones: order new only adds, so the old file leaves by hand,
+    # and a second order new would copy it back from 01_received
+    assert "never replaces or removes one" in text and "delete the old file from in/" in text
+    assert "do not run order new again" in text and "01_received" in text
+    assert "which marks to keep" not in text and "remove the rest" not in text
+    assert "viewshed" in text                                    # and how to print without
+    assert fake.calls == []                                      # no proof
+    assert _builds(d) == [] and not (d / "work" / "state.json").exists()    # and no plate
+    assert not (d / "out").exists()
+
+
+def test_a_single_file_past_the_waypoint_cap_is_a_stop_and_says_so(tmp_path, tools):
+    from app import ingest
+    assert ingest.MAX_WAYPOINTS == 1000
+    d = _make_order(tmp_path)
+    _asks(d, points=_many(1005))                                  # the file keeps 1,000, counts 5
+    with pytest.raises(od.OrderError) as ex:
+        op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert "1,005 marks" in str(ex.value)
+    assert "carries more waypoints than the 1,000 that one file can hold" in str(ex.value)
+
+
+def test_photos_count_with_the_waypoints_toward_the_stop(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _asks(d, points=_many(600))
+    for k in range(401):
+        (d / "in" / f"p{k:03d}.jpg").write_bytes(b"x")
+    fake = _Fake()
+    with pytest.raises(od.OrderError, match="1,001 marks: 600 waypoints and 401 photos"):
+        op.prepare(str(d), tools, log=lambda s: None, proofs=fake)
+    assert fake.calls == [] and _builds(d) == []
+    (d / "in" / "p400.jpg").unlink()                              # 1,000 is allowed
+    from app import orderprep
+    orderprep.stop_over_marks(od.load(str(d)))                    # does not raise
+
+
+def test_exactly_1000_waypoints_prepare(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _asks(d, points=_many(1000))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 1000
+
+
+def test_the_stop_waits_for_the_key(tmp_path, tools, monkeypatch):
+    d = _make_order(tmp_path)
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(SMALL, _many(1500)))
+    _unread_waypoints(monkeypatch)                                # without the key, no read at all
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert "waypoints" not in state
+
+
+def test_a_state_from_before_waypoints_prepares_on_the_current_path(tmp_path, tools):
+    d = _make_order(tmp_path)
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(SMALL, [(-116.19, 35.91, "Elk camp"),
+                                                         (-116.18, 35.92, "Draw")]))
+    first = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    raw = json.loads((d / "work" / "state.json").read_text())
+    for key in ("waypoints", "waypoint_warnings"):
+        raw.pop(key, None)
+    (d / "work" / "state.json").write_text(json.dumps(raw))
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["warnings"] == first["warnings"] and len(_builds(d)) == 1
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = true\n")
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 2 and len(_builds(d)) == 1
+
+
+# --- fix round 1: the same waypoint in two files is one mark -------------------------------
+
+def _two_exports(d, first, second, bbox=SMALL):
+    """The order's track in one file, and a waypoint list in each of two more."""
+    (d / "in" / "trip.gpx").write_text(_gpx(*bbox))
+    for name, points in (("a.gpx", first), ("b.gpx", second)):
+        wpts = "".join(f'<wpt lat="{lat}" lon="{lon}"><name>{n}</name></wpt>'
+                       for lon, lat, n in points)
+        (d / "in" / name).write_text(
+            '<?xml version="1.0"?><gpx version="1.1" creator="t" '
+            f'xmlns="http://www.topografix.com/GPX/1/1">{wpts}</gpx>')
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = true\n")
+
+
+def test_two_files_holding_the_same_600_waypoints_count_600_and_do_not_stop(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _two_exports(d, _many(600), _many(600))
+    lines = []
+    state = op.prepare(str(d), tools, log=lines.append, proofs=_Fake())     # 1,200 raw: no stop
+    assert len(state["waypoints"]) == 600 and state["waypoints_collapsed"] == 600
+    report = (d / "work" / "report.txt").read_text()
+    assert ("Waypoints: 600 read, 600 on the poster as pins, the wash is on at 0.6. "
+            "600 copies of a waypoint that another file held were collapsed.") in report
+    assert any("600 copies of a waypoint" in l for l in lines)
+
+
+def test_overlapping_exports_collapse_the_overlap_only(tmp_path, tools):
+    d = _make_order(tmp_path)
+    many = _many(900)
+    _two_exports(d, many[:600], many[300:])                        # 600 + 600, 300 shared
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 900 and state["waypoints_collapsed"] == 300
+
+
+def test_no_collapse_says_nothing_of_it(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _asks(d)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert state["waypoints_collapsed"] == 0
+    assert "collapsed" not in (d / "work" / "report.txt").read_text()
+
+
+def test_the_count_that_stops_an_order_is_after_the_collapse(tmp_path, tools):
+    d = _make_order(tmp_path)
+    _two_exports(d, _many(1000), _many(1000))                       # 2,000 raw, 1,000 real
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 1000
+    _two_exports(d, _many(1000), _many(1001)[1:])                  # 1,001 real
+    with pytest.raises(od.OrderError, match="1,001 marks"):
+        op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+
+
+# --- fix round 1: the saved studio spec decides what prints, and Prepare says so ---------
+
+SAVED_SAYS = ("The saved studio spec prints {a}. order.toml asks for {b}. The saved spec "
+              "decides what prints. Change it in the studio.")
+
+
+def _saved_with_the_wash(tmp_path, tools, key="viewshed = true"):
+    """An order prepared with the key, then saved in the studio and approved: its saved spec
+    prints the wash at 0.6 with its 2 waypoints as pins."""
+    d = _make_order(tmp_path)
+    _asks(d, key)
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    _save_in_studio(d)
+    return d
+
+
+def _prints(d):
+    from app import orderspec
+    order = od.load(str(d))
+    state = od.read_state(order)
+    spec = orderspec.order_spec(order, state)
+    return spec.viewshed, [h for h in spec.hotspots if h.get("mark") is True], \
+        state["approval"] == {"at": "x", "hash": orderspec.spec_hash(spec)}
+
+
+def test_the_key_taken_away_after_a_save_warns_and_the_saved_spec_still_prints(tmp_path, tools):
+    d = _saved_with_the_wash(tmp_path, tools)
+    (d / "order.toml").write_text(WASH_TOML)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    want = SAVED_SAYS.format(a="the wash at 0.6 and 2 waypoint pins",
+                             b="no wash and 0 waypoint pins")
+    assert want in state["warnings"] and state["waypoint_warnings"] == [want]
+    strength, pins, approved = _prints(d)
+    assert strength == 0.6 and len(pins) == 2 and approved         # nothing moved
+    assert "Waypoints: 0 read, 2 on the poster as pins, the wash is on at 0.6" in \
+        (d / "work" / "report.txt").read_text()
+    again = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert again["warnings"].count(want) == 1                      # replaced, not stacked
+
+
+def test_a_key_changed_after_a_save_warns_and_the_report_reads_the_spec(tmp_path, tools):
+    d = _saved_with_the_wash(tmp_path, tools)
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = 0.2\n")
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    want = SAVED_SAYS.format(a="the wash at 0.6 and 2 waypoint pins",
+                             b="the wash at 0.2 and 2 waypoint pins")
+    assert want in state["warnings"]
+    assert _prints(d)[0] == 0.6 and _prints(d)[2]
+    report = (d / "work" / "report.txt").read_text()
+    assert "the wash is on at 0.6" in report and "on at 0.2" not in report
+
+
+def test_a_key_set_after_a_save_with_none_warns_and_the_report_says_off(tmp_path, tools):
+    d = _make_order(tmp_path)
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(SMALL, [(-116.19, 35.91, "Elk camp"),
+                                                         (-116.18, 35.92, "Draw")]))
+    op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())          # no key
+    _save_in_studio(d)
+    (d / "order.toml").write_text(WASH_TOML + "viewshed = true\n")
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert len(state["waypoints"]) == 2                                    # read, and not printed
+    want = SAVED_SAYS.format(a="no wash and 0 waypoint pins",
+                             b="the wash at 0.6 and 2 waypoint pins")
+    assert want in state["warnings"]
+    strength, pins, approved = _prints(d)
+    assert strength == 0.0 and pins == [] and approved
+    assert "Waypoints: 2 read, 0 on the poster as pins, the wash is off" in \
+        (d / "work" / "report.txt").read_text()
+
+
+def test_a_saved_spec_that_agrees_with_the_key_says_nothing(tmp_path, tools):
+    d = _saved_with_the_wash(tmp_path, tools)
+    state = op.prepare(str(d), tools, log=lambda s: None, proofs=_Fake())
+    assert not any("saved studio spec" in w for w in state["warnings"])
+    assert state["waypoint_warnings"] == []
+    # and with no key and a saved spec with no wash, nothing is added to the state at all
+    d2 = _make_order(tmp_path / "b")
+    op.prepare(str(d2), tools, log=lambda s: None, proofs=_Fake())
+    _save_in_studio(d2)
+    state = op.prepare(str(d2), tools, log=lambda s: None, proofs=_Fake())
+    assert "waypoints" not in state and "waypoint_warnings" not in state
+    assert not any("saved studio spec" in w for w in state["warnings"])
+    assert "Waypoints" not in (d2 / "work" / "report.txt").read_text()
