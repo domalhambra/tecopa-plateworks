@@ -653,3 +653,82 @@ def test_names_and_prices_at_their_limits_still_make_a_wall(tmp_path):
         lay = pdf.wall_layout(offered, names, pdf.content_box("Lassen walk", pdf.WALL_LABEL, True, 1, 5))
         assert min(it["thumb"][2] for it in lay["items"]) >= pdf._px(floor_in), (wall, face)
         _margins_are_clean(pdf.wall_page(offered, names, "Lassen walk", 1, 5))
+
+
+# ---- the wash: a size page shows both maps side by side (viewshed wash, decision 20) ----
+
+WASH_COLOUR = (120, 20, 200)          # the second map's own flat colour, apart from COLOURS
+
+
+def _washed(tmp_path, key, panels, w, h, gap=0.0):
+    e = _entry(tmp_path, key, panels, w, h, gap)
+    path = tmp_path / f"{key}-wash.png"
+    Image.new("RGB", (round(w * 20), round(h * 20)), WASH_COLOUR).save(path)
+    return {**e, "wash_image": str(path)}
+
+
+@pytest.mark.parametrize("names", [NAMES, LONG_NAMES], ids=["names", "long names"])
+@pytest.mark.parametrize("key,panels,w,h,gap", SIZE_PAGES)
+def test_a_size_page_with_a_wash_holds_both_maps_side_by_side(tmp_path, key, panels, w, h,
+                                                              gap, names):
+    e = _washed(tmp_path, key, panels, w, h, gap)
+    box = pdf.content_box("Lassen walk", pdf.size_label(2, 5), False, 2, 5)
+    lay = pdf.pair_layout(e, names, box)
+    plain, wash = lay["map"], lay["wash"]
+    assert _inside(plain, box) and _inside(wash, box) and _inside(lay["caption"], box)
+    assert plain[2:] == wash[2:]                                   # one scale, one size
+    assert plain[2] / plain[3] == pytest.approx(w / h, rel=0.01)   # each keeps its shape
+    assert plain[1] == wash[1]                                     # in one row
+    assert wash[0] >= plain[0] + plain[2] + pdf._px(pdf.MIN_GAP_IN) - 1   # the plain map first
+    assert not _cross(plain, wash)
+    for label, art in zip(lay["labels"], (plain, wash)):
+        assert _inside(label["box"], box) and not _cross(label["box"], art)
+        assert label["box"][0] == art[0] and label["box"][1] >= art[1] + art[3]
+        assert label["box"][2] <= art[2]                           # a label stays under its map
+    for other in (plain, wash, *[l["box"] for l in lay["labels"]]):
+        assert not _cross(lay["caption"], other)
+    img = pdf.size_page(e, names, "Lassen walk" if names is NAMES else "W" * 200, 2, 5)
+    assert img.size == PAGE
+    _margins_are_clean(img)
+    a = np.asarray(img)
+    for (x, y, mw, mh), colour in ((plain, COLOURS[key]), (wash, WASH_COLOUR)):
+        assert (a[y:y + mh, x:x + mw] == colour).all()             # each fills its box
+    assert _extent(img, COLOURS[key]) == tuple(plain)
+    assert _extent(img, WASH_COLOUR) == tuple(wash)
+
+
+def test_the_labels_under_the_two_maps_say_what_each_is(tmp_path):
+    assert pdf.WASH_LABELS == ("As it is", "With your pins and line of sight over bare ground")
+    box = pdf.content_box("Lassen walk", pdf.size_label(2, 5), False, 2, 5)
+    lay = pdf.pair_layout(_washed(tmp_path, "11x17", 1, 11, 17), NAMES, box)
+    assert [" ".join(t for t, _, _ in l["block"]["lines"]) for l in lay["labels"]] == list(
+        pdf.WASH_LABELS)
+    for text in pdf.WASH_LABELS:                                   # the profile's words
+        assert "what you saw" not in text.lower() and "—" not in text
+    img = pdf.size_page(_washed(tmp_path, "11x17", 1, 11, 17), NAMES, "Lassen walk", 2, 5)
+    for label in lay["labels"]:
+        x, y, w, h = label["box"]
+        assert (np.asarray(img)[y:y + h, x:x + w] != pdf.PAPER).any()      # drawn
+
+
+def test_a_size_page_without_a_wash_is_as_it_was(tmp_path):
+    e = _entry(tmp_path, "11x17", 1, 11, 17)
+    assert "wash_image" not in e
+    plain = pdf.size_page(e, NAMES, "Lassen walk", 2, 5)
+    assert not (np.asarray(plain) == np.array(WASH_COLOUR)).all(axis=-1).any()
+    lay = pdf.size_layout(e, NAMES, pdf.content_box("Lassen walk", pdf.size_label(2, 5),
+                                                    False, 2, 5))
+    assert _extent(plain, COLOURS["11x17"]) == tuple(lay["map"])
+
+
+def test_the_pdf_has_the_same_pages_with_a_wash(tmp_path):
+    entries = [_washed(tmp_path, "11x17", 1, 11, 17), _washed(tmp_path, "17x22", 1, 17, 22)]
+    out = tmp_path / "preview.pdf"
+    assert pdf.write(str(out), entries, NAMES, "Lassen walk") == 3     # the wall, then a page each
+    assert out.stat().st_size > 0
+
+
+def test_the_wall_page_still_shows_the_plain_map_only(tmp_path):
+    entries = [_washed(tmp_path, "11x17", 1, 11, 17), _washed(tmp_path, "17x22", 1, 17, 22)]
+    img = np.asarray(pdf.wall_page(entries, NAMES, "Lassen walk", 1, 3))
+    assert not (img == np.array(WASH_COLOUR)).all(axis=-1).any()

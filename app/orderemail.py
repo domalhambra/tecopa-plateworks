@@ -22,6 +22,14 @@ from app.sizes import DIGITAL, PAYMENT_LINK
 
 FILE = "email.txt"
 SUBJECT = "Your Tecopa Plateworks poster, order {number}"
+# Said only when the preview drew a second map of each size (the order's `viewshed` key,
+# viewshed wash spec, decision 20). A customer sentence: it goes through the profile, so it
+# says "line of sight over bare ground", and no word of what the client saw or knows.
+WASH_PARAGRAPH = (
+    "The page for each size shows your map twice, side by side: as it is, and with your "
+    "pins and the ground they can see. Ground out of their sight is toned down. It's line "
+    "of sight over bare ground, so it ignores trees and buildings. Reply and tell me which "
+    "one you'd like.")
 
 
 def _fields(order, key) -> tuple:
@@ -69,6 +77,8 @@ def email_text(order, entries, rows) -> str:
     # One paragraph to a line: HEY wraps the lines itself, and a hard break would show.
     lines += ["Here's your map at each size it suits. The PDF attached shows them all on one "
               "wall first, so you can see how big each one is, then a page for each size."]
+    if any(e["offered"] and e.get("wash_image") for e in entries):
+        lines += ["", WASH_PARAGRAPH]
     if order.returning:
         lines += ["", "Good to see your tracks again. Since this isn't your first poster, these "
                       "are the next-year prices."]

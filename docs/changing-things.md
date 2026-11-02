@@ -201,6 +201,10 @@ approval, `finish`, the printer.
    reader ignores any other key, so a misspelled key is lost without a word. An order
    with photos also takes `band_side`: `"top"` (the default) or `"bottom"`, the end of
    the sheet the photo band takes when the order uses a band. The studio can change it.
+   An order that asks for the wash also takes `viewshed`: `true` (a strength of 0.6) or a
+   number from 0 to 1. `false`, 0 or no key is off, and the order prints as it always
+   did. Anything else, `"yes"` among it, stops the order with the key named. Read
+   "An order's wash" below before you set it.
 3. To let the client choose a size, run the preview before Prepare:
    `.venv/bin/python scripts/order.py preview "<folder>"`. It needs the tracks in `in/`
    and the `title`. It does not use `size`, `orientation` or `gap`, but a wrong value
@@ -224,6 +228,9 @@ approval, `finish`, the printer.
      `<folder>/out/preview/<title>-preview.pdf`, where `<title>` is the title as a
      slug. Page 1 shows every offered size on one wall at one scale. Then each size
      has a page with its name, its hung size and its price.
+   - With `viewshed` set, it draws each offered size twice (see "An order's wash"): the
+     map as it is, and the map with the order's waypoints and the wash. Each size page of
+     the PDF shows the two side by side, and the email says so.
    - It writes `<folder>/out/preview/email.txt`, the email to the client: a line for
      each offered size and a last line for the digital poster, each with its price,
      its shipping and its Payment Link ending in `?client_reference_id=TP-26-001`, then
@@ -721,6 +728,44 @@ Known limits:
   The renderer keeps the box in its panel.
 - A reframe made without a proof is lost when an edit flips the layout or moves the
   band's end. Render a proof after each reframe.
+
+### An order's wash
+
+Read `superpowers/specs/2026-11-01-viewshed-wash-design.md`, decisions 18 to 20, before
+you change it. The wash quiets the ground that none of a poster's marks can see. An order
+gets it only when you set `viewshed` in its `order.toml`. Nothing offers it to a customer:
+no intake form changes, and the preview email says nothing of it, until you set the key.
+
+How an order asks for it:
+
+1. A customer who wants it says so in a reply, in words like "show me the ground my pins
+   can see". Add `viewshed = true` to the order's `order.toml`, or a number from 0 to 1 for a
+   stronger or a weaker wash (`true` is 0.6). Set it before you open the order in the
+   studio. A spec that you saved in the studio earlier keeps its own wash setting: turn
+   the wash on in the studio for that order.
+2. Run the preview again. Each offered size is drawn twice, as `work/preview/<size>.png`
+   and `work/preview/<size>-wash.png`. The second has the waypoints as pins and the wash.
+   The PDF shows both side by side on each size page, and the email has one more
+   paragraph. The preview report says `Wash: on at 0.6, 2 waypoints.` When the files hold
+   no waypoint it says so and draws no second map. Send the customer the PDF and ask which
+   one they want. If they want the plain map, remove the key.
+3. Run Prepare. It reads the waypoints in the same step that reads the tracks, because
+   `order new` opens no file. They go into `state.json` as `waypoints`, hotspots in the
+   plate's projection, and the report has a `Waypoints:` line. The order's spec carries
+   them as pins, ahead of the photos, with the strength in `viewshed`, and the approval
+   hash covers both: change a waypoint or the key, and the approval is void.
+4. Read the warnings. `<n> waypoints are off the plate` names waypoints that draw no pin
+   and see no ground: none is removed, and the customer's file stays as it is. `<file>:
+   its waypoints could not be read` means that no waypoint of that file is on the poster.
+5. Over 1,000 marks Prepare and the preview stop with `This order has <n> marks`, before
+   a plate is built, and write no proof. A mark is a waypoint or a photo, and a file with
+   more than 1,000 waypoints counts all of them. Ask the customer which marks to keep, and
+   remove the rest from the file in `in/`, or remove the key. No mark is dropped for you.
+
+Without the key an order reads no waypoint at all, so its state, its spec hash and its
+pixels are what they were. A `state.json` from before waypoints has no `waypoints` key and
+works as it is. Taking the key away and running Prepare again clears the waypoints and
+their warnings.
 
 ### The test sheet
 

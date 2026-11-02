@@ -21,6 +21,7 @@ section 5. This file never imports app.main, and it imports the renderer only in
 render_maps, so the framing can be tested with no DEM."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import time
@@ -31,7 +32,7 @@ import numpy as np
 from app import panels as panel_geo
 from app import orderemail, previewpdf, sizes
 from app.geo import RegionGeo
-from app.ingest import load_tracks, lonlat_extent
+from app.ingest import load_tracks, load_waypoints, lonlat_extent
 from app.order import (ORIENTATIONS, SIZE_KEYS, OrderError, load, orders_root,
                        parse_order_size, refuse_inside_repo)
 from app.orderplate import (MAX_UPSAMPLE, PLATE_PAD_M, STATIC_LAYERS_M, STATIC_SPAN,
@@ -328,9 +329,30 @@ def load_tracks_m(payloads, epsg) -> list:
     return tracks
 
 
-def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
+def load_waypoints_m(payloads, epsg) -> list:
+    """Every waypoint of the order in one projection, as hotspots, from the same files
+    load_tracks_m reads. A file whose waypoints cannot be read gives none, as it does
+    there; Prepare names such a file."""
+    geo = RegionGeo(crs=f"EPSG:{epsg}", bounds=(0.0, 0.0, 1.0, 1.0), overview_size=(1, 1))
+    out = []
+    for data, name in payloads:
+        try:
+            out += load_waypoints(data, geo, filename=name)
+        except Exception:
+            continue
+    return out
+
+
+def render_maps(entries, tracks, plate_dir, title, out_dir, waypoints=None,
+                viewshed=0.0) -> None:
     """Draw each offered size at screen size with the word PREVIEW, as
     out_dir/<key>.png, and record `image` and `dpi` on its entry.
+
+    With `waypoints` and a `viewshed` above 0 (the order asks for the wash), each size is
+    drawn a second time with the waypoints as pins and the ground they cannot see quieted,
+    as out_dir/<key>-wash.png, and `wash_image` is recorded too (viewshed wash spec,
+    decision 20). The first map is the one it always was. With either one missing there is
+    no second map: a wash with no marks would be the same picture.
 
     A size the painter refuses (SpecError: for one, OffDemError, a frame with too
     much of its ground past the terrain data) gets no image. Its entry becomes
@@ -341,6 +363,7 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
         cfg = json.load(f)
     labels = os.path.isfile(os.path.join(plate_dir, "labels.json"))
     os.makedirs(out_dir, exist_ok=True)
+    wash = bool(waypoints) and viewshed > 0
     for e in entries:
         if not e["offered"]:
             continue
@@ -355,6 +378,12 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
                 panels=e["panels"], panel_gap_in=e["gap"], **PREVIEW_LOOK)
             img = render.rasterize(spec, dpi=dpi, region_dir=plate_dir, watermark=True,
                                    watermark_text="PREVIEW", cfg=cfg)
+            if wash:
+                washed = dataclasses.replace(spec, hotspots=[dict(w) for w in waypoints],
+                                             viewshed=float(viewshed))
+                wash_img = render.rasterize(washed, dpi=dpi, region_dir=plate_dir,
+                                            watermark=True, watermark_text="PREVIEW",
+                                            cfg=cfg)
         except SpecError as ex:
             e.update(offered=False, why=str(ex))
             continue
@@ -362,6 +391,10 @@ def render_maps(entries, tracks, plate_dir, title, out_dir) -> None:
         path = os.path.join(out_dir, f"{e['key']}.png")
         img.save(path, "PNG")
         e["image"], e["dpi"] = path, round(dpi, 2)
+        if wash:
+            wash_path = os.path.join(out_dir, f"{e['key']}-wash.png")
+            panel_geo.paint_gaps(wash_img, washed, dpi).save(wash_path, "PNG")
+            e["wash_image"] = wash_path
 
 
 def _curated_plate(tools, region) -> dict:
@@ -509,6 +542,14 @@ def write_preview_report(order, state, names) -> str:
             lines.append(f"  Warning: {sentence(e['warning'])}.")
         for k in e["ends_behind"]:
             lines.append(f"  Warning: a route end is behind gap {k}.")
+    wash = state.get("wash")
+    if wash:
+        n = wash["waypoints"]
+        lines.append(
+            f"Wash: on at {wash['viewshed']:g}, {n} waypoint{'s' if n != 1 else ''}. "
+            "Each size page shows it beside the plain map." if n else
+            f"Wash: on at {wash['viewshed']:g}, and the files hold no waypoints, so there "
+            "is no second map.")
     if "email" in state:
         lines.append(orderemail.report_line(state["email"], member=order.member))
     lines.append(f"Time: {state['seconds']:g} s")
@@ -535,8 +576,15 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     `epsg` are the first plate and its projection. `names` holds the name and the
     price of every size as the PDF was given them, from config/sizes.toml: the
     next-year price for a returning client. `email` says if out/preview/email.txt was
-    written (app/orderemail.py) and, if not, what it lacks."""
-    from app.orderprep import PREP_VENV_HELP, _plan_grid, cache_env, curated_regions
+    written (app/orderemail.py) and, if not, what it lacks.
+
+    With order.toml's `viewshed` key set (the wash, viewshed wash spec decision 20) each
+    drawn size also has a `wash_image`, the same map with the waypoints as pins and the
+    ground they cannot see quieted, and the PDF and the email show both. `wash` holds the
+    strength and the count of waypoints. Over 1,000 marks the preview stops before a
+    plate, as Prepare does. Without the key none of this happens: no waypoint is read."""
+    from app.orderprep import (PREP_VENV_HELP, _plan_grid, cache_env, curated_regions,
+                               stop_over_marks)
     refuse_inside_repo(orders_root())
     order = load(order_dir)
     if len(order.title) > TITLE_MAX_CHARS:      # the painter's limit, before any plate
@@ -552,6 +600,7 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
         raise OrderError(f"no track points in {order.in_dir}")
     if not conus_covered(tracks_ll):
         raise PlateError("These tracks are outside the lower 48 states.")
+    stop_over_marks(order)         # an order that asks for the wash, over 1,000 marks: no build
     regions = curated_regions(tools.curated_root)
     ground = OrderGround(payloads, tracks_ll, regions)
     # as Prepare, after the curated check: a sheet on a curated plate needs no prep venv
@@ -592,10 +641,17 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
         else:
             shown.append((plate, list(group)))
     work = os.path.join(order.work_dir, "preview")
-    plates = []
+    plates, waypoints = [], None
     for plate, group in shown:
+        wash_kw = {}
+        if order.viewshed > 0:       # the key: the waypoints in this plate's projection
+            wash_kw = {"waypoints": load_waypoints_m(payloads, plate["epsg"]),
+                       "viewshed": order.viewshed}
+            if waypoints is None:
+                waypoints = len(wash_kw["waypoints"])
         (render or render_maps)(group, ground.tracks(plate["epsg"]),
-                                os.path.join(plate["root"], plate["id"]), order.title, work)
+                                os.path.join(plate["root"], plate["id"]), order.title, work,
+                                **wash_kw)
         drawn = [e for e in group if e["offered"]]      # the painter can refuse a size
         plate["sizes"] = [e["key"] for e in drawn]
         for e in drawn:
@@ -611,6 +667,8 @@ def preview(order_dir, tools, log=print, render=None, write_pdf=None) -> dict:
     state = {"epsg": plates[0]["epsg"], "plate": plates[0], "plates": plates, "sizes": entries,
              "names": names, "pdf": pdf, "email": email,
              "seconds": round(time.monotonic() - started, 1)}
+    if order.viewshed > 0:           # only with the key: a preview without it is what it was
+        state["wash"] = {"viewshed": order.viewshed, "waypoints": waypoints or 0}
     _dump(os.path.join(work, "preview.json"), state)
     write_preview_report(order, state, names)
     return state

@@ -1323,3 +1323,104 @@ def test_a_curated_plate_is_reused_before_the_static_tiles_are_asked(tmp_path, t
     assert (state["plate"]["kind"], state["plate"]["id"]) == ("curated", "big")
     assert state["plate"]["grid_m"] > 200
     assert not [l for l in lines if l.startswith("Preview plate")]
+
+
+# ---- the wash: the key makes a second map of each size (viewshed wash, decision 20) ----
+
+def _asking_for_the_wash(d, points, line="viewshed = true", bbox=WIDE):
+    from tests.test_orderprep import WASH_TOML, _wpt_gpx
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(bbox, points))
+    (d / "order.toml").write_text(WASH_TOML + (line + "\n" if line else ""))
+
+
+def _washing_render(calls):
+    """A stand-in for render_maps that records what it was asked for, and gives each
+    offered size its map and, when asked for the wash, a second one."""
+    def render(entries, tracks, plate_dir, title, out_dir, **kw):
+        calls.append({"kw": dict(kw), "plate_dir": plate_dir})
+        for e in entries:
+            if not e["offered"]:
+                continue
+            e["image"], e["dpi"] = os.path.join(out_dir, e["key"] + ".png"), opv.preview_dpi(e)
+            if kw.get("waypoints") and kw.get("viewshed", 0) > 0:
+                e["wash_image"] = os.path.join(out_dir, e["key"] + "-wash.png")
+    return render
+
+
+def test_a_preview_without_the_key_draws_as_it_always_did(tmp_path, tools, monkeypatch):
+    from tests.test_orderprep import _unread_waypoints, _wpt_gpx
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    (d / "in" / "trip.gpx").write_text(_wpt_gpx(WIDE, [(-116.2, 35.9, "Camp")]))
+    calls = []
+
+    def strict(entries, tracks, plate_dir, title, out_dir):      # the five arguments, no more
+        calls.append(1)
+        return _fake_render([])(entries, tracks, plate_dir, title, out_dir)
+    _unread_waypoints(monkeypatch)                                # and no waypoint is read
+    state = opv.preview(str(d), tools, log=lambda s: None, render=strict,
+                        write_pdf=lambda path, entries, names, title: None)
+    assert calls and "wash" not in state
+    assert "wash" not in json.loads((d / "work" / "preview" / "preview.json").read_text())
+    assert "Wash" not in (d / "work" / "preview" / "report.txt").read_text()
+
+
+def test_a_preview_with_the_key_hands_the_renderer_the_waypoints(tmp_path, tools):
+    from pyproj import Transformer
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [(-116.2, 35.9, "Camp"), (-116.1, 36.0, "Spring")])
+    calls, pdfs = [], []
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
+                        write_pdf=lambda path, entries, names, title: pdfs.append(path))
+    assert [c["kw"]["viewshed"] for c in calls] == [0.6]
+    wpts = calls[0]["kw"]["waypoints"]
+    assert [w["label"] for w in wpts] == ["Camp", "Spring"] and all(w["mark"] for w in wpts)
+    back = Transformer.from_crs(f"EPSG:{state['epsg']}", "EPSG:4326", always_xy=True)
+    assert back.transform(wpts[0]["x"], wpts[0]["y"]) == pytest.approx((-116.2, 35.9), abs=1e-6)
+    offered = [e for e in state["sizes"] if e["offered"]]
+    assert offered and all(e["wash_image"].endswith(f"{e['key']}-wash.png") for e in offered)
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 2}
+    saved = json.loads((d / "work" / "preview" / "preview.json").read_text())
+    assert saved["wash"] == {"viewshed": 0.6, "waypoints": 2}
+    report = (d / "work" / "preview" / "report.txt").read_text()
+    assert ("Wash: on at 0.6, 2 waypoints. Each size page shows it beside the plain map."
+            in report)
+
+
+def test_a_number_in_the_key_is_the_previews_strength(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [(-116.2, 35.9, "Camp")], "viewshed = 0.9")
+    calls = []
+    opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
+                write_pdf=lambda path, entries, names, title: None)
+    assert calls[0]["kw"]["viewshed"] == 0.9
+
+
+def test_a_key_with_no_waypoints_in_the_files_says_there_is_nothing_to_show(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [])
+    calls = []
+    state = opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
+                        write_pdf=lambda path, entries, names, title: None)
+    assert all("wash_image" not in e for e in state["sizes"])
+    assert state["wash"] == {"viewshed": 0.6, "waypoints": 0}
+    assert ("Wash: on at 0.6, and the files hold no waypoints, so there is no second map."
+            in (d / "work" / "preview" / "report.txt").read_text())
+
+
+def test_a_preview_over_1000_marks_stops_before_a_plate_is_built(tmp_path, tools):
+    from tests.test_orderprep import _many
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, _many(1001))
+    calls, pdfs = [], []
+    with pytest.raises(od.OrderError, match="1,001 marks"):
+        opv.preview(str(d), tools, log=lambda s: None, render=_washing_render(calls),
+                    write_pdf=lambda path, entries, names, title: pdfs.append(path))
+    assert calls == [] and pdfs == []
+    assert not (d / "work" / "preview").exists()
+
+
+def test_a_bad_key_stops_the_preview_too(tmp_path, tools):
+    d = _make_order(tmp_path, bbox=WIDE, size="11x17")
+    _asking_for_the_wash(d, [], 'viewshed = "yes"')
+    with pytest.raises(od.OrderError, match="viewshed must be true, false or a number"):
+        _preview(d, tools)

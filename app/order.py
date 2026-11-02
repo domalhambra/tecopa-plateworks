@@ -6,7 +6,8 @@
                             order.toml  Dom's decisions: title, size, orientation;
                                         a set's gap; the preview's sizes. From the
                                         intake: order_number, returning, client, email,
-                                        member. band_side: the photo band's end
+                                        member. band_side: the photo band's end.
+                                        viewshed: the wash, true or 0 to 1, off by default
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
@@ -43,6 +44,7 @@ ORDER_NUMBER = re.compile(r"TP-[0-9]{2}-[0-9]{3,5}")
 EMAIL = re.compile(r"[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]{1,64}@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
 CLIENT_MAX_CHARS = 80
 BAND_SIDES = ("top", "bottom")         # the photo band's end of the sheet (order photos, B2)
+DEFAULT_VIEWSHED = 0.6                 # `viewshed = true`: the wash's strength (wash spec, 19)
 
 
 class OrderError(ValueError):
@@ -154,6 +156,24 @@ def parse_band_side(value) -> str:
     return value
 
 
+def parse_viewshed(value) -> float:
+    """The wash's strength from order.toml's `viewshed`: `true` is DEFAULT_VIEWSHED, a number
+    from 0 to 1 is used as given, and `false`, 0 or no key is 0.0, off. An order with no key
+    prints as it always did (viewshed wash spec, decisions 10 and 19). Anything else, "yes"
+    among it, stops the order with the key named: a misspelt value must not turn the wash
+    off without a word."""
+    if value is None or value is False:
+        return 0.0
+    if value is True:
+        return DEFAULT_VIEWSHED
+    # a comparison on the value itself: float() of a 400-digit integer overflows
+    if (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and 0 <= value <= 1):
+        return float(value) + 0.0          # -0.0 becomes 0.0: one hash
+    text = repr(value) if len(repr(value)) <= 40 else repr(value)[:40] + "..."
+    raise OrderError(f"viewshed must be true, false or a number from 0 to 1, not {text}")
+
+
 def parse_client(value) -> str:
     if value is None:
         return ""
@@ -190,6 +210,7 @@ class Order:
     email: str = ""          # the client's address, for the To line of that email
     member: bool = False     # a member at plateworks.org: the member links, no shipping
     band_side: str = "top"   # the photo band's end of the sheet: "top" or "bottom"
+    viewshed: float = 0.0    # the wash's strength, from order.toml's `viewshed`; 0.0 is off
 
     @property
     def id(self) -> str:
@@ -284,7 +305,8 @@ def load(folder) -> Order:
                  returning=parse_returning(cfg.get("returning")),
                  client=parse_client(cfg.get("client")), email=parse_email(cfg.get("email")),
                  member=parse_member(cfg.get("member")),
-                 band_side=parse_band_side(cfg.get("band_side")))
+                 band_side=parse_band_side(cfg.get("band_side")),
+                 viewshed=parse_viewshed(cfg.get("viewshed")))
 
 
 def read_state(order: Order) -> dict:

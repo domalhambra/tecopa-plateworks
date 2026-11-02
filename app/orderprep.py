@@ -5,7 +5,9 @@ holds the print, or build one under work/plate/. A built plate's holes are measu
 before anything trusts it (check_holes). Writes work/state.json and work/report.txt.
 Then the photos (sub-project 3, place_photos): each photo in in/ gets an upright sRGB
 work JPEG under work/photos/, a spot (its GPS, else its time on a track), a caption and
-a box in open ground, or the whole poster hangs its photos in a band. Then the proof.
+a box in open ground, or the whole poster hangs its photos in a band. Then, only when
+order.toml sets `viewshed` (the wash), the waypoints of the same files (read_waypoints).
+Then the proof.
 
 The fetch stack runs only as .venv-prep subprocesses (invariant 13): the coverage
 query (scripts/dem_coverage.py) and the build (region_prep.py and
@@ -23,7 +25,8 @@ from types import SimpleNamespace
 
 from PIL.ImageCms import PyCMSError
 
-from app import orderspec, sizes
+from app import ingest, orderspec, provenance, sizes
+from app.geo import RegionGeo
 from app.ingest import lonlat_extent
 from app import order as order_mod
 from app.order import (BAND_SIDES, DEFAULT_GAP, SIZE_KEYS, OrderError, cache_path, load,
@@ -39,6 +42,20 @@ from app.papers import PaperError
 from app.regionbuild import run_build
 from app.regions import Region
 from app.spec import SpecError
+
+# The wash (viewshed wash spec, decisions 18 to 20). Prepare reads an order's waypoints, in
+# the same step that reads its tracks, only when order.toml's `viewshed` key is set.
+MARK_LIMIT = provenance.MAX_MANIFEST_HOTSPOTS     # the most marks a poster that asks for it holds
+TOO_MANY_MARKS = ("This order has {n:,} marks: {w:,} waypoints and {p:,} photos. A poster "
+                  "that quiets unseen ground holds at most {limit:,}. Ask the customer "
+                  "which marks to keep. Or remove viewshed from order.toml, to print "
+                  "without it.")
+FILE_OVER_CAP = (" One file carries more waypoints than the {cap:,} that one file can "
+                 "hold.")
+WAYPOINTS_OFF_PLATE = "{n} waypoints are off the plate. They draw no pin and see no ground."
+WAYPOINT_OFF_PLATE = "1 waypoint is off the plate. It draws no pin and sees no ground."
+WAYPOINTS_UNREADABLE = ("{file}: its waypoints could not be read ({why}). None of them is "
+                        "on the poster.")
 
 PROOF_FAILED = "PROOF NOT RENDERED: "
 PROJECTION_CHANGED = ("The plate's projection changed: the studio's saved edits were "
@@ -320,6 +337,95 @@ def smaller_size(order, track_bounds_m, layer_m: float) -> str | None:
     return None
 
 
+def scan_order_waypoints(order, epsg) -> tuple:
+    """(spots, over_cap, unreadable) for every track file of the order: each file's
+    waypoints as hotspots in EPSG:`epsg` (ingest.scan_waypoints), the count the files
+    carried past the cap that one file keeps, and [(file name, error)] for a file whose
+    waypoints could not be read. A file that cannot be read is named by the caller:
+    it is never dropped without a word. Nothing is written."""
+    region = RegionGeo(crs=f"EPSG:{epsg}", bounds=(0.0, 0.0, 1.0, 1.0), overview_size=(1, 1))
+    spots, over_cap, unreadable = [], 0, []
+    for data, name in order.payloads():
+        try:
+            scan = ingest.scan_waypoints(data, region, name)
+        except Exception as ex:
+            unreadable.append((name, ex))
+            continue
+        spots += scan.spots
+        over_cap += scan.over_cap
+    return spots, over_cap, unreadable
+
+
+def check_marks(order, waypoints, over_cap=0) -> None:
+    """Raise OrderError, naming the count, when the waypoints (`over_cap` of them past
+    what one file keeps) and the photos of an order that asks for the wash come to more
+    than MARK_LIMIT (decision 20): Dom asks the customer which to keep, and no mark is
+    dropped to make it fit."""
+    photos = len(order.photo_files())
+    total = waypoints + photos
+    if total <= MARK_LIMIT:
+        return
+    text = TOO_MANY_MARKS.format(n=total, w=waypoints, p=photos, limit=MARK_LIMIT)
+    if over_cap:
+        text += FILE_OVER_CAP.format(cap=ingest.MAX_WAYPOINTS)
+    raise OrderError(text)
+
+
+def stop_over_marks(order) -> None:
+    """The stop of decision 20, before any plate is built or any file is written: an order
+    that asks for the wash (`viewshed` above 0) with more than MARK_LIMIT real marks.
+    The waypoints are counted as lon/lat, the same count in any projection. An order
+    with no key reads nothing."""
+    if not order.viewshed > 0:
+        return
+    spots, over_cap, _ = scan_order_waypoints(order, 4326)
+    check_marks(order, len(spots) + over_cap, over_cap)
+
+
+def _off_plate(spots, state) -> int:
+    """How many of `spots` lie outside the plate's bounds, as app.main counts the waypoints
+    of an upload. A plate that records no bounds cannot say, so none is counted."""
+    try:
+        with open(os.path.join(orderspec.plate_dir(state), "region.json")) as f:
+            b = json.load(f)["bounds"]
+        w, s, e, n = (float(v) for v in b)
+    except (OrderError, OSError, ValueError, KeyError, TypeError):
+        return 0
+    return sum(1 for hs in spots if not (w <= hs["x"] <= e and s <= hs["y"] <= n))
+
+
+def read_waypoints(order, state, log=print) -> dict:
+    """The waypoint step of Prepare, after the photos and before the proof. With the key
+    (`viewshed` above 0) it reads every waypoint of the order's own files into
+    state["waypoints"], hotspots in the plate's CRS, and counts the ones off the plate;
+    all of them stay, and the count is a warning (waypoint_warnings, replaced on each run
+    as photo_warnings are). A file whose waypoints could not be read is named in a warning.
+    Without the key it reads nothing, and an order whose state has no waypoints is left as
+    it is; one whose state holds waypoints from a run with the key has them cleared, so the
+    state says what the spec does. A state from before waypoints existed has neither key.
+    Returns the state."""
+    old = set(state.get("waypoint_warnings") or [])
+    base = [w for w in state.get("warnings", []) if w not in old]
+    if not order.viewshed > 0:
+        if not state.get("waypoints") and not old:
+            return state
+        return write_state(order, {"waypoints": [], "waypoint_warnings": [],
+                                   "warnings": base})
+    spots, over_cap, unreadable = scan_order_waypoints(order, state["epsg"])
+    check_marks(order, len(spots) + over_cap, over_cap)
+    notes = []
+    for name, ex in unreadable:
+        why = f"{type(ex).__name__}: {ex}" if str(ex) else type(ex).__name__
+        notes.append(WAYPOINTS_UNREADABLE.format(file=name, why=why[:200]))
+    off = _off_plate(spots, state)
+    if off:
+        notes.append(WAYPOINT_OFF_PLATE if off == 1 else WAYPOINTS_OFF_PLATE.format(n=off))
+    for note in notes:
+        log(note)
+    return write_state(order, {"waypoints": spots, "waypoint_warnings": notes,
+                               "warnings": base + notes})
+
+
 def _prove(order, state, proofs, log) -> dict:
     """Write the proof files after the plate. A failure is a warning, never a stop: the
     plate stays and `proof` is None. Only errors a proof can raise are caught, a typo in
@@ -358,6 +464,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     if not conus_covered(tracks):
         raise PlateError("These tracks are outside the lower 48. "
                          "Alaska and Hawaii come later.")
+    stop_over_marks(order)       # before a plate is built, a file is written or a proof drawn
     state = read_state(order)
     manual = state.get("manual", {})
     inputs = order.inputs_hash()
@@ -379,6 +486,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     if current and _plate_present(old_plate, landcover_rebuilds):
         log(f"Plate is current: {state['plate']['id']}. Nothing to build.")
         state = place_photos(order, state, log, tools=tools)   # new photos, studio edits
+        state = read_waypoints(order, state, log)    # the key may have been set since
         state = _prove(order, state, proofs, log)    # the title may have changed
         write_report(order, state)   # the title may have changed; it is not an input
         return state
@@ -491,6 +599,7 @@ def prepare(order_dir: str, tools: Tools, log=print, proofs=None) -> dict:
     state = place_photos(order, read_state(order), log, recheck_holes=False)
     if holes_env is not None:
         state = _holes_in_use(order, state, tools, holes_env, log)
+    state = read_waypoints(order, state, log)
     state = _prove(order, state, proofs, log)
     write_report(order, state)
     return state
@@ -1102,6 +1211,9 @@ def write_report(order, state) -> str:
              f"Upsampling: {plate['upsample']:.2f}x (limit {MAX_UPSAMPLE:g}x)"]
     if state.get("photos"):
         lines.append(_photos_line(state))
+    if order.viewshed > 0:
+        lines.append(f"Waypoints: {len(state.get('waypoints') or [])} read, the wash is on "
+                     f"at {order.viewshed:g}")
     proof = state.get("proof")
     if proof:
         lines.append(f"Proof: out/proof/{orderspec.file_stem(order.title)}-proof.jpg "

@@ -191,6 +191,23 @@ def photo_hotspots(order: Order, state: dict) -> list:
     return out
 
 
+def waypoint_hotspots(order: Order, state: dict) -> list:
+    """The order's waypoints as hotspots, in the plate's CRS: state["waypoints"], which
+    Prepare reads from the order's own files (ingest.load_waypoints), as new dicts. Empty
+    when the order does not ask for the wash (`viewshed` is 0): the key alone decides, so
+    a state that still holds waypoints from an earlier run changes nothing. A state from
+    before waypoints existed has none. An entry that is not a dict with finite x and y is
+    left out: it has no place on the sheet."""
+    if not order.viewshed > 0:
+        return []
+    out = []
+    held = state.get("waypoints")
+    for hs in held if isinstance(held, list) else []:
+        if (isinstance(hs, dict) and _finite(hs.get("x")) and _finite(hs.get("y"))):
+            out.append(dict(hs))
+    return out
+
+
 def _photo_fields(order: Order, state: dict) -> dict | None:
     """The spec fields an order's photos own, or None for an order with no photos (its
     spec is then the one it always was)."""
@@ -254,6 +271,8 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
     path, cfg = _region_config(state)
     tracks = load_tracks_m(order.payloads(), state["epsg"])
     photos = _photo_fields(order, state) or {"hotspots": []}
+    # the waypoints go ahead of the photos, and only when the order asks for the wash
+    photos = {**photos, "hotspots": waypoint_hotspots(order, state) + photos["hotspots"]}
     spec = CompositionSpec(
         region_id=cfg["id"], crs=cfg["crs"], crop=tuple(state["frame"]),
         print_w_in=state["print_in"][0], print_h_in=state["print_in"][1],
@@ -262,7 +281,8 @@ def default_spec(order: Order, state: dict) -> CompositionSpec:
         seed=SEED, title_text=order.title,
         credit_text=credit_text(path),      # as the studio's proof derives it
         labels=os.path.isfile(os.path.join(path, "labels.json")),
-        panels=state["panels"], panel_gap_in=state["gap"], **photos, **ORDER_LOOK)
+        panels=state["panels"], panel_gap_in=state["gap"], **photos, **ORDER_LOOK,
+        **({"viewshed": order.viewshed} if order.viewshed > 0 else {}))
     return provenance.bound_photo_keys(spec)
 
 
