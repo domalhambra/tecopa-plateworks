@@ -1389,19 +1389,22 @@ def _draw_markers(img, spec, elev_lum, out_w, out_h, dpi, ctx=None):
             # a marker label never crosses a seam: it stays in its anchor's panel. On
             # a set a seam can be anywhere on the map, so a label with no room on the
             # right goes left of its marker; a single sheet keeps the one placement
-            lo, hi = panel_geo.span_px_at(spec, cx, dpi, out_w)
-            _draw_label(dd, label, cx + r + dia*0.25, cy, label_font, out_w, out_h,
-                        x_lo=lo, x_hi=hi,
-                        right_end=cx - r - dia*0.25 if panel_geo.is_set(spec) else None)
+            x, kw = _marker_label_slot(spec, cx, r, dia, dpi, out_w)
+            _draw_label(dd, label, x, cy, label_font, out_w, out_h, **kw)
     if ghost is not None:
         img = _ghost_layer_alpha(img, ghost, OBLIQUE_SYMBOL_GHOST)
     return img
 
-def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None, right_end=None):
-    """A label on a soft cream plate, left-anchored at x and vertically centred on cy.
-    x_lo and x_hi are the panel of a set: the plate stays inside it. right_end is the
-    second place: when the plate does not fit at x, it ends there, if it fits there.
-    Pulled left from x it would cover the marker it names."""
+def _marker_label_slot(spec, cx, r, dia, dpi, out_w):
+    """Where a marker's label plate starts, and the limits _label_plate reads. One
+    source for the painter and the keep-out of the place names."""
+    lo, hi = panel_geo.span_px_at(spec, cx, dpi, out_w)
+    return cx + r + dia*0.25, {
+        "x_lo": lo, "x_hi": hi,
+        "right_end": cx - r - dia*0.25 if panel_geo.is_set(spec) else None}
+
+def _label_plate(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None, right_end=None):
+    """The plate of a label as (x, y, tw, th, pad, l, t), measured and kept inside."""
     l, t, rt, b = d.textbbox((0, 0), text, font=font)
     tw, th = rt - l, b - t
     pad = max(2, round(th * 0.3))
@@ -1412,6 +1415,15 @@ def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None, right_end
     if x_lo:
         x = max(x, x_lo)
     y = float(np.clip(cy - th/2 - pad, 0, out_h - th - 2*pad - 1))
+    return x, y, tw, th, pad, l, t
+
+def _draw_label(d, text, x, cy, font, out_w, out_h, x_lo=0, x_hi=None, right_end=None):
+    """A label on a soft cream plate, left-anchored at x and vertically centred on cy.
+    x_lo and x_hi are the panel of a set: the plate stays inside it. right_end is the
+    second place: when the plate does not fit at x, it ends there, if it fits there.
+    Pulled left from x it would cover the marker it names."""
+    x, y, tw, th, pad, l, t = _label_plate(d, text, x, cy, font, out_w, out_h,
+                                           x_lo=x_lo, x_hi=x_hi, right_end=right_end)
     d.rounded_rectangle([x, y, x + tw + 2*pad, y + th + 2*pad],
                         radius=pad, fill=LABEL_PLATE + (220,))
     d.text((x + pad - l, y + pad - t), text, fill=LABEL_INK + (255,), font=font)
@@ -2197,6 +2209,8 @@ def _load_region_json(region_dir, name):
 def _load_hydro(region_dir):
     return _load_region_json(region_dir, "hydro.json")
 
+MARKER_NAME_SAME_IN = 1.0       # a place name this near a marker of its name is that place
+
 def _load_labels(region_dir):
     return _load_region_json(region_dir, "labels.json")
 
@@ -2525,6 +2539,42 @@ def _place_point_label(ax, ay, tw, th, halo, dpi, in_frame, overlaps, route_mask
             return x0, y0, hl, leader_box
     return None
 
+def _marker_spots(spec, out_w, out_h, dpi, ctx=None):
+    """Each marker on the sheet as (cx, cy, i, hotspot)."""
+    return [(cx, cy, i, hs) for i, hs in enumerate(spec.hotspots)
+            for (cx, cy, _) in [_place_pt(hs["x"], hs["y"], spec, out_w, out_h, ctx)]
+            if 0 <= cx <= out_w and 0 <= cy <= out_h]
+
+def _marker_rects(spec, d, out_w, out_h, dpi, ctx=None):
+    """The rects a marker occupies: its disc and its label plate, as _draw_markers
+    paints them. A band's numbered photo mark has no plate: its caption hangs in the band."""
+    dia = max(5, round(spec.marker_diameter_in * dpi))
+    r = dia / 2.0
+    font = _font(max(8, round(_pt_to_px(spec.label_pt, dpi))))
+    numbered = set(_photo_indices(spec)) if _band_active(spec) else set()
+    rects = []
+    for cx, cy, i, hs in _marker_spots(spec, out_w, out_h, dpi, ctx):
+        rects.append((cx - r, cy - r, cx + r, cy + r))
+        label = (hs.get("label") or "").strip()
+        if label and i not in numbered:
+            x, kw = _marker_label_slot(spec, cx, r, dia, dpi, out_w)
+            x, y, tw, th, pad, _, _ = _label_plate(d, label, x, cy, font, out_w, out_h, **kw)
+            rects.append((x, y, x + tw + 2*pad, y + th + 2*pad))
+    return rects
+
+def _names_a_marker_prints(cands, spec, out_w, out_h, dpi, ctx=None):
+    """The candidates less the ones a marker already names: the same name within
+    MARKER_NAME_SAME_IN of its marker is the same place, and printing it twice leaves a
+    stub beside the pin. Farther off it is a namesake, and stays."""
+    near = round(MARKER_NAME_SAME_IN * dpi)
+    spots = [(cx, cy, (hs.get("label") or "").strip().casefold())
+             for cx, cy, _, hs in _marker_spots(spec, out_w, out_h, dpi, ctx)]
+    def repeated(cand):
+        _, _, name, (ax, ay), *_ = cand
+        return any(label == name.casefold() and (ax - cx)**2 + (ay - cy)**2 <= near**2
+                   for cx, cy, label in spots)
+    return [c for c in cands if not repeated(c)]
+
 def _label_keepout(spec, d, out_w, out_h, dpi, trim=None):
     """The occupied rects auto label placement must avoid: the furniture stack's
     measured boxes, the clear bands, and the elevation strip's EXACT rect. The stack
@@ -2577,6 +2627,7 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     "anchor" (the default) is the original single-centered-position, drop-on-overlap
     placement, byte-identical to before."""
     cands = _label_candidates(labels, hydro, spec, out_w, out_h, ctx=ctx)
+    cands = _names_a_marker_prints(cands, spec, out_w, out_h, dpi, ctx=ctx)
     if not cands:
         return img
     d = ImageDraw.Draw(img, "RGBA")
@@ -2592,6 +2643,9 @@ def _draw_labels(img, labels, hydro, spec, out_w, out_h, dpi, ctx=None, trim=Non
     # previous boxes.
     frames = _photo_frame_rects(spec, out_w, out_h, dpi, ctx=ctx, trim=trim)
     keepout += frames
+    # a marker draws over the names, so a name under its plate is half a name. Here and
+    # not in _label_keepout, for the same reason as the frames: occupancy() reads that.
+    keepout += _marker_rects(spec, d, out_w, out_h, dpi, ctx=ctx)
     placed, occupied = [], list(keepout)
 
     def overlaps(box):

@@ -4,7 +4,7 @@ priority + collision keep the sheet legible, and placement is DPI-stable (proof=
 import json
 import os
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from app import render
 from app.spec import CompositionSpec
@@ -245,3 +245,59 @@ def test_label_halo_feathers_into_the_ground():
     # a feather, not a hard edge with a little antialiasing: most of the band is a
     # partial blend of paper over ground
     assert ((b > 20) & (b < 150)).mean() > 0.6
+
+
+# ---- a place name and a marker: the marker's plate is the name's obstacle --------------
+def _marked(label_place="smart"):
+    spec = _spec(labels=True, label_place=label_place)
+    cx = (spec.crop[0] + spec.crop[2]) / 2; cy = (spec.crop[1] + spec.crop[3]) / 2
+    spec.hotspots = [{"x": cx, "y": cy, "label": "Test Peak", "icon": "summit"}]
+    return spec, cx, cy
+
+def _render_with(spec, features):
+    labels = {"crs": _cfg()["crs"], "features": features}
+    return np.asarray(render.rasterize(spec, dpi=96, region_dir=REGION_DIR,
+                                       hydro={"lakes": [], "rivers": []}, labels=labels))
+
+def _summit(name, x, y):
+    return {"name": name, "kind": "summit", "rank": 85, "coords": [[x, y]]}
+
+def test_a_marker_drops_the_place_name_it_repeats():
+    spec, cx, cy = _marked()
+    bare = _render_with(spec, [])
+    # beside the pin it is the same place: printed twice, half of it under the pin
+    assert np.array_equal(_render_with(spec, [_summit("Test Peak", cx + 200, cy)]), bare)
+    assert np.array_equal(_render_with(spec, [_summit("test peak", cx + 200, cy)]), bare)
+
+def test_a_marker_keeps_a_far_namesake():
+    # two Bald Mountains on one plate are two mountains
+    spec, cx, cy = _marked()
+    far = _render_with(spec, [_summit("Test Peak", cx + 8000, cy - 8000)])
+    assert not np.array_equal(far, _render_with(spec, []))
+
+def test_a_place_name_moves_off_a_marker_and_its_plate():
+    # a name under the whole plate with no slot clear is dropped, as any collision is
+    spec, cx, cy = _marked()
+    bare = _render_with(spec, [])
+    # anchored just off the plate, so a centred name would touch it and a pushed one clears
+    beside = _render_with(spec, [_summit("Other Peak", cx + 1500, cy + 700)])
+    assert not np.array_equal(beside, bare), "the name should still print, elsewhere"
+    out_w, out_h = spec.pixel_size(96)
+    d = ImageDraw.Draw(Image.new("RGBA", (out_w, out_h)))
+    rects = render._marker_rects(spec, d, out_w, out_h, 96)
+    assert len(rects) == 2, "the pin and its plate"
+    for x0, y0, x1, y1 in rects:
+        x0, y0, x1, y1 = (int(v) for v in (x0, y0, x1, y1))
+        assert np.array_equal(beside[y0:y1, x0:x1], bare[y0:y1, x0:x1])
+
+def test_an_anchored_name_under_a_marker_is_dropped():
+    spec, cx, cy = _marked("anchor")
+    bare = _render_with(spec, [])
+    assert np.array_equal(_render_with(spec, [_summit("Other Peak", cx + 1500, cy)]), bare)
+
+def test_a_sheet_with_no_markers_places_its_names_as_before():
+    # the keep-out only grows by what a marker adds
+    spec = _spec(labels=True, label_place="smart")
+    out_w, out_h = spec.pixel_size(96)
+    d = ImageDraw.Draw(Image.new("RGBA", (out_w, out_h)))
+    assert render._marker_rects(spec, d, out_w, out_h, 96) == []
