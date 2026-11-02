@@ -302,3 +302,25 @@ Record the strength Dom settles on in `docs/decisions.md`.
 - Photos (the 64 cap): 64 embedded photo spots on Rifle-Aspen, 9 x 12 in at 300 dpi, took 10.5 s alone and 13.1 s beside 936 photo-less marks (about 1 s at the 96 dpi proof). Without the cap, 1,000 photos measured about 12 s at proof and an estimated 2 minutes at 300 dpi (reviewer's measurement).
 - Drawing at that count: 1,000 marks over one 9 x 12 sheet draw every marker and label, and the labels pile onto each other. Nothing is dropped, and nothing separates them. The speed target holds; whether the sheet reads at that count is a design question, not a time one.
 - The script is not in the repo (session scratchpad, `measure_marks.py`).
+
+2026-11-01, Task 7 (measure, and let Dom judge). For judging, not landing page images.
+
+Time added by the wash. A 17 x 22 in proof at the studio's 96 dpi (1,632 x 2,112 px), labels on, frame at 80% of the plate's height, marks scattered with a fixed seed inside the frame, each labelled. Wash at 0.6. One warm-up render, then two renders with the wash off (the mean is the off time), then one with it on after clearing the seen-mask store (a cold mask). Added is on minus off. Each plate and count ran in a fresh process.
+
+| Plate | Marks | Off | On, cold mask | Added | Of which the sweep | Target |
+|---|---|---|---|---|---|---|
+| `rifle_aspen` | 64 | 1.18 s | 2.68 s | 1.50 s | 1.32 s | under 30 s: met |
+| `rifle_aspen` | 1,000 | 1.47 s | 23.92 s | 22.45 s | 22.23 s | under 60 s: met |
+| `elko_bonneville` | 64 | 1.38 s | 2.56 s | 1.18 s | 0.92 s | about Rifle-Aspen: met |
+| `elko_bonneville` | 1,000 | 1.82 s | 18.59 s | 16.77 s | 16.57 s | about Rifle-Aspen: met (faster) |
+
+With the mask already held, the wash adds about 0.1 s (1.26 s against 1.18 s off at 64 marks, 1.57 s against 1.47 s at 1,000). Elko Bonneville (483 x 331 km) costs no more than Rifle-Aspen. The mark count was not lowered.
+
+Proofs for Dom, 17 x 22 in at 150 dpi (2,550 x 3,300 px), wash off and wash on at 0.6, the same frame, labels on, no PROOF watermark. Both frames are 26 km wide and pass `validate(300)`, so a final could be cut from them. Each pair has a side-by-side JPEG, off on the left and on at 0.6 on the right.
+
+- Rifle-Aspen, the six named summits (Capitol Peak, Snowmass Mountain, Mount Daly, Mount Sopris, North Maroon Peak, Pyramid Peak), peak icon. Frame centred at 321,800 E, 4,341,000 N. `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/rifle_aspen_summits_off_17x22_150dpi.png`, `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/rifle_aspen_summits_on0.6_17x22_150dpi.png`, `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/rifle_aspen_summits_pair_off-left_on0.6-right.jpg`.
+- Lassen County (`lassen_ca`), eight low points named Valley 1 to Valley 8, flag icon. Chosen from the plate's DEM, not from a gazetteer: ground well below its 5 km surroundings, off lakes and playas, at least 6 km apart. Valley 1 to 8 are positions, not places. `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/lassen_valleys_off_17x22_150dpi.png`, `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/lassen_valleys_on0.6_17x22_150dpi.png`, `/private/tmp/claude-501/-Users-dom-Documents-Claude/f50bdf45-bd3b-4696-9627-ba256c2f2906/scratchpad/proofs/lassen_valleys_pair_off-left_on0.6-right.jpg`.
+
+What the proofs show: see `.superpowers/sdd/2026-11-01-viewshed-wash/task-7-report.md`. Dom has not chosen a strength, so none is recorded in `docs/decisions.md`.
+
+The scripts are not in the repo (session scratchpad, `t7/time_one.py`, `t7/valleys3.py`, `t7/proofs.py`).
