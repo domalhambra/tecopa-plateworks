@@ -659,3 +659,70 @@ def test_the_wash_paints_on_a_plate_with_no_cfg_handed_in():
     off = render.rasterize(CompositionSpec(**{**spec.__dict__, "viewshed": 0.0}), dpi=96,
                            region_dir=region_dir, hydro=NO_WATER)
     assert not np.array_equal(np.asarray(on), np.asarray(off))
+
+
+# ---- moving a mark moves the wash, in pixels ------------------------------------------
+
+def test_moving_a_mark_changes_the_pixels_not_only_the_cache_key(tmp_path):
+    """A ridge across the sheet hides what lies behind it. A mark north of the ridge sees
+    the north and a mark south of it sees the south, so the same sheet painted from the
+    two places has to differ, and by a lot: nothing here reads the cache key."""
+    dem = _tower(at=(400, 300))                     # each mark stands on a spike: a mark on
+    dem[500, 300] += 1500.0                         # the flat sees only about 5 km of it
+    plate = _plate(tmp_path, _wall(dem, 440))
+    north, south = [_mark(400, 300)], [_mark(500, 300)]
+    off = _paint(_spec(north, 0.0), *plate)
+    from_north = _paint(_spec(north), *plate)
+    from_south = _paint(_spec(south), *plate)
+    assert not np.array_equal(from_north, from_south)      # the pin moves too: the next lines say more
+    # the sheet is rows 340 to 540: 200 rows over its height. North of the ridge is the
+    # top half, and a mark there keeps it as the terrain is and quiets the bottom half.
+    h = off.shape[0]
+    top, bottom = slice(0, int(h * 0.40)), slice(int(h * 0.65), h)
+    assert _quiet(off[top], from_north[top]) < 0.01 and _quiet(off[bottom], from_north[bottom]) > 0.05
+    assert _quiet(off[bottom], from_south[bottom]) < 0.01 and _quiet(off[top], from_south[top]) > 0.05
+    # and a mark that has not moved paints the same bytes after the cache is gone
+    render._SEEN_MASKS.clear()
+    assert np.array_equal(from_north, _paint(_spec(north), *plate))
+    assert len(render._SEEN_MASKS) == 1
+
+
+# ---- a panel set is washed as one sheet -----------------------------------------------
+
+def test_a_panel_set_is_washed_once_across_the_whole_sheet(tmp_path):
+    """The wash edge runs along the gap between two panels (a ridge on the seam hides the
+    east). Each panel must be the matching window of the same sheet painted unbroken, so
+    nothing starts again at a panel's edge, and the east panel must be the quiet one."""
+    from PIL import Image, ImageDraw
+    from app import panels
+    dpi = 40
+    w_in, h_in = panels.sheet_sizes(2, 2.0)[1]
+    cx, cy = LEFT + 30_000.0, TOP - 30_000.0
+    half = 20_000.0
+    crop = (cx - half, cy - half * h_in / w_in, cx + half, cy + half * h_in / w_in)
+    ridge = _tower(at=(300, 200))                   # the mark's own spike
+    ridge[:, 299:301] += 3000.0                     # one north-south ridge, on the seam
+    plate = _plate(tmp_path, ridge)
+    marks = [_mark(300, 200)]                       # west of the ridge: sees the west panel
+
+    def sheet(n, viewshed):
+        spec = _spec(marks, viewshed, crop=crop, print_w_in=w_in, print_h_in=h_in,
+                     keyline=False, title_text="", panels=n, panel_gap_in=2.0 if n > 1 else 0.0)
+        return spec, _paint(spec, *plate, dpi=dpi)
+
+    as_set, on_set = sheet(2, 1.0)
+    unbroken, on_unbroken = sheet(1, 1.0)
+    _, off_set = sheet(2, 0.0)
+    frames = panels.panel_rects_px(as_set, dpi)
+    d = ImageDraw.Draw(Image.new("RGBA", (on_set.shape[1], on_set.shape[0])))
+    cut = render._panel_mark_rects(as_set, d, frames, dpi)
+    for mx0, my0, mx1, my1 in cut:                  # the panel mark is what a set adds
+        on_set[my0:my1, mx0:mx1] = 0
+        on_unbroken[my0:my1, mx0:mx1] = 0
+    for x0, y0, x1, y1 in frames:
+        assert np.array_equal(on_set[y0:y1, x0:x1], on_unbroken[y0:y1, x0:x1])
+    west, east = frames
+    assert _quiet(off_set[west[1]:west[3], west[0]:west[2]],
+                  on_set[west[1]:west[3], west[0]:west[2]]) < 0.02       # seen
+    assert _quiet(off_set[east[1]:east[3], east[0]:east[2]],
+                  on_set[east[1]:east[3], east[0]:east[2]]) > 0.05       # quieted
