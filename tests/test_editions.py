@@ -837,3 +837,26 @@ def test_continue_then_reexport_dedups_across_editions():
                data={"session_id": sid}).json()
     assert j["skipped_duplicate_tracks"] == 1            # edition-1 track carried in the poster
     assert len(j["tracks"]) == 2                         # edition-1 track + the new one
+
+
+# ---- the manifest door at the cap, at the route level (viewshed wash, decision 14) ----
+
+def _manifest_of_marks(n):
+    """The frozen v1 manifest with n unnamed waypoints (`mark: true`) inside its crop."""
+    m = json.load(open("tests/fixtures/manifest_v1.json"))
+    x0, y0, x1, y1 = m["spec"]["crop"]
+    m["spec"]["hotspots"] = [
+        {"x": x0 + (x1 - x0) * (0.1 + 0.8 * (i % 40) / 40),
+         "y": y0 + (y1 - y0) * (0.1 + 0.8 * (i // 40) / (n // 40 + 1)),
+         "weight": 3, "label": "", "icon": "dot", "mark": True} for i in range(n)]
+    return _embed(m)
+
+
+def test_a_poster_of_1000_marks_reprints_and_continues_and_1001_answers_422():
+    c = _client()
+    for route in ("/api/reprint", "/api/continue"):
+        ok = c.post(route, files={"file": ("p.png", _manifest_of_marks(1000), "image/png")})
+        assert ok.status_code == 200, (route, ok.text[:200])
+        over = c.post(route, files={"file": ("p.png", _manifest_of_marks(1001), "image/png")})
+        assert over.status_code == 422, (route, over.status_code)
+        assert "hotspots" in over.json()["detail"], over.json()
