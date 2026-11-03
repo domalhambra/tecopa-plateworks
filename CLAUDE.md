@@ -48,7 +48,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 8. **`provenance.spec_from_manifest` is the one untrusted-manifest door.** Every verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect` is the exception: it builds no spec.
 9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` and the bundle id are name-neutral.
 10. **Never commit a font.** The repo is public and MB Type is licensed. `.gitignore` blocks font files (commit 39ad08c).
-11. **Marketing honesty.** Every marketing image is an engine render of real country: the terrain guard in `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test in `tests/test_marketing_page.py`, run with `-m live` against the published pages. Plates are free.
+11. **Marketing honesty.** Every marketing image renders real country: the terrain guard in `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test in `tests/test_marketing_page.py`, run with `-m live` against the published pages. Plates are free.
 12. **Never re-stamp `sources.json`** to silence the drift gate. The mismatch is the only record that a plate was swapped.
 13. **Two venvs.** Never install the region-prep stack into `.venv`: it pulled numpy, scipy and rasterio past their pins for six weeks. `region_prep.py` runs in `.venv-prep`.
 14. **Words.** The product is Tecopa Plateworks in full, never bare Plateworks; Plateworks alone names the business, as in the byline "a Plateworks Prints line". Plate, proof, edition, share copy, save file.
@@ -60,8 +60,9 @@ Unnamed sections below are in `docs/changing-things.md`.
 - `.venv/bin/python -m pytest -n auto -m "not slow" -q` before any claim of done, the full suite before a push to `main`. Compare the failure set, not the totals.
 - `ready: True` does not mean real terrain: `tests/conftest.py` hydrates a synthetic DEM. After a pull touching `regions/`, run `.venv/bin/python scripts/verify_regions.py`.
 - No JS test runner. `node --check` each module, match every `$('id')` to the HTML, drive the browser.
-- Nothing here deploys. The landing, order and privacy pages are on www.plateworks.org since 2026-09-26, held in plateworks-site since the 2026-10-13 switch. FastAPI auto-docs are off (commit a3d4ba9).
+- Nothing here deploys. The landing, order and privacy pages are in plateworks-site. FastAPI auto-docs are off.
 - TDD, and granular present-tense commits that say why. Cloud sessions squash-merge from `claude/**`; the Mac commits to `main` only when green.
+- Before a merge, a cloud session installs what `ci.yml` installs, runs the full suite, and puts the result and any skips in the pull request.
 - `tests/test_docs.py` holds this file under 2,000 tokens.
 - Every pull request passes the impact check (`python3 scripts/docs_check.py --impact origin/main`) and its description ends with `Docs: <path changed>` or `Docs: none, <reason>` (the documentation standard). A change to what a customer pays, sees or is promised also updates the section of Business Plan v2 it touches (plateworks-os, Biz HQ, business/plan), or says why not on that Docs line.
 
