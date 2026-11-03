@@ -520,3 +520,4 @@ The decisions the build made or settled that a maintainer needs. The design reco
 | 2026-11-01 | `order new` reading waypoints. | It opens no file. Prepare reads them. | the spec, decision 18 |
 | 2026-11-01 | A second preview map for a photos-only order. | Photos have no place until Prepare, so the map would not match the proof. The email and both reports say so instead. | the spec, decision 20 |
 | 2026-11-01 | The wash's final strength. | Open until Dom reads a real proof on Rifle-Aspen, and on one plate where marks sit low in valleys. | the spec, "How we know it works" |
+| 2026-11-02 | GitHub Actions off for this repo: the CI and Docs impact workflows are disabled on GitHub, and every check runs on the Mac. | Dom's call, to stop spending Actions minutes. The full suite had also outgrown the job's 25-minute limit on a slow runner. The workflow files stay, so `gh workflow enable` reverses it. | `../CLAUDE.md`, Working here |

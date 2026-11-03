@@ -31,10 +31,11 @@ useless for judging a poster by eye. Build the real DEM first (see "Build a new 
 
 ## Run the tests
 
-1. Fast tier: `.venv/bin/python -m pytest -n auto -m "not slow" -q`. This is the
-   pull-request tier in CI.
+1. Fast tier: `.venv/bin/python -m pytest -n auto -m "not slow" -q`. Run it before
+   any claim of done.
 2. Full suite: `.venv/bin/python -m pytest -n auto -q`. It renders real posters and
-   films, about three minutes on the Mac. CI runs it on every push to `main`.
+   films, about three minutes on the Mac. Run it before every push to `main`.
+   GitHub Actions is off for this repo, so nothing runs it for you.
 3. Compare the failure set, not the totals. Totals move with every feature. The
    suite has no known Mac-only failure. `test_mp4_twin_is_tagged_bt709` failed on the
    Mac until 2026-09-24. The one `imageio-ffmpeg` pin ships ffmpeg 7.1 on macOS and

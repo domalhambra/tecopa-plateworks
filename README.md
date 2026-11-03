@@ -36,8 +36,8 @@ and `scripts/order.py prepare "<folder>"`. After the client approves the proof i
 ## Prove a change
 
 ```bash
-.venv/bin/python -m pytest -n auto -m "not slow" -q   # the fast tier, CI's pull-request tier
-.venv/bin/python -m pytest -n auto -q                 # the full suite, about three minutes. CI runs it on every push to main
+.venv/bin/python -m pytest -n auto -m "not slow" -q   # the fast tier
+.venv/bin/python -m pytest -n auto -q                 # the full suite, about three minutes. Run it before every push to main
 .venv/bin/python -m pytest tests/test_docs.py -q      # the docs check alone
 .venv/bin/python scripts/verify_regions.py            # every plate's hash and geometry state
 ```
