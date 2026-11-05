@@ -83,9 +83,30 @@ fi
 WORK="$(cd "$(mktemp -d)" && pwd -P)"   # resolved: the engine reports /private/var, not /var
 mkdir -p "$WORK/ref" "$WORK/cand"
 cp "$REPO/tests/fixtures/sample.gpx" "$WORK/sample.gpx"
-# Fresh blobs and uploads for the candidate (spec 8.1): move the old ones aside.
+# Fresh blobs and uploads for the candidate (spec 8.1): move the old ones aside, and
+# put them back on every exit. Each proof's EXIT trap calls restore_stores; the one
+# set here covers the gap until a proof sets its own.
+STORES_RESTORED=""
+restore_stores() {   # the proof's folders go to $WORK/proof-*, the old ones come back
+  [ -n "$STORES_RESTORED" ] && return 0
+  STORES_RESTORED=1
+  local d
+  for d in blobs uploads; do
+    if [ -e "$AS/$d" ]; then
+      mv "$AS/$d" "$WORK/proof-$d" && echo "proof $d kept at $WORK/proof-$d" >> "$REPORT"
+    fi
+    if [ -e "$WORK/old-$d" ]; then
+      mv "$WORK/old-$d" "$AS/$d" && echo "restored $AS/$d from $WORK/old-$d" >> "$REPORT" \
+        || echo "NOT restored: $AS/$d is still at $WORK/old-$d" | tee -a "$REPORT" >&2
+    fi
+  done
+}
+trap 'restore_stores' EXIT
 for d in blobs uploads; do
-  [ -e "$AS/$d" ] && mv "$AS/$d" "$WORK/old-$d"
+  if [ -e "$AS/$d" ]; then
+    mv "$AS/$d" "$WORK/old-$d"
+    echo "moved aside: $AS/$d to $WORK/old-$d" >> "$REPORT"
+  fi
 done
 
 owner_check() {
@@ -185,7 +206,7 @@ if [ "$PROOF" = 1 ]; then
         --host 127.0.0.1 --port 8849 ) > "$REF/engine.log" 2>&1 &
   REFPID=$!
   # Always stop what this run started, pass or fail.
-  trap 'kill $REFPID 2>/dev/null || true; osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true' EXIT
+  trap 'kill $REFPID 2>/dev/null || true; osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; restore_stores' EXIT
   open "$BUNDLE"
   wait_engine 8849 90 || fail "the reference engine did not start (see $REF/engine.log)"
   wait_engine 8848 90 || fail "the app's engine did not start"
@@ -250,7 +271,7 @@ cp "$REPORT" "$WORK/report.txt"
 REPORT="$WORK/report.txt"
 MOVED="$REPO.moved-$STAMP"
 mv "$REPO" "$MOVED"
-trap 'osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"; cp "$REPORT" "$FINAL_REPORT" 2>/dev/null || true' EXIT
+trap 'osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; restore_stores; mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"; cp "$REPORT" "$FINAL_REPORT" 2>/dev/null || true' EXIT
 
 open "$BUNDLE"
 wait_engine 8848 90 || fail "the app's engine did not start with the repo moved away"
