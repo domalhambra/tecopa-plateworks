@@ -37,3 +37,18 @@ def test_the_engine_imports_and_serves_the_studio_from_another_cwd(tmp_path):
     assert run.returncode == 0, run.stderr[-2000:]
     assert run.stdout.split()[-2:] == ["200", "True"]
     assert sorted(os.listdir(tmp_path)) == ["regions"]   # nothing written to the cwd
+
+
+def test_the_studio_files_are_revalidated_on_every_load():
+    """The Mac app's web view keeps its cache across app updates. Without a
+    Cache-Control header WebKit holds a studio file by heuristic freshness, for about
+    a tenth of its age, and a new engine would meet the old page's JS and CSS."""
+    from fastapi.testclient import TestClient
+    c = TestClient(main.app)
+    for path in ("/", "/app.js", "/shell.css"):
+        r = c.get(path)
+        assert r.status_code == 200, path
+        assert r.headers.get("cache-control") == "no-cache", path
+        assert r.headers.get("etag"), path
+    etag = c.get("/app.js").headers["etag"]
+    assert c.get("/app.js", headers={"If-None-Match": etag}).status_code == 304

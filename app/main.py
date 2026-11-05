@@ -2453,5 +2453,16 @@ if debug.enabled():
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
 # The studio is found beside this module, never through the cwd: the Mac app runs
 # the engine with its working directory in Application Support (phase 1 spec 5.4).
-app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                  "static"), html=True), name="static")
+class _StudioFiles(StaticFiles):
+    """The studio files, revalidated on every load. The Mac app's web view keeps its
+    cache across app updates, and with no Cache-Control WebKit would hold an old
+    app.js by heuristic freshness. no-cache still answers 304 through the ETag."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", _StudioFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                   "static"), html=True), name="static")
