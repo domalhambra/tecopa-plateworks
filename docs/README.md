@@ -46,6 +46,7 @@ Undated documents that still govern something. Each is path-checked.
 | `superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` | Changing the Tecopa landing page, the five showcase plates, or trail-first demo journeys. The design: one story per plate, and Phases A and B. |
 | `superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md` | Changing a sentence on the Tecopa landing page. Every sentence, in page order. |
 | `superpowers/specs/2026-11-05-native-mac-app-phase-1-bundled-engine-design.md` | Working on the native Mac app's phase 1: the bundle with its own Python and engine, the engine's working folder in Application Support, plate seeding, the Dropbox DEM archive, and the byte-equal proof. Approved by Dom on 2026-11-05; not built. The plan is the 2026-11-05 handoff. |
+| `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-design.md` | Working on the native Mac app's phase 2: the one window (Studio in a web view, Orders, Plates, Engine), Settings, orders through TecopaKit's catalog, `order.py choose`, the paid size from the order desk, DEM restore and free space. Decided by Claude under Dom's standing instruction; being built. |
 | `superpowers/prototypes/2026-09-24-ghost-landing-preview.html` | Porting the landing page's shader, poster wall or relief viewer into the theme. The working prototype the spec approves. Its media files are not committed: the relief exporter makes them. |
 
 ## Plans
