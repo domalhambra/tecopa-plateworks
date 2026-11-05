@@ -15,7 +15,15 @@ struct TecopaPlateworksApp: App {
         }
         .defaultSize(width: 1440, height: 900)
         .commands {
-            CommandGroup(replacing: .newItem) {}
+            CommandGroup(replacing: .newItem) {
+                Button("Open Tracks…") { delegate.model.studioOpen("fileInput") }
+                    .keyboardShortcut("o", modifiers: .command)
+                Button("Open Poster…") { delegate.model.studioOpen("posterInput") }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                Divider()
+                Button("Reload Studio") { delegate.model.pane = .studio; delegate.model.studioReloads += 1 }
+                    .keyboardShortcut("r", modifiers: .command)
+            }
             CommandMenu("Go") {
                 ForEach(Pane.allCases) { pane in
                     Button(pane.title) { delegate.model.pane = pane }

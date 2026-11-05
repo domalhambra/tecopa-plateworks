@@ -55,6 +55,9 @@ final class AppModel {
     /// The studio's address; Orders sets `?order=` to land on an order (decision 10).
     var studioURL = URL(string: "http://127.0.0.1:8848/")!
     var studioReloads = 0
+    /// A command for the studio page, run once by StudioWebView (phase 3: the native
+    /// File menu drives the studio's own file inputs, so the engine sees the same upload).
+    var studioCommand: (id: Int, script: String)?
     private(set) var ownedPid: Int32?
 
     var dataRoot: String { layout.dataRoot(home: runtime.home) }
@@ -161,6 +164,14 @@ final class AppModel {
         studioURL = c.url!
         studioReloads += 1
         pane = .studio
+    }
+
+    /// File > Open Tracks… and Open Poster…: the studio's own hidden inputs, so the
+    /// upload is the web studio's, byte for byte.
+    func studioOpen(_ input: String) {
+        pane = .studio
+        let n = (studioCommand?.id ?? 0) + 1
+        studioCommand = (n, "document.getElementById('\(input)').click()")
     }
 
     func openStudioInBrowser() {

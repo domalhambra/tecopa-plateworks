@@ -8,7 +8,7 @@ struct StudioView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
-        StudioWebView(url: model.studioURL, reloads: model.studioReloads)
+        StudioWebView(url: model.studioURL, reloads: model.studioReloads, command: model.studioCommand)
             .toolbar {
                 ToolbarItemGroup {
                     Button { model.studioReloads += 1 } label: { Label("Reload", systemImage: "arrow.clockwise") }
@@ -23,6 +23,7 @@ struct StudioView: View {
 struct StudioWebView: NSViewRepresentable {
     let url: URL
     let reloads: Int
+    let command: (id: Int, script: String)?
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -37,11 +38,17 @@ struct StudioWebView: NSViewRepresentable {
         web.isInspectable = true
         web.setValue(false, forKey: "drawsBackground")
         context.coordinator.loaded = (url, reloads)
+        if let command { context.coordinator.lastCommand = command.id; context.coordinator.pending = command.script }
         web.load(URLRequest(url: url))
         return web
     }
 
     func updateNSView(_ web: WKWebView, context: Context) {
+        if let command, command.id != context.coordinator.lastCommand {
+            context.coordinator.lastCommand = command.id
+            if web.isLoading { context.coordinator.pending = command.script }
+            else { web.evaluateJavaScript(command.script) }
+        }
         guard context.coordinator.loaded.url != url || context.coordinator.loaded.reloads != reloads else { return }
         context.coordinator.loaded = (url, reloads)
         web.load(URLRequest(url: url))
@@ -50,6 +57,13 @@ struct StudioWebView: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
         var loaded: (url: URL, reloads: Int) = (URL(string: "about:blank")!, -1)
+        var lastCommand = 0
+        /// A command that arrived while the page loaded; it runs when the load finishes.
+        var pending: String?
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if let p = pending { pending = nil; webView.evaluateJavaScript(p) }
+        }
 
         // Links that leave the engine open in the browser.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
