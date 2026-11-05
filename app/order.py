@@ -73,7 +73,17 @@ def refuse_inside_repo(path) -> None:
     private tracks and photos, and TECOPA_ORDERS_DIR must not point into it either."""
     repo = os.path.realpath(_repo_root())
     real = os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
-    if real == repo or real.startswith(repo + os.sep):
+    inside = real == repo or real.startswith(repo + os.sep)
+    # In the Mac app the code root is inside the bundle, so also refuse any git
+    # checkout: a `.git` folder or pointer file at the path or any parent.
+    p = real
+    while not inside:
+        inside = os.path.exists(os.path.join(p, ".git"))
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    if inside:
         raise OrderError(f"Order folders must live outside the repo, which is "
                          f"public: {path}. Use ~/Tecopa Orders.")
 
