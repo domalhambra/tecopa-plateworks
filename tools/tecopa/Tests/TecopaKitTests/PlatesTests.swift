@@ -724,6 +724,10 @@ final class PlatesTests: XCTestCase {
             "plate_check": Walk(arguments: ["poster": .string("/p/lassen.png")], programs: 1) { _ in },
             // it takes an order number, never a folder, and runs the script in the call
             "order_new": Walk(arguments: ["number": .string("TP-26-001")], programs: 1) { _ in },
+            "order_choose": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith"),
+                                             "size": .string("17x22")], programs: 1) {
+                $0.folder("/orders/2026-10-001-smith")
+            },
             "order_prepare": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 1) {
                 $0.folder("/orders/2026-10-001-smith")
             },

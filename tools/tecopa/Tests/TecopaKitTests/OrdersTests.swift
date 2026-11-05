@@ -131,6 +131,51 @@ final class OrdersTests: XCTestCase {
         XCTAssertEqual(crashed?.message, "order.py new crashed: KeyError: 'title'")
     }
 
+    // MARK: order choose
+
+    func testOrderChooseRunsTheScriptInTheCallWithTheFolderAndTheSize() async {
+        let world = FakeWorld()
+        world.folder(order)
+        let said = "order.toml: size = \"17x22\", orientation = \"portrait\", gap = 0.5\n"
+        world.result(for: "python", ProcessResult(exitCode: 0, stdout: said, stderr: ""))
+        let (data, failure) = await call("order_choose", world, ["folder": .string(order), "size": .string("17x22")])
+        XCTAssertNil(failure)
+        XCTAssertEqual(data, .object(["output": .string(said.trimmingCharacters(in: .newlines))]))
+        XCTAssertEqual(world.commands, [[python, "scripts/order.py", "choose", order, "17x22"]])
+        XCTAssertEqual(world.workingDirectories, ["/repo"])
+        XCTAssertEqual(world.detached, [])
+        XCTAssertEqual(world.written, [])
+        XCTAssertEqual(Catalog.named("order_choose")?.text?(data ?? .null), said.trimmingCharacters(in: .newlines))
+    }
+
+    func testOrderChooseExit1IsRefusedWithTheScriptsOwnWords() async {
+        let world = FakeWorld()
+        world.folder(order)
+        let said = "choose stopped: Run the preview first: work/preview/preview.json is missing."
+        world.result(for: "python", ProcessResult(exitCode: 1, stdout: "", stderr: said + "\n"))
+        let (data, failure) = await call("order_choose", world, ["folder": .string(order), "size": .string("17x22")])
+        XCTAssertNil(data)
+        XCTAssertEqual(failure?.kind, .refused)
+        XCTAssertEqual(failure?.message, "order.py choose refused: " + said)
+    }
+
+    func testOrderChooseChecksItsArgumentsBeforeTheScriptRuns() async {
+        let world = FakeWorld()
+        world.folder(order)
+        let refused: [([String: JSONValue], String)] = [
+            (["size": .string("17x22")], "folder is required: the path of an order folder."),
+            (["folder": .string(order)], "size is required: a size key of the preview, like 17x22."),
+            (["folder": .string(order), "size": .string("")], "size is required: a size key of the preview, like 17x22."),
+            (["folder": .string(order), "size": .string("--help")], "size cannot start with a hyphen: --help"),
+            (["folder": .string("/no/such/order"), "size": .string("17x22")], "The folder /no/such/order does not exist."),
+        ]
+        for (arguments, said) in refused {
+            let (_, failure) = await call("order_choose", world, arguments)
+            XCTAssertEqual(failure, TecopaFailure(.usage, said), said)
+        }
+        assertNothingHappened(world)
+    }
+
     // MARK: order prepare
 
     func testOrderPrepareStartsTheScriptInTheAppVenvAsATrackedRun() async throws {
@@ -332,8 +377,12 @@ final class OrdersTests: XCTestCase {
 
     func testOrderStatusIsReadOnlyAndOrderPrepareIsNot() {
         XCTAssertEqual(Catalog.all.map(\.name).filter { $0.hasPrefix("order_") },
-                       ["order_new", "order_prepare", "order_preview", "order_finish", "order_status"])
+                       ["order_new", "order_choose", "order_prepare", "order_preview", "order_finish",
+                        "order_status"])
         XCTAssertEqual(Catalog.named("order_new")?.readOnly, false)
+        XCTAssertEqual(Catalog.named("order_choose")?.readOnly, false)
+        XCTAssertEqual((Catalog.named("order_choose")?.parameters ?? []).map { "\($0.name):\($0.kind.rawValue)" },
+                       ["folder:string", "size:string"])
         XCTAssertEqual((Catalog.named("order_new")?.parameters ?? []).map { "\($0.name):\($0.kind.rawValue)" },
                        ["number:string"])
         XCTAssertEqual(Catalog.named("order_prepare")?.readOnly, false)

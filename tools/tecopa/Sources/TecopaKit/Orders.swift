@@ -9,7 +9,8 @@ import Foundation
 /// the PDF and the email under `out/preview/`. No entry writes under the order
 /// folder: only the script does.
 enum Orders {
-    static let entries: [CatalogEntry] = [newEntry, prepareEntry, previewEntry, finishEntry, statusEntry]
+    static let entries: [CatalogEntry] = [
+        newEntry, chooseEntry, prepareEntry, previewEntry, finishEntry, statusEntry]
 
     // MARK: Entries
 
@@ -47,6 +48,34 @@ enum Orders {
         // judges the folders, and refuses with exit 1 and its reason on stderr.
         let result = try ScriptRunner.run("scripts/order.py", ["new", number], runtime)
         guard result.exitCode == 0 else { throw Plates.failure("order.py new", result, refusal: 1) }
+        return .object(["output": .string(Plates.words(result.stdout))])
+    }
+
+    static let chooseEntry = CatalogEntry(
+        name: "order_choose",
+        summary: "Choose the size of one order from its preview with scripts/order.py choose: write the "
+            + "preview's size, orientation and gap lines for that size into order.toml, and keep every other "
+            + "line. Refuses an order with no preview, or a size the preview did not offer.",
+        readOnly: false,
+        parameters: [
+            folderParameter,
+            EntryParameter("size", .string, "The size key of the preview, like 17x22. Required."),
+        ],
+        text: Plates.said
+    ) { runtime, arguments in
+        let folder = try folder(arguments, runtime)
+        guard let size = arguments["size"]?.stringValue, !size.isEmpty else {
+            throw TecopaFailure(.usage, "size is required: a size key of the preview, like 17x22.")
+        }
+        // The script judges the key against the preview. This check only keeps a
+        // value from being read as a flag.
+        guard !size.hasPrefix("-") else {
+            throw TecopaFailure(.usage, "size cannot start with a hyphen: \(size)")
+        }
+        // It edits one file and reads no network, so it runs in the call. The app
+        // never edits order.toml itself (phase 2 spec, decision 7).
+        let result = try ScriptRunner.run("scripts/order.py", ["choose", folder, size], runtime)
+        guard result.exitCode == 0 else { throw Plates.failure("order.py choose", result, refusal: 1) }
         return .object(["output": .string(Plates.words(result.stdout))])
     }
 

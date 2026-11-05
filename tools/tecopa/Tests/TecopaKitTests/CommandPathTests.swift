@@ -279,6 +279,10 @@ final class CommandPathTests: XCTestCase {
             .order.arguments, [:])
         XCTAssertEqual(try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview"]) as? OrderCommand.Preview)
             .order.arguments, [:])
+        let choose = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "choose", "2026-10-001-smith", "17x22"])
+            as? OrderCommand.Choose)
+        XCTAssertEqual(choose.arguments,
+                       ["folder": .string(here + "/2026-10-001-smith"), "size": .string("17x22")])
         // an order command has no option of its own
         XCTAssertNil(try? Tecopa.parseAsRoot(["order", "prepare", "/o/a", "--out", "/tmp"]))
         XCTAssertNil(try? Tecopa.parseAsRoot(["order", "preview", "/o/a", "--out", "/tmp"]))
