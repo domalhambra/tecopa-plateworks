@@ -1042,6 +1042,7 @@ def test_prepare_never_imports_the_app():
 # --- final fix M7: a missing prep venv never stops a hole check --------------------------
 
 def test_a_hole_check_with_no_prep_python_warns_and_goes_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("TECOPA_ORDERS_DIR", str(tmp_path / "orders"))
     plate = {"id": "p", "root": str(tmp_path), "us_share": 1.0}
     monkeypatch.setattr(op, "nan_shares", lambda path, frame: (0.05, 0.05))
     tools = op.Tools(prep_python=str(tmp_path / "no-venv" / "python"), prep_script="-",
@@ -1432,3 +1433,20 @@ def test_a_saved_spec_that_agrees_with_the_key_says_nothing(tmp_path, tools):
     assert "waypoints" not in state and "waypoint_warnings" not in state
     assert not any("saved studio spec" in w for w in state["warnings"])
     assert "Waypoints" not in (d2 / "work" / "report.txt").read_text()
+
+
+def test_the_coverage_query_runs_in_the_order_cache(tmp_path, tools):
+    """The 3DEP coverage query never runs with its cwd at the code root: in the Mac
+    app that is a signed bundle (phase 1 spec 5.4, change 4)."""
+    probe = tmp_path / "stubs" / "cwd_coverage.py"
+    probe.parent.mkdir(exist_ok=True)
+    probe.write_text("import json, os\n"
+                     "open(os.environ['STUB_CWD'], 'w').write(os.getcwd())\n"
+                     "print(json.dumps({'10': 1.0}))\n")
+    seen = tmp_path / "cwd.txt"
+    env, cache_dir = op.cache_env()
+    env["STUB_CWD"] = str(seen)
+    t = op.Tools(**{**tools.__dict__, "coverage_script": str(probe)})
+    assert op.read_coverage(t, SMALL, env) == {10: 1.0}
+    assert seen.read_text() == cache_dir == str(tmp_path / "orders" / "_cache")
+    assert seen.read_text() != t.repo_root

@@ -211,7 +211,9 @@ def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
     if layers:
         cmd += ["--layers", ",".join(str(r) for r in layers)]
     try:
-        run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
+        # The order cache, never the code root: in the Mac app that is a signed
+        # bundle (phase 1 spec 5.4, change 4). dem_coverage finds its imports itself.
+        run = subprocess.run(cmd, cwd=cache_env()[1], capture_output=True, text=True,
                              env=env)
     except OSError as ex:        # no prep venv (a studio edit reaching check_holes)
         raise CoverageError(f"The 3DEP coverage check could not run: {ex}") from ex
