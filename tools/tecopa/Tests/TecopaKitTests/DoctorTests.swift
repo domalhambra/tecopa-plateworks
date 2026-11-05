@@ -104,7 +104,7 @@ final class DoctorTests: XCTestCase {
 
     func testAMissingRepoIsARowAndTheLaterChecksStillRun() async {
         var runtime = healthy().runtime(repo: nil)
-        runtime.fileExists = { $0 == Launcher.appPath }
+        runtime.fileExists = { $0 == "/Applications/Tecopa Plateworks.app" }
         let report = await Doctor.run(runtime)
         XCTAssertEqual(check(report, "repo")?["status"]?.stringValue, "fail")
         XCTAssertNotNil(check(report, "engine"))
@@ -156,7 +156,7 @@ final class DoctorTests: XCTestCase {
 
         // the same check with no repo known: the baked path is all there is to test
         runtime = w.runtime(repo: nil)
-        runtime.fileExists = { $0 == Launcher.appPath }
+        runtime.fileExists = { $0 == "/Applications/Tecopa Plateworks.app" }
         let alone = await Doctor.run(runtime)
         XCTAssertEqual(check(alone, "launcher")?["detail"]?.stringValue,
                        "The launcher was built for /old/place, and no engine is there.")

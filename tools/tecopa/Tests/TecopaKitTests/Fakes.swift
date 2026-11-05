@@ -119,6 +119,8 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var posts: [Post] = []
     /// Every file that `Runtime.writeNew` wrote, in order.
     private(set) var written: [Written] = []
+    /// Every path that `Runtime.removeFile` removed a file from, in order.
+    private(set) var removed: [String] = []
     /// The seconds of each `Runtime.sleep`, in order. No time passes in a test.
     private(set) var slept: [Double] = []
     /// The fake clock: the sum of every sleep, in seconds.
@@ -345,7 +347,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         return found
     }
 
-    /// The fake `Runtime.writeNew`. It keeps the real rule: a path holds one file,
+    /// The fake `Runtime.writeNew` (`removeFile`, its inverse, is in `runtime()`). It keeps the real rule: a path holds one file,
     /// and the second write to it is refused.
     /// A file that was written can be read back, as on a real disk.
     private func write(_ path: String, _ data: Data) throws {
@@ -449,6 +451,14 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                 },
                 readTail: { path, count in self.tail(path, count) },
                 writeNew: { path, data in try self.write(path, data) },
+                removeFile: { path in
+                    self.lock.withLock {
+                        let held = self.taken.remove(path) != nil
+                        let bytes = self.binaries.removeValue(forKey: path) != nil
+                        let text = self.files.removeValue(forKey: path) != nil
+                        if held || bytes || text { self.removed.append(path) }
+                    }
+                },
                 pathKind: { path in
                     self.lock.withLock {
                         self.taken.contains(path) ? .file : self.folders.contains(path) ? .folder : nil

@@ -64,11 +64,11 @@ public enum Doctor {
     }
 
     static func launcherRow(_ runtime: Runtime, repo: String?) -> JSONValue {
-        guard runtime.fileExists(Launcher.appPath) else {
-            return row("launcher", "warn", "The launcher is not installed at \(Launcher.appPath).",
+        guard runtime.fileExists(Launcher.appPath(runtime)) else {
+            return row("launcher", "warn", "The launcher is not installed at \(Launcher.appPath(runtime)).",
                        hint: "Run scripts/macos/build_app.sh --install.")
         }
-        let plist = Launcher.appPath + "/Contents/Info.plist"
+        let plist = Launcher.appPath(runtime) + "/Contents/Info.plist"
         let read = try? runtime.exec("/usr/libexec/PlistBuddy", ["-c", "Print :TecopaRepoPath", plist])
         let built = trimmed(read?.stdout ?? "")
         guard read?.exitCode == 0, !built.isEmpty else {

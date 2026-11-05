@@ -33,6 +33,9 @@ public struct Runtime: Sendable {
     /// Write the bytes to a path that holds no file. A file at the path is a usage
     /// failure: the tool never overwrites.
     public var writeNew: @Sendable (String, Data) throws -> Void
+    /// Remove the file at one path, if there is one. Nothing there is not a fault.
+    /// Only the tool's own marker files go through it.
+    public var removeFile: @Sendable (String) -> Void
     /// What is at one path, or nil when nothing is there. A command asks this for
     /// its output path before its first request, so a long render is not lost to a
     /// path that `writeNew` will refuse.
@@ -68,6 +71,7 @@ public struct Runtime: Sendable {
         writeNew: @escaping @Sendable (String, Data) throws -> Void = {
             try Runtime.writeNewFile($0, $1)
         },
+        removeFile: @escaping @Sendable (String) -> Void = { _ = unlink($0) },
         pathKind: @escaping @Sendable (String) -> PathKind? = { Runtime.kindOfPath($0) },
         now: @escaping @Sendable () -> Date = { Date() },
         randomHex: @escaping @Sendable (Int) -> String = { Runtime.randomHexDigits($0) },
@@ -88,6 +92,7 @@ public struct Runtime: Sendable {
         self.readData = readData
         self.readTail = readTail
         self.writeNew = writeNew
+        self.removeFile = removeFile
         self.pathKind = pathKind
         self.now = now
         self.randomHex = randomHex
