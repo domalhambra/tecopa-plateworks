@@ -2443,4 +2443,7 @@ if debug.enabled():
         proof_form=_proof_form_for, crop_px=_crop_to_overview_px))
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+# The studio is found beside this module, never through the cwd: the Mac app runs
+# the engine with its working directory in Application Support (phase 1 spec 5.4).
+app.mount("/", StaticFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                  "static"), html=True), name="static")
