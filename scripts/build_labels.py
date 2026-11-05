@@ -173,7 +173,7 @@ def main():
             sys.exit("usage: build_labels.py [--root DIR] [id ...]")
         root, args = args[1], args[2:]
     ids = args or sorted(d for d in os.listdir(root)
-                         if os.path.isdir(os.path.join(root, d)))
+                         if not d.startswith(".") and os.path.isdir(os.path.join(root, d)))
     for rid in ids:
         build_region(os.path.join(root, rid))
 
