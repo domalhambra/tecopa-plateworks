@@ -23,7 +23,8 @@ def _write(p: Path, data: bytes = b"x") -> Path:
 def test_engine_paths_are_the_spec_list():
     assert bc.ENGINE_PATHS == ("app", "config", "region_prep.py", "scripts/order.py",
                                "scripts/build_labels.py", "scripts/dem_coverage.py",
-                               "scripts/bake_playa.py", "scripts/render_mockups.py")
+                               "scripts/bake_playa.py", "scripts/render_mockups.py",
+                               "scripts/verify_regions.py", "scripts/pack_region.py")
 
 
 def test_font_files_finds_every_suffix_case_insensitively(tmp_path):
@@ -61,6 +62,37 @@ def test_missing_repo_imports_on_the_real_tree(tmp_path):
                            *bc.ENGINE_PATHS], capture_output=True, check=True).stdout
     subprocess.run(["tar", "-xf", "-", "-C", str(tmp_path)], input=arch, check=True)
     assert bc.missing_repo_imports(tmp_path) == []
+
+
+SWIFT_TABLE = b'''    static let table: [String: Row] = [
+        "scripts/verify_regions.py": .script(.app),     // regions verify
+        "region_prep.py": .script(.prep),               // plate build
+        "app.plates": .module(.app),                    // plate install
+    ]
+'''
+
+
+def test_script_rows_reads_only_the_script_keys(tmp_path):
+    swift = _write(tmp_path / "ScriptRunner.swift", SWIFT_TABLE)
+    assert bc.script_rows(swift) == ["region_prep.py", "scripts/verify_regions.py"]
+
+
+def test_table_rows_missing_from_the_engine(tmp_path):
+    swift = _write(tmp_path / "ScriptRunner.swift", SWIFT_TABLE)
+    eng = tmp_path / "engine"
+    _write(eng / "region_prep.py")
+    assert bc.table_rows_missing(swift, eng) == ["scripts/verify_regions.py"]
+    _write(eng / "scripts" / "verify_regions.py")
+    assert bc.table_rows_missing(swift, eng) == []
+
+
+def test_table_check_on_the_real_tree(tmp_path):
+    arch = subprocess.run(["git", "-C", str(REPO), "archive", "--format=tar", "HEAD", "--",
+                           *bc.ENGINE_PATHS], capture_output=True, check=True).stdout
+    subprocess.run(["tar", "-xf", "-", "-C", str(tmp_path)], input=arch, check=True)
+    swift = REPO / "tools" / "tecopa" / "Sources" / "TecopaKit" / "ScriptRunner.swift"
+    assert "scripts/pack_region.py" in bc.script_rows(swift)
+    assert bc.table_rows_missing(swift, tmp_path) == []
 
 
 def test_macho_files_by_magic(tmp_path):
@@ -119,6 +151,12 @@ def test_cli_exit_codes(tmp_path):
     _write(clean / "f.otf")
     bad = run("fonts", str(clean))
     assert bad.returncode == 1 and "f.otf" in bad.stdout
+    swift = _write(tmp_path / "ScriptRunner.swift", SWIFT_TABLE)
+    missing = run("table", str(swift), str(clean))
+    assert missing.returncode == 1
+    assert "scripts/verify_regions.py" in missing.stdout and "region_prep.py" in missing.stdout
+    empty = _write(tmp_path / "Empty.swift", b"let x = 1\n")
+    assert run("table", str(empty), str(clean)).returncode == 1
     usage = run("--bogus")
     assert usage.returncode == 2
     assert usage.stderr.startswith("usage: bundle_checks.py")

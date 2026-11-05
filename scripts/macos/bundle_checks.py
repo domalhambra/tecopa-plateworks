@@ -6,6 +6,7 @@ Stdlib only: the build runs it as `.venv/bin/python -I -B bundle_checks.py <cmd>
 
   fonts <root> [--allow FILE]     no font file outside the allowlist (invariant 10)
   imports <engine>                every repo-local module app/ imports is bundled
+  table <ScriptRunner.swift> <engine>   every .script row of the tool's table is bundled
   macho <root> [--exclude-suffix S ...]   Mach-O files, NUL-separated, for signing
   pyc <file>                      the .pyc is an unchecked-hash pyc
   pins <lock> <bundle_lock>       the bundle lock keeps every runtime pin
@@ -24,7 +25,8 @@ from pathlib import Path
 
 ENGINE_PATHS = ("app", "config", "region_prep.py", "scripts/order.py",
                 "scripts/build_labels.py", "scripts/dem_coverage.py",
-                "scripts/bake_playa.py", "scripts/render_mockups.py")
+                "scripts/bake_playa.py", "scripts/render_mockups.py",
+                "scripts/verify_regions.py", "scripts/pack_region.py")
 FONT_SUFFIXES = (".otf", ".ttf", ".ttc", ".otc", ".dfont", ".woff", ".woff2")
 MACHO_MAGICS = frozenset({b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf",
                           b"\xfe\xed\xfa\xce", b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca"})
@@ -89,6 +91,18 @@ def missing_repo_imports(engine: Path, local_roots=("app", "scripts", "region_pr
                 if not _module_exists(engine, name):
                     missing.add(f"{name} ({rel})")
     return sorted(missing)
+
+
+_SCRIPT_ROW = re.compile(r'^\s*"([^"]+)"\s*:\s*\.script\(', re.MULTILINE)
+
+
+def script_rows(swift: Path) -> list[str]:
+    """The keys of the `.script(` rows in ScriptRunner.table: the files the tool runs."""
+    return sorted(_SCRIPT_ROW.findall(Path(swift).read_text()))
+
+
+def table_rows_missing(swift: Path, engine: Path) -> list[str]:
+    return [k for k in script_rows(swift) if not (Path(engine) / k).is_file()]
 
 
 def macho_files(root: Path) -> list[Path]:
@@ -161,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("fonts"); p.add_argument("root"); p.add_argument("--allow")
     p = sub.add_parser("imports"); p.add_argument("engine")
+    p = sub.add_parser("table"); p.add_argument("swift"); p.add_argument("engine")
     p = sub.add_parser("macho"); p.add_argument("root")
     p.add_argument("--exclude-suffix", nargs="*", default=[])
     p = sub.add_parser("pyc"); p.add_argument("file")
@@ -182,6 +197,14 @@ def main(argv: list[str] | None = None) -> int:
         bad = missing_repo_imports(Path(a.engine))
         for m in bad:
             print(f"not bundled: {m}")
+        return 1 if bad else 0
+    if a.cmd == "table":
+        if not script_rows(Path(a.swift)):
+            print(f"no .script rows found in {a.swift}")
+            return 1
+        bad = table_rows_missing(Path(a.swift), Path(a.engine))
+        for k in bad:
+            print(f"the tool runs {k}, which the bundle lacks")
         return 1 if bad else 0
     if a.cmd == "macho":
         files = [p for p in macho_files(Path(a.root))

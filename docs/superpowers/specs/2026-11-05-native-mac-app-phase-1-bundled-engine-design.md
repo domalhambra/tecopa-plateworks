@@ -52,7 +52,7 @@ Tecopa Plateworks.app/Contents/
     engine/                          the repo's relative layout, kept exactly
       app/                           including app/static (the web studio)
       scripts/order.py, build_labels.py, dem_coverage.py, bake_playa.py,
-              render_mockups.py
+              render_mockups.py, verify_regions.py, pack_region.py
       region_prep.py
       config/sizes.toml, papers.toml
     plates/<id>/                     git-tracked plate files only, never dem.tif
@@ -69,6 +69,10 @@ Tecopa Plateworks.app/Contents/
   Plates are about 23 MB for 11.
 - A build check greps `from scripts.` and `import scripts` across the bundled `app/`. It fails
   when a module named there is missing from the bundled `scripts/`.
+- The `tecopa` command runs `scripts/verify_regions.py` (regions verify) and
+  `scripts/pack_region.py` (plate pack) from the engine, so both ship. A second build check
+  (`bundle_checks.py table`) reads every `.script(` row of `ScriptRunner.table` in
+  `tools/tecopa` and fails naming any row whose file is missing under `engine/`.
 - `assets/`, `marketing/`, `tests/`, `docs/` and every font stay out (invariant 10: never put a
   font in the bundle or the DMG). A build check fails on any `.otf`, `.ttf`, `.ttc`, `.otc`,
   `.dfont`, `.woff` or `.woff2` under `engine/` or `plates/`. The Python copies get an

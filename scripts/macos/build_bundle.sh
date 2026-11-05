@@ -24,7 +24,8 @@ PBS_SHA256="e8891a012ad178d7afc0db4dcad611d6156e6402947578fc91acbbdf1930eebd"
 TGZ="$REPO/dist/.downloads/cpython-3.14.2+20260127-aarch64-apple-darwin-install_only.tar.gz"
 WH="$REPO/dist/.wheelhouse"
 ENGINE_PATHS=(app config region_prep.py scripts/order.py scripts/build_labels.py
-              scripts/dem_coverage.py scripts/bake_playa.py scripts/render_mockups.py)
+              scripts/dem_coverage.py scripts/bake_playa.py scripts/render_mockups.py
+              scripts/verify_regions.py scripts/pack_region.py)
 
 # ------------------------------------------------------------- 1. Refuse
 echo "1/13 Check the tree"
@@ -91,6 +92,8 @@ echo "6/13 Check for fonts and missing modules"
 "${CHECK[@]}" fonts "$RES/engine" || stop "A font file is in the engine (invariant 10)."
 "${CHECK[@]}" fonts "$RES/plates" || stop "A font file is in the plates (invariant 10)."
 "${CHECK[@]}" imports "$RES/engine" || stop "The engine imports a module the bundle lacks."
+"${CHECK[@]}" table "$REPO/tools/tecopa/Sources/TecopaKit/ScriptRunner.swift" "$RES/engine" \
+  || stop "The tecopa command runs a script the bundle lacks."
 
 # --------------------------------------------------------- 7. Two Pythons
 echo "7/13 Install the two Pythons (invariant 13: never one)"
