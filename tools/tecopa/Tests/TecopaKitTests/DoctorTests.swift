@@ -50,6 +50,44 @@ final class DoctorTests: XCTestCase {
         return w
     }
 
+    // MARK: In the app
+
+    private static let code = app + "/Contents/Resources/engine"
+
+    private func inTheApp(_ w: FakeWorld) -> Runtime {
+        w.file(Self.code + "/app/main.py", "app = FastAPI()\n")
+        var runtime = w.runtime(repo: nil)
+        runtime.layout = .bundle(URL(fileURLWithPath: Self.app))
+        return runtime
+    }
+
+    func testInTheAppTheRepoRowIsACodeRowAndBothInterpretersRun() async {
+        let w = healthy()
+        let report = await Doctor.run(inTheApp(w))
+        XCTAssertEqual(Array(names(report).prefix(4)), ["code", "venv", "venv_prep", "app"])
+        XCTAssertNil(check(report, "repo"))
+        XCTAssertEqual(check(report, "code")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(check(report, "code")?["detail"]?.stringValue, Self.code)
+        XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(check(report, "venv")?["detail"]?.stringValue, "Python 3.14.2")
+        XCTAssertEqual(check(report, "venv_prep")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(check(report, "venv_prep")?["detail"]?.stringValue, "Python 3.14.2")
+        XCTAssertTrue(w.commands.contains([Self.enginePython, "--version"]))
+        XCTAssertTrue(w.commands.contains([Self.prepPython, "--version"]))
+        XCTAssertFalse(w.commands.contains { $0.first?.hasPrefix("/repo") ?? false })
+    }
+
+    func testInTheAppUnreadableCodeAndABrokenPrepInterpreterFail() async {
+        let w = healthy()
+        var runtime = inTheApp(w)
+        runtime.readFile = { _ in nil }
+        w.result(for: "python3.14", ProcessResult(exitCode: 1, stdout: "", stderr: "dyld: Library not loaded"))
+        let report = await Doctor.run(runtime)
+        XCTAssertEqual(check(report, "code")?["status"]?.stringValue, "fail")
+        XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "fail")
+        XCTAssertEqual(check(report, "venv_prep")?["status"]?.stringValue, "fail")
+    }
+
     func testAHealthyAppRowNamesTheIdAndTheEngineVersion() async {
         let w = healthy()
         let report = await Doctor.run(w.runtime(repo: "/repo"))

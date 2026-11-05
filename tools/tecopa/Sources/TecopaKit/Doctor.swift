@@ -58,6 +58,16 @@ public enum Doctor {
         }
 
         let prep = layout.prepPython
+        if case .bundle = layout {
+            // In the app, plate builds and bakes run in the bundled prep interpreter:
+            // it must run, as the engine's must.
+            let ran = runtime.fileExists(prep) ? try? runtime.exec(prep, ["--version"], cwd: root) : nil
+            rows.append(ran?.exitCode == 0
+                ? row("venv_prep", "ok", trimmed(ran?.stdout ?? ""))
+                : row("venv_prep", "fail", "The bundled interpreter \(prep) does not run.",
+                      hint: "Reinstall the app."))
+            return rows
+        }
         rows.append(runtime.fileExists(prep)
             ? row("venv_prep", "ok", prep)
             : row("venv_prep", "warn", "No interpreter at \(prep). Plate builds are not available.",
@@ -152,6 +162,17 @@ public enum Doctor {
 
     public static func run(_ runtime: Runtime) async -> JSONValue {
         var rows: [JSONValue] = []
+        if case .bundle(let app)? = try? runtime.engineLayout() {
+            // The app has no repo: the bundle's code and its two interpreters.
+            let layout = EngineLayout.bundle(app)
+            let marker = layout.codeRoot + "/" + RepoLocator.marker
+            rows.append(runtime.readFile(marker) != nil
+                ? row("code", "ok", layout.codeRoot)
+                : row("code", "fail", "The app's engine code cannot be read: \(marker).",
+                      hint: "Reinstall the app."))
+            rows += venvRows(runtime, layout: layout)
+            return await finish(rows, runtime)
+        }
         var repo: String?
         do {
             let found = try runtime.repo()
@@ -173,6 +194,12 @@ public enum Doctor {
             rows.append(row("repo", "fail", "\(error)"))
         }
         if let repo { rows += venvRows(runtime, layout: .repo(repo)) }
+        return await finish(rows, runtime)
+    }
+
+    /// The rows that do not depend on the layout, and the counts.
+    private static func finish(_ found: [JSONValue], _ runtime: Runtime) async -> JSONValue {
+        var rows = found
         rows.append(appRow(runtime))
         rows += await engineRows(runtime)
         rows.append(logRow(runtime))
@@ -204,7 +231,8 @@ public enum Doctor {
 
     static let entry = CatalogEntry(
         name: "doctor",
-        summary: "Check the repo, both venvs, the app, the port, the debug gate and the log. Works with no engine.",
+        summary: "Check the repo (in the app: its engine code), both interpreters, the app, the port, the debug "
+            + "gate and the log. Works with no engine.",
         readOnly: true,
         text: { render($0) }
     ) { runtime, _ in await run(runtime) }
