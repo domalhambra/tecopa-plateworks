@@ -80,6 +80,12 @@ n="$(find "$RES/plates" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
 [ "$n" -ge 11 ] || stop "Only $n plate folders in the bundle."
 echo "plates $n" >> "$REPORT"
 
+# ------------------------------------------------------------- 5b. Helper
+echo "5b/13 Build the tecopa command that ships inside the app"
+mkdir -p "$APP/Contents/Helpers"
+bash "$REPO/tools/tecopa/build.sh" --bundle-helper "$APP/Contents/Helpers/tecopa" > "$REPO/dist/tecopa-build.log" 2>&1 \
+  || stop "The tecopa command did not build. See dist/tecopa-build.log."
+
 # --------------------------------------------------------------- 6. Checks
 echo "6/13 Check for fonts and missing modules"
 "${CHECK[@]}" fonts "$RES/engine" || stop "A font file is in the engine (invariant 10)."
@@ -189,6 +195,8 @@ while IFS= read -r -d '' f; do sign "$f"; signed=$((signed + 1)); done \
   < <(find "$RES/python-engine" "$RES/python-prep" -type f \( -name '*.so' -o -name '*.dylib' \) -print0)
 while IFS= read -r -d '' f; do sign "$f"; signed=$((signed + 1)); done \
   < <("${CHECK[@]}" macho "$RES" --exclude-suffix .so .dylib)
+sign --identifier org.plateworks.tecopa.tecopa "$APP/Contents/Helpers/tecopa"
+signed=$((signed + 1))
 sign "$APP"
 echo "signed $signed nested Mach-O files" >> "$REPORT"
 
@@ -206,6 +214,8 @@ while IFS= read -r -d '' f; do
   codesign --verify --strict "$f" 2>/dev/null || stop "Not signed: $f"
   verified=$((verified + 1))
 done < <("${CHECK[@]}" macho "$RES")
+codesign --verify --strict "$APP/Contents/Helpers/tecopa" || stop "The tecopa helper is not signed."
+verified=$((verified + 1))
 [ "$verified" -eq "$signed" ] || stop "Signed $signed Mach-O files but found $verified."
 { echo "xattr:"; xattr -lr "$APP"; du -sh "$APP"; } >> "$REPORT"
 echo "Built $APP ($VERSION, $(du -sh "$APP" | cut -f1)). Report: dist/build-report.txt"

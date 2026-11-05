@@ -45,7 +45,8 @@ enum EngineState: Equatable {
 @Observable
 final class AppModel {
     let layout = EngineLayout.bundle(Bundle.main.bundleURL)
-    let runtime = Runtime()
+    /// Every catalog entry runs with this bundle's interpreters and data, never a repo.
+    let runtime = Runtime(layout: .bundle(Bundle.main.bundleURL))
     @ObservationIgnored private let spawner = ProcessEngineSpawner()
     @ObservationIgnored private var quitGate = QuitGate()
     @ObservationIgnored private var quitting = false
