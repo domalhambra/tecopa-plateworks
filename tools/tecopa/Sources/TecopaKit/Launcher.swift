@@ -23,11 +23,13 @@ public enum Launcher {
     /// `busy`: the port accepts a connection and gives no answer in time.
     enum Serving { case tecopa, foreign, none, busy }
 
+    /// `EngineHost.classify` is the one definition, so the app and the tool agree.
     static func probe(_ runtime: Runtime) async -> Serving {
-        switch await runtime.client.probe("/readyz", timeout: 2) {
-        case .reply(let reply): return EngineClient.isTecopa(reply) ? .tecopa : .foreign
-        case .noAnswer: return .none
-        case .timedOut: return .busy
+        switch await EngineHost.classify(runtime) {
+        case .adopt: return .tecopa
+        case .foreign: return .foreign
+        case .none: return .none
+        case .busy: return .busy
         }
     }
 
