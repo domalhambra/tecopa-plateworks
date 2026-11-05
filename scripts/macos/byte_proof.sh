@@ -184,7 +184,8 @@ if [ "$PROOF" = 1 ]; then
       "$REPO/.venv/bin/python" -P -m uvicorn app.main:app --app-dir "$REPO" \
         --host 127.0.0.1 --port 8849 ) > "$REF/engine.log" 2>&1 &
   REFPID=$!
-  trap 'kill $REFPID 2>/dev/null || true' EXIT
+  # Always stop what this run started, pass or fail.
+  trap 'kill $REFPID 2>/dev/null || true; osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true' EXIT
   open "$BUNDLE"
   wait_engine 8849 90 || fail "the reference engine did not start (see $REF/engine.log)"
   wait_engine 8848 90 || fail "the app's engine did not start"
@@ -240,7 +241,7 @@ rm -f "$COPY/work/state.json"   # a venv-prepared state names <repo>/regions (sp
 
 MOVED="$REPO.moved-$STAMP"
 mv "$REPO" "$MOVED"
-trap 'mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"' EXIT
+trap 'osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"' EXIT
 
 open "$BUNDLE"
 wait_engine 8848 90 || fail "the app's engine did not start with the repo moved away"
