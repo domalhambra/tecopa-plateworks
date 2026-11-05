@@ -1,5 +1,10 @@
 import Foundation
 
+/// What one read of the engine's jobs said. `unknown` is not the same as none.
+/// `timedOut` means the engine accepted the connection and did not answer: a long
+/// render can hold it that way, and that render is the work a stop would end.
+public enum JobsRead: Equatable, Sendable { case active(Int), unknown, timedOut }
+
 /// Engine control. The launcher app owns uvicorn as a child process, so "start" opens
 /// the app and "stop" quits it. The tool never starts an engine of its own: two
 /// owners of one engine is the fault the launcher spec was written to prevent.
@@ -94,13 +99,8 @@ public enum Launcher {
     }
 
     /// The jobs a stop would end: those that run and those that wait for a slot.
-    /// nil when the engine did not say, which is not the same as none.
-    /// What one read of the engine's jobs said. `timedOut` means the engine accepted
-    /// the connection and did not answer: a long render can hold it that way, and
-    /// that render is the work a stop would end.
-    enum JobsRead: Equatable { case active(Int), unknown, timedOut }
-
-    static func readJobs(_ runtime: Runtime) async -> JobsRead {
+    /// A 404 (the gate is off), a failed route, or no answer at all is `.unknown`.
+    public static func readJobs(_ runtime: Runtime) async -> JobsRead {
         switch await runtime.client.probe("/api/debug/jobs", timeout: 10) {
         case .timedOut:
             return .timedOut

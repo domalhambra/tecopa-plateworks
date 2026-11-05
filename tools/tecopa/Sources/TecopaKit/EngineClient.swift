@@ -14,6 +14,11 @@ public struct EngineClient: Sendable {
     public struct Reply: Equatable, Sendable {
         public let status: Int
         public let json: JSONValue
+
+        public init(status: Int, json: JSONValue) {
+            self.status = status
+            self.json = json
+        }
     }
 
     /// What one request found. "Nothing listens" and "it listens and is slow" are
