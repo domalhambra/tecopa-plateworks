@@ -80,7 +80,7 @@ if [ -f "$AS/settings.json" ] && grep -q '"TECOPA_FONT' "$AS/settings.json"; the
 fi
 [ -d "$REGIONS/lassen_ca" ] && [ -f "$REGIONS/lassen_ca/dem.tif" ] \
   || fail "no lassen_ca DEM in $REGIONS: start the app once, then run seed_dem_cache.sh"
-WORK="$(mktemp -d)"
+WORK="$(cd "$(mktemp -d)" && pwd -P)"   # resolved: the engine reports /private/var, not /var
 mkdir -p "$WORK/ref" "$WORK/cand"
 cp "$REPO/tests/fixtures/sample.gpx" "$WORK/sample.gpx"
 # Fresh blobs and uploads for the candidate (spec 8.1): move the old ones aside.
@@ -239,9 +239,14 @@ mkdir -p "$HOME/Tecopa Orders/_proof"
 rm -rf "$COPY.tmp"; ditto "$ORDER" "$COPY.tmp"; rm -rf "$COPY"; mv "$COPY.tmp" "$COPY"
 rm -f "$COPY/work/state.json"   # a venv-prepared state names <repo>/regions (spec 8.2 step 5)
 
+# The report leaves the repo with it: write it in the work folder from here on, and
+# copy it back to dist/proof/ when the repo is back.
+FINAL_REPORT="$REPORT"
+cp "$REPORT" "$WORK/report.txt"
+REPORT="$WORK/report.txt"
 MOVED="$REPO.moved-$STAMP"
 mv "$REPO" "$MOVED"
-trap 'osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"' EXIT
+trap 'osascript -e "quit app id \"org.plateworks.tecopa\"" >/dev/null 2>&1 || true; sleep 2; mv "$MOVED" "$REPO" 2>/dev/null && echo "repo restored to $REPO"; cp "$REPORT" "$FINAL_REPORT" 2>/dev/null || true' EXIT
 
 open "$BUNDLE"
 wait_engine 8848 90 || fail "the app's engine did not start with the repo moved away"
