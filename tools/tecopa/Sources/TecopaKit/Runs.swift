@@ -102,7 +102,10 @@ enum Runs {
     /// `command` is the catalog name of the entry that starts the run. `cwd` is
     /// the program's working directory. The result is
     /// `{"run": id, "pid": n, "log": path, "hint": "Run `tecopa runs show <id>`."}`.
-    static func start(program: String, arguments: [String], cwd: String, command: String,
+    /// `environment` is the run's whole environment; nil gives the script
+    /// environment of the tool, `ScriptRunner.environment(_:)`.
+    static func start(program: String, arguments: [String], cwd: String,
+                      environment given: [String: String]? = nil, command: String,
                       failureText: String?, _ runtime: Runtime) throws -> JSONValue {
         // A C string ends at its first NUL byte, so the program would get another argument.
         guard !([program, cwd] + arguments).contains(where: { $0.utf8.contains(0) }) else {
@@ -149,7 +152,7 @@ enum Runs {
                                     + Render.sentence(said))
         }
 
-        var environment = ScriptRunner.environment(runtime)
+        var environment = given ?? ScriptRunner.environment(runtime)
         // Python holds back its output when it does not write to a terminal. With
         // this, each line is in the log when the script prints it.
         environment["PYTHONUNBUFFERED"] = "1"
