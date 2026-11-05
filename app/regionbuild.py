@@ -84,13 +84,13 @@ def run_build(params: dict, repo_root: str, regions_root: str,
     folder is what region_prep, the labels bake and the sweep all use.
 
     `cwd`, when given, is the working directory both subprocesses run in instead
-    of `repo_root`. Only an order build passes it (app/orderprep.py): it moves a
+    of `repo_root`. An order build (app/orderprep.py) and the in-app build
+    (app/main.py, since the Mac app's phase 1) both pass it: it moves a
     fetch-stack library's own hardcoded-relative write (pygeoogc's
     ArcGISRESTful.failed_path, "cache/failed_ids*.txt" -- no env override exists
-    for it) off the public repo's cache/ dir. It is safe only because an order
-    build's script paths and out_root are already absolute, so nothing here
-    depends on the process's cwd to find anything; the in-app build never passes
-    it and keeps running with cwd=repo_root exactly as before."""
+    for it) into the order cache, off the repo and off a signed app bundle. It is
+    safe only because both callers pass absolute script paths and out_root, so
+    nothing here depends on the process's cwd to find anything."""
     rid = params["id"]
     if not re.fullmatch(r"[a-z0-9_]+", rid):
         raise ValueError(f"unsafe region id {rid!r}")

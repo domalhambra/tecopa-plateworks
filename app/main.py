@@ -872,11 +872,19 @@ async def region_build(req: RegionBuildRequest):
     holder = {}
 
     def build_job():
+        # Every path absolute, and the run in the order cache: the Mac app's cwd is
+        # Application Support and a signed bundle must never be written (phase 1
+        # spec 5.4, change 3). orderprep loads the build tools, so import it here.
+        from app.orderprep import cache_env
+        env, cache_dir = cache_env()
+        root = os.path.abspath(REGIONS_ROOT)
         result = regionbuild.run_build(
-            params, repo_root=os.getcwd(), regions_root=REGIONS_ROOT,
-            prep_python=PREP_PYTHON, prep_script=PREP_SCRIPT,
-            labels_script=LABELS_SCRIPT,
-            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s))
+            dict(params, out_root=root), repo_root=os.getcwd(), regions_root=root,
+            prep_python=os.path.abspath(PREP_PYTHON),
+            prep_script=os.path.abspath(PREP_SCRIPT),
+            labels_script=os.path.abspath(LABELS_SCRIPT),
+            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s),
+            env=env, cwd=cache_dir)
         fresh = regions.discover(REGIONS_ROOT)   # build BEFORE mutating: a discover()
         REGIONS.clear()                          # failure (a malformed region.json
         REGIONS.update(fresh)                    # elsewhere) must not leave REGIONS

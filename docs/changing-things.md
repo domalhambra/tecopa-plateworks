@@ -504,6 +504,8 @@ Traps already paid for:
   override at all. Prepare runs the prep subprocess with its cwd at
   `~/Tecopa Orders/_cache/` instead of the repo root, so that write lands there too;
   every script path and `--out-root` it passes is already absolute, so this is safe.
+  The studio's in-app plate build and the 3DEP coverage query run there too, so the
+  Mac app never writes beside its engine (native Mac app phase 1 spec, 5.4).
   The dynamic-service DEM fetch itself already follows `HYRIVER_CACHE_NAME`.
 - A query of the 3DEP index that fails is not a refused size. The first build of the
   preview read it as one, so a network fault removed a size from the client's PDF and
