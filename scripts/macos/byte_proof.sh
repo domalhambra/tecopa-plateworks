@@ -147,10 +147,14 @@ def tree(d):
 import importlib.metadata as md
 wheels = {}
 for dist in md.distributions():
-    rec = [l.split(",")[0] for l in (dist.read_text("RECORD") or "").splitlines()]
-    keep = sorted(r for r in rec if "__pycache__" not in r and not r.startswith("../")
-                  and not r.endswith(("INSTALLER", "REQUESTED", "direct_url.json", "RECORD"))
-                  and "/bin/" not in r)
+    # Each installed file with its own sha256, from RECORD, minus what the installer
+    # writes (pip and uv differ there): bytecode, scripts, INSTALLER, REQUESTED,
+    # direct_url.json, uv_cache.json and RECORD itself.
+    rec = [l.rsplit(",", 2)[:2] for l in (dist.read_text("RECORD") or "").splitlines() if l]
+    keep = sorted(f"{name},{h}" for name, h in rec if "__pycache__" not in name
+                  and not name.startswith("../") and "/bin/" not in name
+                  and not name.endswith(("INSTALLER", "REQUESTED", "direct_url.json",
+                                         "uv_cache.json", "RECORD")))
     wheels[dist.metadata["Name"].lower()] = hashlib.sha256("\n".join(keep).encode()).hexdigest()[:16]
 gdal = os.path.join(os.path.dirname(rasterio.__file__), "gdal_data")
 f = render._load_font(None, 24)
