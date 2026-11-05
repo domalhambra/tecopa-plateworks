@@ -107,6 +107,8 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var copies: [[String]] = []
     /// Every `Runtime.moveFile`, in order: the source and the destination.
     private(set) var moves: [[String]] = []
+    /// Every path that `Runtime.trashItem` moved to the Trash, in order.
+    private(set) var trashed: [String] = []
     /// Every folder that `Runtime.makeFolder` made, in order.
     private(set) var madeFolders: [String] = []
     private(set) var commands: [[String]] = []
@@ -493,7 +495,17 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                         (self.binaries[path] ?? self.files[path].map { Data($0.utf8) }).map(FakeWorld.sha256)
                     }
                 },
-                moveFile: { source, destination in try self.move(source, destination) })
+                moveFile: { source, destination in try self.move(source, destination) },
+                trashItem: { path in
+                    try self.lock.withLock {
+                        let held = self.taken.remove(path) != nil
+                        let bytes = self.binaries.removeValue(forKey: path) != nil
+                        guard held || bytes else {
+                            throw TecopaFailure(.environment, "Could not move \(path) to the Trash: no such file.")
+                        }
+                        self.trashed.append(path)
+                    }
+                })
     }
 
     /// The sha256 of some bytes, in lower-case hex.

@@ -665,7 +665,7 @@ final class PlatesTests: XCTestCase {
     func testOnlyPlatePlanAndPlateCheckAreReadOnly() {
         let readOnly = ["plate_plan": true, "plate_build": false, "plate_labels": false, "plate_playa": false,
                         "plate_pack": false, "plate_install": false, "plate_check": true,
-                        "plate_restore": false]
+                        "plate_restore": false, "plate_evict": false]
         XCTAssertEqual(Set(Catalog.all.map(\.name).filter { $0.hasPrefix("plate_") }), Set(readOnly.keys))
         for (name, flag) in readOnly { XCTAssertEqual(Catalog.named(name)?.readOnly, flag, name) }
         func parameters(_ name: String) -> [String] {
@@ -680,6 +680,7 @@ final class PlatesTests: XCTestCase {
         XCTAssertEqual(parameters("plate_install"), ["file:string"])
         XCTAssertEqual(parameters("plate_check"), ["poster:string"])
         XCTAssertEqual(parameters("plate_restore"), ["id:string"])
+        XCTAssertEqual(parameters("plate_evict"), ["id:string"])
     }
 
     func testTheTextOfAPlateCommand() {
@@ -733,6 +734,11 @@ final class PlatesTests: XCTestCase {
                 world.file(archive + "/index.json", #"{"current": "\#(sha)"}"#)
                 world.existingFile(archive + "/" + sha + "/dem.tif")
                 world.binary(archive + "/" + sha + "/dem.tif", dem)
+            },
+            // it moves one file to the Trash and runs no program: no run is tracked, so no ps
+            "plate_evict": Walk(arguments: ["id": .string("lassen_ca")], programs: 0) { world in
+                world.folder("/repo/regions/lassen_ca")
+                world.existingFile("/repo/regions/lassen_ca/dem.tif")
             },
             // it takes an order number, never a folder, and runs the script in the call
             "order_new": Walk(arguments: ["number": .string("TP-26-001")], programs: 1) { _ in },

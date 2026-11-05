@@ -14,7 +14,7 @@ final class MCPServerTests: XCTestCase {
         "engine_start", "engine_stop", "engine_restart",
         "render_proof", "render_final", "render_wallpaper", "render_film", "render_fetch",
         "reprint", "continue", "runs_cancel",
-        "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install", "plate_restore",
+        "plate_build", "plate_labels", "plate_playa", "plate_pack", "plate_install", "plate_restore", "plate_evict",
         "order_new", "order_choose", "order_prepare", "order_preview", "order_finish"]
 
     private var binary: URL {
@@ -120,7 +120,7 @@ final class MCPServerTests: XCTestCase {
         let replies = try converse([#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#], lastId: 2)
         let tools = reply(replies, id: 2)?["result"]?["tools"]?.arrayValue ?? []
         let names = Set(tools.compactMap { $0["name"]?.stringValue })
-        XCTAssertEqual(tools.count, 38)
+        XCTAssertEqual(tools.count, 39)
         XCTAssertEqual(names, readOnly.union(writes))
         XCTAssertEqual(names, Set(Catalog.all.map { $0.name }))
         for tool in tools {

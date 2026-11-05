@@ -383,6 +383,21 @@ enum Runs {
         return Status(state: cancelled ? .cancelled : .lost, exitCode: nil)
     }
 
+    /// Every tracked run that is running now, by the same records and the same
+    /// state rule as `runs`. A file that is not a record is skipped: it names no
+    /// command. A `ps` that fails throws, so a caller that guards on this fails closed.
+    static func running(_ runtime: Runtime) throws -> [Record] {
+        let names = (runtime.listFolder(runtime.runsFolder) ?? []).filter { $0.hasSuffix(".json") }.sorted(by: >)
+        var found: [Record] = []
+        for name in names {
+            let id = String(name.dropLast(".json".count))
+            guard isRunID(id), let data = runtime.readData(runtime.runsFolder + "/" + name),
+                  let record = record(in: data, id: id, runtime) else { continue }
+            if try status(record, runtime).state == .running { found.append(record) }
+        }
+        return found
+    }
+
     // MARK: The log
 
     /// `runs show` returns at least one line and at most this many.

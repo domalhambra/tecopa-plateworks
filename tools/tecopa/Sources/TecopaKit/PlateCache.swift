@@ -1,14 +1,14 @@
 import Foundation
 
-/// The DEM cache of the plates: restore a DEM from the Dropbox archive (phase 1
-/// spec, section 6; phase 2 spec, decision 12).
+/// The DEM cache of the plates: restore a DEM from the Dropbox archive, and free
+/// one's space (phase 1 spec, section 6; phase 2 spec, decision 12).
 ///
 /// The archive is keyed by each DEM's own sha256, and `<id>/index.json` names the
 /// `current` one. A restore takes that sha and never the one in `sources.json`:
 /// six plates drifted on purpose with the Lanczos swap, and the `sources.json` sha
 /// is the striped DEM before it. Nothing here writes `sources.json` (invariant 12).
 enum PlateCache {
-    static let entries: [CatalogEntry] = [restoreEntry]
+    static let entries: [CatalogEntry] = [restoreEntry, evictEntry]
 
     /// The archive's default folder, under the home folder.
     static let archiveFolder = "/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates"
@@ -84,5 +84,35 @@ enum PlateCache {
         }
         try runtime.moveFile(partial, target)
         return .object(["output": .string("\(target): restored \(id) \(sha)")])
+    }
+
+    static let evictEntry = CatalogEntry(
+        name: "plate_evict",
+        summary: "Free a plate's space: move its dem.tif to the Trash, and nothing else. Refuses while an order "
+            + "run is going, since a plate with no DEM drops out of Preview and Prepare. plate_restore puts it back.",
+        readOnly: false,
+        parameters: [EntryParameter("id", .string, "The region id of the plate. Required.")],
+        text: Plates.said
+    ) { runtime, arguments in
+        let id = try Plates.regionID(arguments)
+        // phase 1 spec, section 6: never evict a DEM under an order verb
+        let orders = try Runs.running(runtime).filter { $0.command.hasPrefix("order_") }
+        guard orders.isEmpty else {
+            let named = orders.map { "\($0.command) (\($0.id))" }.joined(separator: ", ")
+            throw TecopaFailure(.refused, "An order run is going: \(named). A plate's DEM stays while it runs.",
+                                hint: "Wait for it to end, or stop it with `tecopa runs cancel`.")
+        }
+        let plate = try Plates.folder(id, runtime)
+        guard runtime.pathKind(plate) == .folder else {
+            throw TecopaFailure(.refused, "No plate \(id) in \(try Plates.regionsRoot(runtime)).",
+                                hint: "Run `tecopa regions` for the plates that exist.")
+        }
+        let dem = plate + "/dem.tif"
+        guard runtime.pathKind(dem) == .file else {
+            throw TecopaFailure(.refused, "The plate \(id) has no dem.tif. Nothing to free.")
+        }
+        try runtime.trashItem(dem)
+        return .object(["output": .string(
+            "Moved \(dem) to the Trash. `tecopa plate restore \(id)` puts the archived DEM back.")])
     }
 }

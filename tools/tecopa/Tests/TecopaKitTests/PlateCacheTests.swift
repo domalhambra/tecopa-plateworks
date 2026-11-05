@@ -148,6 +148,77 @@ final class PlateCacheTests: XCTestCase {
         XCTAssertEqual(Runtime.sha256OfFile(folder + "/other.tif"), FakeWorld.sha256(bytes))
     }
 
+    // MARK: plate_evict
+
+    private func evict(_ w: FakeWorld, id: String = "lassen_ca") async -> (data: JSONValue?, failure: TecopaFailure?) {
+        let (envelope, failure) = await Catalog.call("plate_evict", w.runtime(), ["id": .string(id)])
+        return (envelope["data"], failure)
+    }
+
+    private func plateOnDisk() -> FakeWorld {
+        let w = FakeWorld()
+        w.folder(regions + "/lassen_ca")
+        w.existingFile(regions + "/lassen_ca/region.json")
+        w.existingFile(regions + "/lassen_ca/sources.json")
+        put(w, regions + "/lassen_ca/dem.tif", dem)
+        return w
+    }
+
+    func testAnEvictMovesOnlyTheDEMToTheTrash() async {
+        let w = plateOnDisk()
+        let (data, failure) = await evict(w)
+        XCTAssertNil(failure)
+        XCTAssertEqual(w.trashed, [regions + "/lassen_ca/dem.tif"])
+        XCTAssertEqual(w.removed, [])
+        XCTAssertEqual(w.runtime().pathKind(regions + "/lassen_ca/region.json"), .file)
+        XCTAssertEqual(w.runtime().pathKind(regions + "/lassen_ca/sources.json"), .file)
+        XCTAssertNotNil(data?["output"]?.stringValue)
+    }
+
+    func testAnEvictRefusesWhileAnOrderRunIsGoing() async {
+        // a curated plate with no DEM drops out of Preview and Prepare silently
+        let w = plateOnDisk()
+        w.folder("/orders/2026-10-001-smith")
+        let (_, started) = await Catalog.call("order_preview", w.runtime(),
+                                              ["folder": .string("/orders/2026-10-001-smith")])
+        XCTAssertNil(started)
+        let (_, failure) = await evict(w)
+        XCTAssertEqual(failure?.kind, .refused)
+        XCTAssertTrue(failure?.message.contains("order_preview") ?? false, failure?.message ?? "")
+        XCTAssertEqual(w.trashed, [])
+
+        // once the run is over, the evict goes ahead
+        w.endProcess(4001)
+        let (_, after) = await evict(w)
+        XCTAssertNil(after)
+        XCTAssertEqual(w.trashed, [regions + "/lassen_ca/dem.tif"])
+    }
+
+    func testAnEvictIsNotStoppedByARunThatIsNotAnOrder() async {
+        let w = plateOnDisk()
+        w.file(regions + "/lassen_ca/sources.json", #"{"assets": {}}"#)
+        let (_, started) = await Catalog.call("plate_labels", w.runtime(), ["id": .string("lassen_ca")])
+        XCTAssertNil(started)
+        let (_, failure) = await evict(w)
+        XCTAssertNil(failure)
+        XCTAssertEqual(w.trashed, [regions + "/lassen_ca/dem.tif"])
+    }
+
+    func testAnEvictRefusesAPlateThatIsNotThereOrHasNoDEM() async {
+        let w = plateOnDisk()
+        let (_, missing) = await evict(w, id: "rifle_aspen")
+        XCTAssertEqual(missing?.kind, .refused)
+        let empty = FakeWorld()
+        empty.folder(regions + "/lassen_ca")
+        let (_, noDEM) = await evict(empty)
+        XCTAssertEqual(noDEM?.kind, .refused)
+        for id in ["", "../lassen_ca", "--root"] {
+            let (_, failure) = await evict(w, id: id)
+            XCTAssertEqual(failure?.kind, .usage, id)
+        }
+        XCTAssertEqual(w.trashed + empty.trashed, [])
+    }
+
     func testARestoreTakesOnlyARegionId() async {
         let w = world()
         for id in ["", "../lassen_ca", "--root", "Lassen"] {

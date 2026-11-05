@@ -65,6 +65,9 @@ public struct Runtime: Sendable {
     /// Rename a file to a path that holds nothing. A file at the destination is a
     /// usage failure: the rename never replaces.
     public var moveFile: @Sendable (String, String) throws -> Void
+    /// Move one file to the user's Trash, where it can be put back. Only the DEM
+    /// evict goes through it.
+    public var trashItem: @Sendable (String) throws -> Void
 
     public init(
         repoFlag: String? = nil,
@@ -101,8 +104,17 @@ public struct Runtime: Sendable {
         },
         copyFile: @escaping @Sendable (String, String) throws -> Void = { try Runtime.copyNewFile($0, $1) },
         sha256File: @escaping @Sendable (String) -> String? = { Runtime.sha256OfFile($0) },
-        moveFile: @escaping @Sendable (String, String) throws -> Void = { try Runtime.renameExclusive($0, $1) }
+        moveFile: @escaping @Sendable (String, String) throws -> Void = { try Runtime.renameExclusive($0, $1) },
+        trashItem: @escaping @Sendable (String) throws -> Void = { path in
+            do {
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+            } catch {
+                throw TecopaFailure(.environment,
+                                    "Could not move \(path) to the Trash: \(error.localizedDescription)")
+            }
+        }
     ) {
+        self.trashItem = trashItem
         self.copyFile = copyFile
         self.sha256File = sha256File
         self.moveFile = moveFile
