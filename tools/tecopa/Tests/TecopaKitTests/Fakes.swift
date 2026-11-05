@@ -252,6 +252,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         lock.lock(); binaries[path] = data; lock.unlock()
     }
 
+    /// An app at `path` whose Info.plist names `id`: the new app by default.
+    /// `Launcher` reads the id before it opens or quits anything.
+    func app(_ path: String = "/Applications/Tecopa Plateworks.app",
+             id: String = "org.plateworks.tecopa") {
+        // swiftlint:disable:next force_try
+        let plist = try! PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+        binary(path + "/Contents/Info.plist", plist)
+    }
+
     /// After this, `Runtime.writeNew` refuses `path`: a file is already there.
     /// `Runtime.pathKind` reports it as a file.
     func existingFile(_ path: String) {

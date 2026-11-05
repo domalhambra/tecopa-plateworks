@@ -26,6 +26,20 @@ public enum Launcher {
         return installedPath
     }
 
+    /// Refuse an app at `app` that is not this tool's app. The old launcher
+    /// (`guide.badwater.tecopa`) can still sit at /Applications under the same name:
+    /// `open` would start it, and a quit by the new id would never reach it. The id
+    /// is read as Doctor's app row reads it, through `EngineLayout.infoValue`.
+    static func requireCurrentApp(_ runtime: Runtime, at app: String) throws {
+        let id = EngineLayout.bundle(URL(fileURLWithPath: app)).infoValue("CFBundleIdentifier", runtime)
+        guard id == bundleID else {
+            throw TecopaFailure(
+                .environment,
+                "The app at \(app) is the old launcher (\(id ?? "unidentified")). "
+                    + "Set TECOPA_APP to the new build, or install it.")
+        }
+    }
+
     /// The marker a forced stop leaves, so the app skips its quit confirm.
     static func quitMarker(_ runtime: Runtime) -> String {
         runtime.home + "/Library/Application Support/Tecopa Plateworks/.quit-forced"
@@ -98,6 +112,7 @@ public enum Launcher {
         guard runtime.fileExists(app) else {
             throw TecopaFailure(.environment, "Tecopa Plateworks is not installed at \(app).")
         }
+        try requireCurrentApp(runtime, at: app)
         // -g: the app stays in the background. It still opens the studio in the
         // browser when the engine is ready; that is the app's own behaviour.
         let opened = try runtime.exec("/usr/bin/open", ["-g", app])
@@ -144,6 +159,9 @@ public enum Launcher {
     /// read fails), the tool cannot know, so the stop continues and says so.
     public static func stop(_ runtime: Runtime, force: Bool = false) async throws -> JSONValue {
         try requireLauncherPort(runtime)
+        // The launcher pattern matches the old launcher too: refuse it before any quit.
+        let app = appPath(runtime)
+        if runtime.fileExists(app) { try requireCurrentApp(runtime, at: app) }
         guard try launcherRuns(runtime) else {
             if await probe(runtime) != .none {
                 throw TecopaFailure(
@@ -180,6 +198,8 @@ public enum Launcher {
             // decided, so it leaves a marker the app reads and deletes. A stale one
             // goes first: `writeNew` never overwrites.
             let marker = quitMarker(runtime)
+            let folder = (marker as NSString).deletingLastPathComponent
+            if runtime.pathKind(folder) != .folder { try runtime.makeFolder(folder) }
             runtime.removeFile(marker)
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime]

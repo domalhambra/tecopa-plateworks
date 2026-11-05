@@ -25,10 +25,17 @@ final class LauncherTests: XCTestCase {
         w.serve("/api/debug/sessions", 200, sessions)
     }
 
+    /// A machine with the new app installed at /Applications.
+    private static func machine() -> FakeWorld {
+        let w = FakeWorld()
+        w.app()
+        return w
+    }
+
     /// A machine where `open` starts the launcher and its engine, and `osascript`
     /// stops both.
     private func world(running: Bool) -> FakeWorld {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = running
         if running { Self.serveEngine(w) }
         w.onRun = { world, command in
@@ -77,7 +84,7 @@ final class LauncherTests: XCTestCase {
     func testStartFailsWhenTheEngineNeverAnswers() async {
         // the app waits 60 seconds for its engine, so the tool waits 70: 140 polls
         // of half a second. No Documents prompt any more.
-        let w = FakeWorld()          // open succeeds, and nothing ever serves
+        let w = Self.machine()          // open succeeds, and nothing ever serves
         do {
             _ = try await Launcher.start(w.runtime())
             XCTFail("expected a failure")
@@ -103,6 +110,7 @@ final class LauncherTests: XCTestCase {
         var runtime = w.runtime()
         let dist = "/Users/dom/Tecopa Plateworks/dist/Tecopa Plateworks.app"
         runtime.environment["TECOPA_APP"] = dist
+        w.app(dist)
         XCTAssertEqual(Launcher.appPath(runtime), dist)
         let out = try await Launcher.start(runtime)
         XCTAssertEqual(out["started"], .bool(true))
@@ -138,6 +146,63 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(plain.removed, [])
     }
 
+    func testTheOldLauncherIsNeverOpenedOrQuit() async {
+        // the old launcher still sits at /Applications: the tool refuses to drive it
+        let message = "The app at /Applications/Tecopa Plateworks.app is the old launcher (guide.badwater.tecopa). "
+            + "Set TECOPA_APP to the new build, or install it."
+        for running in [false, true] {
+            let w = world(running: running)
+            w.app(id: "guide.badwater.tecopa")
+            do {
+                if running { _ = try await Launcher.stop(w.runtime(), force: true) }
+                else { _ = try await Launcher.start(w.runtime()) }
+                XCTFail("expected a failure")
+            } catch let f as TecopaFailure {
+                XCTAssertEqual(f.kind, .environment)
+                XCTAssertEqual(f.message, message)
+            } catch { XCTFail("\(error)") }
+            XCTAssertEqual(w.commands, [], "running \(running)")
+            XCTAssertEqual(w.written, [])
+        }
+        // restart goes through stop, so it refuses before the quit
+        let w = world(running: true)
+        w.app(id: "guide.badwater.tecopa")
+        do {
+            _ = try await Launcher.restart(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.message, message)
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [])
+    }
+
+    func testAnAppWithNoReadableIdIsRefusedToo() async {
+        let w = FakeWorld()          // the app exists, and its Info.plist reads as nothing
+        do {
+            _ = try await Launcher.start(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .environment)
+            XCTAssertTrue(f.message.contains("(unidentified)"), f.message)
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [])
+    }
+
+    func testAForcedStopMakesTheMarkerFolderWhenItIsMissing() async throws {
+        let w = world(running: true)
+        let folder = "/home/Library/Application Support/Tecopa Plateworks"
+        _ = try await Launcher.stop(w.runtime(), force: true)
+        XCTAssertEqual(w.madeFolders, [folder])
+        XCTAssertEqual(w.written.map(\.path), [Self.marker])
+
+        // a folder that exists is left alone
+        let there = world(running: true)
+        there.folder(folder)
+        _ = try await Launcher.stop(there.runtime(), force: true)
+        XCTAssertEqual(there.madeFolders, [])
+        XCTAssertEqual(there.written.map(\.path), [Self.marker])
+    }
+
     func testStartOverAForeignAnswerRunsNoCommand() async {
         let w = world(running: false)
         w.serve("/readyz", 200, "<html>hello</html>")
@@ -168,7 +233,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testAnEngineThatIsSlowAfterOpenIsNotReadyYet() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.onRun = { world, command in
             if command.first == "/usr/bin/open" { world.timeOut("/readyz") }
         }
@@ -201,7 +266,7 @@ final class LauncherTests: XCTestCase {
 
     func testStopPollsUntilTheLauncherProcessIsGone() async throws {
         // the port closes first, and the app needs two more looks to exit
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -215,7 +280,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testStopSaysWhenTheLauncherProcessIsStillExiting() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -265,7 +330,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testAPortThatDoesNotAnswerInTimeIsStillThereForStop() async {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -288,7 +353,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testStopNamesTheAutomationPermissionWhenMacOSDeniesTheQuit() async {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.serve("/readyz", 200, FakeWorld.readyBody)
         w.result(for: "osascript", ProcessResult(
             exitCode: 1, stdout: "",
@@ -389,7 +454,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testTheUnreadNoteJoinsTheStillExitingNote() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         w.serve("/readyz", 200, FakeWorld.readyBody)
         w.onRun = { world, command in
