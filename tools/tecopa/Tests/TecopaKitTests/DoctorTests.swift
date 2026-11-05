@@ -27,14 +27,93 @@ final class DoctorTests: XCTestCase {
         (report["checks"]?.arrayValue ?? []).compactMap { $0["name"]?.stringValue }
     }
 
-    /// A healthy machine with a stopped engine: PlistBuddy reports the repo path,
-    /// python reports its version, and the repo's marker file can be read.
+    private static let app = "/Applications/Tecopa Plateworks.app"
+    private static let enginePython = app + "/Contents/Resources/python-engine/bin/python3.14"
+    private static let prepPython = app + "/Contents/Resources/python-prep/bin/python3.14"
+
+    /// The app's Info.plist, with the keys given.
+    private static func plist(_ keys: [String: String]) -> Data {
+        // swiftlint:disable:next force_try
+        try! PropertyListSerialization.data(fromPropertyList: keys, format: .xml, options: 0)
+    }
+
+    /// A healthy machine with a stopped engine: the app's Info.plist names the new
+    /// id and an engine version, every python reports its version, and the repo's
+    /// marker file can be read.
     private func healthy(readable: Bool = true) -> FakeWorld {
         let w = FakeWorld()
         if readable { w.file("/repo/app/main.py", "app = FastAPI()\n") }
-        w.result(for: "PlistBuddy", ProcessResult(exitCode: 0, stdout: "/repo\n", stderr: ""))
+        w.binary(Self.app + "/Contents/Info.plist", Self.plist(
+            ["CFBundleIdentifier": "org.plateworks.tecopa", "TecopaEngineVersion": "74cbc38"]))
         w.result(for: "python", ProcessResult(exitCode: 0, stdout: "Python 3.14.2\n", stderr: ""))
+        w.result(for: "python3.14", ProcessResult(exitCode: 0, stdout: "Python 3.14.2\n", stderr: ""))
         return w
+    }
+
+    func testAHealthyAppRowNamesTheIdAndTheEngineVersion() async {
+        let w = healthy()
+        let report = await Doctor.run(w.runtime(repo: "/repo"))
+        let row = check(report, "app")
+        XCTAssertEqual(row?["status"]?.stringValue, "ok")
+        XCTAssertEqual(row?["detail"]?.stringValue,
+                       "org.plateworks.tecopa, engine 74cbc38, both interpreters run.")
+        XCTAssertTrue(w.commands.contains([Self.enginePython, "--version"]))
+        XCTAssertTrue(w.commands.contains([Self.prepPython, "--version"]))
+    }
+
+    func testTheOldLauncherAtTheAppPathFails() async {
+        let w = healthy()
+        w.binary(Self.app + "/Contents/Info.plist", Self.plist(
+            ["CFBundleIdentifier": "guide.badwater.tecopa", "TecopaRepoPath": "/repo"]))
+        let report = await Doctor.run(w.runtime(repo: "/repo"))
+        let row = check(report, "app")
+        XCTAssertEqual(row?["status"]?.stringValue, "fail")
+        XCTAssertEqual(row?["detail"]?.stringValue,
+                       "The app at \(Self.app) is guide.badwater.tecopa, not org.plateworks.tecopa.")
+        XCTAssertEqual(report["fail_count"]?.intValue, 1)
+    }
+
+    func testAnAppWhoseInterpreterDoesNotRunFails() async {
+        let w = healthy()
+        w.result(for: "python3.14", ProcessResult(exitCode: 1, stdout: "", stderr: "dyld: Library not loaded"))
+        let row = check(await Doctor.run(w.runtime(repo: "/repo")), "app")
+        XCTAssertEqual(row?["status"]?.stringValue, "fail")
+        XCTAssertEqual(row?["detail"]?.stringValue, "The bundled interpreter \(Self.enginePython) does not run.")
+    }
+
+    func testAMissingAppIsAWarning() async {
+        let w = healthy()
+        var runtime = w.runtime(repo: "/repo")
+        runtime.fileExists = { $0 != Self.app }
+        let report = await Doctor.run(runtime)
+        let row = check(report, "app")
+        XCTAssertEqual(row?["status"]?.stringValue, "warn")
+        XCTAssertEqual(row?["detail"]?.stringValue, "Tecopa Plateworks is not installed at \(Self.app).")
+        XCTAssertEqual(report["fail_count"]?.intValue, 0)
+
+        // TECOPA_APP moves the check to a dist/ build
+        runtime.environment["TECOPA_APP"] = "/dist/Tecopa Plateworks.app"
+        let moved = check(await Doctor.run(runtime), "app")
+        XCTAssertEqual(moved?["status"]?.stringValue, "fail")       // no plist served there
+        XCTAssertTrue(moved?["detail"]?.stringValue?.contains("/dist/Tecopa Plateworks.app") ?? false)
+    }
+
+    func testAnAppWithNoEngineVersionFails() async {
+        let w = healthy()
+        w.binary(Self.app + "/Contents/Info.plist", Self.plist(["CFBundleIdentifier": "org.plateworks.tecopa"]))
+        let row = check(await Doctor.run(w.runtime(repo: "/repo")), "app")
+        XCTAssertEqual(row?["status"]?.stringValue, "fail")
+        XCTAssertEqual(row?["detail"]?.stringValue, "The app at \(Self.app) has no TecopaEngineVersion.")
+    }
+
+    func testTheVenvRowsReadTheRepoLayout() {
+        let w = healthy()
+        let rows = Doctor.venvRows(w.runtime(repo: "/my repo"), layout: .repo("/my repo"))
+        XCTAssertEqual(rows.compactMap { $0["name"]?.stringValue }, ["venv", "venv_prep"])
+        XCTAssertEqual(rows.first?["detail"]?.stringValue, "Python 3.14.2")
+        XCTAssertEqual(w.commands, [["/my repo/.venv/bin/python", "--version"]])
+        XCTAssertEqual(w.workingDirectories, ["/my repo"])
+        XCTAssertEqual(rows.last?["detail"]?.stringValue, "/my repo/.venv-prep/bin/python")
     }
 
     func testAStoppedEngineIsAWarningAndNotAFailure() async {
@@ -42,7 +121,7 @@ final class DoctorTests: XCTestCase {
         XCTAssertEqual(check(report, "engine")?["status"]?.stringValue, "warn")
         XCTAssertEqual(check(report, "repo")?["status"]?.stringValue, "ok")
         XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "ok")
-        XCTAssertEqual(check(report, "launcher")?["status"]?.stringValue, "ok")
+        XCTAssertEqual(check(report, "app")?["status"]?.stringValue, "ok")
         XCTAssertEqual(report["fail_count"]?.intValue, 0)
     }
 
@@ -56,21 +135,7 @@ final class DoctorTests: XCTestCase {
                        "The repo is at /repo, and app/main.py there cannot be read.")
         XCTAssertTrue(row?["hint"]?.stringValue?.contains("Files and Folders") == true)
         XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "ok")
-        XCTAssertEqual(check(report, "launcher")?["status"]?.stringValue, "ok")
-        XCTAssertEqual(report["fail_count"]?.intValue, 1)
-    }
-
-    func testALauncherBuiltForAnotherPathFailsAndNamesBothPaths() async {
-        // the real fault this plan found: the app in /Applications was built before
-        // the repo moved, so it can only show an alert
-        let w = healthy()
-        w.result(for: "PlistBuddy", ProcessResult(exitCode: 0, stdout: "/old/place\n", stderr: ""))
-        let report = await Doctor.run(w.runtime(repo: "/repo"))
-        let row = check(report, "launcher")
-        XCTAssertEqual(row?["status"]?.stringValue, "fail")
-        XCTAssertTrue(row?["detail"]?.stringValue?.contains("/old/place") ?? false)
-        XCTAssertTrue(row?["detail"]?.stringValue?.contains("/repo") ?? false)
-        XCTAssertTrue(row?["hint"]?.stringValue?.contains("build_app.sh --install") ?? false)
+        XCTAssertEqual(check(report, "app")?["status"]?.stringValue, "ok")
         XCTAssertEqual(report["fail_count"]?.intValue, 1)
     }
 
@@ -118,10 +183,10 @@ final class DoctorTests: XCTestCase {
         var runtime = w.runtime(repo: "/repo")
         runtime.runner = BrokenRunner()
         let report = await Doctor.run(runtime)
-        XCTAssertEqual(names(report), ["repo", "venv", "venv_prep", "launcher", "engine", "log"])
+        XCTAssertEqual(names(report), ["repo", "venv", "venv_prep", "app", "engine", "log"])
         XCTAssertEqual(check(report, "repo")?["status"]?.stringValue, "ok")
         XCTAssertEqual(check(report, "venv")?["status"]?.stringValue, "fail")
-        XCTAssertEqual(check(report, "launcher")?["status"]?.stringValue, "fail")
+        XCTAssertEqual(check(report, "app")?["status"]?.stringValue, "fail")
         XCTAssertEqual(check(report, "engine")?["status"]?.stringValue, "warn")
         XCTAssertEqual(report["fail_count"]?.intValue, 2)
     }
@@ -135,31 +200,9 @@ final class DoctorTests: XCTestCase {
         XCTAssertEqual(row?["status"]?.stringValue, "fail")
         XCTAssertEqual(row?["detail"]?.stringValue, "Port 8848 answers, but it is not Tecopa Plateworks.")
         XCTAssertNil(check(report, "debug_gate"))
-        XCTAssertEqual(names(report), ["repo", "venv", "venv_prep", "launcher", "engine", "log"])
+        XCTAssertEqual(names(report), ["repo", "venv", "venv_prep", "app", "engine", "log"])
         // the foreign program is asked for /readyz and for nothing else
         XCTAssertEqual(w.requests.map(\.path), ["/readyz"])
-    }
-
-    func testALauncherWhoseBakedPathHasNoEngineFails() async {
-        // the folder was moved or deleted after the app was built: the launcher can
-        // only show an alert, whatever --repo says
-        let w = healthy()
-        w.result(for: "PlistBuddy", ProcessResult(exitCode: 0, stdout: "/old/place\n", stderr: ""))
-        var runtime = w.runtime(repo: "/repo")
-        runtime.fileExists = { !$0.hasPrefix("/old/place/") }
-        let report = await Doctor.run(runtime)
-        let row = check(report, "launcher")
-        XCTAssertEqual(row?["status"]?.stringValue, "fail")
-        XCTAssertEqual(row?["detail"]?.stringValue,
-                       "The launcher was built for /old/place, and no engine is there.")
-        XCTAssertEqual(row?["hint"]?.stringValue, "Run scripts/macos/build_app.sh --install.")
-
-        // the same check with no repo known: the baked path is all there is to test
-        runtime = w.runtime(repo: nil)
-        runtime.fileExists = { $0 == "/Applications/Tecopa Plateworks.app" }
-        let alone = await Doctor.run(runtime)
-        XCTAssertEqual(check(alone, "launcher")?["detail"]?.stringValue,
-                       "The launcher was built for /old/place, and no engine is there.")
     }
 
     /// The venv row for one interpreter version and one .python-version file.

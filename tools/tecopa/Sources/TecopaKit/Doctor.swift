@@ -36,15 +36,17 @@ public enum Doctor {
         return token.split(separator: ".", omittingEmptySubsequences: false).starts(with: wantedParts)
     }
 
-    static func venvRows(_ runtime: Runtime, repo: String) -> [JSONValue] {
+    /// The two interpreters of one layout: the engine's, then the prep one.
+    static func venvRows(_ runtime: Runtime, layout: EngineLayout) -> [JSONValue] {
         var rows: [JSONValue] = []
-        let python = repo + "/.venv/bin/python"
+        let root = layout.codeRoot
+        let python = layout.enginePython
         if !runtime.fileExists(python) {
             rows.append(row("venv", "fail", "No interpreter at \(python).",
                             hint: "Read docs/changing-things.md, Set up a machine."))
-        } else if let version = try? runtime.exec(python, ["--version"], cwd: repo), version.exitCode == 0 {
+        } else if let version = try? runtime.exec(python, ["--version"], cwd: root), version.exitCode == 0 {
             let found = trimmed(version.stdout)             // "Python 3.14.2"
-            let wanted = trimmed(runtime.readFile(repo + "/.python-version") ?? "")
+            let wanted = trimmed(runtime.readFile(root + "/.python-version") ?? "")
             if versionMatches(found: found, wanted: wanted) == false {
                 rows.append(row("venv", "warn", "\(found), and .python-version asks for \(wanted)."))
             } else {
@@ -55,7 +57,7 @@ public enum Doctor {
                             hint: "Read docs/changing-things.md, Set up a machine."))
         }
 
-        let prep = repo + "/.venv-prep/bin/python"
+        let prep = layout.prepPython
         rows.append(runtime.fileExists(prep)
             ? row("venv_prep", "ok", prep)
             : row("venv_prep", "warn", "No interpreter at \(prep). Plate builds are not available.",
@@ -63,30 +65,31 @@ public enum Doctor {
         return rows
     }
 
-    static func launcherRow(_ runtime: Runtime, repo: String?) -> JSONValue {
-        guard runtime.fileExists(Launcher.appPath(runtime)) else {
-            return row("launcher", "warn", "The launcher is not installed at \(Launcher.appPath(runtime)).",
-                       hint: "Run scripts/macos/build_app.sh --install.")
+    /// The Tecopa Plateworks app at `Launcher.appPath`: its id, its engine version,
+    /// and both bundled interpreters. A missing app is a warning: the tool works
+    /// without it, and `engine start` says what is missing.
+    static func appRow(_ runtime: Runtime) -> JSONValue {
+        let path = Launcher.appPath(runtime)
+        guard runtime.fileExists(path) else {
+            return row("app", "warn", "Tecopa Plateworks is not installed at \(path).",
+                       hint: "Set TECOPA_APP to a built copy, or install the app.")
         }
-        let plist = Launcher.appPath(runtime) + "/Contents/Info.plist"
-        let read = try? runtime.exec("/usr/libexec/PlistBuddy", ["-c", "Print :TecopaRepoPath", plist])
-        let built = trimmed(read?.stdout ?? "")
-        guard read?.exitCode == 0, !built.isEmpty else {
-            return row("launcher", "fail", "The launcher holds no repository path.",
-                       hint: "Run scripts/macos/build_app.sh --install.")
+        let layout = EngineLayout.bundle(URL(fileURLWithPath: path))
+        let id = layout.infoValue("CFBundleIdentifier", runtime)
+        guard id == Launcher.bundleID else {
+            return row("app", "fail",
+                       "The app at \(path) is \(id ?? "unidentified"), not \(Launcher.bundleID).")
         }
-        // the launcher starts <built>/.venv/bin/python and shows an alert without it
-        if !runtime.fileExists(built + "/.venv/bin/python") {
-            return row("launcher", "fail",
-                       "The launcher was built for \(built), and no engine is there.",
-                       hint: "Run scripts/macos/build_app.sh --install.")
+        guard let version = layout.infoValue("TecopaEngineVersion", runtime) else {
+            return row("app", "fail", "The app at \(path) has no TecopaEngineVersion.")
         }
-        if let repo, built != repo {
-            return row("launcher", "fail",
-                       "The launcher was built for \(built). The repository is at \(repo).",
-                       hint: "Run scripts/macos/build_app.sh --install.")
+        for python in [layout.enginePython, layout.prepPython] {
+            let ran = try? runtime.exec(python, ["--version"])
+            guard ran?.exitCode == 0 else {
+                return row("app", "fail", "The bundled interpreter \(python) does not run.")
+            }
         }
-        return row("launcher", "ok", "Built for \(built).")
+        return row("app", "ok", "\(Launcher.bundleID), engine \(version), both interpreters run.")
     }
 
     static func engineRows(_ runtime: Runtime) async -> [JSONValue] {
@@ -130,7 +133,7 @@ public enum Doctor {
             rows.append(row("debug_gate", "ok", "The debug routes are on."))
         } catch let failure as TecopaFailure where EngineClient.isGateOff(failure) {
             rows.append(row("debug_gate", "warn", "The debug routes are off.",
-                            hint: "Start the engine with TECOPA_DEBUG=1. The launcher sets it."))
+                            hint: "Start the engine with TECOPA_DEBUG=1. The app sets it."))
         } catch {
             // the gate's state is not known, so it is not reported as off
             let said = (error as? TecopaFailure)?.message ?? "\(error)"
@@ -142,7 +145,7 @@ public enum Doctor {
     static func logRow(_ runtime: Runtime) -> JSONValue {
         let tail = LogReader.read(path: runtime.logPath, lines: 15, grep: nil, since: nil)
         guard tail["exists"]?.boolValue == true else {
-            return row("log", "warn", "No log at \(runtime.logPath). The launcher has not run on this Mac.")
+            return row("log", "warn", "No log at \(runtime.logPath). The app has not run on this Mac.")
         }
         return row("log", "ok", runtime.logPath, extra: ["lines": tail["lines"] ?? .array([])])
     }
@@ -169,8 +172,8 @@ public enum Doctor {
         } catch {
             rows.append(row("repo", "fail", "\(error)"))
         }
-        if let repo { rows += venvRows(runtime, repo: repo) }
-        rows.append(launcherRow(runtime, repo: repo))
+        if let repo { rows += venvRows(runtime, layout: .repo(repo)) }
+        rows.append(appRow(runtime))
         rows += await engineRows(runtime)
         rows.append(logRow(runtime))
 
@@ -201,7 +204,7 @@ public enum Doctor {
 
     static let entry = CatalogEntry(
         name: "doctor",
-        summary: "Check the repo, both venvs, the launcher, the port, the debug gate and the log. Works with no engine.",
+        summary: "Check the repo, both venvs, the app, the port, the debug gate and the log. Works with no engine.",
         readOnly: true,
         text: { render($0) }
     ) { runtime, _ in await run(runtime) }

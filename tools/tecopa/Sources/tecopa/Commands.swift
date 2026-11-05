@@ -657,7 +657,7 @@ struct StudioCommand: AsyncParsableCommand {
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",
-        abstract: "Check the repo, the venvs, the launcher, the port and the log. Works with no engine.")
+        abstract: "Check the repo, both venvs, the app, the port, the debug gate and the log. Works with no engine.")
     @OptionGroup var global: GlobalOptions
 
     func run() async throws {
