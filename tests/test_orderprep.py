@@ -331,6 +331,17 @@ def test_curated_reuse_needs_no_prep_venv(tmp_path, tools):
     assert state["plate"]["kind"] == "curated"
 
 
+def test_default_tools_honour_tecopa_regions(tmp_path, monkeypatch):
+    """Prepare and Preview must see the same curated plates as the engine: the Mac
+    app sets TECOPA_REGIONS to its Application Support cache (phase 1 spec 5.4)."""
+    monkeypatch.delenv("TECOPA_REGIONS", raising=False)
+    assert op.default_tools("/repo").curated_root == "/repo/regions"
+    monkeypatch.setenv("TECOPA_REGIONS", str(tmp_path / "plates"))
+    assert op.default_tools("/repo").curated_root == str(tmp_path / "plates")
+    monkeypatch.setenv("TECOPA_REGIONS", "elsewhere/regions")
+    assert op.default_tools("/repo").curated_root == "/repo/elsewhere/regions"
+
+
 def test_default_tools_honour_tecopa_prep_python(tmp_path, monkeypatch):
     monkeypatch.delenv("TECOPA_PREP_PYTHON", raising=False)
     assert op.default_tools("/repo").prep_python == "/repo/.venv-prep/bin/python"
