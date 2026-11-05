@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @testable import TecopaKit
 
@@ -102,6 +103,10 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var detached: [Detached] = []
     /// Every `signalGroup`, in order.
     private(set) var signals: [Signal] = []
+    /// Every `Runtime.copyFile`, in order: the source and the destination.
+    private(set) var copies: [[String]] = []
+    /// Every `Runtime.moveFile`, in order: the source and the destination.
+    private(set) var moves: [[String]] = []
     /// Every folder that `Runtime.makeFolder` made, in order.
     private(set) var madeFolders: [String] = []
     private(set) var commands: [[String]] = []
@@ -481,6 +486,45 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                     }
                 },
                 listFolder: { path in self.list(path) },
-                containingApp: { self.containingApp })
+                containingApp: { self.containingApp },
+                copyFile: { source, destination in try self.copy(source, destination) },
+                sha256File: { path in
+                    self.lock.withLock {
+                        (self.binaries[path] ?? self.files[path].map { Data($0.utf8) }).map(FakeWorld.sha256)
+                    }
+                },
+                moveFile: { source, destination in try self.move(source, destination) })
+    }
+
+    /// The sha256 of some bytes, in lower-case hex.
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The fake `Runtime.copyFile`: the bytes of a file a test put on the machine,
+    /// at a path that holds nothing. The copy is a file that `pathKind` sees.
+    private func copy(_ source: String, _ destination: String) throws {
+        try lock.withLock {
+            guard let data = binaries[source] ?? files[source].map({ Data($0.utf8) }) else {
+                throw TecopaFailure(.environment, "Could not copy \(source): no such file.")
+            }
+            guard !taken.contains(destination) else { throw fileAlreadyThere(destination) }
+            taken.insert(destination)
+            binaries[destination] = data
+            copies.append([source, destination])
+        }
+    }
+
+    /// The fake `Runtime.moveFile`: it never replaces a file.
+    private func move(_ source: String, _ destination: String) throws {
+        try lock.withLock {
+            guard !taken.contains(destination) else { throw fileAlreadyThere(destination) }
+            guard let data = binaries.removeValue(forKey: source) ?? files.removeValue(forKey: source).map({ Data($0.utf8) })
+            else { throw TecopaFailure(.environment, "Could not rename \(source): no such file.") }
+            taken.remove(source)
+            taken.insert(destination)
+            binaries[destination] = data
+            moves.append([source, destination])
+        }
     }
 }

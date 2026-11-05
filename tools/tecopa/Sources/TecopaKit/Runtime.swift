@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// What one path holds, when it holds anything.
@@ -55,6 +56,15 @@ public struct Runtime: Sendable {
     /// The `.app` bundle that holds the running binary, or nil when it is in none.
     /// A seam, so a test can put the tool in an app.
     public var containingApp: @Sendable () -> URL?
+    /// Copy a file to a path that holds nothing. A file at the destination is a
+    /// usage failure, as for `writeNew`. Only the DEM restore copies.
+    public var copyFile: @Sendable (String, String) throws -> Void
+    /// The sha256 of one file in lower-case hex, read in chunks so a DEM of
+    /// hundreds of megabytes never sits in memory. nil when it cannot be read.
+    public var sha256File: @Sendable (String) -> String?
+    /// Rename a file to a path that holds nothing. A file at the destination is a
+    /// usage failure: the rename never replaces.
+    public var moveFile: @Sendable (String, String) throws -> Void
 
     public init(
         repoFlag: String? = nil,
@@ -88,8 +98,14 @@ public struct Runtime: Sendable {
         },
         containingApp: @escaping @Sendable () -> URL? = {
             Runtime.appContaining(bundle: Bundle.main.bundleURL, executable: Bundle.main.executablePath)
-        }
+        },
+        copyFile: @escaping @Sendable (String, String) throws -> Void = { try Runtime.copyNewFile($0, $1) },
+        sha256File: @escaping @Sendable (String) -> String? = { Runtime.sha256OfFile($0) },
+        moveFile: @escaping @Sendable (String, String) throws -> Void = { try Runtime.renameExclusive($0, $1) }
     ) {
+        self.copyFile = copyFile
+        self.sha256File = sha256File
+        self.moveFile = moveFile
         self.repoFlag = repoFlag
         self.layout = layout
         self.containingApp = containingApp
@@ -175,6 +191,46 @@ func fileAlreadyThere(_ path: String) -> TecopaFailure {
 }
 
 extension Runtime {
+    /// The real `copyFile`. `FileManager` refuses a destination that exists.
+    public static func copyNewFile(_ source: String, _ destination: String) throws {
+        guard kindOfPath(destination) == nil else { throw fileAlreadyThere(destination) }
+        do {
+            try FileManager.default.copyItem(atPath: source, toPath: destination)
+        } catch {
+            throw TecopaFailure(.environment,
+                                "Could not copy \(source) to \(destination): \(error.localizedDescription)")
+        }
+    }
+
+    /// The real `sha256File`: 8 MiB at a time.
+    public static func sha256OfFile(_ path: String) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { try? handle.close() }
+        var hasher = SHA256()
+        while true {
+            let chunk: Data?
+            do {
+                chunk = try autoreleasepool { try handle.read(upToCount: 8 << 20) }
+            } catch {
+                return nil
+            }
+            guard let chunk, !chunk.isEmpty else { break }
+            hasher.update(data: chunk)
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The real `moveFile`: `renamex_np` with `RENAME_EXCL`, so the check and the
+    /// rename are one step and a file at the destination is never replaced.
+    public static func renameExclusive(_ source: String, _ destination: String) throws {
+        guard renamex_np(source, destination, UInt32(RENAME_EXCL)) == 0 else {
+            let code = errno
+            if code == EEXIST { throw fileAlreadyThere(destination) }
+            throw TecopaFailure(.environment,
+                                "Could not rename \(source) to \(destination): \(String(cString: strerror(code)))")
+        }
+    }
+
     /// The real `writeNew`: create the file at `path` and write all the bytes to it.
     public static func writeNewFile(_ path: String, _ data: Data) throws {
         try writeExclusive(path, data, write: { Darwin.write($0, $1, $2) })

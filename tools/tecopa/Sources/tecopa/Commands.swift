@@ -413,10 +413,11 @@ struct RunsCommand: AsyncParsableCommand {
 struct PlateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "plate",
-        abstract: "Plan, build, bake, pack, install or check a plate.",
+        abstract: "Plan, build, bake, pack, install, check or restore a plate.",
         discussion: "`plate build`, `plate labels` and `plate playa` start a tracked run and return at once. "
             + "Read it with `tecopa runs show <id>`.",
-        subcommands: [Plan.self, Build.self, Labels.self, Playa.self, Pack.self, Install.self, Check.self])
+        subcommands: [Plan.self, Build.self, Labels.self, Playa.self, Pack.self, Install.self, Check.self,
+                      Restore.self])
 
     struct Plan: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -532,6 +533,15 @@ struct PlateCommand: AsyncParsableCommand {
         }
 
         func run() async throws { try await execute("plate_install", global, arguments) }
+    }
+
+    struct Restore: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "restore",
+            abstract: "Restore a plate's dem.tif from the Dropbox archive: the sha its index.json names as current.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        func run() async throws { try await execute("plate_restore", global, plate.arguments) }
     }
 
     struct Check: AsyncParsableCommand {
