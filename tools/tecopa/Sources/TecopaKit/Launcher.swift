@@ -16,7 +16,14 @@ public enum Launcher {
     /// The tool opens the app by this path, never by bundle id: LaunchServices may
     /// hold several copies under one id, Xcode's own build among them.
     public static func appPath(_ runtime: Runtime) -> String {
-        runtime.environment["TECOPA_APP"] ?? installedPath
+        if let named = runtime.environment["TECOPA_APP"] { return named }
+        // Inside an app (the app itself, or the tecopa that ships in it), the app is
+        // that one: doctor checks the copy it runs from, not /Applications.
+        if case .bundle(let app)? = runtime.layout { return app.standardizedFileURL.path }
+        if runtime.layout == nil, runtime.repoFlag == nil, let app = runtime.containingApp() {
+            return app.standardizedFileURL.path
+        }
+        return installedPath
     }
 
     /// The marker a forced stop leaves, so the app skips its quit confirm.

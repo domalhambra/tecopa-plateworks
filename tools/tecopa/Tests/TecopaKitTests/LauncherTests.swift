@@ -110,6 +110,14 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(w.commands, [["/usr/bin/open", "-g", dist]])
     }
 
+    func testInsideAnAppTheAppPathIsThatApp() {
+        var runtime = world(running: false).runtime()
+        runtime.layout = .bundle(URL(fileURLWithPath: "/Users/dom/x/dist/Tecopa Plateworks.app"))
+        XCTAssertEqual(Launcher.appPath(runtime), "/Users/dom/x/dist/Tecopa Plateworks.app")
+        runtime.environment["TECOPA_APP"] = "/Elsewhere/Tecopa Plateworks.app"
+        XCTAssertEqual(Launcher.appPath(runtime), "/Elsewhere/Tecopa Plateworks.app")
+    }
+
     func testAForcedStopLeavesTheQuitMarker() async throws {
         let w = world(running: true)
         Self.serveEngine(w, jobs: Self.oneRunningJob)
