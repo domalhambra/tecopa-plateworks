@@ -29,7 +29,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 | The Tecopa pages on www.plateworks.org | `docs/superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md`, then Edit landing or privacy copy |
 | A sentence a customer reads | `docs/superpowers/specs/2026-08-16-target-customer-profile-design.md`, then Edit landing or privacy copy, then `docs/marketing.md` |
 | The demo journeys | `docs/superpowers/specs/2026-08-15-real-network-demo-tracks-design.md` (amended 2026-11-01) |
-| The macOS launcher | `docs/superpowers/specs/2026-07-18-macos-launcher-app-design.md`, then Rebuild the macOS launcher |
+| The Mac app, `macos/` | `docs/superpowers/specs/2026-11-05-native-mac-app-phase-1-bundled-engine-design.md`, then Build the Mac app |
 | The `tecopa` tool, `app/debug.py` | `docs/superpowers/specs/2026-10-09-tecopa-cli-and-mcp-design.md`, then Build the tecopa tool |
 | Blender | Render a hero plate |
 | A past decision | `docs/decisions.md` |
@@ -46,7 +46,7 @@ Unnamed sections below are in `docs/changing-things.md`.
 6. **The zoom cap at the final dpi, at most 2× upsampled.** A 422 past 2× (`MAX_UPSAMPLE`, `app/spec.py`) is correct. Default framing still aims for 1×.
 7. **The forever-contract is retired.** `engine_version` records cross-build drift. No new revs, and never reintroduce omit-at-default. `serialize.spec_from_json` stays read-tolerant. A plate mismatch refuses with 422 unless `allow_plate_mismatch=true`. A relief pass is a no-op at its pre-feature default.
 8. **`provenance.spec_from_manifest` is the one untrusted-manifest door.** Every verb that turns an uploaded file into a spec goes through it. `/api/reprint/inspect` is the exception: it builds no spec.
-9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` and the bundle id are name-neutral.
+9. **Names that must not move.** The zTXt keyword `trailprint` is frozen forever: changing it orphans every printed poster. `ENGINE` is stamped, never read back; readers also accept `LEGACY_ENGINES`. `ENGINE_URL` is the repo's real name, since GitHub frees old names. `TECOPA_*` are name-neutral; the bundle id `org.plateworks.tecopa` stays.
 10. **Never commit a font.** The repo is public and MB Type is licensed. `.gitignore` blocks font files (commit 39ad08c).
 11. **Marketing honesty.** Every marketing image renders real country: the terrain guard in `marketing/build_deploy.py` refuses a region with no real terrain record in `assets/index.json`. Never weaken it. Every claim has a test in `tests/test_marketing_page.py`, run with `-m live` against the published pages. Plates are free.
 12. **Never re-stamp `sources.json`** to silence the drift gate. The mismatch is the only record that a plate was swapped.
