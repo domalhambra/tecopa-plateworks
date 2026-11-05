@@ -1,0 +1,204 @@
+import AppKit
+import SwiftUI
+import TecopaKit
+
+struct PlateRow: Identifiable {
+    var id: String
+    var name: String
+    var ready: Bool
+    var demPresent: Bool
+    var problem: String?
+}
+
+/// The Plates pane: each plate's readiness and its cached DEM, the Dropbox restore and
+/// Free Space (phase 1 spec 6, phase 2 spec decision 12), verify, and a new plate.
+struct PlatesView: View {
+    @Environment(AppModel.self) private var model
+    @State private var plates: [PlateRow] = []
+    @State private var selection: PlateRow.ID?
+    @State private var output = ""
+    @State private var failed = false
+    @State private var busy = false
+    @State private var run: RunTracker?
+    @State private var showingNew = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Table(plates, selection: $selection) {
+                TableColumn("Plate") { p in
+                    VStack(alignment: .leading) {
+                        Text(p.name)
+                        Text(p.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                }
+                TableColumn("Terrain") { p in
+                    if p.demPresent {
+                        Label(p.ready ? "Ready" : "Not ready", systemImage: p.ready ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(p.ready ? .green : .orange)
+                    } else {
+                        Label("Not cached", systemImage: "icloud.and.arrow.down").foregroundStyle(.secondary)
+                    }
+                }
+                .width(min: 110, ideal: 130)
+                TableColumn("Note") { p in Text(p.problem ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            }
+            .frame(minHeight: 260)
+            Divider()
+            VStack(alignment: .leading, spacing: 8) {
+                if let run { RunPanel(run: run) }
+                if !output.isEmpty {
+                    ScrollView {
+                        Text(output).font(.callout.monospaced()).textSelection(.enabled)
+                            .foregroundStyle(failed ? .red : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 220)
+                }
+            }
+            .padding(12)
+        }
+        .toolbar {
+            ToolbarItemGroup {
+                Button { Task { await act("plate_restore") } } label: { Label("Restore from Dropbox", systemImage: "icloud.and.arrow.down") }
+                    .disabled(selection == nil || busy)
+                    .help("Copy this plate's DEM back from the Dropbox archive, checked by its sha256")
+                Button { Task { await act("plate_evict") } } label: { Label("Free Space", systemImage: "externaldrive.badge.minus") }
+                    .disabled(selection == nil || busy)
+                    .help("Delete this plate's cached DEM. It refuses while an order run is going.")
+                Button { Task { await verify() } } label: { Label("Verify", systemImage: "checkmark.shield") }
+                    .disabled(busy)
+                Button { showingNew = true } label: { Label("New Plate", systemImage: "plus") }
+                Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+            }
+        }
+        .sheet(isPresented: $showingNew) {
+            NewPlateSheet { tracker in run = tracker; await tracker.follow(model) { await load() } }
+        }
+        .task { await load() }
+    }
+
+    private func load() async {
+        switch await model.call("regions") {
+        case .success(let d):
+            let names = Dictionary(uniqueKeysWithValues: (d["regions"]?.arrayValue ?? []).compactMap { r -> (String, String)? in
+                guard let id = r["id"]?.stringValue else { return nil }
+                return (id, r["name"]?.stringValue ?? id)
+            })
+            plates = (d["readiness"]?.arrayValue ?? []).compactMap { r in
+                guard let id = r["id"]?.stringValue else { return nil }
+                var problem: String? = r["error"]?.stringValue
+                if problem == nil, r["crs_match"]?.boolValue == false { problem = "The DEM's projection is not the plate's." }
+                if problem == nil, let drift = r["bounds_drift_m"], r["bounds_match"]?.boolValue == false {
+                    problem = "The DEM's bounds drift \(drift.text(pretty: false)) m from the plate."
+                }
+                return PlateRow(id: id, name: names[id] ?? id, ready: r["ready"]?.boolValue ?? false,
+                                demPresent: r["dem_present"]?.boolValue ?? false, problem: problem)
+            }.sorted { $0.name < $1.name }
+        case .failure(let f):
+            failed = true; output = f.message
+        }
+    }
+
+    private func verify() async {
+        busy = true; defer { busy = false }
+        var args: [String: JSONValue] = [:]
+        if let selection { args["regions"] = .array([.string(selection)]) }
+        show(await model.call("regions_verify", args))
+    }
+
+    private func act(_ entry: String) async {
+        guard let selection else { return }
+        busy = true; defer { busy = false }
+        show(await model.call(entry, ["id": .string(selection)]))
+        await load()
+    }
+
+    private func show(_ r: Result<JSONValue, TecopaFailure>) {
+        switch r {
+        case .success(let d):
+            failed = false
+            output = d["output"]?.stringValue ?? d.text(pretty: true)
+        case .failure(let f):
+            failed = true
+            output = [f.message, f.hint].compactMap { $0 }.joined(separator: "\n")
+        }
+    }
+}
+
+/// Plan a plate from tracks, then build it (plate_plan, then plate_build).
+struct NewPlateSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let started: (RunTracker) async -> Void
+    @State private var tracks: [URL] = []
+    @State private var plan: JSONValue?
+    @State private var name = ""
+    @State private var message = ""
+    @State private var busy = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("New plate").font(.headline)
+            HStack {
+                Button("Choose Tracks…") { pick() }
+                Text(tracks.isEmpty ? "No tracks" : tracks.map(\.lastPathComponent).joined(separator: ", "))
+                    .lineLimit(2).foregroundStyle(.secondary)
+            }
+            if let plan {
+                Grid(alignment: .leading) {
+                    GridRow { Text("Id"); Text(plan["id"]?.stringValue ?? "").font(.body.monospaced()) }
+                    GridRow { Text("EPSG"); Text(plan["epsg"]?.text(pretty: false) ?? "") }
+                    GridRow { Text("Grid"); Text("\(plan["resolution_m"]?.text(pretty: false) ?? "?") m") }
+                    GridRow { Text("DEM"); Text("about \(plan["est_dem_mb"]?.text(pretty: false) ?? "?") MB") }
+                }
+                TextField("Name", text: $name).textFieldStyle(.roundedBorder)
+            }
+            if !message.isEmpty { Text(message).foregroundStyle(.red).textSelection(.enabled) }
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Build") { Task { await build() } }
+                    .keyboardShortcut(.defaultAction).disabled(plan == nil || name.isEmpty || busy)
+            }
+        }
+        .padding(20).frame(width: 520)
+    }
+
+    private func pick() {
+        let p = NSOpenPanel()
+        p.allowsMultipleSelection = true
+        p.allowedContentTypes = []
+        p.message = "Choose GPX, KML or KMZ tracks"
+        guard p.runModal() == .OK else { return }
+        tracks = p.urls
+        Task { await planIt() }
+    }
+
+    private func planIt() async {
+        busy = true; defer { busy = false }
+        switch await model.call("plate_plan", ["tracks": .array(tracks.map { .string($0.path) })]) {
+        case .success(let d):
+            plan = d; message = ""
+            name = d["name_prefill"]?.stringValue ?? ""
+            if d["us_covered"]?.boolValue == false { message = "These tracks are outside 3DEP's coverage: a plate cannot be built here." }
+        case .failure(let f): message = f.message
+        }
+    }
+
+    private func build() async {
+        guard let plan else { return }
+        busy = true; defer { busy = false }
+        let bbox = (plan["bbox"]?.arrayValue ?? []).map { JSONValue.string($0.text(pretty: false)) }
+        var args: [String: JSONValue] = ["id": plan["id"] ?? .null, "name": .string(name),
+                                         "bbox": .array(bbox), "epsg": plan["epsg"] ?? .null]
+        if let r = plan["resolution_m"] { args["resolution"] = .string(r.text(pretty: false)) }
+        switch await model.call("plate_build", args) {
+        case .success(let d):
+            if let id = d["run"]?.stringValue {
+                dismiss()
+                await started(RunTracker(id: id, title: "Build plate"))
+            }
+        case .failure(let f): message = f.message
+        }
+    }
+}
