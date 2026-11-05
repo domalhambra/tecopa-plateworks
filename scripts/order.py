@@ -8,6 +8,7 @@ docs/changing-things.md > Run an order.
 
     .venv/bin/python scripts/order.py new TP-26-001
     .venv/bin/python scripts/order.py preview "~/Tecopa Orders/TP-26-001-smith"
+    .venv/bin/python scripts/order.py choose "~/Tecopa Orders/TP-26-001-smith" 17x22
     .venv/bin/python scripts/order.py prepare "~/Tecopa Orders/TP-26-001-smith"
     .venv/bin/python scripts/order.py finish "~/Tecopa Orders/TP-26-001-smith"
 """
@@ -18,7 +19,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from app import ordernew, orderfinish  # noqa: E402
+from app import orderchoose, ordernew, orderfinish  # noqa: E402
 from app.order import OrderError  # noqa: E402
 from app.orderplate import PlateError  # noqa: E402
 from app.orderprep import default_tools, prepare  # noqa: E402
@@ -41,6 +42,9 @@ def main(argv=None, tools=None) -> int:
     n = sub.add_parser("new", help="copy the intake's job folder from Dropbox into a new "
                                    "order folder, and write its order.toml")
     n.add_argument("number", help="the order number, like TP-26-001")
+    c = sub.add_parser("choose", help="write the preview's order.toml lines for one size")
+    c.add_argument("folder", help="the order folder, after its preview")
+    c.add_argument("size", help="the size key: 11x17, 17x22, two or three")
     args = ap.parse_args(argv)
     if args.cmd == "new":
         try:
@@ -51,6 +55,13 @@ def main(argv=None, tools=None) -> int:
         print(report, end="")
         return 0
     folder = os.path.abspath(os.path.expanduser(args.folder))
+    if args.cmd == "choose":
+        try:
+            print(orderchoose.choose(folder, args.size), end="")
+        except (OrderError, OSError, ValueError) as ex:
+            print(f"choose stopped: {ex}", file=sys.stderr)
+            return 1
+        return 0
     if args.cmd == "finish":
         try:
             result = orderfinish.finish(folder, log=lambda m: print(m, file=sys.stderr))
