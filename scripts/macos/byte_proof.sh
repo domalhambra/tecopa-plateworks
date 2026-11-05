@@ -223,6 +223,10 @@ fi
 # ----------------------------------------------------------------- proof 2
 ANCHOR="$(ls -t "$REPO"/dist/proof/byte-proof-1-*.txt 2>/dev/null | head -1)"
 [ -n "$ANCHOR" ] && grep -q '^PASS: proof 1' "$ANCHOR" || fail "no passing proof 1 report to compare against"
+# The engine version is in every final's manifest: only a proof 1 of this same build
+# is an anchor for it.
+head -1 "$ANCHOR" | grep -qF "($VER)" \
+  || fail "the last proof 1 ($ANCHOR) is of another build; run proof 1 on $VER first"
 cp "$ANCHOR" "$WORK/anchor.txt"
 "$REPO/scripts/macos/seed_dem_cache.sh" >> "$REPORT" || fail "seed_dem_cache.sh did not report every plate"
 # dist/ is inside the repo: prove a copy of the app that lives outside it.
