@@ -1,7 +1,7 @@
 # Native Mac app, phase 1: the bundled engine: design
 
 **Date:** 2026-11-05
-**Status:** Draft for Dom's review. Not built.
+**Status:** Approved by Dom, 2026-11-05. Not built. Three actions keep their own gate and each waits for Dom's typed yes: the Developer ID signing spike (section 7), the install over the launcher (section 9), and the zlib fallback (section 8.1).
 **Extends:** `docs/superpowers/handoffs/2026-11-05-native-mac-app.md` (the plan, phases 0 to 5).
 **Will supersede, when phase 1 ships:** `2026-07-18-macos-launcher-app-design.md` (the launcher).
 **Will amend, when phase 1 ships:** `2026-10-09-tecopa-cli-and-mcp-design.md`, decision 7, the
@@ -467,3 +467,23 @@ except where noted:
 - The launcher is in `/Applications`, `~/.local/bin/tecopa` is installed, and its MCP server
   is connected.
 - Gaps: the type-role fonts (section 11). `gdalinfo` is not installed; nothing here needs it.
+
+## 13. Amendments made while planning (2026-11-05)
+
+An adversarial review of the implementation plan (`superpowers/plans/2026-11-05-native-mac-app-phase-1-bundled-engine.md`)
+found three places where this design could not work as written. Dom delegated these
+decisions on 2026-11-05.
+
+- **8.1, the environment record.** "A difference fails the proof" cannot hold for every
+  field: `sys.version` and the data-folder paths differ between python.org and
+  python-build-standalone by construction, and a wheel's `RECORD` holds its installer and
+  its scripts. The record is split. The versions, the font's sha256, a tree hash of the
+  PROJ and GDAL data and each wheel's `RECORD` minus installer files must match. The
+  `sys.version`, the paths and the zlib version are recorded only. `cmp` stays the pass.
+- **5.5, quit.** No quit skips the confirm because it came as an Apple Event: the Dock's
+  Quit, logout and `osascript` all arrive that way. The one exception is
+  `tecopa engine stop --force`. It writes `<AS>/.quit-forced` first, and a marker younger
+  than 15 s skips the confirm.
+- **9, `Launcher`.** The tool opens the app by its path (`open -g <path>`, with
+  `TECOPA_APP` as an override), not by bundle id. LaunchServices may hold several copies
+  under one id, Xcode's own build among them. It still quits by bundle id.
