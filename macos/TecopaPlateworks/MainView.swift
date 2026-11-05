@@ -22,20 +22,42 @@ struct MainView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .failed(let title, let message):
-                ContentUnavailableView {
-                    Label(title, systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(message).textSelection(.enabled)
-                } actions: {
-                    Button("Try Again") { Task { await model.launch() } }
-                    Button("Show the Log") { model.pane = .engine; model.engine = .ready(adopted: false) }
+                if model.pane == .engine {
+                    // The log and the doctor, under the failure, which stays shown.
+                    VStack(spacing: 0) {
+                        HStack {
+                            Label(title, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
+                            Spacer()
+                            Button("Try Again") { Task { await model.launch() } }
+                        }
+                        .padding(10)
+                        Divider()
+                        EngineView()
+                    }
+                } else {
+                    ContentUnavailableView {
+                        Label(title, systemImage: "exclamationmark.triangle")
+                    } description: {
+                        Text(message).textSelection(.enabled)
+                    } actions: {
+                        Button("Try Again") { Task { await model.launch() } }
+                        Button("Show the Log") { model.pane = .engine }
+                    }
                 }
             case .ready:
-                switch model.pane {
-                case .studio: StudioView()
-                case .orders: OrdersView()
-                case .plates: PlatesView()
-                case .engine: EngineView()
+                // The studio stays in the window under the other panes, so its page,
+                // its session and an open order survive a switch (phase 3a).
+                ZStack {
+                    StudioView()
+                        .opacity(model.pane == .studio ? 1 : 0)
+                        .allowsHitTesting(model.pane == .studio)
+                        .accessibilityHidden(model.pane != .studio)
+                    switch model.pane {
+                    case .studio: EmptyView()
+                    case .orders: OrdersView().background(.background)
+                    case .plates: PlatesView().background(.background)
+                    case .engine: EngineView().background(.background)
+                    }
                 }
             }
         }

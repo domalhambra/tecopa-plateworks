@@ -19,7 +19,7 @@ struct PlatesView: View {
     @State private var output = ""
     @State private var failed = false
     @State private var busy = false
-    @State private var run: RunTracker?
+    @State private var build: (title: String, state: String, progress: String)?
     @State private var showingNew = false
 
     var body: some View {
@@ -45,7 +45,18 @@ struct PlatesView: View {
             .frame(minHeight: 260)
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                if let run { RunPanel(run: run) }
+                if let build {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            if build.state == "running" || build.state == "queued" { ProgressView().controlSize(.small) }
+                            Text("\(build.title): \(build.state)").font(.headline)
+                                .foregroundStyle(build.state == "error" ? .red : build.state == "done" ? .green : .primary)
+                        }
+                        Text(build.progress).font(.caption.monospaced()).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(10).background(RoundedRectangle(cornerRadius: 8).fill(.quaternary))
+                }
                 if !output.isEmpty {
                     ScrollView {
                         Text(output).font(.callout.monospaced()).textSelection(.enabled)
@@ -72,7 +83,7 @@ struct PlatesView: View {
             }
         }
         .sheet(isPresented: $showingNew) {
-            NewPlateSheet { tracker in run = tracker; await tracker.follow(model) { await load() } }
+            NewPlateSheet { jid, title in await follow(jid, title) }
         }
         .task { await load() }
     }
@@ -96,6 +107,20 @@ struct PlatesView: View {
             }.sorted { $0.name < $1.name }
         case .failure(let f):
             failed = true; output = f.message
+        }
+    }
+
+    /// Follow the engine's build job (GET /api/regions/build/<job>) until it ends.
+    private func follow(_ jid: String, _ title: String) async {
+        build = (title, "queued", "")
+        while true {
+            if let j = try? await model.runtime.client.get("/api/regions/build/\(jid)") {
+                let state = j["state"]?.stringValue ?? "?"
+                let progress = j["error"]?.stringValue ?? j["progress"]?.stringValue ?? ""
+                build = (title, state, progress)
+                if state == "done" || state == "error" { await load(); return }
+            }
+            try? await Task.sleep(for: .seconds(2))
         }
     }
 
@@ -129,7 +154,7 @@ struct PlatesView: View {
 struct NewPlateSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let started: (RunTracker) async -> Void
+    let started: (String, String) async -> Void
     @State private var tracks: [URL] = []
     @State private var plan: JSONValue?
     @State private var name = ""
@@ -158,7 +183,7 @@ struct NewPlateSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Build") { Task { await build() } }
-                    .keyboardShortcut(.defaultAction).disabled(plan == nil || name.isEmpty || busy)
+                    .keyboardShortcut(.defaultAction).disabled(plan == nil || name.isEmpty || busy || !message.isEmpty)
             }
         }
         .padding(20).frame(width: 520)
@@ -180,25 +205,39 @@ struct NewPlateSheet: View {
         case .success(let d):
             plan = d; message = ""
             name = d["name_prefill"]?.stringValue ?? ""
-            if d["us_covered"]?.boolValue == false { message = "These tracks are outside 3DEP's coverage: a plate cannot be built here." }
+            // The engine's own refusals, before Build: the studio's create flow says the same.
+            if d["us_covered"]?.boolValue == false { message = "USGS 3DEP terrain covers the US only: a plate cannot be built here." }
+            else if d["over_budget"]?.boolValue == true { message = "This area is too large to build from the app (corridor-scale grid)." }
+            else if d["prep_ready"]?.boolValue == false { message = "The region-prep interpreter is missing from this app." }
         case .failure(let f): message = f.message
         }
     }
 
+    /// Build through the engine (POST /api/regions/build), so its checks, the labels
+    /// and the plate list refresh all apply.
     private func build() async {
         guard let plan else { return }
         busy = true; defer { busy = false }
-        let bbox = (plan["bbox"]?.arrayValue ?? []).map { JSONValue.string($0.text(pretty: false)) }
-        var args: [String: JSONValue] = ["id": plan["id"] ?? .null, "name": .string(name),
-                                         "bbox": .array(bbox), "epsg": plan["epsg"] ?? .null]
-        if let r = plan["resolution_m"] { args["resolution"] = .string(r.text(pretty: false)) }
-        switch await model.call("plate_build", args) {
-        case .success(let d):
-            if let id = d["run"]?.stringValue {
+        let bbox = (plan["bbox"]?.arrayValue ?? []).compactMap { v -> Double? in
+            if case .double(let d) = v { return d }; if case .int(let i) = v { return Double(i) }; return nil }
+        let body: [String: Any] = ["id": plan["id"]?.stringValue ?? "", "name": name, "bbox": bbox,
+                                   "epsg": plan["epsg"]?.intValue ?? 0]
+        var req = URLRequest(url: URL(string: "http://127.0.0.1:8848/api/regions/build")!)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        do {
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            let j = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+            if (resp as? HTTPURLResponse)?.statusCode == 200, let jid = j?["job"] as? String {
                 dismiss()
-                await started(RunTracker(id: id, title: "Build plate"))
+                await started(jid, "Build \(name)")
+            } else {
+                message = (j?["detail"] as? String) ?? "The engine refused the build."
             }
-        case .failure(let f): message = f.message
+        } catch {
+            message = "The engine could not be reached: \(error.localizedDescription)"
         }
     }
+
 }

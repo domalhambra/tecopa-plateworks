@@ -53,13 +53,13 @@ final class AppModel {
 
     var engine: EngineState = .starting("Starting the engine…")
     var pane: Pane = .studio
-    /// The studio's address; Orders sets `?order=` to land on an order (decision 10).
-    var studioURL = URL(string: "http://127.0.0.1:8848/")!
-    var studioReloads = 0
-    /// A command for the studio page, run once by StudioWebView (phase 3: the native
-    /// File menu drives the studio's own file inputs, so the engine sees the same upload).
-    var studioCommand: (id: Int, script: String)?
+    /// The one studio web view, kept for the window's life: switching panes never
+    /// reloads it, so a session, an open order and a render being followed survive.
+    @ObservationIgnored lazy var studio = StudioController()
     private(set) var ownedPid: Int32?
+    /// Order runs (Preview, Prepare, Finish) by order folder, so leaving the Orders pane
+    /// neither loses a run nor lets a second one start on the same folder.
+    var orderRuns: [String: RunTracker] = [:]
 
     var dataRoot: String { layout.dataRoot(home: runtime.home) }
     var settingsPath: String { dataRoot + "/settings.json" }
@@ -122,26 +122,36 @@ final class AppModel {
                 onSpawn: { pid in Task { @MainActor in self.ownedPid = pid } },
                 onExit: { status in Task { @MainActor in self.engineExited(status) } })
             engine = .ready(adopted: false)
-        } catch let f as TecopaFailure {
-            engine = .failed(title: "Tecopa Plateworks couldn’t start its engine",
-                             message: AlertText.couldNotStart(f.message, log: runtime.logPath))
+            studio.reload()
         } catch {
+            // The start stopped its own child: a late exit of it is not a second failure,
+            // and must not replace the reason shown here.
+            ownedPid = nil
+            let message = (error as? TecopaFailure)?.message ?? "\(error)"
             engine = .failed(title: "Tecopa Plateworks couldn’t start its engine",
-                             message: AlertText.couldNotStart("\(error)", log: runtime.logPath))
+                             message: AlertText.couldNotStart(message, log: runtime.logPath))
         }
     }
 
+    enum RestartOutcome: Equatable { case restarted, cancelled, notOurs }
+
     /// Stop the engine this app owns and start it again: a setting the engine reads at
-    /// start changed (phase 2 spec, decision 14).
-    func restartEngine() async {
+    /// start changed (phase 2 spec, decision 14). It reads the jobs first and asks, as
+    /// quit does. An engine this app adopted is not its to stop.
+    func restartEngine() async -> RestartOutcome {
+        if case .ready(adopted: true) = engine, ownedPid == nil { return .notOurs }
         if let pid = ownedPid {
+            if case .confirm(let jobs) = afterJobs(await EngineHost.activeJobs(runtime)),
+               !confirm(title: "Restart the engine?", text: AlertText.restartConfirm(jobs: jobs), button: "Restart") {
+                return .cancelled
+            }
             quitting = true
             try? await EngineHost.stop(pid: pid, runtime: runtime, spawner: spawner)
             ownedPid = nil
             quitting = false
         }
         await launch()
-        studioReloads += 1
+        return .restarted
     }
 
     private func adoptedVersion() async -> String? {
@@ -159,20 +169,56 @@ final class AppModel {
 
     // MARK: the studio
 
-    func openStudio(order folderName: String? = nil) {
-        var c = URLComponents(string: "http://127.0.0.1:8848/")!
-        if let folderName { c.queryItems = [URLQueryItem(name: "order", value: folderName)] }
-        studioURL = c.url!
-        studioReloads += 1
+    /// Open an order in the studio: one load of `?order=<folder>` (decision 10). The
+    /// studio takes the link off its address after it opens the order.
+    func openStudio(order folderName: String) {
         pane = .studio
+        studio.open(order: folderName)
     }
 
     /// File > Open Tracks… and Open Poster…: the studio's own hidden inputs, so the
-    /// upload is the web studio's, byte for byte.
+    /// upload is the web studio's, byte for byte. It runs once, when the page is ready.
     func studioOpen(_ input: String) {
         pane = .studio
-        let n = (studioCommand?.id ?? 0) + 1
-        studioCommand = (n, "document.getElementById('\(input)').click()")
+        studio.run("document.getElementById('\(input)').click()")
+    }
+
+    func reloadStudio() {
+        pane = .studio
+        studio.reload()
+    }
+
+    // MARK: order runs
+
+    /// Start one order step as a tracked run, unless one already runs on this folder.
+    /// Returns the engine's words when it does not start.
+    func startOrderRun(_ entry: String, folder: String, then ended: @escaping () async -> Void) async -> String? {
+        if let r = orderRuns[folder], r.isRunning { return "\(r.title) is still running on this order." }
+        switch await call(entry, ["folder": .string(folder)]) {
+        case .success(let d):
+            guard let id = d["run"]?.stringValue else { return "The run did not start." }
+            let tracker = RunTracker(id: id, title: entry.replacingOccurrences(of: "order_", with: "").capitalized)
+            orderRuns[folder] = tracker
+            Task { await tracker.follow(self) { await ended() } }
+            return nil
+        case .failure(let f):
+            return [f.message, f.hint].compactMap { $0 }.joined(separator: "\n")
+        }
+    }
+
+    /// A run started before this view (or by `tecopa`) on this folder: follow it too.
+    func adoptOrderRun(folder: String, then ended: @escaping () async -> Void) async {
+        if let r = orderRuns[folder], r.isRunning { return }
+        guard case .success(let d) = await call("runs") else { return }
+        for r in d["runs"]?.arrayValue ?? [] where r["state"]?.stringValue == "running" {
+            guard let cmd = r["command"]?.stringValue, cmd.hasPrefix("order_"),
+                  let id = r["id"]?.stringValue,
+                  (r["argv"]?.arrayValue ?? []).contains(where: { $0.stringValue == folder }) else { continue }
+            let tracker = RunTracker(id: id, title: cmd.replacingOccurrences(of: "order_", with: "").capitalized)
+            orderRuns[folder] = tracker
+            Task { await tracker.follow(self) { await ended() } }
+            return
+        }
     }
 
     func openStudioInBrowser() {
@@ -232,10 +278,14 @@ final class AppModel {
     }
 
     private func confirmQuit(jobs: Int?) -> Bool {
+        confirm(title: "Quit Tecopa Plateworks?", text: AlertText.quitConfirm(jobs: jobs), button: "Quit")
+    }
+
+    private func confirm(title: String, text: String, button: String) -> Bool {
         let a = NSAlert()
-        a.messageText = "Quit Tecopa Plateworks?"
-        a.informativeText = AlertText.quitConfirm(jobs: jobs)
-        a.addButton(withTitle: "Quit")
+        a.messageText = title
+        a.informativeText = text
+        a.addButton(withTitle: button)
         a.addButton(withTitle: "Cancel")
         return a.runModal() == .alertFirstButtonReturn
     }

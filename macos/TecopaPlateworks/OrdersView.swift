@@ -138,6 +138,7 @@ struct NewOrderSheet: View {
     }
 
     private func run() async {
+        guard !busy else { return }
         busy = true; defer { busy = false }
         switch await model.call("order_new", ["number": .string(number.trimmingCharacters(in: .whitespaces))]) {
         case .success(let d):
@@ -158,7 +159,6 @@ struct OrderDetail: View {
     let order: OrderRow
     let reload: () -> Void
 
-    @State private var run: RunTracker?
     @State private var note: (text: String, error: Bool)?
     @State private var previewSizes: [PreviewSize] = []
     @State private var desk: DeskOrder?
@@ -167,12 +167,14 @@ struct OrderDetail: View {
     @State private var printNote = ""
 
     private var folderURL: URL { URL(fileURLWithPath: order.folder) }
+    /// The order's run lives in the model, so it outlasts this view (one at a time).
+    private var run: RunTracker? { model.orderRuns[order.folder] }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                if let run { RunPanel(run: run) }
+                if let run { RunPanel(run: run) { note = ($0, true) } }
                 if let note {
                     Text(note.text).textSelection(.enabled)
                         .foregroundStyle(note.error ? .red : .primary)
@@ -199,7 +201,10 @@ struct OrderDetail: View {
             .padding(20)
             .frame(maxWidth: 820, alignment: .leading)
         }
-        .task { await refresh() }
+        .task {
+            await refresh()
+            await model.adoptOrderRun(folder: order.folder) { await refresh(); reload() }
+        }
     }
 
     private var header: some View {
@@ -256,11 +261,23 @@ struct OrderDetail: View {
         return deskSizeMatches(desk.size, key: s.key)
     }
 
+    /// The PDF the last preview wrote (preview.json's `pdf`); the newest one if older
+    /// previews left others under another title.
     private var previewPDF: URL? {
+        if let data = FileManager.default.contents(atPath: order.folder + "/work/preview/preview.json"),
+           let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let pdf = root["pdf"] as? String {
+            let url = pdf.hasPrefix("/") ? URL(fileURLWithPath: pdf) : folderURL.appendingPathComponent(pdf)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
         let dir = folderURL.appendingPathComponent("out/preview")
-        let pdfs = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
-            .filter { $0.pathExtension == "pdf" } ?? []
-        return pdfs.first
+        let pdfs = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? [])
+            .filter { $0.pathExtension == "pdf" }
+        return pdfs.max { a, b in
+            let da = (try? a.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            let db = (try? b.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            return da < db
+        }
     }
 
     private var emailText: String? {
@@ -325,14 +342,8 @@ struct OrderDetail: View {
 
     private func start(_ entry: String) async {
         note = nil
-        switch await model.call(entry, ["folder": .string(order.folder)]) {
-        case .success(let d):
-            guard let id = d["run"]?.stringValue else { note = ("The run did not start.", true); return }
-            let tracker = RunTracker(id: id, title: entry.replacingOccurrences(of: "order_", with: "").capitalized)
-            run = tracker
-            await tracker.follow(model) { await refresh(); reload() }
-        case .failure(let f):
-            note = ([f.message, f.hint].compactMap { $0 }.joined(separator: "\n"), true)
+        if let refused = await model.startOrderRun(entry, folder: order.folder, then: { await refresh(); reload() }) {
+            note = (refused, true)
         }
     }
 
@@ -415,14 +426,19 @@ final class RunTracker {
         }
     }
 
-    func cancel(_ model: AppModel) async {
-        _ = await model.call("runs_cancel", ["run": .string(id)])
+    /// Cancel the run; the engine's words when it refuses.
+    func cancel(_ model: AppModel) async -> String? {
+        if case .failure(let f) = await model.call("runs_cancel", ["run": .string(id)]) {
+            return [f.message, f.hint].compactMap { $0 }.joined(separator: "\n")
+        }
+        return nil
     }
 }
 
 struct RunPanel: View {
     @Environment(AppModel.self) private var model
     let run: RunTracker
+    var refused: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -431,7 +447,7 @@ struct RunPanel: View {
                 Text("\(run.title): \(run.state)").font(.headline)
                     .foregroundStyle(run.state == "failed" ? .red : run.state == "done" ? .green : .primary)
                 Spacer()
-                if run.isRunning { Button("Cancel") { Task { await run.cancel(model) } } }
+                if run.isRunning { Button("Cancel") { Task { if let r = await run.cancel(model) { refused(r) } } } }
             }
             ScrollView {
                 Text(run.lines.joined(separator: "\n")).font(.caption.monospaced()).textSelection(.enabled)

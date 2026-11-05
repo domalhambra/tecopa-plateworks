@@ -21,7 +21,7 @@ struct TecopaPlateworksApp: App {
                 Button("Open Poster…") { delegate.model.studioOpen("posterInput") }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                 Divider()
-                Button("Reload Studio") { delegate.model.pane = .studio; delegate.model.studioReloads += 1 }
+                Button("Reload Studio") { delegate.model.reloadStudio() }
                     .keyboardShortcut("r", modifiers: .command)
             }
             CommandMenu("Go") {

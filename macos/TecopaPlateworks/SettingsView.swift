@@ -11,6 +11,9 @@ struct SettingsView: View {
     @State private var tokenSaved = false
     @State private var dirty = false
     @State private var note = ""
+    @State private var toolNote = ""
+    /// settings.json could not be read: shown, and kept aside before any save.
+    @State private var loadError = ""
 
     static let fontRoles: [(key: String, label: String)] = [
         ("TECOPA_FONT_TITLE", "Title (cartouche)"), ("TECOPA_FONT_POINT", "Points"),
@@ -20,6 +23,9 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             Form {
+                if !loadError.isEmpty {
+                    Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
+                }
                 Section("Folders") {
                     folderRow("Orders folder", key: "TECOPA_ORDERS_DIR", fallback: model.runtime.home + "/Tecopa Orders")
                     folderRow("Dropbox intake", key: "TECOPA_INTAKE_DIR",
@@ -76,6 +82,7 @@ struct SettingsView: View {
                     Button("Install the tecopa Command") { installTool() }
                     Text("Links ~/.local/bin/tecopa to the copy inside this app, so Claude's tecopa tools use this app's engine.")
                         .font(.caption).foregroundStyle(.secondary)
+                    if !toolNote.isEmpty { Text(toolNote).font(.callout).textSelection(.enabled) }
                 } header: { Text("Command line") }
             }
             .formStyle(.grouped)
@@ -122,8 +129,14 @@ struct SettingsView: View {
     }
 
     private func load() {
-        values = (try? EngineEnvironment.settings(
-            from: FileManager.default.contents(atPath: model.settingsPath), path: model.settingsPath)) ?? [:]
+        do {
+            values = try EngineEnvironment.settings(
+                from: FileManager.default.contents(atPath: model.settingsPath), path: model.settingsPath)
+            loadError = ""
+        } catch {
+            values = [:]
+            loadError = "\(model.settingsPath) is not valid JSON. Saving keeps a copy of it as settings.json.bad."
+        }
         tokenSaved = Keychain.read(service: DeskClient.service, account: DeskClient.account) != nil
     }
 
@@ -131,12 +144,21 @@ struct SettingsView: View {
         let clean = values.filter { EngineEnvironment.isSettingsKey($0.key) && !$0.value.isEmpty }
         do {
             try FileManager.default.createDirectory(atPath: model.dataRoot, withIntermediateDirectories: true)
+            if !loadError.isEmpty {
+                let bad = model.settingsPath + ".bad"
+                try? FileManager.default.removeItem(atPath: bad)
+                try FileManager.default.copyItem(atPath: model.settingsPath, toPath: bad)
+                loadError = ""
+            }
             let data = try JSONSerialization.data(withJSONObject: clean, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: URL(fileURLWithPath: model.settingsPath), options: .atomic)
             dirty = false
             note = "Saved. Restarting the engine…"
-            await model.restartEngine()
-            note = "Saved."
+            switch await model.restartEngine() {
+            case .restarted: note = "Saved. The engine restarted with the new settings."
+            case .cancelled: note = "Saved. The engine was not restarted; the settings take effect at its next start."
+            case .notOurs: note = "Saved. " + AlertText.restartNotOurs
+            }
         } catch {
             note = "Could not save: \(error.localizedDescription)"
         }
@@ -146,21 +168,28 @@ struct SettingsView: View {
         let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/tecopa").path
         let bin = model.runtime.home + "/.local/bin"
         let link = bin + "/tecopa"
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: helper) else { toolNote = "This build has no tecopa command inside it."; return }
+        if (try? fm.destinationOfSymbolicLink(atPath: link)) == helper {
+            toolNote = "~/.local/bin/tecopa already runs this app's copy."; return
+        }
         do {
-            guard FileManager.default.isExecutableFile(atPath: helper) else {
-                note = "This build has no tecopa command inside it."; return
+            try fm.createDirectory(atPath: bin, withIntermediateDirectories: true)
+            var kept = ""
+            if (try? fm.destinationOfSymbolicLink(atPath: link)) != nil || fm.fileExists(atPath: link) {
+                // Never remove an earlier backup: the first one is the original command.
+                var old = link + ".before-app"
+                var n = 2
+                while fm.fileExists(atPath: old) || (try? fm.destinationOfSymbolicLink(atPath: old)) != nil {
+                    old = link + ".before-app-\(n)"; n += 1
+                }
+                try fm.moveItem(atPath: link, toPath: old)
+                kept = " The old one is \(old.replacingOccurrences(of: model.runtime.home, with: "~"))."
             }
-            try FileManager.default.createDirectory(atPath: bin, withIntermediateDirectories: true)
-            if (try? FileManager.default.destinationOfSymbolicLink(atPath: link)) != nil
-                || FileManager.default.fileExists(atPath: link) {
-                let old = link + ".before-app"
-                try? FileManager.default.removeItem(atPath: old)
-                try FileManager.default.moveItem(atPath: link, toPath: old)
-            }
-            try FileManager.default.createSymbolicLink(atPath: link, withDestinationPath: helper)
-            note = "~/.local/bin/tecopa now runs this app's copy. The old one is ~/.local/bin/tecopa.before-app."
+            try fm.createSymbolicLink(atPath: link, withDestinationPath: helper)
+            toolNote = "~/.local/bin/tecopa now runs this app's copy." + kept
         } catch {
-            note = "Could not install: \(error.localizedDescription)"
+            toolNote = "Could not install: \(error.localizedDescription)"
         }
     }
 }

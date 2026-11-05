@@ -5,6 +5,7 @@ import TecopaKit
 struct EngineView: View {
     @Environment(AppModel.self) private var model
     @State private var tab = 0
+    @State private var restartNote = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -12,6 +13,7 @@ struct EngineView: View {
                 Text("Health").tag(0); Text("Log").tag(1); Text("Runs").tag(2); Text("Caches").tag(3)
             }
             .pickerStyle(.segmented).labelsHidden().padding(10).frame(maxWidth: 480)
+            if !restartNote.isEmpty { Text(restartNote).font(.callout).foregroundStyle(.secondary).padding(.bottom, 6) }
             Divider()
             switch tab {
             case 0: HealthView()
@@ -22,7 +24,13 @@ struct EngineView: View {
         }
         .toolbar {
             ToolbarItem {
-                Button { Task { await model.restartEngine() } } label: { Label("Restart Engine", systemImage: "arrow.triangle.2.circlepath") }
+                Button { Task {
+                    switch await model.restartEngine() {
+                    case .restarted: restartNote = ""
+                    case .cancelled: restartNote = "The engine was not restarted."
+                    case .notOurs: restartNote = AlertText.restartNotOurs
+                    }
+                } } label: { Label("Restart Engine", systemImage: "arrow.triangle.2.circlepath") }
                     .help("Stop the engine this app started and start it again")
             }
         }
@@ -94,12 +102,12 @@ struct LogView: View {
             }
             .defaultScrollAnchor(.bottom)
         }
-        .task {
-            while !Task.isCancelled {
+        .task(id: follow) {
+            repeat {
                 await load()
                 if !follow { break }
                 try? await Task.sleep(for: .seconds(2))
-            }
+            } while !Task.isCancelled
         }
     }
 
