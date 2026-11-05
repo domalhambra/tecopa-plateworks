@@ -97,6 +97,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private var clockDate = FakeWorld.date("2026-10-10T18:55:15Z")
     private var hexDigits = "a1b2c3"
     private var startError: TecopaFailure?
+    private var hostApp: URL?
     /// Every `startDetached`, in order.
     private(set) var detached: [Detached] = []
     /// Every `signalGroup`, in order.
@@ -206,6 +207,13 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     var hex: String {
         get { lock.withLock { hexDigits } }
         set { lock.withLock { hexDigits = newValue } }
+    }
+
+    /// The app bundle that holds the running binary, as `Runtime.containingApp`
+    /// reports it. nil, the default, is a binary outside any app.
+    var containingApp: URL? {
+        get { lock.withLock { hostApp } }
+        set { lock.withLock { hostApp = newValue } }
     }
 
     /// After this, `startDetached` throws the failure and starts nothing:
@@ -472,6 +480,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                         self.madeFolders.append(path)
                     }
                 },
-                listFolder: { path in self.list(path) })
+                listFolder: { path in self.list(path) },
+                containingApp: { self.containingApp })
     }
 }

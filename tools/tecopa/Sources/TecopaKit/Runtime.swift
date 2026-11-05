@@ -49,9 +49,16 @@ public struct Runtime: Sendable {
     public var makeFolder: @Sendable (String) throws -> Void
     /// The names in one folder, in no order, or nil when it cannot be read.
     public var listFolder: @Sendable (String) -> [String]?
+    /// The layout this runtime works in, when the caller knows it. The Mac app
+    /// gives `.bundle(Bundle.main.bundleURL)`. nil: `engineLayout()` finds it.
+    public var layout: EngineLayout?
+    /// The `.app` bundle that holds the running binary, or nil when it is in none.
+    /// A seam, so a test can put the tool in an app.
+    public var containingApp: @Sendable () -> URL?
 
     public init(
         repoFlag: String? = nil,
+        layout: EngineLayout? = nil,
         port: Int = Runtime.defaultPort,
         environment: [String: String] = ProcessInfo.processInfo.environment,
         home: String = NSHomeDirectory(),
@@ -78,9 +85,14 @@ public struct Runtime: Sendable {
         makeFolder: @escaping @Sendable (String) throws -> Void = { try Runtime.makePrivateFolder($0) },
         listFolder: @escaping @Sendable (String) -> [String]? = {
             try? FileManager.default.contentsOfDirectory(atPath: $0)
+        },
+        containingApp: @escaping @Sendable () -> URL? = {
+            Runtime.appContaining(bundle: Bundle.main.bundleURL, executable: Bundle.main.executablePath)
         }
     ) {
         self.repoFlag = repoFlag
+        self.layout = layout
+        self.containingApp = containingApp
         self.port = port
         self.environment = environment
         self.home = home
@@ -105,6 +117,33 @@ public struct Runtime: Sendable {
     public func repo() throws -> String {
         try RepoLocator.resolve(flag: repoFlag, env: environment, baked: bakedRepoPath,
                                 fileExists: fileExists)
+    }
+
+    /// Where the engine's code and interpreters are (phase 2 spec, decision 5): the
+    /// layout this runtime was given; else a repo that `--repo`, `TECOPA_REPO` or the
+    /// baked path names; else the app that holds the running binary. A named repo
+    /// that is wrong is an error and never falls through to the app, the locator's
+    /// rule. With no source at all, the repo failure comes back.
+    public func engineLayout() throws -> EngineLayout {
+        if let layout { return layout }
+        let named = repoFlag != nil || !(environment["TECOPA_REPO"] ?? "").isEmpty
+            || !(bakedRepoPath ?? "").isEmpty
+        if !named, let app = containingApp() { return .bundle(app) }
+        return .repo(try repo())
+    }
+
+    /// The `.app` that holds a binary: the main bundle when it is an app (the app's
+    /// own binary), or the folder above `Contents/Helpers/` (the bundled `tecopa`,
+    /// whose main bundle is the folder it is in). A link to the helper, such as
+    /// `~/.local/bin/tecopa`, is followed first.
+    public static func appContaining(bundle: URL, executable: String?) -> URL? {
+        let bundle = bundle.standardizedFileURL
+        if bundle.pathExtension == "app" { return bundle }
+        guard let executable else { return nil }
+        let path = URL(fileURLWithPath: executable).resolvingSymlinksInPath().path
+        guard let range = path.range(of: "/Contents/Helpers/") else { return nil }
+        let app = URL(fileURLWithPath: String(path[..<range.lowerBound]))
+        return app.pathExtension == "app" ? app : nil
     }
 
     /// The launcher's log. The launcher and its engine both write here.
