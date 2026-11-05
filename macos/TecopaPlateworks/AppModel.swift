@@ -60,6 +60,11 @@ final class AppModel {
     /// Order runs (Preview, Prepare, Finish) by order folder, so leaving the Orders pane
     /// neither loses a run nor lets a second one start on the same folder.
     var orderRuns: [String: RunTracker] = [:]
+    /// Folders whose run is being started: held from the click to the run's id, so a
+    /// double click cannot start a second run on the same folder during that await.
+    private(set) var startingOrders: Set<String> = []
+    /// A restart is under way: the second click of an impatient user waits for it.
+    private(set) var restarting = false
 
     var dataRoot: String { layout.dataRoot(home: runtime.home) }
     var settingsPath: String { dataRoot + "/settings.json" }
@@ -133,12 +138,17 @@ final class AppModel {
         }
     }
 
-    enum RestartOutcome: Equatable { case restarted, cancelled, notOurs }
+    enum RestartOutcome: Equatable { case restarted, cancelled, notOurs, busy }
 
     /// Stop the engine this app owns and start it again: a setting the engine reads at
     /// start changed (phase 2 spec, decision 14). It reads the jobs first and asks, as
     /// quit does. An engine this app adopted is not its to stop.
     func restartEngine() async -> RestartOutcome {
+        // Set before the first await, on the main actor: two overlapping restarts would
+        // each stop and launch, and the second would adopt the first's engine as foreign.
+        guard !restarting else { return .busy }
+        restarting = true
+        defer { restarting = false }
         if case .ready(adopted: true) = engine, ownedPid == nil { return .notOurs }
         if let pid = ownedPid {
             if case .confirm(let jobs) = afterJobs(await EngineHost.activeJobs(runtime)),
@@ -194,6 +204,9 @@ final class AppModel {
     /// Returns the engine's words when it does not start.
     func startOrderRun(_ entry: String, folder: String, then ended: @escaping () async -> Void) async -> String? {
         if let r = orderRuns[folder], r.isRunning { return "\(r.title) is still running on this order." }
+        guard !startingOrders.contains(folder) else { return "A run is already starting on this order." }
+        startingOrders.insert(folder)
+        defer { startingOrders.remove(folder) }
         switch await call(entry, ["folder": .string(folder)]) {
         case .success(let d):
             guard let id = d["run"]?.stringValue else { return "The run did not start." }
@@ -209,6 +222,9 @@ final class AppModel {
     /// A run started before this view (or by `tecopa`) on this folder: follow it too.
     func adoptOrderRun(folder: String, then ended: @escaping () async -> Void) async {
         if let r = orderRuns[folder], r.isRunning { return }
+        guard !startingOrders.contains(folder) else { return }
+        startingOrders.insert(folder)
+        defer { startingOrders.remove(folder) }
         guard case .success(let d) = await call("runs") else { return }
         for r in d["runs"]?.arrayValue ?? [] where r["state"]?.stringValue == "running" {
             guard let cmd = r["command"]?.stringValue, cmd.hasPrefix("order_"),

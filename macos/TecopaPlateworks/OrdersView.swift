@@ -169,6 +169,8 @@ struct OrderDetail: View {
     private var folderURL: URL { URL(fileURLWithPath: order.folder) }
     /// The order's run lives in the model, so it outlasts this view (one at a time).
     private var run: RunTracker? { model.orderRuns[order.folder] }
+    /// A step runs, or one is being started: the run buttons wait for either.
+    private var stepLocked: Bool { run?.isRunning == true || model.startingOrders.contains(order.folder) }
 
     var body: some View {
         ScrollView {
@@ -224,7 +226,7 @@ struct OrderDetail: View {
 
     @ViewBuilder private var previewStep: some View {
         HStack {
-            Button("Run Preview") { Task { await start("order_preview") } }.disabled(run?.isRunning == true)
+            Button("Run Preview") { Task { await start("order_preview") } }.disabled(stepLocked)
             if let pdf = previewPDF {
                 Button("Open PDF") { NSWorkspace.shared.open(pdf) }
                 Button("Copy Email") { copyEmail() }.disabled(emailText == nil)
@@ -302,7 +304,7 @@ struct OrderDetail: View {
 
     @ViewBuilder private var prepareStep: some View {
         HStack {
-            Button("Run Prepare") { Task { await start("order_prepare") } }.disabled(run?.isRunning == true)
+            Button("Run Prepare") { Task { await start("order_prepare") } }.disabled(stepLocked)
             let soft = folderURL.appendingPathComponent("work/softproof.png")
             if FileManager.default.fileExists(atPath: soft.path) {
                 Button("Open Soft Proof") { NSWorkspace.shared.open(soft) }
@@ -320,7 +322,7 @@ struct OrderDetail: View {
     @ViewBuilder private var finishStep: some View {
         HStack {
             Button("Run Finish") { Task { await start("order_finish") } }
-                .disabled(run?.isRunning == true || !order.prepared)
+                .disabled(stepLocked || !order.prepared)
             let printDir = folderURL.appendingPathComponent("out/print")
             ForEach(tiffs, id: \.self) { t in
                 Button("Open \(t.lastPathComponent)") { NSWorkspace.shared.open(t) }

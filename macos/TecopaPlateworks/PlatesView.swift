@@ -20,6 +20,8 @@ struct PlatesView: View {
     @State private var failed = false
     @State private var busy = false
     @State private var build: (title: String, state: String, progress: String)?
+    /// The poll of the build job: cancelled when the pane goes away or a new build starts.
+    @State private var follower: Task<Void, Never>?
     @State private var showingNew = false
 
     var body: some View {
@@ -83,9 +85,13 @@ struct PlatesView: View {
             }
         }
         .sheet(isPresented: $showingNew) {
-            NewPlateSheet { jid, title in await follow(jid, title) }
+            NewPlateSheet { jid, title in
+                follower?.cancel()
+                follower = Task { await follow(jid, title) }
+            }
         }
         .task { await load() }
+        .onDisappear { follower?.cancel(); follower = nil }
     }
 
     private func load() async {
@@ -110,17 +116,28 @@ struct PlatesView: View {
         }
     }
 
-    /// Follow the engine's build job (GET /api/regions/build/<job>) until it ends.
+    /// Follow the engine's build job (GET /api/regions/build/<job>) until it ends. The
+    /// engine keeps build jobs in memory: after a restart it answers 404 for the job, and
+    /// the follow ends there. Thirty seconds without an answer also end it.
     private func follow(_ jid: String, _ title: String) async {
         build = (title, "queued", "")
-        while true {
-            if let j = try? await model.runtime.client.get("/api/regions/build/\(jid)") {
+        var misses = 0
+        while !Task.isCancelled {
+            do {
+                let j = try await model.runtime.client.get("/api/regions/build/\(jid)")
+                misses = 0
                 let state = j["state"]?.stringValue ?? "?"
                 let progress = j["error"]?.stringValue ?? j["progress"]?.stringValue ?? ""
                 build = (title, state, progress)
                 if state == "done" || state == "error" { await load(); return }
+            } catch let f as TecopaFailure where f.status == 404 {
+                build = (title, "error", "The engine no longer knows this build: it restarted. Check the plate list, and build again if the plate is not there.")
+                await load(); return
+            } catch {
+                misses += 1
+                if misses >= 15 { build = (title, "error", "Lost contact with the engine. Check the Engine pane."); return }
             }
-            try? await Task.sleep(for: .seconds(2))
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
         }
     }
 

@@ -42,7 +42,7 @@ struct SettingsView: View {
                 HStack {
                     if !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("Save and Restart Engine") { Task { await save() } }.disabled(!dirty)
+                    Button("Save and Restart Engine") { Task { await save() } }.disabled(!dirty || model.restarting)
                 }
             }
             .formStyle(.grouped)
@@ -158,6 +158,7 @@ struct SettingsView: View {
             case .restarted: note = "Saved. The engine restarted with the new settings."
             case .cancelled: note = "Saved. The engine was not restarted; the settings take effect at its next start."
             case .notOurs: note = "Saved. " + AlertText.restartNotOurs
+            case .busy: note = "Saved. A restart is already under way; the settings take effect at the engine's next start."
             }
         } catch {
             note = "Could not save: \(error.localizedDescription)"

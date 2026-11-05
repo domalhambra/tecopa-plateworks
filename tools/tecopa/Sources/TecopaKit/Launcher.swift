@@ -30,13 +30,30 @@ public enum Launcher {
     /// (`guide.badwater.tecopa`) can still sit at /Applications under the same name:
     /// `open` would start it, and a quit by the new id would never reach it. The id
     /// is read as Doctor's app row reads it, through `EngineLayout.infoValue`.
-    static func requireCurrentApp(_ runtime: Runtime, at app: String) throws {
+    static func requireCurrentApp(_ runtime: Runtime, at app: String, running: Bool = false) throws {
         let id = EngineLayout.bundle(URL(fileURLWithPath: app)).infoValue("CFBundleIdentifier", runtime)
         guard id == bundleID else {
+            if running {
+                throw TecopaFailure(
+                    .environment,
+                    "The running app at \(app) is the old launcher (\(id ?? "unidentified")). "
+                        + "Quit it from its menu, then start the new app.")
+            }
             throw TecopaFailure(
                 .environment,
                 "The app at \(app) is the old launcher (\(id ?? "unidentified")). "
                     + "Set TECOPA_APP to the new build, or install it.")
+        }
+    }
+
+    /// The .app folders of running launcher processes, read from each pid's command
+    /// line. The pattern matches the old launcher too, so a stop checks what runs, not
+    /// only the app at `appPath`: a quit by the new id would never reach the old one.
+    static func runningApps(_ runtime: Runtime, pids: String) -> [String] {
+        pids.split(whereSeparator: \.isNewline).compactMap { pid -> String? in
+            guard let ps = try? runtime.exec("/bin/ps", ["-o", "command=", "-p", String(pid)]),
+                  ps.exitCode == 0, let cut = ps.stdout.range(of: "/Contents/MacOS/") else { return nil }
+            return String(ps.stdout[..<cut.lowerBound])
         }
     }
 
@@ -77,10 +94,15 @@ public enum Launcher {
     /// match. Any other code means pgrep could not do its work, and that is not
     /// "the launcher is not running".
     static func launcherRuns(_ runtime: Runtime) throws -> Bool {
+        try launcherPids(runtime) != nil
+    }
+
+    /// pgrep's pid lines when a launcher process runs, nil when none does.
+    static func launcherPids(_ runtime: Runtime) throws -> String? {
         let found = try runtime.exec("/usr/bin/pgrep", ["-f", processPattern])
         switch found.exitCode {
-        case 0: return true
-        case 1: return false
+        case 0: return found.stdout
+        case 1: return nil
         default:
             let said = found.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw TecopaFailure(.environment, "pgrep failed with exit \(found.exitCode): \(said)")
@@ -162,7 +184,7 @@ public enum Launcher {
         // The launcher pattern matches the old launcher too: refuse it before any quit.
         let app = appPath(runtime)
         if runtime.fileExists(app) { try requireCurrentApp(runtime, at: app) }
-        guard try launcherRuns(runtime) else {
+        guard let pids = try launcherPids(runtime) else {
             if await probe(runtime) != .none {
                 throw TecopaFailure(
                     .refused, "An engine answers on port \(port), but the launcher is not running.",
@@ -172,6 +194,9 @@ public enum Launcher {
                 "stopped": .bool(false), "running": .bool(false),
                 "note": .string("The launcher is not running."),
             ])
+        }
+        for running in runningApps(runtime, pids: pids) where runtime.fileExists(running) {
+            try requireCurrentApp(runtime, at: running, running: true)
         }
         let jobsRead = await readJobs(runtime)
         if !force {

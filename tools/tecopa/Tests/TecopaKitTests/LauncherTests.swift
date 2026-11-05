@@ -176,6 +176,41 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(w.commands, [])
     }
 
+    func testARunningOldLauncherIsRefusedBeforeAnyQuit() async {
+        // the new app is on disk, but the launcher that runs is the old one elsewhere:
+        // a quit by the new id would never reach it, so the stop refuses up front
+        let old = "/Volumes/Old/Tecopa Plateworks.app"
+        let w = world(running: true)
+        w.app(old, id: "guide.badwater.tecopa")
+        w.result(for: "pgrep", ProcessResult(exitCode: 0, stdout: "4242\n", stderr: ""))
+        w.process(4242, old + "/Contents/MacOS/TecopaPlateworks")
+        for forced in [false, true] {
+            do {
+                _ = try await Launcher.stop(w.runtime(), force: forced)
+                XCTFail("expected a failure")
+            } catch let f as TecopaFailure {
+                XCTAssertEqual(f.kind, .environment)
+                XCTAssertEqual(f.message, "The running app at \(old) is the old launcher (guide.badwater.tecopa). "
+                                   + "Quit it from its menu, then start the new app.")
+            } catch { XCTFail("\(error)") }
+        }
+        XCTAssertFalse(w.commands.contains { $0.first == "/usr/bin/osascript" })
+        XCTAssertEqual(w.written, [])
+
+        // the new app running passes the same check and quits as before
+        let ok = world(running: true)
+        ok.result(for: "pgrep", ProcessResult(exitCode: 0, stdout: "77\n", stderr: ""))
+        ok.process(77, "/Applications/Tecopa Plateworks.app/Contents/MacOS/TecopaPlateworks")
+        ok.onRun = { world, command in
+            if command.first == "/usr/bin/osascript" {
+                world.result(for: "pgrep", ProcessResult(exitCode: 1, stdout: "", stderr: ""))
+                world.stopServing()
+            }
+        }
+        _ = try? await Launcher.stop(ok.runtime())
+        XCTAssertTrue(ok.commands.contains { $0.first == "/usr/bin/osascript" })
+    }
+
     func testAnAppWithNoReadableIdIsRefusedToo() async {
         let w = FakeWorld()          // the app exists, and its Info.plist reads as nothing
         do {

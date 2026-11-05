@@ -29,9 +29,11 @@ struct EngineView: View {
                     case .restarted: restartNote = ""
                     case .cancelled: restartNote = "The engine was not restarted."
                     case .notOurs: restartNote = AlertText.restartNotOurs
+                    case .busy: break
                     }
                 } } label: { Label("Restart Engine", systemImage: "arrow.triangle.2.circlepath") }
                     .help("Stop the engine this app started and start it again")
+                    .disabled(model.restarting)
             }
         }
     }
