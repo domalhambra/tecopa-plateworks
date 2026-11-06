@@ -301,12 +301,12 @@ final class RunsTests: XCTestCase {
         runtime.environment = [
             "PYTHONHOME": "/opt/other", "PYTHONPATH": "/opt/other/site-packages",
             "PYTHONSTARTUP": "/Users/dom/.pythonrc", "__PYVENV_LAUNCHER__": "/opt/other/bin/python",
-            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
             "PYTHONUNBUFFERED": "0",
         ]
         _ = try ScriptRunner.start("region_prep.py", ["--id", "x"], command: "plate_build", runtime)
         XCTAssertEqual(world.detached.first?.environment, [
-            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
             "PYTHONUNBUFFERED": "1",
         ])
     }

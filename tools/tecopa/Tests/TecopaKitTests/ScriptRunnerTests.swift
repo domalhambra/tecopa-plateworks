@@ -16,11 +16,11 @@ final class ScriptRunnerTests: XCTestCase {
         runtime.environment = [
             "PYTHONHOME": "/opt/other", "PYTHONPATH": "/opt/other/site-packages",
             "PYTHONSTARTUP": "/Users/dom/.pythonrc", "__PYVENV_LAUNCHER__": "/opt/other/bin/python",
-            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
             "PYTHONUNBUFFERED": "0",
         ]
         let kept = [
-            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
+            "TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin", "HOME": "/Users/dom",
             "PYTHONUNBUFFERED": "0",
         ]
         _ = try ScriptRunner.run("scripts/pack_region.py", ["lassen_ca"], runtime)

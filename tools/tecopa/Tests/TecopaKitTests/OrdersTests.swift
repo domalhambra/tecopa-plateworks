@@ -7,7 +7,7 @@ final class OrdersTests: XCTestCase {
     private let runs = "/home/Library/Application Support/TecopaPlateworks/runs"
     /// The id of a start at the fake's default clock and digits.
     private let run = "20261010-185515-a1b2c3"
-    private let order = "/Users/dom/Tecopa Orders/2026-10-001-smith"
+    private let order = "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith"
 
     private func call(_ name: String, _ world: FakeWorld,
                       _ arguments: [String: JSONValue] = [:]) async -> (data: JSONValue?, failure: TecopaFailure?) {
@@ -35,7 +35,7 @@ final class OrdersTests: XCTestCase {
           "frame_from_manual": null,
           "fill": 0.612,
           "need_m": 6.482,
-          "plate": {"id": "o_2026_10_001_smith", "root": "/Users/dom/Tecopa Orders/2026-10-001-smith/work/plate",
+          "plate": {"id": "o_2026_10_001_smith", "root": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith/work/plate",
                     "kind": "built", "grid_m": 10, "layer_m": null, "upsample": 1.0,
                     "hole_fill": {"filled_share": 0.021, "layer_m": 30}, "nan_share": 0.0},
           "warnings": ["Upsampling 1.54x", "The frame was widened."],
@@ -98,8 +98,8 @@ final class OrdersTests: XCTestCase {
             ("--help", "Not an order number: --help. It is like TP-26-001."),
             ("TP-26-001/../x", "Not an order number: TP-26-001/../x. It is like TP-26-001."),
             ("TP-٢٦-001", "Not an order number: TP-٢٦-001. It is like TP-26-001."),
-            ("/Users/dom/Tecopa Orders/TP-26-001-smith",
-             "Not an order number: /Users/dom/Tecopa Orders/TP-26-001-smith. It is like TP-26-001."),
+            ("/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith",
+             "Not an order number: /Users/dom/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith. It is like TP-26-001."),
         ]
         for (number, said) in refused {
             let (data, failure) = await call("order_new", world, number.map { ["number": .string($0)] } ?? [:])
@@ -182,7 +182,7 @@ final class OrdersTests: XCTestCase {
         let world = FakeWorld()
         world.folder(order)
         var runtime = world.runtime()
-        runtime.environment = ["TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin"]
+        runtime.environment = ["TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin"]
         let (envelope, failure) = await Catalog.call("order_prepare", runtime, ["folder": .string(order)])
         XCTAssertNil(failure)
         // the folder is one argument, with its space
@@ -192,7 +192,7 @@ final class OrdersTests: XCTestCase {
         XCTAssertEqual(world.detached.first?.cwd, "/repo")
         // the script reads TECOPA_ORDERS_DIR: the tool's own environment goes through
         XCTAssertEqual(world.detached.first?.environment, [
-            "TECOPA_ORDERS_DIR": "/Users/dom/Tecopa Orders", "PATH": "/usr/bin:/bin", "PYTHONUNBUFFERED": "1"])
+            "TECOPA_ORDERS_DIR": "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders", "PATH": "/usr/bin:/bin", "PYTHONUNBUFFERED": "1"])
         let written = try JSONValue.parse(
             try XCTUnwrap(world.written.first { $0.path.hasSuffix(".json") }).data)
         XCTAssertEqual(written["command"]?.stringValue, "order_prepare")
@@ -214,17 +214,17 @@ final class OrdersTests: XCTestCase {
     func testOrderPrepareNeedsAnAbsolutePathToAFolderThatExists() async {
         let world = FakeWorld()
         world.folder(order)
-        world.existingFile("/Users/dom/Tecopa Orders/order.toml")
+        world.existingFile("/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/order.toml")
         let refused: [(String?, String)] = [
             (nil, "folder is required: the path of an order folder."),
             ("", "folder is required: the path of an order folder."),
             // a relative folder is the MCP client's, not the caller's
             ("2026-10-001-smith", "folder must be an absolute path: 2026-10-001-smith"),
-            ("~/Tecopa Orders/2026-10-001-smith", "folder must be an absolute path: ~/Tecopa Orders/2026-10-001-smith"),
+            ("~/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith", "folder must be an absolute path: ~/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith"),
             ("--out", "folder must be an absolute path: --out"),
-            ("/Users/dom/Tecopa Orders/none", "The folder /Users/dom/Tecopa Orders/none does not exist."),
+            ("/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/none", "The folder /Users/dom/Library/Application Support/Tecopa Plateworks/Orders/none does not exist."),
             // a file is not a folder
-            ("/Users/dom/Tecopa Orders/order.toml", "/Users/dom/Tecopa Orders/order.toml is not a folder."),
+            ("/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/order.toml", "/Users/dom/Library/Application Support/Tecopa Plateworks/Orders/order.toml is not a folder."),
         ]
         for name in ["order_prepare", "order_preview", "order_finish", "order_status"] {
             for (folder, said) in refused {

@@ -257,14 +257,14 @@ final class CommandPathTests: XCTestCase {
 
     func testTheFolderOfAnOrderCommandIsMadeAbsolute() throws {
         let here = FileManager.default.currentDirectoryPath
-        let prepare = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "prepare", "~/Tecopa Orders/2026-10-001-smith"])
+        let prepare = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "prepare", "~/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith"])
             as? OrderCommand.Prepare)
         XCTAssertEqual(prepare.order.arguments,
-                       ["folder": .string(NSHomeDirectory() + "/Tecopa Orders/2026-10-001-smith")])
-        let preview = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview", "~/Tecopa Orders/2026-10-001-smith"])
+                       ["folder": .string(NSHomeDirectory() + "/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith")])
+        let preview = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview", "~/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith"])
             as? OrderCommand.Preview)
         XCTAssertEqual(preview.order.arguments,
-                       ["folder": .string(NSHomeDirectory() + "/Tecopa Orders/2026-10-001-smith")])
+                       ["folder": .string(NSHomeDirectory() + "/Library/Application Support/Tecopa Plateworks/Orders/2026-10-001-smith")])
         let relative = try XCTUnwrap(try Tecopa.parseAsRoot(["order", "preview", "2026-10-001-smith", "--json"])
             as? OrderCommand.Preview)
         XCTAssertEqual(relative.order.arguments, ["folder": .string(here + "/2026-10-001-smith")])

@@ -114,6 +114,15 @@ def test_orders_root_env(monkeypatch, tmp_path):
     assert od.cache_path() == str(tmp_path / "_cache" / "aiohttp_cache.sqlite")
 
 
+def test_orders_root_defaults_beside_the_app_data(monkeypatch, tmp_path):
+    # Beside the app's regions, blobs and uploads, under no git checkout (2026-11-06).
+    monkeypatch.delenv("TECOPA_ORDERS_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    want = tmp_path / "Library" / "Application Support" / "Tecopa Plateworks" / "Orders"
+    assert od.orders_root() == str(want)
+    od.refuse_inside_repo(want)                              # must not raise
+
+
 # ---- an order folder must live outside the repo, which is public ----
 
 def test_load_refuses_a_folder_inside_the_repo(tmp_path, monkeypatch):
@@ -126,7 +135,7 @@ def test_load_refuses_a_folder_inside_the_repo(tmp_path, monkeypatch):
 
 def test_load_refuses_the_repo_root_itself(tmp_path, monkeypatch):
     monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path))
-    with pytest.raises(od.OrderError, match="Use ~/Tecopa Orders"):
+    with pytest.raises(od.OrderError, match="Use ~/Library/Application Support/"):
         od.load(str(tmp_path))
 
 

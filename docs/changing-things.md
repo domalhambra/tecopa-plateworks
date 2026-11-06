@@ -159,7 +159,7 @@ approves the proof. Finish writes the print TIFFs and the note that tells you ho
 print them. The steps run in this order: `new`, `preview`, `prepare`, the proof, the
 approval, `finish`, the printer.
 
-1. Make the order folder under `~/Tecopa Orders/` (or `$TECOPA_ORDERS_DIR`). Never
+1. Make the order folder under `~/Library/Application Support/Tecopa Plateworks/Orders/` (or `$TECOPA_ORDERS_DIR`). Never
    inside the repo: it is public. For an order from the intake, run
    `.venv/bin/python scripts/order.py new TP-26-001`, or `tecopa order new TP-26-001`.
    For an order by email, make the folder by hand and put the customer's GPX, KML or
@@ -422,7 +422,7 @@ Running Prepare again with the same tracks, size and orientation builds nothing.
 set, the panel count and the gap count too. A
 changed input, or a new manual frame in `state.json`'s `manual` key, rebuilds the plate.
 `in/` is never written. The plate lives in `work/plate/<id>/`. The HyRiver request
-cache is `~/Tecopa Orders/_cache/`. It holds NHD, NLCD and dynamic-service requests,
+cache is `~/Library/Application Support/Tecopa Plateworks/Orders/_cache/`. It holds NHD, NLCD and dynamic-service requests,
 and it grows large: 880 MB after a handful of orders. Delete it any time. The static
 10, 30 and 60 m tiles are read by GDAL and are not cached.
 
@@ -502,7 +502,7 @@ Traps already paid for:
   set beside `HYRIVER_CACHE_NAME`), and pygeoogc's `ArcGISRESTful` (pynhd's NHD
   queries) writes a retry log to a hardcoded `cache/failed_ids*.txt` with no env
   override at all. Prepare runs the prep subprocess with its cwd at
-  `~/Tecopa Orders/_cache/` instead of the repo root, so that write lands there too;
+  `~/Library/Application Support/Tecopa Plateworks/Orders/_cache/` instead of the repo root, so that write lands there too;
   every script path and `--out-root` it passes is already absolute, so this is safe.
   The studio's in-app plate build and the 3DEP coverage query run there too, so the
   Mac app never writes beside its engine (native Mac app phase 1 spec, 5.4).

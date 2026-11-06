@@ -258,9 +258,9 @@ PREP_PY="$BUNDLE/Contents/Resources/python-prep/bin/python3.14"
 CODE="$BUNDLE/Contents/Resources/engine"
 codesign --verify --deep --strict "$BUNDLE" || fail "the copied app's signature is not valid"
 xattr -lr "$BUNDLE" > "$WORK/xattr.before"
-COPY="$HOME/Tecopa Orders/_proof/$(basename "$ORDER")"
+COPY="$HOME/Library/Application Support/Tecopa Plateworks/Orders/_proof/$(basename "$ORDER")"
 [ -d "$ORDER" ] || fail "no order at $ORDER"
-mkdir -p "$HOME/Tecopa Orders/_proof"
+mkdir -p "$HOME/Library/Application Support/Tecopa Plateworks/Orders/_proof"
 rm -rf "$COPY.tmp"; ditto "$ORDER" "$COPY.tmp"; rm -rf "$COPY"; mv "$COPY.tmp" "$COPY"
 rm -f "$COPY/work/state.json"   # a venv-prepared state names <repo>/regions (spec 8.2 step 5)
 
@@ -289,7 +289,7 @@ xattr -lr "$BUNDLE" | diff -q - "$WORK/xattr.before" >/dev/null || fail "the app
 
 # Prepare one order through the bundle (spec 8.2 step 5).
 set_engine_env
-( cd "$AS" && env -i "${ENGINE_ENV[@]}" TECOPA_ORDERS_DIR="$HOME/Tecopa Orders/_proof" \
+( cd "$AS" && env -i "${ENGINE_ENV[@]}" TECOPA_ORDERS_DIR="$HOME/Library/Application Support/Tecopa Plateworks/Orders/_proof" \
     "$ENGINE_PY" -P "$CODE/scripts/order.py" prepare "$COPY" ) >> "$REPORT" 2>&1 \
   || fail "order prepare through the bundle failed"
 "$PY" - "$COPY/work/state.json" "$REGIONS" <<'PY' >> "$REPORT" || fail "the order did not use the curated plate in the app's cache"
