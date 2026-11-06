@@ -51,6 +51,13 @@ struct OrdersView: View {
                     .padding(.vertical, 2)
                     .tag(o.id)
                 }
+                .overlay {
+                    if orders.isEmpty && loadError == nil {
+                        // A first launch: say why the list is empty and where it reads.
+                        ContentUnavailableView("No orders yet", systemImage: "tray",
+                                               description: Text("Orders are the folders in your orders folder (Settings > General). Make one from an intake number with New Order."))
+                    }
+                }
                 if let loadError {
                     Text(loadError).font(.caption).foregroundStyle(.red).padding(6)
                 }
