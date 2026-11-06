@@ -27,7 +27,7 @@ struct SettingsView: View {
                     Section { Label(loadError, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 }
                 Section("Folders") {
-                    folderRow("Orders folder", key: "TECOPA_ORDERS_DIR", fallback: model.runtime.home + "/Tecopa Orders")
+                    folderRow("Orders folder", key: "TECOPA_ORDERS_DIR", fallback: model.runtime.home + "/Library/Application Support/Tecopa Plateworks/Orders")
                     folderRow("Dropbox intake", key: "TECOPA_INTAKE_DIR",
                               fallback: model.runtime.home + "/Dropbox/Apps/Plateworks Lab/Tecopa")
                 }

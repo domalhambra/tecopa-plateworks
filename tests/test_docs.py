@@ -49,7 +49,7 @@ def test_docs_are_indexed_and_every_quoted_path_exists():
             # without the file stays green.
             "docs/superpowers/assessments/2026-09-02-metal-render-viability.md",
             # An order folder's own contents (order pipeline spec, section 1).
-            # They live under ~/Tecopa Orders/ (or $TECOPA_ORDERS_DIR),
+            # They live under ~/Library/Application Support/Tecopa Plateworks/Orders/ (or $TECOPA_ORDERS_DIR),
             # entirely outside this repo, so no checkout ever has them.
             "order.toml",
             "in/",

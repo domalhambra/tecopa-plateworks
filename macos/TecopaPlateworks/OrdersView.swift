@@ -94,7 +94,7 @@ struct OrdersView: View {
     private var ordersRoot: String {
         let settings = (try? EngineEnvironment.settings(
             from: FileManager.default.contents(atPath: model.settingsPath), path: model.settingsPath)) ?? [:]
-        return settings["TECOPA_ORDERS_DIR"] ?? (model.runtime.home + "/Tecopa Orders")
+        return settings["TECOPA_ORDERS_DIR"] ?? (model.runtime.home + "/Library/Application Support/Tecopa Plateworks/Orders")
     }
 
     private func load() async {

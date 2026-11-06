@@ -3,9 +3,11 @@
 
     ~/Dropbox/Apps/Plateworks Lab/Tecopa/TP-26-001 Smith/order.md       the intake wrote it
                                                          01_received/   the client's upload
-        -> ~/Tecopa Orders/TP-26-001-smith/in/          a copy of each file
-                                           order.toml   title, order_number, returning,
+        -> <orders root>/TP-26-001-smith/in/            a copy of each file
+                                         order.toml     title, order_number, returning,
                                                         client, email, member
+
+The orders root is ~/Library/Application Support/Tecopa Plateworks/Orders (app/order.py).
 
 Spec: docs/superpowers/specs/2026-10-12-tecopa-client-intake-and-payment-design.md,
 section 5.1. TECOPA_INTAKE_DIR moves the Dropbox folder, TECOPA_ORDERS_DIR the orders.

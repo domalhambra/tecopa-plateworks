@@ -7,10 +7,10 @@ and out/print/PRINT.txt of an order whose proof Dom approved in the studio. See
 docs/changing-things.md > Run an order.
 
     .venv/bin/python scripts/order.py new TP-26-001
-    .venv/bin/python scripts/order.py preview "~/Tecopa Orders/TP-26-001-smith"
-    .venv/bin/python scripts/order.py choose "~/Tecopa Orders/TP-26-001-smith" 17x22
-    .venv/bin/python scripts/order.py prepare "~/Tecopa Orders/TP-26-001-smith"
-    .venv/bin/python scripts/order.py finish "~/Tecopa Orders/TP-26-001-smith"
+    .venv/bin/python scripts/order.py preview "~/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith"
+    .venv/bin/python scripts/order.py choose "~/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith" 17x22
+    .venv/bin/python scripts/order.py prepare "~/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith"
+    .venv/bin/python scripts/order.py finish "~/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith"
 """
 import argparse
 import os

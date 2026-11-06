@@ -1,7 +1,7 @@
 # app/order.py
 """One customer order on disk (order pipeline spec, section 1).
 
-    ~/Tecopa Orders/<order>/in/         the customer's files; only `order new` writes
+    <orders root>/<order>/in/           the customer's files; only `order new` writes
                                         here, and it adds a file and replaces none
                             order.toml  Dom's decisions: title, size, orientation;
                                         a set's gap; the preview's sizes. From the
@@ -11,8 +11,8 @@
                             work/       plate/, state.json, report.txt
                             out/        print and customer files (later sub-projects)
 
-Customer data stays outside the repo, which is public. TECOPA_ORDERS_DIR moves the
-root. state.json holds what Prepare and the studio decide; its "manual" key holds
+Customer data stays outside the repo, which is public. The orders root is
+~/Library/Application Support/Tecopa Plateworks/Orders; TECOPA_ORDERS_DIR moves it. state.json holds what Prepare and the studio decide; its "manual" key holds
 Dom's studio changes, and Prepare never erases them."""
 from __future__ import annotations
 
@@ -51,9 +51,15 @@ class OrderError(ValueError):
     """The order folder or its order.toml is not usable. The message is for Dom."""
 
 
+# Beside the app's regions, blobs and uploads: local, never synced, and under no git
+# checkout, which refuse_inside_repo would refuse (decision, 2026-11-06).
+DEFAULT_ORDERS = os.path.join("Library", "Application Support", "Tecopa Plateworks",
+                              "Orders")
+
+
 def orders_root() -> str:
     return os.environ.get(ORDERS_ENV) or os.path.join(os.path.expanduser("~"),
-                                                      "Tecopa Orders")
+                                                      DEFAULT_ORDERS)
 
 
 def cache_path() -> str:
@@ -85,7 +91,8 @@ def refuse_inside_repo(path) -> None:
         p = parent
     if inside:
         raise OrderError(f"Order folders must live outside the repo, which is "
-                         f"public: {path}. Use ~/Tecopa Orders.")
+                         f"public: {path}. Use ~/Library/Application Support/"
+                         f"Tecopa Plateworks/Orders.")
 
 
 def parse_size(text) -> tuple:
