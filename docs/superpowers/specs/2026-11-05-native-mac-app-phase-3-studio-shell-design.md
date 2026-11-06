@@ -1,7 +1,7 @@
 # Native Mac app, phase 3: the studio's native shell: design
 
 **Date:** 2026-11-05
-**Status:** Decided by Claude under Dom's standing instruction of 2026-11-05 ("Make all decisions for yourself to get to this end goal"). Phase 3a is built. Phase 3b, the area-by-area SwiftUI port, is planned here and not built.
+**Status:** Decided by Claude under Dom's standing instruction of 2026-11-05 ("Make all decisions for yourself to get to this end goal"). Phase 3a is built. Phase 3b, the area-by-area SwiftUI port, is not built: on 2026-11-05 Claude decided the web studio in the native shell is the app's studio (`docs/decisions.md`). Section 3 stays as the plan if Dom asks for a native area later.
 **Extends:** the phase 1 and phase 2 specs, and the handoff `superpowers/handoffs/2026-11-05-native-mac-app.md` (phase 3).
 
 ## 1. The decision
