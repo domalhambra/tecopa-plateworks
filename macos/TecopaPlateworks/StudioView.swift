@@ -33,10 +33,19 @@ final class StudioController: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
     static let home = URL(string: "http://127.0.0.1:8848/")!
     let web: WKWebView
     private var loadedOnce = false
+    /// The engine version these studio files came with. A new one clears the web
+    /// view's cache before the first load: builds before 51cf777 sent no Cache-Control,
+    /// so the cache can hold their files as fresh, and an old app.js would meet the new
+    /// engine. The studio files now revalidate, so this clears only once per version.
+    private let version: String
+    private var cacheCleared = false
+    private var waiting: URL?
+    static let cacheVersionKey = "StudioCacheVersion"
     /// Scripts that wait for the page to finish loading; each runs once.
     private var pending: [String] = []
 
-    override init() {
+    init(version: String) {
+        self.version = version
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .default()
         config.preferences.isElementFullscreenEnabled = true
@@ -51,14 +60,33 @@ final class StudioController: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
 
     /// The web view, loaded the first time it is shown.
     func showing() -> WKWebView {
-        if !loadedOnce { loadedOnce = true; web.load(URLRequest(url: Self.home)) }
+        if !loadedOnce { loadedOnce = true; load(Self.home) }
         return web
+    }
+
+    /// Every load goes through here, so the first one waits for the cache clear.
+    private func load(_ url: URL) {
+        if cacheCleared { web.load(URLRequest(url: url)); return }
+        let first = waiting == nil
+        waiting = url
+        guard first else { return }
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: Self.cacheVersionKey) != version else {
+            cacheCleared = true; waiting = nil; web.load(URLRequest(url: url)); return
+        }
+        let types: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache]
+        web.configuration.websiteDataStore.removeData(ofTypes: types, modifiedSince: .distantPast) { [weak self] in
+            guard let self else { return }
+            defaults.set(self.version, forKey: Self.cacheVersionKey)
+            self.cacheCleared = true
+            if let next = self.waiting { self.waiting = nil; self.web.load(URLRequest(url: next)) }
+        }
     }
 
     /// Reload the page as it is now: its own address, without a one-shot `?order=`.
     func reload() {
         guard loadedOnce else { return }
-        if web.url == nil { web.load(URLRequest(url: Self.home)) } else { web.reload() }
+        if web.url == nil || !cacheCleared { load(Self.home) } else { web.reload() }
     }
 
     /// Load `?order=<folder>` once; the studio opens the order and drops the link.
@@ -66,13 +94,13 @@ final class StudioController: NSObject, WKNavigationDelegate, WKUIDelegate, WKDo
         var c = URLComponents(url: Self.home, resolvingAgainstBaseURL: false)!
         c.queryItems = [URLQueryItem(name: "order", value: folder)]
         loadedOnce = true
-        web.load(URLRequest(url: c.url!))
+        load(c.url!)
     }
 
     /// Run a script once the page is ready (now, if it is).
     func run(_ script: String) {
         if !loadedOnce { _ = showing() }
-        if web.isLoading { pending.append(script) } else { web.evaluateJavaScript(script) }
+        if web.isLoading || !cacheCleared { pending.append(script) } else { web.evaluateJavaScript(script) }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

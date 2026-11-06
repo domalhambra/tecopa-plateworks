@@ -55,7 +55,7 @@ final class AppModel {
     var pane: Pane = .studio
     /// The one studio web view, kept for the window's life: switching panes never
     /// reloads it, so a session, an open order and a render being followed survive.
-    @ObservationIgnored lazy var studio = StudioController()
+    @ObservationIgnored lazy var studio = StudioController(version: bundleVersion)
     private(set) var ownedPid: Int32?
     /// Order runs (Preview, Prepare, Finish) by order folder, so leaving the Orders pane
     /// neither loses a run nor lets a second one start on the same folder.
