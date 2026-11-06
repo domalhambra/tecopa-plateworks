@@ -90,7 +90,7 @@ Tecopa Plateworks.app/Contents/
 | `…/blobs/`, `…/uploads/` | Engine blobs, uploaded tracks | state |
 | `…/settings.json` | Font bindings, orders folder, intake folder. Hand-edited in phase 1; the Settings window writes it in phase 2. | state |
 | `~/Library/Logs/TecopaPlateworks.log` | Engine and app log, unchanged, so `LogReader` and `tecopa doctor` keep working | log |
-| `~/Tecopa Orders/` (`TECOPA_ORDERS_DIR`) | Orders, unchanged. Its `_cache/` holds the HyRiver request cache that Prepare uses; in-app plate builds share it (5.4, change 3). | user data |
+| `~/Library/Application Support/Tecopa Plateworks/Orders/` (`TECOPA_ORDERS_DIR`) | Orders. Moved from `~/Tecopa Orders/` on 2026-11-06, beside the app's other data and under no git checkout. Its `_cache/` holds the HyRiver request cache that Prepare uses; in-app plate builds share it (5.4, change 3). | user data |
 | `~/Library/CloudStorage/Dropbox/Apps/Plateworks Lab/Tecopa/` | The intake. Read-only to Tecopa, unchanged. | user data |
 | `~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates/` | The cold DEM archive (section 6) | archive |
 
@@ -386,8 +386,8 @@ tarball's `libpython` links `/usr/lib/libz.1.dylib`, before proof 1 runs.
    ```
 
    with the full 5.3 environment from `EngineHost`, the working directory at `<AS>`, and
-   `TECOPA_ORDERS_DIR=~/Tecopa Orders/_proof`. `<copy>` is a copy of a past order made under
-   `~/Tecopa Orders/_proof/`, never anywhere else: it holds a customer's tracks. The copy is
+   `TECOPA_ORDERS_DIR=~/Library/Application Support/Tecopa Plateworks/Orders/_proof`. `<copy>` is a copy of a past order made under
+   `~/Library/Application Support/Tecopa Plateworks/Orders/_proof/`, never anywhere else: it holds a customer's tracks. The copy is
    deleted at the end of the proof (to the Trash).
    - Pass: Prepare exits 0, and `work/state.json` names `<AS>/regions` as the plate root and the
      plate as curated. An exit 0 alone can hide a silent order-plate build.

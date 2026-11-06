@@ -40,4 +40,4 @@ Every phase 1 rule. The Order panel's approval semantics, unchanged: Approve wor
 
 ## 5. Proof
 
-A copy of a real past order from `~/Tecopa Orders/` runs end to end in the app, from New to Finish, with the PRINT.txt shown. Each step's refusal is checked once by making it happen: Finish before Approve says "Approve the proof in the studio first."
+A copy of a real past order from `~/Library/Application Support/Tecopa Plateworks/Orders/` runs end to end in the app, from New to Finish, with the PRINT.txt shown. Each step's refusal is checked once by making it happen: Finish before Approve says "Approve the proof in the studio first."

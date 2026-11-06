@@ -119,7 +119,7 @@ The Ship list tab gets a third block: map orders that are paid, approved and not
 `scripts/order.py new <order number>`, and `tecopa order new` in the tool.
 
 - It finds the job folder in the Dropbox folder that syncs to the Mac: `~/Dropbox/Apps/Plateworks Lab/Tecopa/`. The setting `TECOPA_INTAKE_DIR` names another place.
-- It copies each file of `01_received` into `in/` of a new order folder, `~/Tecopa Orders/TP-26-001-smith/`. It never moves a file and never writes to Dropbox.
+- It copies each file of `01_received` into `in/` of a new order folder, `~/Library/Application Support/Tecopa Plateworks/Orders/TP-26-001-smith/`. It never moves a file and never writes to Dropbox.
 - It writes `order.toml` with the title, the order number and the first-poster flag, read from `order.md`. It writes no size.
 - It reports what it copied: tracks, photos, and files of a type it does not know.
 - A second run adds the files that arrived later. It replaces no file and does not change `order.toml`.

@@ -160,7 +160,7 @@ scripts/render_asset_farm.py ──▶ assets/ (gitignored) ──▶ scripts/ex
 | `TECOPA_FONT`, `TECOPA_FONT_TITLE`, `TECOPA_FONT_POINT`, `TECOPA_FONT_AREA`, `TECOPA_FONT_WATER`, `TECOPA_FONT_<ROLE>_CASE` | `app/render.py`, `scripts/render_mockups.py` | Per-role faces. `TECOPA_FONT_AREA_CASE=mixed` for a small-caps face. Tested by `tests/test_type_roles.py`. |
 | `TECOPA_ENGINE_VERSION` | `app/provenance.py` | Overrides the git commit as `engine_version` in packaged builds. |
 | `TECOPA_PREP_PYTHON`, `TECOPA_PREP_SCRIPT`, `TECOPA_LABELS_SCRIPT` | `app/main.py` | The interpreter and scripts the in-app region build spawns. |
-| `TECOPA_ORDERS_DIR` | `app/order.py` | The root of the order folders and of the request cache that Prepare and the preview share. Default `~/Tecopa Orders`. It must be outside this repo. |
+| `TECOPA_ORDERS_DIR` | `app/order.py` | The root of the order folders and of the request cache that Prepare and the preview share. Default `~/Library/Application Support/Tecopa Plateworks/Orders`. It must be outside this repo. |
 | `TECOPA_INTAKE_DIR` | `app/ordernew.py` | The folder `order new` reads the intake's job folders from. Default `~/Dropbox/Apps/Plateworks Lab/Tecopa`. The orders root must not be inside it. |
 | `TECOPA_LOG_LEVEL`, `TECOPA_LOG_FORMAT` | `app/logconfig.py` | Logging. |
 | `TECOPA_DEBUG` | `app/debug.py`, `app/main.py` | `1` includes the debug routes. Any other value, and unset, leaves them out. The launcher sets it. `tests/conftest.py` removes it. |

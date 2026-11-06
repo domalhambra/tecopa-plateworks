@@ -44,7 +44,7 @@ or a 17" roll. It prints from a TIFF. The customer gets a JPG and a share kit.
 Customer data stays outside the repo. The repo is public.
 
 ```
-~/Tecopa Orders/                     (TECOPA_ORDERS_DIR overrides)
+~/Library/Application Support/Tecopa Plateworks/Orders/                     (TECOPA_ORDERS_DIR overrides)
   _cache/                            3DEP, NHD, NLCD tiles shared by all orders
   2026-10-001-smith/
     in/            GPX, KML, KMZ and photos, exactly as the customer sent them
