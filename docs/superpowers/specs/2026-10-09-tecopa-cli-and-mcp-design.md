@@ -34,7 +34,7 @@ thing it must diagnose. A compiled binary does not.
 | 4 | One spec covers all four jobs. The build has four phases. No code before the 2026-10-21 review. |
 | 5 | The tool is a SwiftPM (Swift Package Manager) package with a shared core library. A single dependency-free file and a CLI with no MCP server were rejected. |
 | 6 | The tool holds no render logic, no coordinate math, and no spec rules. Those stay in Python. |
-| 7 | The launcher stays the one owner of the engine on port 8848. The tool never starts a second uvicorn. |
+| 7 | The Tecopa Plateworks app (`org.plateworks.tecopa`) is the one owner of the engine on port 8848 (amended 2026-11-05; it was the launcher). The tool never starts a second uvicorn. |
 | 8 | The debug routes exist only when `TECOPA_DEBUG=1`. The default is off. |
 | 9 | Studio reports stay in engine memory. Nothing goes to disk. |
 | 10 | No command writes `sources.json`, deletes a plate or an order, touches a font file, or publishes anything. |

@@ -664,7 +664,8 @@ final class PlatesTests: XCTestCase {
 
     func testOnlyPlatePlanAndPlateCheckAreReadOnly() {
         let readOnly = ["plate_plan": true, "plate_build": false, "plate_labels": false, "plate_playa": false,
-                        "plate_pack": false, "plate_install": false, "plate_check": true]
+                        "plate_pack": false, "plate_install": false, "plate_check": true,
+                        "plate_restore": false, "plate_evict": false]
         XCTAssertEqual(Set(Catalog.all.map(\.name).filter { $0.hasPrefix("plate_") }), Set(readOnly.keys))
         for (name, flag) in readOnly { XCTAssertEqual(Catalog.named(name)?.readOnly, flag, name) }
         func parameters(_ name: String) -> [String] {
@@ -678,6 +679,8 @@ final class PlatesTests: XCTestCase {
         XCTAssertEqual(parameters("plate_pack"), ["id:string", "resync:boolean"])
         XCTAssertEqual(parameters("plate_install"), ["file:string"])
         XCTAssertEqual(parameters("plate_check"), ["poster:string"])
+        XCTAssertEqual(parameters("plate_restore"), ["id:string"])
+        XCTAssertEqual(parameters("plate_evict"), ["id:string"])
     }
 
     func testTheTextOfAPlateCommand() {
@@ -722,8 +725,27 @@ final class PlatesTests: XCTestCase {
             "plate_pack": Walk(arguments: ["id": .string("lassen_ca")], programs: 1) { _ in },
             "plate_install": Walk(arguments: ["file": .string(zip)], programs: 1) { $0.existingFile(self.zip) },
             "plate_check": Walk(arguments: ["poster": .string("/p/lassen.png")], programs: 1) { _ in },
+            // it copies one archived file and runs no program
+            "plate_restore": Walk(arguments: ["id": .string("lassen_ca")], programs: 0) { world in
+                let dem = Data("dem".utf8)
+                let sha = FakeWorld.sha256(dem)
+                let archive = "/home/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates/lassen_ca"
+                world.existingFile("/repo/regions/lassen_ca/region.json")
+                world.file(archive + "/index.json", #"{"current": "\#(sha)"}"#)
+                world.existingFile(archive + "/" + sha + "/dem.tif")
+                world.binary(archive + "/" + sha + "/dem.tif", dem)
+            },
+            // it moves one file to the Trash and runs no program: no run is tracked, so no ps
+            "plate_evict": Walk(arguments: ["id": .string("lassen_ca")], programs: 0) { world in
+                world.folder("/repo/regions/lassen_ca")
+                world.existingFile("/repo/regions/lassen_ca/dem.tif")
+            },
             // it takes an order number, never a folder, and runs the script in the call
             "order_new": Walk(arguments: ["number": .string("TP-26-001")], programs: 1) { _ in },
+            "order_choose": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith"),
+                                             "size": .string("17x22")], programs: 1) {
+                $0.folder("/orders/2026-10-001-smith")
+            },
             "order_prepare": Walk(arguments: ["folder": .string("/orders/2026-10-001-smith")], programs: 1) {
                 $0.folder("/orders/2026-10-001-smith")
             },

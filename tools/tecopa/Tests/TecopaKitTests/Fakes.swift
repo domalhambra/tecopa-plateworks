@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 @testable import TecopaKit
 
@@ -97,10 +98,17 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private var clockDate = FakeWorld.date("2026-10-10T18:55:15Z")
     private var hexDigits = "a1b2c3"
     private var startError: TecopaFailure?
+    private var hostApp: URL?
     /// Every `startDetached`, in order.
     private(set) var detached: [Detached] = []
     /// Every `signalGroup`, in order.
     private(set) var signals: [Signal] = []
+    /// Every `Runtime.copyFile`, in order: the source and the destination.
+    private(set) var copies: [[String]] = []
+    /// Every `Runtime.moveFile`, in order: the source and the destination.
+    private(set) var moves: [[String]] = []
+    /// Every path that `Runtime.trashItem` moved to the Trash, in order.
+    private(set) var trashed: [String] = []
     /// Every folder that `Runtime.makeFolder` made, in order.
     private(set) var madeFolders: [String] = []
     private(set) var commands: [[String]] = []
@@ -119,6 +127,8 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     private(set) var posts: [Post] = []
     /// Every file that `Runtime.writeNew` wrote, in order.
     private(set) var written: [Written] = []
+    /// Every path that `Runtime.removeFile` removed a file from, in order.
+    private(set) var removed: [String] = []
     /// The seconds of each `Runtime.sleep`, in order. No time passes in a test.
     private(set) var slept: [Double] = []
     /// The fake clock: the sum of every sleep, in seconds.
@@ -206,6 +216,13 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         set { lock.withLock { hexDigits = newValue } }
     }
 
+    /// The app bundle that holds the running binary, as `Runtime.containingApp`
+    /// reports it. nil, the default, is a binary outside any app.
+    var containingApp: URL? {
+        get { lock.withLock { hostApp } }
+        set { lock.withLock { hostApp = newValue } }
+    }
+
     /// After this, `startDetached` throws the failure and starts nothing:
     /// `world.startFailure = TecopaFailure(.environment, "no more processes")`.
     var startFailure: TecopaFailure? {
@@ -233,6 +250,16 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
     /// The bytes `Runtime.readData` returns for `path`: a track or a poster.
     func binary(_ path: String, _ data: Data) {
         lock.lock(); binaries[path] = data; lock.unlock()
+    }
+
+    /// An app at `path` whose Info.plist names `id`: the new app by default.
+    /// `Launcher` reads the id before it opens or quits anything.
+    func app(_ path: String = "/Applications/Tecopa Plateworks.app",
+             id: String = "org.plateworks.tecopa") {
+        // swiftlint:disable:next force_try
+        let plist = try! PropertyListSerialization.data(
+            fromPropertyList: ["CFBundleIdentifier": id], format: .xml, options: 0)
+        binary(path + "/Contents/Info.plist", plist)
     }
 
     /// After this, `Runtime.writeNew` refuses `path`: a file is already there.
@@ -345,7 +372,7 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
         return found
     }
 
-    /// The fake `Runtime.writeNew`. It keeps the real rule: a path holds one file,
+    /// The fake `Runtime.writeNew` (`removeFile`, its inverse, is in `runtime()`). It keeps the real rule: a path holds one file,
     /// and the second write to it is refused.
     /// A file that was written can be read back, as on a real disk.
     private func write(_ path: String, _ data: Data) throws {
@@ -449,6 +476,14 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                 },
                 readTail: { path, count in self.tail(path, count) },
                 writeNew: { path, data in try self.write(path, data) },
+                removeFile: { path in
+                    self.lock.withLock {
+                        let held = self.taken.remove(path) != nil
+                        let bytes = self.binaries.removeValue(forKey: path) != nil
+                        let text = self.files.removeValue(forKey: path) != nil
+                        if held || bytes || text { self.removed.append(path) }
+                    }
+                },
                 pathKind: { path in
                     self.lock.withLock {
                         self.taken.contains(path) ? .file : self.folders.contains(path) ? .folder : nil
@@ -462,6 +497,56 @@ final class FakeWorld: HTTPFetching, ProcessRunning, @unchecked Sendable {
                         self.madeFolders.append(path)
                     }
                 },
-                listFolder: { path in self.list(path) })
+                listFolder: { path in self.list(path) },
+                containingApp: { self.containingApp },
+                copyFile: { source, destination in try self.copy(source, destination) },
+                sha256File: { path in
+                    self.lock.withLock {
+                        (self.binaries[path] ?? self.files[path].map { Data($0.utf8) }).map(FakeWorld.sha256)
+                    }
+                },
+                moveFile: { source, destination in try self.move(source, destination) },
+                trashItem: { path in
+                    try self.lock.withLock {
+                        let held = self.taken.remove(path) != nil
+                        let bytes = self.binaries.removeValue(forKey: path) != nil
+                        guard held || bytes else {
+                            throw TecopaFailure(.environment, "Could not move \(path) to the Trash: no such file.")
+                        }
+                        self.trashed.append(path)
+                    }
+                })
+    }
+
+    /// The sha256 of some bytes, in lower-case hex.
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The fake `Runtime.copyFile`: the bytes of a file a test put on the machine,
+    /// at a path that holds nothing. The copy is a file that `pathKind` sees.
+    private func copy(_ source: String, _ destination: String) throws {
+        try lock.withLock {
+            guard let data = binaries[source] ?? files[source].map({ Data($0.utf8) }) else {
+                throw TecopaFailure(.environment, "Could not copy \(source): no such file.")
+            }
+            guard !taken.contains(destination) else { throw fileAlreadyThere(destination) }
+            taken.insert(destination)
+            binaries[destination] = data
+            copies.append([source, destination])
+        }
+    }
+
+    /// The fake `Runtime.moveFile`: it never replaces a file.
+    private func move(_ source: String, _ destination: String) throws {
+        try lock.withLock {
+            guard !taken.contains(destination) else { throw fileAlreadyThere(destination) }
+            guard let data = binaries.removeValue(forKey: source) ?? files.removeValue(forKey: source).map({ Data($0.utf8) })
+            else { throw TecopaFailure(.environment, "Could not rename \(source): no such file.") }
+            taken.remove(source)
+            taken.insert(destination)
+            binaries[destination] = data
+            moves.append([source, destination])
+        }
     }
 }

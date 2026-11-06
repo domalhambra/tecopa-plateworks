@@ -152,8 +152,8 @@ class Tools:
 
 
 def default_tools(repo_root: str) -> Tools:
-    """The real tools. TECOPA_PREP_PYTHON, TECOPA_PREP_SCRIPT and TECOPA_LABELS_SCRIPT
-    move them, with app/main.py's names and defaults. main.py's paths are relative to
+    """The real tools. TECOPA_PREP_PYTHON, TECOPA_PREP_SCRIPT, TECOPA_LABELS_SCRIPT and
+    TECOPA_REGIONS (the curated plates) move them, with app/main.py's names and defaults. main.py's paths are relative to
     the server's cwd, the repo root; here a relative path is joined to `repo_root`."""
     def env_path(var, default):
         return os.path.join(repo_root, os.environ.get(var, default))
@@ -162,7 +162,7 @@ def default_tools(repo_root: str) -> Tools:
                  labels_script=env_path("TECOPA_LABELS_SCRIPT", "scripts/build_labels.py"),
                  coverage_script=os.path.join(repo_root, "scripts", "dem_coverage.py"),
                  repo_root=repo_root,
-                 curated_root=os.path.join(repo_root, "regions"))
+                 curated_root=env_path("TECOPA_REGIONS", "regions"))
 
 
 def _real_terrain(root: str, rid: str):
@@ -211,7 +211,9 @@ def read_coverage(tools: Tools, bbox, env, layers=None) -> dict:
     if layers:
         cmd += ["--layers", ",".join(str(r) for r in layers)]
     try:
-        run = subprocess.run(cmd, cwd=tools.repo_root, capture_output=True, text=True,
+        # The order cache, never the code root: in the Mac app that is a signed
+        # bundle (phase 1 spec 5.4, change 4). dem_coverage finds its imports itself.
+        run = subprocess.run(cmd, cwd=cache_env()[1], capture_output=True, text=True,
                              env=env)
     except OSError as ex:        # no prep venv (a studio edit reaching check_holes)
         raise CoverageError(f"The 3DEP coverage check could not run: {ex}") from ex

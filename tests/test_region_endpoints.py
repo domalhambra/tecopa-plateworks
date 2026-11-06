@@ -1,6 +1,7 @@
 # /api/regions/plan + /api/regions/build against stub scripts (no network).
 import io
 import json
+import os
 import sys
 import time
 
@@ -11,6 +12,8 @@ import app.main as main
 from app import regions as regions_mod
 
 client = TestClient(main.app)
+# Absolute: the in-app build runs its scripts in the order cache, not the repo.
+SUSANVILLE = os.path.abspath("regions/susanville_reno/region.json")
 
 GPX_ALPS = b"""<?xml version="1.0"?>
 <gpx version="1.1" creator="t" xmlns="http://www.topografix.com/GPX/1/1">
@@ -59,6 +62,7 @@ def test_plan_reports_prep_readiness(monkeypatch):
 def _stub_env(tmp_path, monkeypatch, prep_body_ok=True):
     regions_root = tmp_path / "regions"
     regions_root.mkdir()
+    monkeypatch.setenv("TECOPA_ORDERS_DIR", str(tmp_path / "orders"))
     monkeypatch.setenv("STUB_REGIONS_ROOT", str(regions_root))
     monkeypatch.setattr(main, "REGIONS_ROOT", str(regions_root))
     prep = tmp_path / "prep.py"
@@ -67,14 +71,19 @@ def _stub_env(tmp_path, monkeypatch, prep_body_ok=True):
         "ap = argparse.ArgumentParser()\n"
         "for a in ('--id','--name','--epsg'): ap.add_argument(a, required=True)\n"
         "ap.add_argument('--bbox', nargs=4, type=float, required=True)\n"
+        "ap.add_argument('--out-root')\n"
         "a = ap.parse_args()\n"
-        "out = os.path.join(os.environ['STUB_REGIONS_ROOT'], a.id)\n"
+        "if os.environ.get('STUB_SEEN'):\n"
+        "    json.dump({'cwd': os.getcwd(), 'out_root': a.out_root,\n"
+        "               'cache': os.environ.get('HYRIVER_CACHE_NAME')},\n"
+        "              open(os.environ['STUB_SEEN'], 'w'))\n"
+        "out = os.path.join(a.out_root or os.environ['STUB_REGIONS_ROOT'], a.id)\n"
         "os.makedirs(out, exist_ok=True)\n"
         "print('Build plan: stub')\n")
     if prep_body_ok:
         # region.json must satisfy regions.Region(); copy a real one and re-name it.
         ok_body += (
-            "cfg = json.load(open('regions/susanville_reno/region.json'))\n"
+            f"cfg = json.load(open({SUSANVILLE!r}))\n"
             "cfg['name'] = a.name\n"
             "json.dump(cfg, open(os.path.join(out, 'region.json'), 'w'))\n"
             "open(os.path.join(out, 'overview.png'), 'wb').write(b'x')\n")
@@ -172,6 +181,7 @@ def test_build_streams_progress_to_status(tmp_path, monkeypatch):
     # a stub that emits a marker then blocks, so the status poll can observe it.
     regions_root = tmp_path / "regions"
     regions_root.mkdir()
+    monkeypatch.setenv("TECOPA_ORDERS_DIR", str(tmp_path / "orders"))
     monkeypatch.setenv("STUB_REGIONS_ROOT", str(regions_root))
     monkeypatch.setattr(main, "REGIONS_ROOT", str(regions_root))
     prep = tmp_path / "prep.py"
@@ -180,12 +190,17 @@ def test_build_streams_progress_to_status(tmp_path, monkeypatch):
         "ap = argparse.ArgumentParser()\n"
         "for a in ('--id','--name','--epsg'): ap.add_argument(a, required=True)\n"
         "ap.add_argument('--bbox', nargs=4, type=float, required=True)\n"
+        "ap.add_argument('--out-root')\n"
         "a = ap.parse_args()\n"
-        "out = os.path.join(os.environ['STUB_REGIONS_ROOT'], a.id)\n"
+        "if os.environ.get('STUB_SEEN'):\n"
+        "    json.dump({'cwd': os.getcwd(), 'out_root': a.out_root,\n"
+        "               'cache': os.environ.get('HYRIVER_CACHE_NAME')},\n"
+        "              open(os.environ['STUB_SEEN'], 'w'))\n"
+        "out = os.path.join(a.out_root or os.environ['STUB_REGIONS_ROOT'], a.id)\n"
         "os.makedirs(out, exist_ok=True)\n"
         "print('STREAM_MARKER', flush=True)\n"
         "time.sleep(1.2)\n"
-        "cfg = json.load(open('regions/susanville_reno/region.json'))\n"
+        f"cfg = json.load(open({SUSANVILLE!r}))\n"
         "cfg['name'] = a.name\n"
         "json.dump(cfg, open(os.path.join(out, 'region.json'), 'w'))\n"
         "open(os.path.join(out, 'overview.png'), 'wb').write(b'x')\n")
@@ -207,5 +222,45 @@ def test_build_streams_progress_to_status(tmp_path, monkeypatch):
             time.sleep(0.1)
         assert saw, "progress never reflected the streamed prep output"
         assert _wait_done(jid)["state"] == "done"
+    finally:
+        main.REGIONS.clear(); main.REGIONS.update(saved)
+
+
+def test_build_runs_in_the_order_cache_with_an_absolute_out_root(tmp_path, monkeypatch):
+    """Nothing the in-app build writes may land relative to the engine's cwd: in the
+    Mac app that cwd is Application Support, and in a signed bundle a stray write
+    breaks the signature (phase 1 spec 5.4, change 3)."""
+    regions_root = _stub_env(tmp_path, monkeypatch)
+    seen = tmp_path / "seen.json"
+    monkeypatch.setenv("STUB_SEEN", str(seen))
+    saved = dict(main.REGIONS)
+    try:
+        st = _wait_done(client.post("/api/regions/build", json=BUILD_REQ).json()["job"])
+        assert st["state"] == "done", st
+        got = json.loads(seen.read_text())
+        cache_dir = str(tmp_path / "orders" / "_cache")
+        assert got["cwd"] == cache_dir
+        assert got["out_root"] == str(regions_root)
+        assert got["cache"] == os.path.join(cache_dir, "aiohttp_cache.sqlite")
+        assert (regions_root / "stub_built" / "region.json").exists()
+        assert "stub_built" in main.REGIONS
+    finally:
+        main.REGIONS.clear(); main.REGIONS.update(saved)
+
+
+def test_build_with_relative_prep_paths_still_finds_its_scripts(tmp_path, monkeypatch):
+    """The dev engine runs from the repo with relative defaults; moving the build's cwd
+    to the cache must not break them."""
+    regions_root = _stub_env(tmp_path, monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "PREP_SCRIPT", "prep.py")
+    monkeypatch.setattr(main, "LABELS_SCRIPT", "labels.py")
+    monkeypatch.setattr(main, "REGIONS_ROOT", "regions")
+    saved = dict(main.REGIONS)
+    try:
+        st = _wait_done(client.post("/api/regions/build", json=BUILD_REQ).json()["job"])
+        assert st["state"] == "done", st
+        assert (regions_root / "stub_built" / "region.json").exists()
+        assert st["result"]["labels_note"] is None
     finally:
         main.REGIONS.clear(); main.REGIONS.update(saved)

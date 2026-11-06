@@ -41,11 +41,13 @@ public enum ScriptRunner {
     ]
 
     /// One command that the table allows: the interpreter of the row's venv, its
-    /// arguments, and the repo as the working directory.
+    /// arguments, the working directory and the whole environment. In a repo the
+    /// directory is the repo; in the app it is the data root.
     struct Command: Equatable, Sendable {
         let python: String
         let arguments: [String]
-        let repo: String
+        let cwd: String
+        let environment: [String: String]
     }
 
     /// The variables of the caller that change what a Python interpreter loads:
@@ -72,14 +74,58 @@ public enum ScriptRunner {
                 .usage, "\(name) has no row in the script table.",
                 hint: "Add a row to ScriptRunner.table in the same change as the command.")
         }
-        let repo = try runtime.repo()
-        let python = repo + "/" + row.venv.rawValue + "/bin/python"
-        guard runtime.fileExists(python) else {
-            throw TecopaFailure(.environment, "No interpreter at \(python).",
-                                hint: "Read docs/changing-things.md, Set up a machine.")
+        let layout = try runtime.engineLayout()
+        let missing = { (python: String) in
+            TecopaFailure(.environment, "No interpreter at \(python).",
+                          hint: "Read docs/changing-things.md, Set up a machine.")
         }
-        let target = row.kind == .module ? ["-m", name] : [name]
-        return Command(python: python, arguments: target + arguments, repo: repo)
+        switch layout {
+        case .repo(let repo):
+            let python = repo + "/" + row.venv.rawValue + "/bin/python"
+            guard runtime.fileExists(python) else { throw missing(python) }
+            let target = row.kind == .module ? ["-m", name] : [name]
+            return Command(python: python, arguments: target + arguments, cwd: repo,
+                           environment: environment(runtime))
+        case .bundle:
+            // The row's venv column picks the bundled interpreter: invariant 13.
+            let python = row.venv == .prep ? layout.prepPython : layout.enginePython
+            guard runtime.fileExists(python) else { throw missing(python) }
+            // `-P` keeps the data root, the working directory, off sys.path. Each
+            // script puts the code root on it; a module gets it from the bootstrap.
+            let code = layout.codeRoot
+            let target: [String]
+            switch row.kind {
+            case .script:
+                target = ["-P", code + "/" + name]
+            case .module:
+                target = ["-P", "-c", "import sys,runpy; sys.path.insert(0, \(pythonLiteral(code))); "
+                    + "runpy.run_module(\(pythonLiteral(name)), run_name='__main__', alter_sys=True)"]
+            }
+            return Command(python: python, arguments: target + arguments,
+                           cwd: layout.dataRoot(home: runtime.home),
+                           environment: try bundleEnvironment(layout, runtime))
+        }
+    }
+
+    /// The environment of a script in the app: the engine's own (phase 1 spec 5.3),
+    /// from the tool's environment without `droppedVariables`, the data root's
+    /// `settings.json` and the bundle's engine version.
+    static func bundleEnvironment(_ layout: EngineLayout, _ runtime: Runtime) throws -> [String: String] {
+        let path = layout.dataRoot(home: runtime.home) + "/settings.json"
+        let settings = try EngineEnvironment.settings(from: runtime.readData(path), path: path)
+        return EngineEnvironment.build(
+            layout: layout, home: runtime.home, base: environment(runtime), settings: settings,
+            engineVersion: layout.infoValue("TecopaEngineVersion", runtime) ?? "unknown")
+    }
+
+    /// A Python string literal of `text`, in single quotes. Only the bootstrap of a
+    /// module row uses it, for the code root and the module's name.
+    static func pythonLiteral(_ text: String) -> String {
+        let escaped = text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "'", with: "\\'")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+        return "'" + escaped + "'"
     }
 
     /// Run one row of the table and wait for it.
@@ -93,8 +139,8 @@ public enum ScriptRunner {
     static func run(_ name: String, _ arguments: [String], _ runtime: Runtime,
                     table: [String: Row]) throws -> ProcessResult {
         let command = try command(name, arguments, runtime, table: table)
-        return try runtime.exec(command.python, command.arguments, cwd: command.repo,
-                                environment: environment(runtime))
+        return try runtime.exec(command.python, command.arguments, cwd: command.cwd,
+                                environment: command.environment)
     }
 
     /// Start one row of the table as a tracked run, and return at once. The checks
@@ -114,8 +160,9 @@ public enum ScriptRunner {
                       failureText: String? = nil, _ runtime: Runtime,
                       table: [String: Row]) throws -> JSONValue {
         let row = try self.command(name, arguments, runtime, table: table)
-        return try Runs.start(program: row.python, arguments: row.arguments, cwd: row.repo,
-                              command: command, failureText: failureText, runtime)
+        return try Runs.start(program: row.python, arguments: row.arguments, cwd: row.cwd,
+                              environment: row.environment, command: command,
+                              failureText: failureText, runtime)
     }
 
     /// The engine's own rule for a region id, `^[a-z0-9_]{1,64}$` (app/main.py). The

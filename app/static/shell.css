@@ -178,7 +178,9 @@ details.insp-advanced[open] > summary.insp-head .insp-title { color: var(--text-
 
 /* ---- responsive: sidebars stack around the stage on narrow viewports ---- */
 @media (max-width: 1100px) {
-  .studio-body { grid-template-columns: 1fr; grid-template-rows: auto auto auto; overflow-y: auto; }
+  /* max-content rows: the panels keep min-height 0 for the wide layout, so auto rows would
+     squeeze them to fit the window and their contents would draw over one another */
+  .studio-body { grid-template-columns: 1fr; grid-template-rows: repeat(3, max-content); overflow-y: auto; }
   .projectbar { border-right: 0; border-bottom: 1px solid var(--hairline); }
   .projectbar-body { overflow-y: visible; }
   .inspector { border-left: 0; border-top: 1px solid var(--hairline); }

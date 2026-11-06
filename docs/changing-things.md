@@ -504,6 +504,8 @@ Traps already paid for:
   override at all. Prepare runs the prep subprocess with its cwd at
   `~/Tecopa Orders/_cache/` instead of the repo root, so that write lands there too;
   every script path and `--out-root` it passes is already absolute, so this is safe.
+  The studio's in-app plate build and the 3DEP coverage query run there too, so the
+  Mac app never writes beside its engine (native Mac app phase 1 spec, 5.4).
   The dynamic-service DEM fetch itself already follows `HYRIVER_CACHE_NAME`.
 - A query of the 3DEP index that fails is not a refused size. The first build of the
   preview read it as one, so a network fault removed a size from the client's PDF and
@@ -1068,19 +1070,37 @@ copy answers to the Collector register, and `tests/test_marketing_page.py` enfor
    each section heading and the Journey Light claim, and `tests/test_stories_config.py`
    holds `marketing/stories.toml` to the same headings.
 
-## Rebuild the macOS launcher
+## Build the Mac app
 
-Only when the repo moves or the launcher itself changes. A `git pull` updates the app
-with no rebuild, because it runs the engine from this repo's `.venv` on port 8848.
+`Tecopa Plateworks.app` (bundle id `org.plateworks.tecopa`) carries its own Python
+3.14.2, the engine and the plate files, and runs the engine on port 8848 with its data
+in `~/Library/Application Support/Tecopa Plateworks/`. It reads nothing from the repo.
+Designs: `superpowers/specs/2026-11-05-native-mac-app-phase-1-bundled-engine-design.md`
+and `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-design.md`.
 
-1. `scripts/macos/build_app.sh --install` builds `dist/` and copies the app to
-   `/Applications`. Bundle id `guide.badwater.tecopa` is name-neutral. Keep it, or macOS
-   treats the build as a new app and re-prompts.
-2. `scripts/macos/smoke_test.sh` needs a human: it raises one-time Documents and
-   Automation prompts, and port 8848 must be free. Logs are at
-   `~/Library/Logs/TecopaPlateworks.log`.
+1. When a lock or a venv changes: `scripts/macos/make_bundle_locks.sh`. It writes the two
+   hashed locks, `requirements-bundle-engine.txt` and `requirements-bundle-prep.txt`,
+   and the wheelhouse in `dist/.wheelhouse/`. Commit the locks.
+2. `scripts/macos/build_bundle.sh` builds `dist/Tecopa Plateworks.app` from `HEAD`, signed
+   ad hoc. It refuses tracked changes. It checks the fonts (invariant 10), the engine's
+   imports, the bytecode, that the engine starts clean from another folder, and the
+   signature. Its report is `dist/build-report.txt`.
+3. First launch seeds the plate files. Then `scripts/macos/seed_dem_cache.sh` copies the
+   checkout's DEMs into the app's cache once, sha-checked.
+4. `scripts/macos/byte_proof.sh --bundle "dist/Tecopa Plateworks.app" --proof 1` proves a
+   poster from the app equals the venv's byte for byte. `--proof 2 --order <folder>`
+   proves a copy of the app renders the same bytes and prepares an order with the repo
+   renamed away. Reports go to `dist/proof/`.
+5. A release: `scripts/macos/make_release.sh` signs with the Developer ID and the hardened
+   runtime (no entitlements), notarizes and staples the app and
+   `dist/Tecopa Plateworks-<version>.dmg`. Install by dragging the app to `/Applications`.
+6. The cold DEM archive: `scripts/macos/archive_dems.py --archive-root
+   "~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates" --label <label> [--current]`.
+   Write-once, keyed by sha256. Run `--dry-run` first. The app's Plates pane restores
+   from it.
 
-Design: `superpowers/specs/2026-07-18-macos-launcher-app-design.md`.
+The old launcher (`scripts/macos/build_app.sh`, `guide.badwater.tecopa`) is retired by
+the app; its spec is superseded.
 
 ## Build the tecopa tool
 

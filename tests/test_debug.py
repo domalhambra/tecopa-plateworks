@@ -8,6 +8,8 @@ import asyncio
 import inspect
 import json
 import logging
+import os
+import sys
 import time
 import numpy as np
 import pytest
@@ -961,3 +963,14 @@ def test_debug_module_writes_nothing_to_disk():
             name = getattr(node.func, "id", getattr(node.func, "attr", ""))
             assert name not in ("open", "write", "write_text", "write_bytes",
                                 "dump"), node.lineno
+
+
+def test_engine_reports_its_interpreter_and_path():
+    # The Mac app's proofs check that the engine on 8848 is the bundle's own
+    # interpreter, and its build checks sys.path (phase 1 spec 5.2, 8).
+    c, _ = _client()
+    body = c.get("/api/debug/engine").json()
+    assert body["executable"] == sys.executable
+    assert body["prefix"] == sys.prefix
+    assert body["sys_path"] == sys.path
+    assert body["pid"] == os.getpid()

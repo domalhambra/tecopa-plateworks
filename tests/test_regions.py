@@ -32,3 +32,12 @@ def test_lonlat_bbox_roundtrips_to_input_bbox():
 
 # (detect_region/contains_lonlat were removed as production-dead code -- upload
 # routing is main._best_region, covered by tests/test_region_recovery.py.)
+
+
+def test_discover_ignores_the_seed_staging_folder_and_record(tmp_path):
+    from tests.test_readyz import _write_region
+    b = (600000.0, 4400000.0, 610000.0, 4410000.0)
+    _write_region(str(tmp_path / ".seed-tmp"), "lassen_ca", b, b)
+    (tmp_path / ".seeded.json").write_text("{}")
+    _write_region(str(tmp_path), "real", b, b)
+    assert list(discover(str(tmp_path))) == ["real"]

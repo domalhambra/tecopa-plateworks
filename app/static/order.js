@@ -77,6 +77,24 @@ async function loadOrders() {
   // no orders (or no orders folder): the panel stays out of the way
   $('orderPanel').hidden = !list.length;
   refresh();
+  openFromLink(list);
+}
+
+// The Mac app's Orders window opens an order here with ?order=<folder name> (native Mac
+// app phase 2 spec, decision 10): select it and press Open, once. The link is then taken
+// off the address, so a reload does not open the order again.
+function openFromLink(list) {
+  const params = new URLSearchParams(location.search);
+  const want = params.get('order');
+  if (!want) return;
+  params.delete('order');
+  const rest = params.toString();
+  history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  const hit = list.find((o) => o.name === want || o.folder === want);
+  if (!hit) { toast(`No order named ${want}`, 'error'); return; }
+  if (!hit.prepared) { toast(`${hit.title || hit.name} is not prepared yet: run Prepare first`, 'error'); return; }
+  $('orderSelect').value = hit.folder;
+  openSelected();
 }
 
 // ---- open -------------------------------------------------------------------------

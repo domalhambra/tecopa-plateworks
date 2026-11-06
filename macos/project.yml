@@ -1,0 +1,76 @@
+# XcodeGen spec for Tecopa Plateworks.app, the native Mac app
+# (docs/superpowers/specs/2026-11-05-native-mac-app-phase-1-bundled-engine-design.md).
+# Regenerate:  xcodegen generate --spec macos/project.yml --project macos
+#
+# Not sandboxed, no entitlements file, hardened runtime off: the app starts its own
+# Python engine. scripts/macos/build_bundle.sh adds the engine and both Pythons to
+# the built app and signs it. The xcodeproj stays inside macos/ so ../tools/tecopa
+# resolves.
+name: TecopaPlateworks
+options:
+  bundleIdPrefix: org.plateworks
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  tecopa:
+    path: ../tools/tecopa
+
+targets:
+  TecopaPlateworks:
+    type: application
+    platform: macOS
+    dependencies:
+      - package: tecopa
+        product: TecopaKit
+    sources:
+      - path: TecopaPlateworks
+    # XcodeGen writes Info.plist from these. A hand edit is lost.
+    info:
+      path: TecopaPlateworks/Info.plist
+      properties:
+        CFBundleName: Tecopa Plateworks
+        CFBundleDisplayName: Tecopa Plateworks
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        LSApplicationCategoryType: public.app-category.graphics-design
+        NSHumanReadableCopyright: "Copyright © 2026 Plateworks. AGPL-3.0-or-later."
+        # build_bundle.sh writes the git commit here.
+        TecopaEngineVersion: unbaked
+    settings:
+      base:
+        PRODUCT_NAME: TecopaPlateworks
+        PRODUCT_BUNDLE_IDENTIFIER: org.plateworks.tecopa
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        ENABLE_APP_SANDBOX: NO
+        ENABLE_HARDENED_RUNTIME: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+    scheme:
+      testTargets:
+        - TecopaPlateworksTests
+
+  # The app's pure decisions and copy, tested with no host: the bundle compiles the
+  # two files itself. Do not add TEST_HOST or BUNDLE_LOADER.
+  TecopaPlateworksTests:
+    type: bundle.unit-test
+    platform: macOS
+    dependencies:
+      - package: tecopa
+        product: TecopaKit
+    sources:
+      - path: TecopaPlateworksTests
+      - path: TecopaPlateworks/AppDecisions.swift
+      - path: TecopaPlateworks/AlertText.swift
+      - path: TecopaPlateworks/OrderData.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.plateworks.tecopa.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"

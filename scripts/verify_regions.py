@@ -132,8 +132,10 @@ def main(argv=None) -> int:
     if not os.path.isdir(root):
         print(f"no regions root at {root!r}", file=sys.stderr)
         return 2
+    # A dot folder is never a plate: the Mac app stages copies in .seed-tmp.
     ids = args.region_id or sorted(
-        d for d in os.listdir(root) if os.path.isdir(os.path.join(root, d)))
+        d for d in os.listdir(root)
+        if not d.startswith(".") and os.path.isdir(os.path.join(root, d)))
 
     bad = 0
     for rid in ids:

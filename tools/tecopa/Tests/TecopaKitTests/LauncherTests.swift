@@ -5,9 +5,10 @@ final class LauncherTests: XCTestCase {
     private let open = ["/usr/bin/open", "-g", "/Applications/Tecopa Plateworks.app"]
     private let pgrep = [
         "/usr/bin/pgrep", "-f",
-        #"^/Applications/Tecopa Plateworks\.app/Contents/MacOS/TecopaPlateworks( |$)"#,
+        #"/Tecopa Plateworks\.app/Contents/MacOS/TecopaPlateworks( |$)"#,
     ]
-    private let quit = ["/usr/bin/osascript", "-e", "quit app \"Tecopa Plateworks\""]
+    private let quit = ["/usr/bin/osascript", "-e", "quit app id \"org.plateworks.tecopa\""]
+    private static let marker = "/home/Library/Application Support/Tecopa Plateworks/.quit-forced"
 
     private static let noJobs = #"{"jobs":[]}"#
     private static let noSessions = #"{"sessions":[]}"#
@@ -24,10 +25,17 @@ final class LauncherTests: XCTestCase {
         w.serve("/api/debug/sessions", 200, sessions)
     }
 
+    /// A machine with the new app installed at /Applications.
+    private static func machine() -> FakeWorld {
+        let w = FakeWorld()
+        w.app()
+        return w
+    }
+
     /// A machine where `open` starts the launcher and its engine, and `osascript`
     /// stops both.
     private func world(running: Bool) -> FakeWorld {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = running
         if running { Self.serveEngine(w) }
         w.onRun = { world, command in
@@ -58,36 +66,176 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(out["running"], .bool(true))
     }
 
-    func testStartFailsWhenTheLauncherIsNotInstalled() async {
+    func testStartFailsWhenTheAppIsNotInstalled() async {
         let w = world(running: false)
         var runtime = w.runtime()
-        runtime.fileExists = { $0 != Launcher.appPath }
+        runtime.fileExists = { $0 != "/Applications/Tecopa Plateworks.app" }
         do {
             _ = try await Launcher.start(runtime)
             XCTFail("expected a failure")
         } catch let f as TecopaFailure {
             XCTAssertEqual(f.kind, .environment)
-            XCTAssertTrue(f.hint?.contains("build_app.sh --install") ?? false)
+            XCTAssertEqual(f.message, "Tecopa Plateworks is not installed at /Applications/Tecopa Plateworks.app.")
+            XCTAssertNil(f.hint)
         } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [])
     }
 
     func testStartFailsWhenTheEngineNeverAnswers() async {
-        // the launcher can wait 90 seconds on the Documents-permission prompt and
-        // then 60 for the engine, so the tool waits 160: 320 polls of half a second
-        let w = FakeWorld()          // open succeeds, and nothing ever serves
+        // the app waits 60 seconds for its engine, so the tool waits 70: 140 polls
+        // of half a second. No Documents prompt any more.
+        let w = Self.machine()          // open succeeds, and nothing ever serves
         do {
             _ = try await Launcher.start(w.runtime())
             XCTFail("expected a failure")
         } catch let f as TecopaFailure {
             XCTAssertEqual(f.kind, .environment)
-            XCTAssertEqual(f.message, "The engine did not answer within 160 seconds.")
+            XCTAssertEqual(f.message, "The engine did not answer within 70 seconds.")
             XCTAssertEqual(
-                f.hint,
-                "Run `tecopa logs`. The launcher shows an alert when it cannot start the engine, "
-                    + "and macOS may be waiting for a Documents-folder permission click.")
+                f.hint, "Run `tecopa logs`. The app shows an alert when it cannot start the engine.")
+            XCTAssertFalse(f.hint?.contains("Documents") ?? true)
         } catch { XCTFail("\(error)") }
         XCTAssertEqual(w.commands, [open])
-        XCTAssertEqual(w.requests.count, 321)       // one look before `open`, then 320 polls
+        XCTAssertEqual(w.requests.count, 141)       // one look before `open`, then 140 polls
+        XCTAssertEqual(w.clock, 70)
+    }
+
+    func testTheBundleIdIsTheNewOne() {
+        XCTAssertEqual(Launcher.bundleID, "org.plateworks.tecopa")
+        XCTAssertEqual(Launcher.appPath(FakeWorld().runtime()), "/Applications/Tecopa Plateworks.app")
+    }
+
+    func testTheAppPathFollowsTecopaApp() async throws {
+        let w = world(running: false)
+        var runtime = w.runtime()
+        let dist = "/Users/dom/Tecopa Plateworks/dist/Tecopa Plateworks.app"
+        runtime.environment["TECOPA_APP"] = dist
+        w.app(dist)
+        XCTAssertEqual(Launcher.appPath(runtime), dist)
+        let out = try await Launcher.start(runtime)
+        XCTAssertEqual(out["started"], .bool(true))
+        // by path, never by bundle id: LaunchServices may hold several copies
+        XCTAssertEqual(w.commands, [["/usr/bin/open", "-g", dist]])
+    }
+
+    func testInsideAnAppTheAppPathIsThatApp() {
+        var runtime = world(running: false).runtime()
+        runtime.layout = .bundle(URL(fileURLWithPath: "/Users/dom/x/dist/Tecopa Plateworks.app"))
+        XCTAssertEqual(Launcher.appPath(runtime), "/Users/dom/x/dist/Tecopa Plateworks.app")
+        runtime.environment["TECOPA_APP"] = "/Elsewhere/Tecopa Plateworks.app"
+        XCTAssertEqual(Launcher.appPath(runtime), "/Elsewhere/Tecopa Plateworks.app")
+    }
+
+    func testAForcedStopLeavesTheQuitMarker() async throws {
+        let w = world(running: true)
+        Self.serveEngine(w, jobs: Self.oneRunningJob)
+        w.existingFile(Self.marker)          // a stale marker from an earlier forced stop
+        w.now = FakeWorld.date("2026-11-05T12:00:00Z")
+        let out = try await Launcher.stop(w.runtime(), force: true)
+        XCTAssertEqual(out["stopped"], .bool(true))
+        XCTAssertEqual(w.removed, [Self.marker])
+        XCTAssertEqual(w.written.map(\.path), [Self.marker])
+        XCTAssertEqual(w.written.first.map { String(decoding: $0.data, as: UTF8.self) },
+                       "2026-11-05T12:00:00Z\n")
+        XCTAssertEqual(w.commands, [pgrep, quit, pgrep])
+
+        // without force there is no marker: the tool already refused running jobs
+        let plain = world(running: true)
+        _ = try await Launcher.stop(plain.runtime())
+        XCTAssertEqual(plain.written, [])
+        XCTAssertEqual(plain.removed, [])
+    }
+
+    func testTheOldLauncherIsNeverOpenedOrQuit() async {
+        // the old launcher still sits at /Applications: the tool refuses to drive it
+        let message = "The app at /Applications/Tecopa Plateworks.app is the old launcher (guide.badwater.tecopa). "
+            + "Set TECOPA_APP to the new build, or install it."
+        for running in [false, true] {
+            let w = world(running: running)
+            w.app(id: "guide.badwater.tecopa")
+            do {
+                if running { _ = try await Launcher.stop(w.runtime(), force: true) }
+                else { _ = try await Launcher.start(w.runtime()) }
+                XCTFail("expected a failure")
+            } catch let f as TecopaFailure {
+                XCTAssertEqual(f.kind, .environment)
+                XCTAssertEqual(f.message, message)
+            } catch { XCTFail("\(error)") }
+            XCTAssertEqual(w.commands, [], "running \(running)")
+            XCTAssertEqual(w.written, [])
+        }
+        // restart goes through stop, so it refuses before the quit
+        let w = world(running: true)
+        w.app(id: "guide.badwater.tecopa")
+        do {
+            _ = try await Launcher.restart(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.message, message)
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [])
+    }
+
+    func testARunningOldLauncherIsRefusedBeforeAnyQuit() async {
+        // the new app is on disk, but the launcher that runs is the old one elsewhere:
+        // a quit by the new id would never reach it, so the stop refuses up front
+        let old = "/Volumes/Old/Tecopa Plateworks.app"
+        let w = world(running: true)
+        w.app(old, id: "guide.badwater.tecopa")
+        w.result(for: "pgrep", ProcessResult(exitCode: 0, stdout: "4242\n", stderr: ""))
+        w.process(4242, old + "/Contents/MacOS/TecopaPlateworks")
+        for forced in [false, true] {
+            do {
+                _ = try await Launcher.stop(w.runtime(), force: forced)
+                XCTFail("expected a failure")
+            } catch let f as TecopaFailure {
+                XCTAssertEqual(f.kind, .environment)
+                XCTAssertEqual(f.message, "The running app at \(old) is the old launcher (guide.badwater.tecopa). "
+                                   + "Quit it from its menu, then start the new app.")
+            } catch { XCTFail("\(error)") }
+        }
+        XCTAssertFalse(w.commands.contains { $0.first == "/usr/bin/osascript" })
+        XCTAssertEqual(w.written, [])
+
+        // the new app running passes the same check and quits as before
+        let ok = world(running: true)
+        ok.result(for: "pgrep", ProcessResult(exitCode: 0, stdout: "77\n", stderr: ""))
+        ok.process(77, "/Applications/Tecopa Plateworks.app/Contents/MacOS/TecopaPlateworks")
+        ok.onRun = { world, command in
+            if command.first == "/usr/bin/osascript" {
+                world.result(for: "pgrep", ProcessResult(exitCode: 1, stdout: "", stderr: ""))
+                world.stopServing()
+            }
+        }
+        _ = try? await Launcher.stop(ok.runtime())
+        XCTAssertTrue(ok.commands.contains { $0.first == "/usr/bin/osascript" })
+    }
+
+    func testAnAppWithNoReadableIdIsRefusedToo() async {
+        let w = FakeWorld()          // the app exists, and its Info.plist reads as nothing
+        do {
+            _ = try await Launcher.start(w.runtime())
+            XCTFail("expected a failure")
+        } catch let f as TecopaFailure {
+            XCTAssertEqual(f.kind, .environment)
+            XCTAssertTrue(f.message.contains("(unidentified)"), f.message)
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(w.commands, [])
+    }
+
+    func testAForcedStopMakesTheMarkerFolderWhenItIsMissing() async throws {
+        let w = world(running: true)
+        let folder = "/home/Library/Application Support/Tecopa Plateworks"
+        _ = try await Launcher.stop(w.runtime(), force: true)
+        XCTAssertEqual(w.madeFolders, [folder])
+        XCTAssertEqual(w.written.map(\.path), [Self.marker])
+
+        // a folder that exists is left alone
+        let there = world(running: true)
+        there.folder(folder)
+        _ = try await Launcher.stop(there.runtime(), force: true)
+        XCTAssertEqual(there.madeFolders, [])
+        XCTAssertEqual(there.written.map(\.path), [Self.marker])
     }
 
     func testStartOverAForeignAnswerRunsNoCommand() async {
@@ -120,7 +268,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testAnEngineThatIsSlowAfterOpenIsNotReadyYet() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.onRun = { world, command in
             if command.first == "/usr/bin/open" { world.timeOut("/readyz") }
         }
@@ -153,7 +301,7 @@ final class LauncherTests: XCTestCase {
 
     func testStopPollsUntilTheLauncherProcessIsGone() async throws {
         // the port closes first, and the app needs two more looks to exit
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -167,7 +315,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testStopSaysWhenTheLauncherProcessIsStillExiting() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -217,7 +365,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testAPortThatDoesNotAnswerInTimeIsStillThereForStop() async {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         Self.serveEngine(w)
         w.onRun = { world, command in
@@ -240,7 +388,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testStopNamesTheAutomationPermissionWhenMacOSDeniesTheQuit() async {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.serve("/readyz", 200, FakeWorld.readyBody)
         w.result(for: "osascript", ProcessResult(
             exitCode: 1, stdout: "",
@@ -341,7 +489,7 @@ final class LauncherTests: XCTestCase {
     }
 
     func testTheUnreadNoteJoinsTheStillExitingNote() async throws {
-        let w = FakeWorld()
+        let w = Self.machine()
         w.launcherRunning = true
         w.serve("/readyz", 200, FakeWorld.readyBody)
         w.onRun = { world, command in
@@ -405,15 +553,15 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(Launcher.port, Runtime.defaultPort)
         XCTAssertEqual(
             Catalog.named("engine_start")?.summary,
-            "Open the launcher app, which starts the engine on port 8848, and wait for it to answer.")
+            "Open the Tecopa Plateworks app, which starts the engine on port 8848, and wait for it to answer.")
         XCTAssertEqual(
             Catalog.named("engine_stop")?.summary,
-            "Quit the launcher app, which stops the engine it started. This ends every running job "
+            "Quit the Tecopa Plateworks app, which stops the engine it started. This ends every running job "
                 + "and every studio session that is held in memory. Refuses while a job is running "
                 + "or queued, unless force is true.")
         XCTAssertEqual(
             Catalog.named("engine_restart")?.summary,
-            "Quit and reopen the launcher app, for example after a change to the engine's Python "
+            "Quit and reopen the Tecopa Plateworks app, for example after a change to the engine's Python "
                 + "code. This ends every running job and every studio session that is held in memory. "
                 + "Refuses while a job is running or queued, unless force is true.")
         for name in ["engine_stop", "engine_restart"] {
@@ -434,9 +582,10 @@ final class LauncherTests: XCTestCase {
         XCTAssertEqual(out["start"]?["running"], .bool(true))
     }
 
-    func testTheProcessPatternMatchesTheLauncherAndNoOtherCommandLine() throws {
+    func testTheProcessPatternMatchesADistCopy() throws {
         // pgrep -f reads the pattern as an extended regular expression over the full
         // command line. These cases have the same meaning in NSRegularExpression.
+        // Unanchored, so a dist/ build of the app counts as the app.
         XCTAssertEqual(Launcher.processPattern, pgrep[2])
         let pattern = try NSRegularExpression(pattern: Launcher.processPattern)
         func matches(_ line: String) -> Bool {
@@ -445,11 +594,13 @@ final class LauncherTests: XCTestCase {
         let binary = "/Applications/Tecopa Plateworks.app/Contents/MacOS/TecopaPlateworks"
         XCTAssertTrue(matches(binary))
         XCTAssertTrue(matches(binary + " -psn_0_12345"))
-        XCTAssertFalse(matches("/usr/bin/vim " + binary))
-        XCTAssertFalse(matches("/usr/bin/pgrep -f " + binary))
+        XCTAssertTrue(matches(
+            "/Users/dom/Documents/Claude/20-29 Properties/25 Tecopa Plateworks/dist/Tecopa Plateworks.app"
+                + "/Contents/MacOS/TecopaPlateworks"))
         XCTAssertFalse(matches(binary + "Helper"))
-        XCTAssertFalse(matches("/Users/dom" + binary))
         XCTAssertFalse(matches("/Applications/Tecopa PlateworksXapp/Contents/MacOS/TecopaPlateworks"))
+        XCTAssertFalse(matches("/Applications/Other.app/Contents/MacOS/Other"))
+        XCTAssertFalse(matches("/Users/dom/.venv/bin/python -m uvicorn app.main:app --port 8848"))
     }
 
     func testControlRefusesAnyPortExcept8848() async {

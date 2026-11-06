@@ -318,3 +318,73 @@ public struct SystemProcessRunner: ProcessRunning {
         }
     }
 }
+
+/// The engine process, for the app. A test replaces it.
+public protocol EngineSpawning: Sendable {
+    /// Start the engine and return its pid at once. Its stdout and stderr append to
+    /// `logPath`. `onExit` gets its termination status when it ends.
+    func spawn(_ executable: String, _ arguments: [String], cwd: String, environment: [String: String],
+               logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> Int32
+    func isRunning(_ pid: Int32) -> Bool
+    func signal(_ pid: Int32, _ signal: Int32) throws
+}
+
+/// The real spawner: a Foundation `Process`, as the launcher did. stdout and stderr
+/// share one O_APPEND descriptor on the log, so the engine's lines and the app's own
+/// can never overwrite each other. No unit test; Task 18 checks it by hand.
+public struct ProcessEngineSpawner: EngineSpawning {
+    /// The children started here, by pid. `Process` reaps its child, so `isRunning`
+    /// asks the `Process`, not `kill(pid, 0)`.
+    private final class Children: @unchecked Sendable {
+        let lock = NSLock()
+        var byPID: [Int32: Process] = [:]
+    }
+    private static let children = Children()
+
+    public init() {}
+
+    public func spawn(_ executable: String, _ arguments: [String], cwd: String, environment: [String: String],
+                      logPath: String, onExit: @escaping @Sendable (Int32) -> Void) throws -> Int32 {
+        let folder = (logPath as NSString).deletingLastPathComponent
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        let fd = open(logPath, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
+        guard fd >= 0 else {
+            throw TecopaFailure(.environment,
+                                "Could not open the log \(logPath): \(String(cString: strerror(errno)))")
+        }
+        // Process dups the descriptor into the child; the handle closes this one.
+        let log = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.currentDirectoryURL = URL(fileURLWithPath: cwd)
+        process.environment = environment
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = log
+        process.standardError = log
+        let children = Self.children
+        process.terminationHandler = { finished in
+            children.lock.withLock { _ = children.byPID.removeValue(forKey: finished.processIdentifier) }
+            onExit(finished.terminationStatus)
+        }
+        do {
+            try process.run()
+        } catch {
+            throw TecopaFailure(.environment, "Could not start \(executable): \(error.localizedDescription)")
+        }
+        let pid = process.processIdentifier
+        children.lock.withLock { if process.isRunning { children.byPID[pid] = process } }
+        return pid
+    }
+
+    public func isRunning(_ pid: Int32) -> Bool {
+        Self.children.lock.withLock { Self.children.byPID[pid]?.isRunning ?? false }
+    }
+
+    public func signal(_ pid: Int32, _ signal: Int32) throws {
+        guard pid > 1 else { throw TecopaFailure(.environment, "\(pid) is not the engine's pid.") }
+        guard kill(pid, signal) == 0 else {
+            throw TecopaFailure(.environment, "Could not signal \(pid): \(String(cString: strerror(errno)))")
+        }
+    }
+}

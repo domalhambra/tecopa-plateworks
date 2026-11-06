@@ -28,12 +28,19 @@ export function toast(msg, kind = 'info') {
   }
 }
 
-// Run a DOM mutation inside a View Transition when the platform supports it and the
-// user hasn't asked for reduced motion; otherwise just run it. Section swaps use this.
+// Run a DOM mutation inside a View Transition when the platform supports it, the page
+// is visible and the user hasn't asked for reduced motion; otherwise just run it.
+// Section swaps use this. A hidden page (the Mac app's window opened behind another)
+// skips the animation, and a transition that a newer one aborts rejects `ready` and
+// `finished`: neither is a fault, so both are caught. updateCallbackDone is left
+// alone, so an error inside fn itself still reaches the studio's report.
 export function withTransition(fn) {
-  const ok = document.startViewTransition &&
+  const ok = document.startViewTransition && document.visibilityState === 'visible' &&
     window.matchMedia('(prefers-reduced-motion: no-preference)').matches;
-  if (ok) document.startViewTransition(fn); else fn();
+  if (!ok) { fn(); return; }
+  const t = document.startViewTransition(fn);
+  t.ready.catch(() => {});
+  t.finished.catch(() => {});
 }
 
 // The save-file sentence, told true for the CURRENT export choice. A share copy carries

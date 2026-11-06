@@ -1,16 +1,39 @@
 #!/usr/bin/env bash
 # Build (and optionally install) the tecopa tool.
-# Usage: tools/tecopa/build.sh [--install]
+# Usage: tools/tecopa/build.sh [--install | --bundle-helper <out path>]
+#
+# --bundle-helper builds the copy that ships in the app's Contents/Helpers/tecopa.
+# It bakes no repo path, so it finds the app from its own path (phase 2 spec,
+# decision 5), and copies the binary to <out path>.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+USAGE="usage: tools/tecopa/build.sh [--install | --bundle-helper <out path>]"
 INSTALL=0
+HELPER_OUT=""
 case "${1:-}" in
   "") ;;
   --install) INSTALL=1 ;;
-  *) echo "usage: tools/tecopa/build.sh [--install]" >&2; exit 2 ;;
+  --bundle-helper)
+    HELPER_OUT="${2:-}"
+    if [[ -z "$HELPER_OUT" ]]; then echo "$USAGE" >&2; exit 2; fi
+    ;;
+  *) echo "$USAGE" >&2; exit 2 ;;
 esac
+
+if [[ -n "$HELPER_OUT" ]]; then
+  echo "Building the app's tecopa helper (no baked repo path)"
+  # Without TECOPA_BAKED, Baked.swift's defaults compile: no repo, version "dev".
+  swift build --package-path "$SCRIPT_DIR" -c release
+  BIN="$(swift build --package-path "$SCRIPT_DIR" -c release --show-bin-path)/tecopa"
+  mkdir -p "$(dirname "$HELPER_OUT")"
+  # remove first: macOS caches the signature of a binary by path
+  rm -f "$HELPER_OUT"
+  cp "$BIN" "$HELPER_OUT"
+  echo "Helper: $HELPER_OUT"
+  exit 0
+fi
 
 VERSION="$(git -C "$REPO" describe --always --dirty 2>/dev/null || echo dev)"
 GEN="$SCRIPT_DIR/Sources/TecopaKit/Baked.generated.swift"

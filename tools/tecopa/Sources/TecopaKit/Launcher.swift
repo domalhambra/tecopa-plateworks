@@ -1,28 +1,84 @@
 import Foundation
 
-/// Engine control. The launcher app owns uvicorn as a child process, so "start" opens
-/// the app and "stop" quits it. The tool never starts an engine of its own: two
-/// owners of one engine is the fault the launcher spec was written to prevent.
+/// What one read of the engine's jobs said. `unknown` is not the same as none.
+/// `timedOut` means the engine accepted the connection and did not answer: a long
+/// render can hold it that way, and that render is the work a stop would end.
+public enum JobsRead: Equatable, Sendable { case active(Int), unknown, timedOut }
+
+/// Engine control. The Tecopa Plateworks app owns uvicorn as a child process, so
+/// "start" opens the app and "stop" quits it. The tool never starts an engine of its
+/// own: two owners of one engine is the fault the launcher spec was written to prevent.
 public enum Launcher {
-    public static let appPath = "/Applications/Tecopa Plateworks.app"
-    /// The launcher's engine port. `Runtime.defaultPort` is the one definition.
+    public static let bundleID = "org.plateworks.tecopa"
+    static let installedPath = "/Applications/Tecopa Plateworks.app"
+
+    /// The app the tool drives. `TECOPA_APP` names a `dist/` build before the install.
+    /// The tool opens the app by this path, never by bundle id: LaunchServices may
+    /// hold several copies under one id, Xcode's own build among them.
+    public static func appPath(_ runtime: Runtime) -> String {
+        if let named = runtime.environment["TECOPA_APP"] { return named }
+        // Inside an app (the app itself, or the tecopa that ships in it), the app is
+        // that one: doctor checks the copy it runs from, not /Applications.
+        if case .bundle(let app)? = runtime.layout { return app.standardizedFileURL.path }
+        if runtime.layout == nil, runtime.repoFlag == nil, let app = runtime.containingApp() {
+            return app.standardizedFileURL.path
+        }
+        return installedPath
+    }
+
+    /// Refuse an app at `app` that is not this tool's app. The old launcher
+    /// (`guide.badwater.tecopa`) can still sit at /Applications under the same name:
+    /// `open` would start it, and a quit by the new id would never reach it. The id
+    /// is read as Doctor's app row reads it, through `EngineLayout.infoValue`.
+    static func requireCurrentApp(_ runtime: Runtime, at app: String, running: Bool = false) throws {
+        let id = EngineLayout.bundle(URL(fileURLWithPath: app)).infoValue("CFBundleIdentifier", runtime)
+        guard id == bundleID else {
+            if running {
+                throw TecopaFailure(
+                    .environment,
+                    "The running app at \(app) is the old launcher (\(id ?? "unidentified")). "
+                        + "Quit it from its menu, then start the new app.")
+            }
+            throw TecopaFailure(
+                .environment,
+                "The app at \(app) is the old launcher (\(id ?? "unidentified")). "
+                    + "Set TECOPA_APP to the new build, or install it.")
+        }
+    }
+
+    /// The .app folders of running launcher processes, read from each pid's command
+    /// line. The pattern matches the old launcher too, so a stop checks what runs, not
+    /// only the app at `appPath`: a quit by the new id would never reach the old one.
+    static func runningApps(_ runtime: Runtime, pids: String) -> [String] {
+        pids.split(whereSeparator: \.isNewline).compactMap { pid -> String? in
+            guard let ps = try? runtime.exec("/bin/ps", ["-o", "command=", "-p", String(pid)]),
+                  ps.exitCode == 0, let cut = ps.stdout.range(of: "/Contents/MacOS/") else { return nil }
+            return String(ps.stdout[..<cut.lowerBound])
+        }
+    }
+
+    /// The marker a forced stop leaves, so the app skips its quit confirm.
+    static func quitMarker(_ runtime: Runtime) -> String {
+        runtime.home + "/Library/Application Support/Tecopa Plateworks/.quit-forced"
+    }
+
+    /// The app's engine port. `Runtime.defaultPort` is the one definition.
     public static let port = Runtime.defaultPort
-    /// Matches the launcher's own process and nothing else. `pgrep -f` matches the
-    /// full command line with an extended regular expression, so the pattern is
-    /// anchored at the start, and the executable's name ends at a space or at the
-    /// end. A process that only has the path in its arguments does not match.
-    static let processPattern =
-        "^" + appPath.replacingOccurrences(of: ".", with: "\\.")
-        + "/Contents/MacOS/TecopaPlateworks( |$)"
+    /// Matches the app's own process wherever the app is: `/Applications` or a
+    /// `dist/` copy. `pgrep -f` matches the full command line with an extended
+    /// regular expression; the executable's name ends at a space or at the end.
+    static let processPattern = #"/Tecopa Plateworks\.app/Contents/MacOS/TecopaPlateworks( |$)"#
 
     /// `busy`: the port accepts a connection and gives no answer in time.
     enum Serving { case tecopa, foreign, none, busy }
 
+    /// `EngineHost.classify` is the one definition, so the app and the tool agree.
     static func probe(_ runtime: Runtime) async -> Serving {
-        switch await runtime.client.probe("/readyz", timeout: 2) {
-        case .reply(let reply): return EngineClient.isTecopa(reply) ? .tecopa : .foreign
-        case .noAnswer: return .none
-        case .timedOut: return .busy
+        switch await EngineHost.classify(runtime) {
+        case .adopt: return .tecopa
+        case .foreign: return .foreign
+        case .none: return .none
+        case .busy: return .busy
         }
     }
 
@@ -38,10 +94,15 @@ public enum Launcher {
     /// match. Any other code means pgrep could not do its work, and that is not
     /// "the launcher is not running".
     static func launcherRuns(_ runtime: Runtime) throws -> Bool {
+        try launcherPids(runtime) != nil
+    }
+
+    /// pgrep's pid lines when a launcher process runs, nil when none does.
+    static func launcherPids(_ runtime: Runtime) throws -> String? {
         let found = try runtime.exec("/usr/bin/pgrep", ["-f", processPattern])
         switch found.exitCode {
-        case 0: return true
-        case 1: return false
+        case 0: return found.stdout
+        case 1: return nil
         default:
             let said = found.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             throw TecopaFailure(.environment, "pgrep failed with exit \(found.exitCode): \(said)")
@@ -69,38 +130,32 @@ public enum Launcher {
         case .none:
             break
         }
-        guard runtime.fileExists(appPath) else {
-            throw TecopaFailure(.environment, "The launcher is not installed at \(appPath).",
-                                hint: "Run scripts/macos/build_app.sh --install.")
+        let app = appPath(runtime)
+        guard runtime.fileExists(app) else {
+            throw TecopaFailure(.environment, "Tecopa Plateworks is not installed at \(app).")
         }
-        // -g: the launcher stays in the background. It still opens the studio in the
-        // browser when the engine is ready; that is the launcher's own behaviour.
-        let opened = try runtime.exec("/usr/bin/open", ["-g", appPath])
+        try requireCurrentApp(runtime, at: app)
+        // -g: the app stays in the background. It still opens the studio in the
+        // browser when the engine is ready; that is the app's own behaviour.
+        let opened = try runtime.exec("/usr/bin/open", ["-g", app])
         guard opened.exitCode == 0 else {
-            throw TecopaFailure(.environment, "macOS could not open the launcher: \(opened.stderr)")
+            throw TecopaFailure(.environment, "macOS could not open the app: \(opened.stderr)")
         }
-        // 160 seconds: the launcher can wait 90 on the macOS Documents-permission
-        // prompt, and then 60 for the engine. `busy` is "not ready yet".
-        for _ in 0..<320 {
+        // 70 seconds: the app waits 60 for its engine. `busy` is "not ready yet".
+        for _ in 0..<140 {
             if await probe(runtime) == .tecopa {
                 return .object(["started": .bool(true), "running": .bool(true)])
             }
             await runtime.sleep(0.5)
         }
         throw TecopaFailure(
-            .environment, "The engine did not answer within 160 seconds.",
-            hint: "Run `tecopa logs`. The launcher shows an alert when it cannot start the engine, "
-                + "and macOS may be waiting for a Documents-folder permission click.")
+            .environment, "The engine did not answer within 70 seconds.",
+            hint: "Run `tecopa logs`. The app shows an alert when it cannot start the engine.")
     }
 
     /// The jobs a stop would end: those that run and those that wait for a slot.
-    /// nil when the engine did not say, which is not the same as none.
-    /// What one read of the engine's jobs said. `timedOut` means the engine accepted
-    /// the connection and did not answer: a long render can hold it that way, and
-    /// that render is the work a stop would end.
-    enum JobsRead: Equatable { case active(Int), unknown, timedOut }
-
-    static func readJobs(_ runtime: Runtime) async -> JobsRead {
+    /// A 404 (the gate is off), a failed route, or no answer at all is `.unknown`.
+    public static func readJobs(_ runtime: Runtime) async -> JobsRead {
         switch await runtime.client.probe("/api/debug/jobs", timeout: 10) {
         case .timedOut:
             return .timedOut
@@ -126,7 +181,10 @@ public enum Launcher {
     /// read fails), the tool cannot know, so the stop continues and says so.
     public static func stop(_ runtime: Runtime, force: Bool = false) async throws -> JSONValue {
         try requireLauncherPort(runtime)
-        guard try launcherRuns(runtime) else {
+        // The launcher pattern matches the old launcher too: refuse it before any quit.
+        let app = appPath(runtime)
+        if runtime.fileExists(app) { try requireCurrentApp(runtime, at: app) }
+        guard let pids = try launcherPids(runtime) else {
             if await probe(runtime) != .none {
                 throw TecopaFailure(
                     .refused, "An engine answers on port \(port), but the launcher is not running.",
@@ -136,6 +194,9 @@ public enum Launcher {
                 "stopped": .bool(false), "running": .bool(false),
                 "note": .string("The launcher is not running."),
             ])
+        }
+        for running in runningApps(runtime, pids: pids) where runtime.fileExists(running) {
+            try requireCurrentApp(runtime, at: running, running: true)
         }
         let jobsRead = await readJobs(runtime)
         if !force {
@@ -157,7 +218,20 @@ public enum Launcher {
         if jobs == nil || sessions == nil {
             notes.append("The engine's jobs and sessions could not be read before the stop.")
         }
-        let quit = try runtime.exec("/usr/bin/osascript", ["-e", "quit app \"Tecopa Plateworks\""])
+        if force {
+            // The app confirms every quit while jobs run. A forced stop already
+            // decided, so it leaves a marker the app reads and deletes. A stale one
+            // goes first: `writeNew` never overwrites.
+            let marker = quitMarker(runtime)
+            let folder = (marker as NSString).deletingLastPathComponent
+            if runtime.pathKind(folder) != .folder { try runtime.makeFolder(folder) }
+            runtime.removeFile(marker)
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            try runtime.writeNew(marker, Data((formatter.string(from: runtime.now()) + "\n").utf8))
+        }
+        // By id: there is one running app whatever its path.
+        let quit = try runtime.exec("/usr/bin/osascript", ["-e", "quit app id \"\(bundleID)\""])
         if quit.exitCode != 0 {
             let text = quit.stderr.lowercased()
             let denied = text.contains("1743") || text.contains("not authoriz") || text.contains("not permitted")
@@ -212,12 +286,12 @@ public enum Launcher {
     static let entries: [CatalogEntry] = [
         CatalogEntry(
             name: "engine_start",
-            summary: "Open the launcher app, which starts the engine on port \(port), and wait for it to answer.",
+            summary: "Open the Tecopa Plateworks app, which starts the engine on port \(port), and wait for it to answer.",
             readOnly: false
         ) { runtime, _ in try await start(runtime) },
         CatalogEntry(
             name: "engine_stop",
-            summary: "Quit the launcher app, which stops the engine it started. "
+            summary: "Quit the Tecopa Plateworks app, which stops the engine it started. "
                 + "This ends every running job and every studio session that is held in memory. "
                 + "Refuses while a job is running or queued, unless force is true.",
             readOnly: false,
@@ -227,7 +301,7 @@ public enum Launcher {
         },
         CatalogEntry(
             name: "engine_restart",
-            summary: "Quit and reopen the launcher app, for example after a change to the engine's Python code. "
+            summary: "Quit and reopen the Tecopa Plateworks app, for example after a change to the engine's Python code. "
                 + "This ends every running job and every studio session that is held in memory. "
                 + "Refuses while a job is running or queued, unless force is true.",
             readOnly: false,

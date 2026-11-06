@@ -74,3 +74,13 @@ def test_geometry_row_degrades_when_render_stack_is_absent(tmp_path, monkeypatch
     verdict, detail = vr.geometry_verdict(d)
     assert verdict == "skip"
     assert "not checked" in detail
+
+
+def test_main_skips_dot_folders(tmp_path, capsys):
+    # The Mac app stages plate copies in regions/.seed-tmp; it is not a plate.
+    _with_sidecar(str(tmp_path), "rebuilt", GOOD, GOOD)
+    os.makedirs(tmp_path / ".seed-tmp" / "lassen_ca")
+    vr.main(["--regions-root", str(tmp_path)])
+    out = capsys.readouterr().out
+    assert ".seed-tmp" not in out
+    assert "rebuilt  --" in out

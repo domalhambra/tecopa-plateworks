@@ -1,7 +1,7 @@
 # macOS Launcher App (TrailPrint.app) — Design
 
 **Date:** 2026-07-18
-**Status:** Approved by Dom (brainstorming session)
+**Status:** Superseded on 2026-11-05 by `2026-11-05-native-mac-app-phase-1-bundled-engine-design.md`: the Mac app carries its own engine and owns port 8848. Approved by Dom (brainstorming session).
 
 ## Goal
 

@@ -34,6 +34,7 @@ import math
 import os
 import platform
 import re
+import sys
 import threading
 import time
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -252,6 +253,9 @@ def build_router(*, queues: dict, caches: dict, started: float, forms: dict,
                 "pid": os.getpid(),
                 "uptime_s": round(time.time() - started, 1),
                 "python": platform.python_version(),
+                "executable": sys.executable,
+                "prefix": sys.prefix,
+                "sys_path": list(sys.path),
                 "env": {k: v for k, v in sorted(os.environ.items())
                         if k.startswith("TECOPA_")},
                 "store": session.kind(),

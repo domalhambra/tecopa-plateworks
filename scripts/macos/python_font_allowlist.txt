@@ -1,0 +1,2 @@
+# Font files a wheel in the bundled Python may ship (freely licensed only). One path per line,
+# relative to the interpreter copy. Empty on 2026-11-05: neither venv holds a font.

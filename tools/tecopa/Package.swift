@@ -6,6 +6,11 @@ import PackageDescription
 let package = Package(
     name: "tecopa",
     platforms: [.macOS(.v13)],
+    // The library is what the Mac app links; the executable is the tool.
+    products: [
+        .library(name: "TecopaKit", targets: ["TecopaKit"]),
+        .executable(name: "tecopa", targets: ["tecopa"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.8.2"),
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.1"),

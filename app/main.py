@@ -872,11 +872,19 @@ async def region_build(req: RegionBuildRequest):
     holder = {}
 
     def build_job():
+        # Every path absolute, and the run in the order cache: the Mac app's cwd is
+        # Application Support and a signed bundle must never be written (phase 1
+        # spec 5.4, change 3). orderprep loads the build tools, so import it here.
+        from app.orderprep import cache_env
+        env, cache_dir = cache_env()
+        root = os.path.abspath(REGIONS_ROOT)
         result = regionbuild.run_build(
-            params, repo_root=os.getcwd(), regions_root=REGIONS_ROOT,
-            prep_python=PREP_PYTHON, prep_script=PREP_SCRIPT,
-            labels_script=LABELS_SCRIPT,
-            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s))
+            dict(params, out_root=root), repo_root=os.getcwd(), regions_root=root,
+            prep_python=os.path.abspath(PREP_PYTHON),
+            prep_script=os.path.abspath(PREP_SCRIPT),
+            labels_script=os.path.abspath(LABELS_SCRIPT),
+            set_progress=lambda s: BUILD_QUEUE.set_progress(holder.get("jid", ""), s),
+            env=env, cwd=cache_dir)
         fresh = regions.discover(REGIONS_ROOT)   # build BEFORE mutating: a discover()
         REGIONS.clear()                          # failure (a malformed region.json
         REGIONS.update(fresh)                    # elsewhere) must not leave REGIONS
@@ -2443,4 +2451,18 @@ if debug.enabled():
         proof_form=_proof_form_for, crop_px=_crop_to_overview_px))
 
 app.mount("/regions", StaticFiles(directory=REGIONS_ROOT), name="regions")
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+# The studio is found beside this module, never through the cwd: the Mac app runs
+# the engine with its working directory in Application Support (phase 1 spec 5.4).
+class _StudioFiles(StaticFiles):
+    """The studio files, revalidated on every load. The Mac app's web view keeps its
+    cache across app updates, and with no Cache-Control WebKit would hold an old
+    app.js by heuristic freshness. no-cache still answers 304 through the ETag."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", _StudioFiles(directory=os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                   "static"), html=True), name="static")

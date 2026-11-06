@@ -413,10 +413,11 @@ struct RunsCommand: AsyncParsableCommand {
 struct PlateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "plate",
-        abstract: "Plan, build, bake, pack, install or check a plate.",
+        abstract: "Plan, build, bake, pack, install or check a plate, or restore or evict its DEM.",
         discussion: "`plate build`, `plate labels` and `plate playa` start a tracked run and return at once. "
             + "Read it with `tecopa runs show <id>`.",
-        subcommands: [Plan.self, Build.self, Labels.self, Playa.self, Pack.self, Install.self, Check.self])
+        subcommands: [Plan.self, Build.self, Labels.self, Playa.self, Pack.self, Install.self, Check.self,
+                      Restore.self, Evict.self])
 
     struct Plan: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
@@ -534,6 +535,24 @@ struct PlateCommand: AsyncParsableCommand {
         func run() async throws { try await execute("plate_install", global, arguments) }
     }
 
+    struct Restore: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "restore",
+            abstract: "Restore a plate's dem.tif from the Dropbox archive: the sha its index.json names as current.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        func run() async throws { try await execute("plate_restore", global, plate.arguments) }
+    }
+
+    struct Evict: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "evict",
+            abstract: "Move a plate's dem.tif to the Trash to free its space. Refuses while an order run is going.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var plate: Plate
+        func run() async throws { try await execute("plate_evict", global, plate.arguments) }
+    }
+
     struct Check: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "check", abstract: "Check a poster file against the plate that is installed.")
@@ -555,11 +574,11 @@ struct OrderCommand: AsyncParsableCommand {
         abstract: "Make a customer order from the intake, preview its sizes, prepare it, finish it, or "
             + "read what Prepare decided.",
         discussion: "`order new` copies the intake's job folder into a new order folder and prints what it "
-            + "copied. `order prepare`, `order preview` and `order finish` each start a tracked run and "
+            + "copied. `order choose` writes the preview's lines for one size into order.toml. `order prepare`, `order preview` and `order finish` each start a tracked run and "
             + "return at once. Read a run with `tecopa runs show <id>`. After Prepare, run "
             + "`tecopa order status <folder>`. The preview writes its PDF and its email under the "
             + "order's out/preview/ folder. Finish writes the print files under out/print/.",
-        subcommands: [New.self, Prepare.self, Preview.self, Finish.self, Status.self])
+        subcommands: [New.self, Choose.self, Prepare.self, Preview.self, Finish.self, Status.self])
 
     /// The one argument of each command.
     struct Folder: ParsableArguments {
@@ -581,6 +600,22 @@ struct OrderCommand: AsyncParsableCommand {
         func run() async throws {
             try await execute("order_new", global, number.map { ["number": .string($0)] } ?? [:])
         }
+    }
+
+    struct Choose: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "choose",
+            abstract: "Write the preview's lines for one size into the order's order.toml.")
+        @OptionGroup var global: GlobalOptions
+        @OptionGroup var order: Folder
+        @Argument(help: "The size key of the preview, like 17x22.")
+        var size: String?
+
+        var arguments: [String: JSONValue] {
+            order.arguments.merging(size.map { ["size": .string($0)] } ?? [:]) { _, new in new }
+        }
+
+        func run() async throws { try await execute("order_choose", global, arguments) }
     }
 
     struct Prepare: AsyncParsableCommand {
@@ -657,7 +692,7 @@ struct StudioCommand: AsyncParsableCommand {
 struct DoctorCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "doctor",
-        abstract: "Check the repo, the venvs, the launcher, the port and the log. Works with no engine.")
+        abstract: "Check the repo, both venvs, the app, the port, the debug gate and the log. Works with no engine.")
     @OptionGroup var global: GlobalOptions
 
     func run() async throws {

@@ -349,3 +349,33 @@ def test_the_key_leaves_the_plates_inputs_hash_alone(tmp_path):
     plain = od.load(_order(tmp_path, TOML))
     washed = od.load(_order(tmp_path / "b", TOML + "viewshed = true\n"))
     assert washed.inputs_hash() == plain.inputs_hash()
+
+
+# --- the Mac app: the guard keeps guarding the public checkout from a bundle --------
+
+def test_refuse_inside_repo_refuses_a_git_checkout_that_is_not_the_code_root(tmp_path, monkeypatch):
+    # In the bundle, _repo_root() names Contents/Resources/engine, not the checkout.
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path / "engine"))
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    for p in (checkout, checkout / "orders", checkout / "orders" / "not-yet-made"):
+        with pytest.raises(od.OrderError, match="Order folders must live outside the repo"):
+            od.refuse_inside_repo(p)
+
+
+def test_refuse_inside_repo_refuses_a_git_pointer_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(od, "_repo_root", lambda: str(tmp_path / "engine"))
+    wt = tmp_path / "worktree"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: /elsewhere\n")      # a worktree or an external store
+    with pytest.raises(od.OrderError, match="outside the repo"):
+        od.refuse_inside_repo(wt / "orders")
+
+
+def test_refuse_inside_repo_allows_a_plain_folder_and_still_refuses_the_code_root(tmp_path, monkeypatch):
+    engine = tmp_path / "engine"
+    engine.mkdir()
+    monkeypatch.setattr(od, "_repo_root", lambda: str(engine))
+    od.refuse_inside_repo(tmp_path / "Tecopa Orders")       # must not raise
+    with pytest.raises(od.OrderError, match="outside the repo"):
+        od.refuse_inside_repo(engine / "orders")

@@ -236,9 +236,15 @@ enum Plates {
         return id
     }
 
-    /// The folder of one plate under the repo.
+    /// The folder of one plate: under the repo, or under the app's data root.
     static func folder(_ id: String, _ runtime: Runtime) throws -> String {
-        try runtime.repo() + "/regions/" + id
+        try regionsRoot(runtime) + "/" + id
+    }
+
+    /// The folder of the plates the engine reads: `<repo>/regions` in a checkout,
+    /// `<data root>/regions` in the app, as `TECOPA_REGIONS` names it there.
+    static func regionsRoot(_ runtime: Runtime) throws -> String {
+        try runtime.engineLayout().dataRoot(home: runtime.home) + "/regions"
     }
 
     // MARK: The guard of the two bakes

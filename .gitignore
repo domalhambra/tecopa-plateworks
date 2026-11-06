@@ -36,8 +36,11 @@ assets/
 # repo's to hold: Dom's own files, put in place by hand.
 marketing/photos/
 
-# built macOS launcher app (scripts/macos/build_app.sh)
+# built apps, the wheelhouse and the interpreter download (scripts/macos/)
 /dist/
+# the Mac app's generated Xcode project and its build folder (macos/project.yml)
+/macos/*.xcodeproj/
+/macos/build/
 
 # ---- Licensed fonts: never commit, this repo is PUBLIC ----
 # MB Type licence paragraph 7 forbids storing the fonts in a location reachable

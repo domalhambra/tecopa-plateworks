@@ -45,6 +45,9 @@ Undated documents that still govern something. Each is path-checked.
 | `superpowers/specs/2026-11-01-viewshed-wash-design.md` | Adding or changing the viewshed wash: shading a sheet by the ground in line of sight from its marks. Built: the strength of the wash waits for Dom's read of a real proof. Its last section lists what the build changed. |
 | `superpowers/specs/2026-11-01-showcase-plates-and-pick-a-plate-landing-design.md` | Changing the Tecopa landing page, the five showcase plates, or trail-first demo journeys. The design: one story per plate, and Phases A and B. |
 | `superpowers/specs/2026-11-01-pick-a-plate-landing-copy.md` | Changing a sentence on the Tecopa landing page. Every sentence, in page order. |
+| `superpowers/specs/2026-11-05-native-mac-app-phase-1-bundled-engine-design.md` | Working on the native Mac app's phase 1: the bundle with its own Python and engine, the engine's working folder in Application Support, plate seeding, the Dropbox DEM archive, and the byte-equal proof. Approved by Dom on 2026-11-05; not built. The plan is the 2026-11-05 handoff. |
+| `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-design.md` | Working on the native Mac app's phase 2: the one window (Studio in a web view, Orders, Plates, Engine), Settings, orders through TecopaKit's catalog, `order.py choose`, the paid size from the order desk, DEM restore and free space. Decided by Claude under Dom's standing instruction; built 2026-11-05. |
+| `superpowers/specs/2026-11-05-native-mac-app-phase-3-studio-shell-design.md` | Working on the studio inside the Mac app: the native shell (File > Open, drag and drop, downloads, Go menu) that is built, and the area-by-area SwiftUI port that is planned and waits for someone who can watch the window. |
 | `superpowers/prototypes/2026-09-24-ghost-landing-preview.html` | Porting the landing page's shader, poster wall or relief viewer into the theme. The working prototype the spec approves. Its media files are not committed: the relief exporter makes them. |
 
 ## Plans
@@ -83,6 +86,7 @@ notes on what changed against the spec while it ran.
 | `superpowers/plans/2026-11-01-viewshed-wash.md` | Building the viewshed wash: which spots are real marks, the mark cap, the line-of-sight module and its relief pass, the studio toggle, and waypoints in orders. The plan and its build record. |
 | `superpowers/plans/2026-11-01-pick-a-plate-phase-a.md` | Picking up the new Tecopa landing page. Phase A: the copy, the story config, and the page on an unmerged plateworks-site branch. |
 | `superpowers/plans/2026-11-01-pick-a-plate-phase-b.md` | Picking up the new Tecopa landing page. Phase B: the look, the five plates, the journeys, the renders and the ship. |
+| `superpowers/plans/2026-11-05-native-mac-app-phase-1-bundled-engine.md` | Building the native Mac app's phase 1: the five engine path fixes, the bundle checks and hashed locks, TecopaKit's layout, environment, plate seeder and engine host, the XcodeGen app, the bundle build, the DEM seed and archive scripts, and the two proofs. 24 tasks. |
 
 ## Handoffs
 
@@ -101,6 +105,7 @@ with a banner that points at the 2026-07-03 one.
 | `superpowers/handoffs/2026-07-27-fonts-shipped-forever-contract-retirement.md` | You want the state after the type roles shipped and the retirement was decided. |
 | `superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md` | Picking the repo up cold. The Collector register, the terrain guard that blocks a deploy, the detail-crop regression, the copy traps, open threads, known-good state. |
 | `superpowers/handoffs/2026-09-23-open-threads.md` | Working the open threads. All ten Tecopa threads open on 2026-09-23, ordered around the customer path: the price, the demo tracks, the plate re-render, then the rest. Each has its state checked that day. |
+| `superpowers/handoffs/2026-11-05-native-mac-app.md` | Building Tecopa Plateworks as a native Mac app: the bundled engine, the Orders window, the native studio and tooling, the signed DMG. Dom's choice, the rules, the phases, the open questions. |
 
 ## Assessments
 
