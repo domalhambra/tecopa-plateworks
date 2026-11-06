@@ -27,6 +27,19 @@ IDENTITY="${TECOPA_SIGN_IDENTITY:-Developer ID Application: DOMINIC ALEKSANDR AL
 PROFILE="${TECOPA_NOTARY_PROFILE:-desqueeze-notary}"
 CHECK=("$REPO/.venv/bin/python" -I -B "$REPO/scripts/macos/bundle_checks.py")
 
+# Every app this script builds or stages registers with LaunchServices, and the
+# newest copy then answers the bundle id: `open -b`, Spotlight and the Dock
+# launched dist/ instead of /Applications (2026-11-05). Unregister them on exit.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+STAGED=()
+unregister() {
+  local p
+  for p in "$APP" "$REPO/macos/build/Build/Products/Release/TecopaPlateworks.app" ${STAGED[@]+"${STAGED[@]}"}; do
+    "$LSREGISTER" -u "$p" >/dev/null 2>&1 || true
+  done
+}
+trap unregister EXIT
+
 security find-identity -v -p codesigning | grep -qF "$IDENTITY" || stop "No signing identity: $IDENTITY"
 if [ "$NOTARIZE" = 1 ]; then
   xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 \
@@ -79,10 +92,12 @@ fi
 
 echo "5/6 Make the disk image"
 stage="$(mktemp -d)"
+STAGED+=("$stage/Tecopa Plateworks.app")
 ditto "$APP" "$stage/Tecopa Plateworks.app"
 ln -s /Applications "$stage/Applications"
 rm -f "$DMG"
 hdiutil create -volname "Tecopa Plateworks" -srcfolder "$stage" -fs APFS -format ULFO -ov "$DMG" >/dev/null
+unregister
 rm -rf "$stage"
 codesign --force --timestamp --sign "$IDENTITY" "$DMG"
 
