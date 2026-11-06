@@ -1098,6 +1098,14 @@ and `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-d
    "~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates" --label <label> [--current]`.
    Write-once, keyed by sha256. Run `--dry-run` first. The app's Plates pane restores
    from it.
+7. The app's tests: `xcodegen generate --spec macos/project.yml --project macos`, then
+   `xcodebuild -project macos/TecopaPlateworks.xcodeproj -scheme TecopaPlateworks test`.
+   To look at the panes without driving the app on screen, set
+   `TEST_RUNNER_TECOPA_SNAPSHOT_DIR=<folder>` on that command. `PaneSnapshots` then
+   renders Orders, Plates, Engine, the starting and failed states and Settings at the
+   window's minimum and default sizes into offscreen windows, and writes PNGs. The
+   sidebar draws on a material the capture cannot draw, so it shows blank. The Engine
+   pane's doctor rows fail there, because the test host is not the app bundle.
 
 The old launcher (`scripts/macos/build_app.sh`, `guide.badwater.tecopa`) is retired by
 the app; its spec is superseded.

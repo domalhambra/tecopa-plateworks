@@ -53,6 +53,7 @@ targets:
     scheme:
       testTargets:
         - TecopaPlateworksTests
+        - TecopaPlateworksSnapshots
 
   # The app's pure decisions and copy, tested with no host: the bundle compiles the
   # two files itself. Do not add TEST_HOST or BUNDLE_LOADER.
@@ -70,6 +71,31 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.plateworks.tecopa.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+  # Offscreen pictures of the window's panes, for a look at the native layout without
+  # driving the app on screen. The views render in this test process's own offscreen
+  # windows; nothing is shown. Skipped unless TECOPA_SNAPSHOT_DIR names a folder:
+  #   TEST_RUNNER_TECOPA_SNAPSHOT_DIR=/tmp/shots xcodebuild ... -only-testing:TecopaPlateworksSnapshots test
+  TecopaPlateworksSnapshots:
+    type: bundle.unit-test
+    platform: macOS
+    dependencies:
+      - package: tecopa
+        product: TecopaKit
+    sources:
+      - path: TecopaPlateworksSnapshots
+      - path: TecopaPlateworks
+        excludes:
+          - TecopaPlateworksApp.swift
+          - Info.plist
+          - Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.plateworks.tecopa.snapshots
         GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "6.0"
         CODE_SIGN_STYLE: Manual
