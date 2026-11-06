@@ -1094,6 +1094,9 @@ and `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-d
 5. A release: `scripts/macos/make_release.sh` signs with the Developer ID and the hardened
    runtime (no entitlements), notarizes and staples the app and
    `dist/Tecopa Plateworks-<version>.dmg`. Install by dragging the app to `/Applications`.
+   On exit it unregisters its own copies from LaunchServices, so the bundle id opens
+   `/Applications` and not `dist/`. Any other copy that runs (a test build, a copy in the
+   Trash) registers again: `lsregister -u <path>` it.
 6. The cold DEM archive: `scripts/macos/archive_dems.py --archive-root
    "~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates" --label <label> [--current]`.
    Write-once, keyed by sha256. Run `--dry-run` first. The app's Plates pane restores
