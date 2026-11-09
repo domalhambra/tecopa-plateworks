@@ -11,7 +11,7 @@ enum PlateCache {
     static let entries: [CatalogEntry] = [restoreEntry, evictEntry]
 
     /// The archive's default folder, under the home folder.
-    static let archiveFolder = "/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates"
+    static let archiveFolder = "/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates"
 
     /// The archive root: `TECOPA_DEM_ARCHIVE` when it is set, else Dropbox's.
     static func archiveRoot(_ runtime: Runtime) -> String {

@@ -33,7 +33,7 @@ def roots(tmp_path):
     _write(regions / "tecopa_ca" / "dem.tif", b"DEM-ONE")
     _write(regions / "tecopa_ca" / "region.json", b'{"id": "tecopa_ca"}')
     _write(regions / "tecopa_ca" / "sources.json", b'{"dem": "sidecar"}')
-    archive = base / "Dropbox" / "Tecopa Plateworks" / "Plates"
+    archive = base / "Dropbox" / "Apps" / "Tecopa Plateworks" / "Plates"
     return regions, archive
 
 

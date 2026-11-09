@@ -92,7 +92,7 @@ Tecopa Plateworks.app/Contents/
 | `~/Library/Logs/TecopaPlateworks.log` | Engine and app log, unchanged, so `LogReader` and `tecopa doctor` keep working | log |
 | `~/Library/Application Support/Tecopa Plateworks/Orders/` (`TECOPA_ORDERS_DIR`) | Orders. Moved from `~/Tecopa Orders/` on 2026-11-06, beside the app's other data and under no git checkout. Its `_cache/` holds the HyRiver request cache that Prepare uses; in-app plate builds share it (5.4, change 3). | user data |
 | `~/Library/CloudStorage/Dropbox/Apps/Plateworks Lab/Tecopa/` | The intake. Read-only to Tecopa, unchanged. | user data |
-| `~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates/` | The cold DEM archive (section 6) | archive |
+| `~/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates/` | The cold DEM archive (section 6) | archive |
 
 The bundle is never written. Section 8, proof 2, checks it.
 
@@ -252,7 +252,7 @@ The archive is cold and write-once. It exists so an exact reprint stays possible
 cache is cleared or 3DEP revises its data.
 
 ```
-~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates/
+~/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates/
   <id>/
     index.json                      generations, and which one is "current"
     <sha256>/dem.tif

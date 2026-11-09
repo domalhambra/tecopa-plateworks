@@ -4,7 +4,7 @@ import XCTest
 /// Restore a DEM from the Dropbox archive (phase 1 spec, section 6; phase 2 spec,
 /// decision 12) on the fake machine.
 final class PlateCacheTests: XCTestCase {
-    private let archive = "/home/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates"
+    private let archive = "/home/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates"
     private let regions = "/repo/regions"
     private let dem = Data("the lanczos DEM".utf8)
     private var sha: String { FakeWorld.sha256(dem) }

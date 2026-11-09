@@ -1098,7 +1098,7 @@ and `superpowers/specs/2026-11-05-native-mac-app-phase-2-window-orders-tooling-d
    `/Applications` and not `dist/`. Any other copy that runs (a test build, a copy in the
    Trash) registers again: `lsregister -u <path>` it.
 6. The cold DEM archive: `scripts/macos/archive_dems.py --archive-root
-   "~/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates" --label <label> [--current]`.
+   "~/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates" --label <label> [--current]`.
    Write-once, keyed by sha256. Run `--dry-run` first. The app's Plates pane restores
    from it.
 7. The app's tests: `xcodegen generate --spec macos/project.yml --project macos`, then
