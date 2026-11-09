@@ -729,7 +729,7 @@ final class PlatesTests: XCTestCase {
             "plate_restore": Walk(arguments: ["id": .string("lassen_ca")], programs: 0) { world in
                 let dem = Data("dem".utf8)
                 let sha = FakeWorld.sha256(dem)
-                let archive = "/home/Library/CloudStorage/Dropbox/Tecopa Plateworks/Plates/lassen_ca"
+                let archive = "/home/Library/CloudStorage/Dropbox/Apps/Tecopa Plateworks/Plates/lassen_ca"
                 world.existingFile("/repo/regions/lassen_ca/region.json")
                 world.file(archive + "/index.json", #"{"current": "\#(sha)"}"#)
                 world.existingFile(archive + "/" + sha + "/dem.tif")
