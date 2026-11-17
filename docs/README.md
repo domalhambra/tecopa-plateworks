@@ -106,6 +106,7 @@ with a banner that points at the 2026-07-03 one.
 | `superpowers/handoffs/2026-08-16-collector-register-and-terrain-guard.md` | Picking the repo up cold. The Collector register, the terrain guard that blocks a deploy, the detail-crop regression, the copy traps, open threads, known-good state. |
 | `superpowers/handoffs/2026-09-23-open-threads.md` | Working the open threads. All ten Tecopa threads open on 2026-09-23, ordered around the customer path: the price, the demo tracks, the plate re-render, then the rest. Each has its state checked that day. |
 | `superpowers/handoffs/2026-11-05-native-mac-app.md` | Building Tecopa Plateworks as a native Mac app: the bundled engine, the Orders window, the native studio and tooling, the signed DMG. Dom's choice, the rules, the phases, the open questions. |
+| `superpowers/handoffs/2026-11-16-plates-beyond-the-lower-48.md` | Writing the scope, spec or plan for plates outside the lower 48: Alaska, Hawaii and the rest of the world. The open sources for each layer, the license read for each one, the credit lines, Dom's decisions, what was measured, and what the plan has to cover. No engine code changed. |
 
 ## Assessments
 
