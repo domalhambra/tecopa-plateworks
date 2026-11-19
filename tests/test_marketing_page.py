@@ -241,7 +241,12 @@ def test_the_customers_doubts_are_answered():
 # on every page (Plausible before it, from the move to Netlify on 2026-10-13)
 # and the video poster's placeholder on /tecopa/; fonts, scripts and images
 # otherwise come from the site.
-NAMED_HOSTS = {"img.spacergif.org", "stats.plateworks.org"}
+# Since 2026-11-19 Cloudflare's Turnstile check from challenges.cloudflare.com
+# is named too: the order form loads it with the page (intake D85), and the
+# newsletter signup at the foot of each page loads it only once a reader clicks
+# into its email field. Both load it from a script, so the tag scan below never
+# sees it; the privacy page must still name it.
+NAMED_HOSTS = {"img.spacergif.org", "stats.plateworks.org", "challenges.cloudflare.com"}
 
 
 def test_the_pages_link_to_the_privacy_page():
@@ -269,6 +274,8 @@ def test_privacy_page_names_every_host_the_pages_load():
     assert "storage.ghost.io" not in page
     for host in NAMED_HOSTS:
         assert host in page, f"privacy page no longer names {host}"
+    assert "There are two exceptions" in page
+    assert "once you click into its email field" in page
     allowed = NAMED_HOSTS | {"www.plateworks.org", "plateworks.org"}
     for path in ("/tecopa/", "/tecopa-build/", "/tecopa-privacy-policy/"):
         loaded = set(re.findall(
